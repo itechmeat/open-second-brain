@@ -69,6 +69,18 @@ metric; named, the response gains a `packing` accounting object and the
 receipt and telemetry budget metadata gain a `packing_policy` member of the
 frozen two-value vocabulary. There is no CLI flag and no config key - the
 knob rides the MCP tool only, following the `query_mode` parity precedent.
+
+**Standing-instruction facets are opt-in on the attention flow
+evaluation, strictly read-only.** Callers that evaluate the
+`standing_query` action keep the legacy `pref-<slug> (scope)` output
+byte for byte unless they name `standingInstructionFacets`; named, a
+surfaced preference whose `evidenced_by` evidence joins to a signal
+`session_ref` gains a first-mention annotation, and preferences whose
+join does not resolve stay unannotated rather than implying an origin.
+No preference is admitted that the plain lane would not already deliver,
+and the lane performs zero writes. The new `standing_instruction` bench
+category exists to measure that join; runs without such questions
+produce byte-identical reports and output.
 ## Upgrading to 1.83.0
 
 Nothing below needs a migration step. Every new surface in this release

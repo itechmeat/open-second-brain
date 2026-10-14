@@ -744,6 +744,173 @@ describe("bench help text", () => {
 });
 
 /**
+ * The standing_instruction human line (recall-lane-latency): printed only
+ * when the report's quality buckets carry the category - a run without
+ * standing_instruction questions keeps its stdout byte-identical, a
+ * lane-on run prints the category beside its rates, and the exit code
+ * stays all-pass-or-nonzero with the category in play.
+ */
+describe("bench standing_instruction human line", () => {
+  /** The surfacing lane's fixture vault files, in the live writers' shapes. */
+  const STANDING_FLOW_MD = [
+    "---",
+    "kind: brain-attention-flow",
+    "id: open-loops",
+    "title: Open loops",
+    "actions:",
+    "  - standing_query",
+    "standing_queries:",
+    "  - testing",
+    "status: active",
+    "---",
+    "",
+    "# Open loops",
+    "",
+  ].join("\n");
+  const STANDING_PREF_MD = [
+    "---",
+    "kind: brain-preference",
+    "id: pref-tabs",
+    "created_at: 2026-06-01T00:00:00Z",
+    "_confirmed_at: 2026-06-02T00:00:00Z",
+    "unconfirmed_until: 2026-07-01T00:00:00Z",
+    "tags:",
+    "  - bench",
+    "topic: tabs",
+    "_status: confirmed",
+    "principle: Use tabs for indentation",
+    "_evidenced_by:",
+    '  - "[[sig-bench-turn]]"',
+    "_applied_count: 0",
+    "_violated_count: 0",
+    "_last_evidence_at: null",
+    "_confidence: low",
+    "_confidence_value: null",
+    "pinned: false",
+    "scope: testing",
+    "---",
+    "",
+    "Use tabs for indentation",
+    "",
+  ].join("\n");
+  const STANDING_SIGNAL_MD = [
+    "---",
+    "kind: brain-signal",
+    "id: sig-bench-turn",
+    "created_at: 2026-06-01T00:00:00Z",
+    "tags:",
+    "  - bench",
+    "topic: tabs",
+    "signal: positive",
+    "agent: bench",
+    "principle: use tabs for indentation",
+    "scope: testing",
+    "session_ref: bench-session.json#turn-2",
+    "---",
+    "",
+    "recorded preference signal",
+    "",
+  ].join("\n");
+
+  const STANDING_SUITE = "standing-stub";
+  registerBenchSuite(STANDING_SUITE, {
+    loader: () => ({
+      fixture: parseBenchFixture({
+        name: "standing-cli",
+        notes: [
+          { path: "Brain/attention/flows/open-loops.md", body: STANDING_FLOW_MD },
+          { path: "Brain/preferences/pref-tabs.md", body: STANDING_PREF_MD },
+          { path: "Brain/inbox/sig-bench-turn.md", body: STANDING_SIGNAL_MD },
+        ],
+        continuity: [],
+        questions: [
+          {
+            id: "q-standing",
+            category: "standing_instruction",
+            expected_ids: ["pref:pref-tabs"],
+            expected_text: "first mention turn bench-session.json#turn-2",
+          },
+        ],
+      }),
+    }),
+    capabilities: { embeddings: false },
+  });
+
+  /** The same fixture with the expectation unmet: the question fails. */
+  const FAILING_SUITE = "standing-failing-stub";
+  registerBenchSuite(FAILING_SUITE, {
+    loader: () => ({
+      fixture: parseBenchFixture({
+        name: "standing-cli-failing",
+        notes: [
+          { path: "Brain/attention/flows/open-loops.md", body: STANDING_FLOW_MD },
+          { path: "Brain/preferences/pref-tabs.md", body: STANDING_PREF_MD },
+          { path: "Brain/inbox/sig-bench-turn.md", body: STANDING_SIGNAL_MD },
+        ],
+        continuity: [],
+        questions: [
+          {
+            id: "q-standing",
+            category: "standing_instruction",
+            expected_ids: ["pref:pref-never-resolves"],
+          },
+        ],
+      }),
+    }),
+    capabilities: { embeddings: false },
+  });
+
+  test("a run without the category keeps stdout byte-identical", async () => {
+    const out = await runCli(
+      ["brain", "bench", "memory", "--fixture", "core-recall", "--runs-dir", runsDir],
+      {},
+    );
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).not.toContain("standing_instruction");
+  }, 60_000);
+
+  test("a lane-on run prints the new category and its rates", async () => {
+    const out = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "core-recall",
+        "--suite",
+        STANDING_SUITE,
+        "--runs-dir",
+        join(runsDir, "lane-on"),
+      ],
+      {},
+    );
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain("standing_instruction: 1/1 (pass rate 1)");
+  }, 60_000);
+
+  test("the exit code stays all-pass-or-nonzero with the new category in play", async () => {
+    const out = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "core-recall",
+        "--suite",
+        FAILING_SUITE,
+        "--runs-dir",
+        join(runsDir, "failing"),
+      ],
+      {},
+    );
+    expect(out.returncode).not.toBe(0);
+    // The failing question names the category and the missing facet.
+    expect(out.stdout).toContain("FAIL  q-standing (standing_instruction)");
+    expect(out.stdout).toContain("pref:pref-never-resolves");
+  }, 60_000);
+});
+
+/**
  * The overlapped_ms human line (recall-lane-latency): printed only when
  * the aggregate latency family carries the figure - a keyword-only run
  * (the default pin) keeps its stdout byte-identical, and a lane-on run

@@ -42,6 +42,15 @@ const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
  */
 const OVERLAPPED_LINE_PREFIX = "overlapped_ms";
 
+/**
+ * The standing-instruction human line (recall-lane-latency), printed only
+ * when the report's quality buckets carry the category - a run without
+ * standing_instruction questions keeps its stdout byte-identical. The
+ * category rates stay a named line of their own, never a fold into the
+ * overall pass rate.
+ */
+const STANDING_INSTRUCTION_LINE_PREFIX = "standing_instruction";
+
 /** A suite name must be safe to echo into errors, reports and run ids. */
 const SUITE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -460,6 +469,13 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
           ? ` sample_population ${report.longmemeval.sample_population} sample_selected ${report.longmemeval.sample_selected}`
           : "") +
         "\n",
+    );
+  }
+  if (report.quality.by_category["standing_instruction"] !== undefined) {
+    const standing = report.quality.by_category["standing_instruction"];
+    process.stdout.write(
+      `${STANDING_INSTRUCTION_LINE_PREFIX}: ${standing.passed}/${standing.total} ` +
+        `(pass rate ${Math.round((standing.passed / standing.total) * 1000) / 1000})\n`,
     );
   }
   process.stdout.write(`judge: ${report.judge.status}\n`);
