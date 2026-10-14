@@ -1,0 +1,166 @@
+/**
+ * Read-time provenance join for surfaced preferences (recall lane).
+ *
+ * A preference's `evidenced_by` frontmatter cites its origin signals as
+ * wikilinks (`[[sig-...]]`), and a signal may carry a `session_ref` —
+ * the coordinates of the conversation moment the fact came from. This
+ * module joins the two at READ time: parse the ref, order the origins
+ * by the preference's own evidence order, and hand the caller the
+ * first mention. Nothing is written: no new frontmatter field, no
+ * preference rewrite, so a join cannot corrupt the provenance it only
+ * reads.
+ *
+ * Three producers write `session_ref` today, each with its own shape,
+ * and the parser is per-producer aware rather than shape-guessing:
+ *
+ *   - import-session: `<portable basename>#<turn id>` (the ref is
+ *     composed in `src/core/brain/sessions/import.ts` from
+ *     `sessionRefIdentity`'s basename key; the fragment is a real
+ *     turn id) — resolves with kind `turn`;
+ *   - capture lifecycle: `session:<id>#<event>` (composed in
+ *     `src/core/brain/session-lifecycle.ts`; the fragment is an event
+ *     id, turn-correlated but not guaranteed to be a turn id) —
+ *     resolves with kind `origin_event`, labeled as what it is;
+ *   - auto-extract: a bare session reference with no fragment
+ *     (`src/core/brain/extract-signals.ts` stores the caller's
+ *     session id verbatim) — resolves to NOTHING, because no turn is
+ *     available.
+ *
+ * The never-guess rule governs every shape outside those three: a ref
+ * that is blank, fragment-less, double-hashed, or half-empty yields no
+ * provenance rather than a best-effort reading. Callers report an
+ * honestly-unresolved preference instead of an invented coordinate.
+ *
+ * Pure and deterministic, in the `detectThreadFacets` mold
+ * (thread-topics.ts): no I/O, no clock, no randomness, no imports at
+ * all — the signal lookup is injected, so the same input yields the
+ * same origins in the same order across calls.
+ */
+
+/** How the fragment of a parsed `session_ref` should be read. */
+export type SessionRefOriginKind = "turn" | "origin_event";
+
+/**
+ * One origin coordinate parsed from a signal's `session_ref`.
+ * `sessionKey` is the ref's key segment verbatim — the portable
+ * session basename for import-session refs, the `session:<id>` form
+ * for capture-lifecycle refs — so a consumer never sees a rewritten
+ * identity.
+ */
+export interface SessionRefOrigin {
+  readonly sessionKey: string;
+  /** The ref's fragment: a turn id (`turn`) or an event id (`origin_event`). */
+  readonly fragment: string;
+  readonly kind: SessionRefOriginKind;
+}
+
+/** The slice of a parsed preference the join needs. */
+export interface PreferenceEvidenceSource {
+  /** Preference id (`pref-<slug>`); becomes the stable `pref:<id>` key. */
+  readonly id: string;
+  /** Origin-signal wikilinks, in the preference's own evidence order. */
+  readonly evidenced_by: ReadonlyArray<string>;
+}
+
+/**
+ * Signal-id → `session_ref` lookup, injected so this module stays a
+ * leaf. Returns `undefined` when the signal does not exist or carries
+ * no `session_ref` — both mean "contributes no origin", never an error.
+ */
+export type SignalSessionRefLookup = (signalId: string) => string | undefined;
+
+/**
+ * The resolved provenance of one preference. `origins` follows the
+ * preference's `evidenced_by` order (never re-sorted), with duplicate
+ * coordinates folded into their first position, so `origins[0]` is the
+ * first mention.
+ */
+export interface PreferenceProvenance {
+  /** Stable facet key: `pref:<preference id>`. */
+  readonly key: string;
+  readonly preferenceId: string;
+  readonly origins: ReadonlyArray<SessionRefOrigin>;
+}
+
+/** The capture-lifecycle key prefix; the one producer key that is not a basename. */
+const CAPTURE_LIFECYCLE_SCHEME = "session:";
+
+/**
+ * Parse one signal `session_ref` into its origin coordinates, or
+ * `null` when the ref is absent, blank, fragment-less (the auto-extract
+ * shape — no turn exists to cite), double-hashed (no producer emits
+ * it), or halves-empty. The split is on the FIRST `#`, per the
+ * documented `<key>#<fragment>` contract; a key with the
+ * capture-lifecycle prefix marks an event fragment and resolves as
+ * `origin_event`, every other key as a `turn`.
+ */
+export function parseSessionRef(ref: string): SessionRefOrigin | null {
+  const trimmed = ref.trim();
+  if (trimmed.length === 0) return null;
+  const hash = trimmed.indexOf("#");
+  // Bare reference: the auto-extract producer's shape, and no other
+  // writer's. No fragment means no turn to cite — no provenance.
+  if (hash < 0) return null;
+  // A second `#` is a shape no producer emits; reading one would be a
+  // guess about which segment is the fragment.
+  if (trimmed.indexOf("#", hash + 1) >= 0) return null;
+  const sessionKey = trimmed.slice(0, hash);
+  const fragment = trimmed.slice(hash + 1);
+  if (sessionKey.length === 0 || fragment.length === 0) return null;
+  if (sessionKey.startsWith(CAPTURE_LIFECYCLE_SCHEME)) {
+    if (sessionKey.length === CAPTURE_LIFECYCLE_SCHEME.length) return null;
+    return Object.freeze({ sessionKey, fragment, kind: "origin_event" });
+  }
+  return Object.freeze({ sessionKey, fragment, kind: "turn" });
+}
+
+/**
+ * Evidence wikilinks are written as the exact `[[<signal id>]]` form;
+ * anything else (a bare id, prose embedding a link, an aliased variant)
+ * is not an evidence link this join may interpret, and yields no
+ * target rather than a guessed one.
+ */
+const EXACT_EVIDENCE_WIKILINK_RE = /^\[\[([^[\]]+)\]\]$/;
+
+function evidenceTarget(entry: string): string | null {
+  // Inside a character class a lone `[` needs no escape, so the class
+  // reads "one or more characters that are neither bracket kind".
+  const match = EXACT_EVIDENCE_WIKILINK_RE.exec(entry.trim());
+  if (match === null) return null;
+  const target = match[1]?.trim() ?? "";
+  return target.length > 0 ? target : null;
+}
+
+/**
+ * Resolve one preference's origin provenance: walk `evidenced_by` in
+ * order, resolve each exact evidence wikilink through `lookup`, parse
+ * the signal's `session_ref`, and keep the origins that resolve —
+ * duplicates folded into their first position. Returns `null` when
+ * nothing resolves: an honestly-unresolved preference, never an empty
+ * stand-in that could read as provenance.
+ */
+export function resolvePreferenceProvenance(
+  preference: PreferenceEvidenceSource,
+  lookup: SignalSessionRefLookup,
+): PreferenceProvenance | null {
+  const origins: SessionRefOrigin[] = [];
+  const seen = new Set<string>();
+  for (const entry of preference.evidenced_by) {
+    const target = evidenceTarget(entry);
+    if (target === null) continue;
+    const ref = lookup(target);
+    if (ref === undefined) continue;
+    const origin = parseSessionRef(ref);
+    if (origin === null) continue;
+    const dedupKey = `${origin.kind}\u0000${origin.sessionKey}\u0000${origin.fragment}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    origins.push(origin);
+  }
+  if (origins.length === 0) return null;
+  return Object.freeze({
+    key: `pref:${preference.id}`,
+    preferenceId: preference.id,
+    origins: Object.freeze(origins),
+  });
+}
