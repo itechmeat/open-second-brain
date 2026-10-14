@@ -75,8 +75,25 @@ export interface SemanticEmbedTiming {
    * was resolved at.
    */
   readonly clock: () => number;
+  /**
+   * The dispatch stamp: written by the provider's dispatch report, the
+   * moment the request actually leaves. A provider that never reports a
+   * dispatch leaves it unset, and the fold falls back to the pre-call
+   * stamp.
+   */
   embedStartMs?: number;
+  /**
+   * The resolution stamp: written when the phase's continuation around
+   * the provider promise ran - the answer or the failure came back. It
+   * is never a claim about any wire event past the call's own return.
+   */
   embedEndMs?: number;
+  /**
+   * The pre-call fallback start: stamped just before the provider call
+   * for providers that never report a dispatch, so their interval stays
+   * the whole awaited call, as before the dispatch report existed.
+   */
+  preCallStartMs?: number;
 }
 
 interface SemanticPhaseOutcome {
@@ -204,21 +221,43 @@ export async function runSemanticPhase(
   }
 
   let queryVec: number[];
+  // The embed start is stamped by the provider's dispatch report - the
+  // moment the request actually leaves, which is the instant overlap is
+  // measured from. The pre-call stamp below is only the fallback for
+  // providers that never report a dispatch (the offline local embedder,
+  // or one built before the callback existed): their interval stays the
+  // whole awaited call, as before. With no sink there is no stamp and no
+  // callback, and the call options are exactly what they were.
+  const timing = opts.timing;
+  if (timing !== undefined) timing.preCallStartMs = timing.clock();
   try {
     const provider = makeProvider(config.semantic);
-    if (opts.timing !== undefined) opts.timing.embedStartMs = opts.timing.clock();
     const vectors = await provider.embed(
       [prepared.text],
       "query",
-      opts.signal !== undefined ? { signal: opts.signal } : undefined,
+      timing === undefined && opts.signal === undefined
+        ? undefined
+        : {
+            ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+            ...(timing !== undefined
+              ? {
+                  onDispatch: () => {
+                    timing.embedStartMs = timing.clock();
+                  },
+                }
+              : {}),
+          },
     );
-    if (opts.timing !== undefined) opts.timing.embedEndMs = opts.timing.clock();
+    if (timing !== undefined) timing.embedEndMs = timing.clock();
     queryVec = vectors[0] ?? [];
   } catch (e) {
     // The interval closes even on the failure arm: the overlap figure
     // stays coherent for a lane that ran and lost its embed.
-    if (opts.timing !== undefined && opts.timing.embedStartMs !== undefined) {
-      opts.timing.embedEndMs = opts.timing.clock();
+    if (
+      timing !== undefined &&
+      (timing.embedStartMs !== undefined || timing.preCallStartMs !== undefined)
+    ) {
+      timing.embedEndMs = timing.clock();
     }
     if (opts.signal?.aborted === true) throw opts.signal.reason;
     if (opts.explicit) {

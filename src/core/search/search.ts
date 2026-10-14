@@ -625,10 +625,13 @@ export async function search(
     const semanticLane = await semanticLaneJoin.join();
     // One sink call at the join, on both deadline arms: the intervals and
     // their intersection, zero whenever no embed interval was stamped
-    // (keyword-only, or a pre-flight refusal left no stamps). An embed
-    // that ran and was discarded still reports its real interval.
+    // (keyword-only, or a pre-flight refusal left no stamps). The start
+    // is the dispatch report when the provider gave one, and the pre-call
+    // fallback otherwise (a provider that never reports dispatches keeps
+    // its whole-awaited-call interval). An embed that ran and was
+    // discarded still reports its real interval.
     if (laneTimingSink !== undefined) {
-      const embedStartMs = embedTiming.embedStartMs;
+      const embedStartMs = embedTiming.embedStartMs ?? embedTiming.preCallStartMs;
       const embedEndMs = embedTiming.embedEndMs;
       laneTimingSink({
         ...(embedStartMs !== undefined ? { embedStartMs } : {}),

@@ -305,6 +305,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     // The caller's cancellation reaches every batch through the same
     // controller a failed sibling uses.
     const unlink = linkAbortSignal(opts?.signal, cancel);
+    // The dispatch report fires once per call, for the first batch that
+    // reaches the wire: the caller's embed interval starts when the
+    // request actually leaves, not at an await inside a later batch task.
+    let dispatched = false;
 
     const tasks = batches.map(async (batch) => {
       // A free permit is taken synchronously, so the batch reaches `fetch`
@@ -314,6 +318,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
       const permit = sem.tryAcquire() ?? (await sem.acquire());
       try {
         if (cancel.signal.aborted) return;
+        if (dispatched === false && opts?.onDispatch !== undefined) {
+          dispatched = true;
+          opts.onDispatch();
+        }
         const vectors = await this.embedBatchWithRetry(
           batch.map((b) => b.text),
           {

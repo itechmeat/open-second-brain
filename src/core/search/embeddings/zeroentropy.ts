@@ -125,6 +125,10 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     const out: number[][] = new Array(texts.length);
     const cancel = new AbortController();
     const unlink = linkAbortSignal(opts?.signal, cancel);
+    // The dispatch report fires once per call, for the first batch that
+    // reaches the wire: the caller's embed interval starts when the
+    // request actually leaves, not at an await inside a later batch task.
+    let dispatched = false;
 
     const tasks = batches.map(async (batch) => {
       // A free permit is taken synchronously, so the batch reaches `fetch`
@@ -134,6 +138,10 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
       const permit = sem.tryAcquire() ?? (await sem.acquire());
       try {
         if (cancel.signal.aborted) return;
+        if (dispatched === false && opts?.onDispatch !== undefined) {
+          dispatched = true;
+          opts.onDispatch();
+        }
         const vectors = await this.embedBatchWithRetry(
           batch.map((b) => b.text),
           { maxAttempts: this.config.maxRetries, parentSignal: cancel.signal },

@@ -463,10 +463,39 @@ test("the embed request dispatches before the keyword lanes finish", async () =>
   }
   expect(dispatchMs).toBeLessThanOrEqual(timing.keywordStartMs);
   expect(dispatchMs).toBeLessThanOrEqual(timing.keywordEndMs);
+  // The sink's start stamp is the dispatch report: the phase stamped the
+  // moment the provider handed the request toward the wire, not an
+  // earlier pre-call instant, and the resolution stamp sits behind the
+  // delayed answer, past the keyword lane's end.
+  expect(timing.embedStartMs).toBeLessThanOrEqual(dispatchMs);
+  expect(timing.embedEndMs).toBeGreaterThan(timing.keywordEndMs);
   // The delayed endpoint kept the lane's resolution behind the keyword
   // lane, so the dispatch really did precede the answer.
   expect(arrivals.length).toBeGreaterThan(0);
   expect(arrivals[0]).toBeLessThan(timing.embedEndMs ?? Number.MAX_SAFE_INTEGER);
+});
+
+test("a provider that never reports a dispatch keeps the pre-call interval as the fallback", async () => {
+  if (!sqliteVecLoadable()) return;
+  await seedCorpus();
+  // The offline local embedder predates the dispatch report and finishes
+  // synchronously: the phase's pre-call stamp is the only start it can
+  // have, and the honest overlap for it is zero - its embed is done
+  // before the keyword lanes open, so none of that interval was hidden.
+  const cfg = semanticConfig({ provider: "local" });
+  await indexVault(cfg, { embeddings: true });
+  let timing: SearchLaneTiming | undefined;
+  const out = await search(cfg, {
+    query: "fox",
+    limit: 5,
+    semantic: true,
+    laneTiming: (t) => void (timing = t),
+  });
+  if (timing === undefined) throw new Error("the lane timing sink never arrived");
+  expect(timing.embedStartMs).toBeDefined();
+  expect(timing.embedEndMs).toBeGreaterThanOrEqual(timing.embedStartMs);
+  expect(timing.overlappedMs).toBe(0);
+  expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
 });
 
 test("keyword sentences precede semantic sentences in the merged warnings", async () => {

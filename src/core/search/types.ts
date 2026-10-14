@@ -864,7 +864,8 @@ export interface EvidencePack {
 /**
  * Per-call lane timing (recall-lane-latency): when the embed round trip
  * ran relative to the keyword lanes, and how much of it they hid - the
- * intersection of the two intervals, `max(0, min(embedEnd, keywordEnd) -
+ * intersection of the embed's dispatch-to-resolution interval with the
+ * keyword interval, `max(0, min(embedEnd, keywordEnd) -
  * max(embedStart, keywordStart))`, zero whenever no embed interval was
  * stamped.
  *
@@ -874,9 +875,21 @@ export interface EvidencePack {
  * served afterwards. Absent embed stamps mean the embed never ran.
  */
 export interface SearchLaneTiming {
-  /** Absolute `Date.now()` stamp of the query embed's start; absent when it never ran. */
+  /**
+   * Absolute `Date.now()` stamp of the query embed's start - the moment
+   * the provider put the request on the wire, as reported through the
+   * provider's dispatch callback. A provider that does not report
+   * dispatches falls back to the instant the phase called into it, so
+   * its interval stays the whole awaited call. Absent when the embed
+   * never ran.
+   */
   readonly embedStartMs?: number;
-  /** Absolute `Date.now()` stamp of the query embed's end; absent when it never ran. */
+  /**
+   * Absolute `Date.now()` stamp of the query embed's RESOLUTION: when
+   * the phase's continuation around the provider promise ran, i.e. the
+   * answer (or the failure) came back - never a claim about any wire
+   * event past that return. Absent when the embed never ran.
+   */
   readonly embedEndMs?: number;
   /** Absolute `Date.now()` stamp taken when the keyword lanes started. */
   readonly keywordStartMs: number;

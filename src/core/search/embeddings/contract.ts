@@ -19,6 +19,15 @@ export type EmbedKind = "query" | "passage";
 export interface EmbedCallOptions {
   /** The caller's cancellation: an aborted call stops its requests. */
   readonly signal?: AbortSignal;
+  /**
+   * The dispatch report (recall-lane-latency): invoked once per call,
+   * for the first batch whose request is about to go on the wire - the
+   * moment the caller's embed interval actually starts, not an earlier
+   * pre-call instant. A provider that never dispatches (the offline
+   * local embedder, or one built before the callback existed) never
+   * calls it, and callers keep their own fallback stamp for that case.
+   */
+  readonly onDispatch?: () => void;
 }
 
 /**
