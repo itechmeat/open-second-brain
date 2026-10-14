@@ -85,10 +85,18 @@ function rerankRoute(req: FakeRequest): FakeResponseSpec {
     return { status: 400, body: { error: "rerank request: documents must be strings" } };
   }
   const query = body.query;
-  const results = (body.documents as string[]).map((document, index) => ({
+  const scored = (body.documents as string[]).map((document, index) => ({
     index,
     relevance_score: overlapScore(query, document),
   }));
+  // Real providers (Cohere, Jina, TEI) answer in score order, not input
+  // order, so the default route does too: sorted by relevance_score
+  // descending, stable on index (Array#sort is stable). The rerank
+  // client realigns the items back through each item's own `index`, and
+  // going through the default route keeps that realignment exercised by
+  // every suite that rides the shared fixture, not only by the suites
+  // that install an explicit out-of-order handler.
+  const results = scored.sort((a, b) => b.relevance_score - a.relevance_score);
   return { status: 200, body: { results, model: body.model ?? DEFAULT_FAKE_MODEL } };
 }
 

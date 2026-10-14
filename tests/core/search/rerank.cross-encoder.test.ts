@@ -76,7 +76,8 @@ describe("CrossEncoderRerankProvider", () => {
 
   test("rides the default /rerank route without a per-test handler", async () => {
     // No setHandler: the fixture's default overlap scores flow through the
-    // provider's wrapped-shape parser, one per document in input order.
+    // provider's wrapped-shape parser and come back realigned to one
+    // score per input document, whatever order the route answered in.
     const provider = new CrossEncoderRerankProvider(endpoint());
     expect(await provider.rerank("fox", ["a fox here", "nothing relevant"])).toEqual([0.5, 0]);
   });

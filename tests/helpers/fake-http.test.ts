@@ -3,7 +3,8 @@
  * answers 500 with its message, so a test fails on the real error rather
  * than timing out on a request nobody answers. The default handler's
  * `/rerank` route contract is pinned here too: deterministic scores, one
- * per document, with malformed bodies failing visibly.
+ * per document, answered in score order like the real providers, with
+ * malformed bodies failing visibly.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -61,17 +62,13 @@ test("the default handler answers POST /rerank with one deterministic score per 
     results: { index: number; relevance_score: number }[];
   };
   expect(body.model).toBe("rerank-1");
-  // One item per document, in input order.
-  expect(body.results.map((r) => r.index)).toEqual([0, 1, 2]);
-  const scores = body.results.map((r) => r.relevance_score);
-  // A document sharing no query token scores lowest; sharing more query
-  // tokens scores higher (monotone in overlap).
-  const unshared = scores[1]!;
-  const shared = scores[0]!;
-  const richer = scores[2]!;
-  expect(unshared).toBe(0);
-  expect(shared).toBeGreaterThan(unshared);
-  expect(richer).toBeGreaterThan(shared);
+  // One item per document, in SCORE order: the default route sorts by
+  // relevance_score descending, stable on index, the way real providers
+  // answer, and the rerank client realigns the items through their own
+  // `index`. "fox runs far" shares two query tokens (2/3), "a fox here"
+  // one (1/2), "nothing relevant" none (0).
+  expect(body.results.map((r) => r.index)).toEqual([2, 0, 1]);
+  expect(body.results.map((r) => r.relevance_score)).toEqual([2 / 3, 0.5, 0]);
   // The same request answers byte-identically: no randomness, no clock.
   const replay = await postJson(base, "/rerank", RERANK_REQUEST);
   expect(replay.status).toBe(200);
