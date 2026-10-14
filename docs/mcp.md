@@ -2048,7 +2048,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   not the only record that it happened. Nothing in this tool removes a dead
   letter; `o2b state status` names the location and the records are listable
   from core. Single-artifact lanes are deliberately excluded: their one
-  failure IS the response. No new tool - the surface stays at 113.
+  failure IS the response. No new tool - the surface is unchanged.
 - Since v1.53.0 `brain_context_pack` reads its `query` two ways. The default is
   the substring filter it has always been - a case/Unicode-insensitive match
   against `topic + principle`, every miss dropped with a `filter-miss` skip -
@@ -2066,7 +2066,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   modes. The tool also stops discarding the report's `warnings`: injection-time
   tension warnings and the owner-scope observation now reach the caller as
   `brain_pre_compress_pack` has always passed them, absent when empty. No new
-  tool - the surface stays at 113.
+  tool - the surface is unchanged.
 - Since v1.84.0 `brain_context_pack` accepts `packing_policy`, a strictly
   opt-in claim order over the two candidate populations that already share
   the one `max_tokens` budget: the preference-derived pages (the facts
@@ -2088,7 +2088,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   or telemetry keys. The receipt and telemetry budget metadata and the
   prompt-prefix metric segment carry the policy under the same rule, as a
   closed-vocabulary member of the frozen tuple. No new tool - the surface
-  stays at 113.
+  is unchanged.
 - Since v1.54.0 a page may RESERVE itself against remote reads, and the
   reservation is enforced rather than advisory. A vault page whose
   `visibility:` frontmatter carries the reserved token is not returned, not
@@ -2152,7 +2152,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   and `write_id: null` arrives with an `audit_reason` naming what went wrong. A
   skipped create (`if_exists: "skip"`) authored no bytes, so it carries no
   `write_id` at all. `brain_writes` reads the record back. One new tool - the
-  surface moves from 113 to 114.
+  surface grows by one.
 - With the optional decision-model turn pre-filter (`extract_prefilter`, see
   [`decision-models/extract-prefilter.md`](decision-models/extract-prefilter.md)),
   the `brain_extract_signals` plan may additively carry `turns_dropped` (turn
