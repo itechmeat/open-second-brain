@@ -307,6 +307,45 @@ describe("context pack packing policy", () => {
     expect("packing" in r).toBe(false);
   });
 
+  test("a reserved charge that consumes the whole budget is refused by name, not answered with zeroed accounting", () => {
+    writeMixedVault();
+    listAttentionFlows(vault); // bootstraps the default flow fixtures
+    const charged = packContext(vault, {
+      maxTokens: 10_000,
+      packingPolicy: "facts_first",
+      attentionFlowIds: ["open-loops"],
+    });
+    const attentionTokens = charged.items.find((i) => i.id === "attention-flows")!.tokens;
+    expect(attentionTokens).toBeGreaterThan(0);
+    // A reserved charge equal to or over the total leaves neither lane
+    // anything to draw - the same silent delivery the zero-budget refusal
+    // exists for, reached through the reserved charge instead of a zero
+    // maxTokens. Both lanes hold candidates, so the empty-lane refusal
+    // does not fire either; the pack must fail by name.
+    for (const total of [attentionTokens, attentionTokens - 1]) {
+      let caught: unknown = null;
+      try {
+        packContext(vault, {
+          maxTokens: total,
+          packingPolicy: "facts_first",
+          attentionFlowIds: ["open-loops"],
+          receipt: { trigger: "context_pack", host: "packing-test" },
+        });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(ContextPackPackingLaneEmptyError);
+      const err = caught as Error;
+      // The refusal says what the caller must know: the policy, the
+      // reserved charge and the total it consumed.
+      expect(err.message).toContain("facts_first");
+      expect(err.message).toContain(String(attentionTokens));
+      expect(err.message).toContain(String(total));
+    }
+    // The refusal ran before the funnel: no delivery record exists.
+    expect(listContextReceipts(vault)).toHaveLength(0);
+  });
+
   test("the refusal names both lanes when both are empty", () => {
     // An empty vault: neither population has a candidate in reach.
     expect(() => packContext(vault, { maxTokens: 10_000, packingPolicy: "facts_first" })).toThrow(

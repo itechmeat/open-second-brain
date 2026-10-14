@@ -150,12 +150,13 @@ export class ContextPackSemanticRelevanceMissingError extends Error {
 
 /**
  * A named packing policy was asked for against a pack where it cannot
- * run: one of its two lanes has no candidate in reach, or the budget is
- * zero and neither lane can ever draw. Packing by the named order would
- * silently do nothing, so the call fails by name - the policy member and
- * every empty lane are in the message - and fails before the receipt and
- * telemetry are written, so a refused pack leaves no record of a
- * delivery.
+ * run: one of its two lanes has no candidate in reach, the budget is
+ * zero and neither lane can ever draw, or the reserved attention charge
+ * consumes the whole budget and neither lane can draw. Packing by the
+ * named order would silently do nothing, so the call fails by name - the
+ * policy member and every empty lane are in the message - and fails
+ * before the receipt and telemetry are written, so a refused pack leaves
+ * no record of a delivery.
  */
 export class ContextPackPackingLaneEmptyError extends Error {
   private constructor(message: string) {
@@ -179,6 +180,18 @@ export class ContextPackPackingLaneEmptyError extends Error {
     return new ContextPackPackingLaneEmptyError(
       `context pack: packing_policy ${policy} needs a positive token budget; ` +
         `neither lane can draw on zero tokens`,
+    );
+  }
+
+  /**
+   * The allocation's refusal: the reserved attention charge consumes the
+   * whole budget, so both populated lanes draw on nothing.
+   */
+  static reservedCharge(policy: PackingPolicy, reservedTokens: number, maxTokens: number) {
+    return new ContextPackPackingLaneEmptyError(
+      `context pack: packing_policy ${policy} needs a lane budget beyond the reserved ` +
+        `attention charge; the reserved charge of ${reservedTokens} tokens consumes the ` +
+        `whole ${maxTokens}-token budget and neither lane can draw`,
     );
   }
 }
@@ -350,11 +363,12 @@ export interface ContextPackOptions {
    * losing lane fills the exact remainder and the total never grows.
    * Omitted runs the unified comparator pack byte-identical to every
    * release before this one - no partition, no `packing` accounting.
-   * With the option set, a lane with no candidate in reach - and a zero
-   * budget, which offers neither lane anything to draw - is refused
-   * by name ({@link ContextPackPackingLaneEmptyError}), never a silent
-   * no-op, and the synthesized attention block stays a reserved charge
-   * neither lane draws. See {@link PACKING_POLICIES}.
+   * With the option set, a lane with no candidate in reach, a zero
+   * budget, or a reserved attention charge that consumes the whole
+   * total - each of which offers neither lane anything to draw - is
+   * refused by name ({@link ContextPackPackingLaneEmptyError}), never a
+   * silent no-op, and the synthesized attention block stays a reserved
+   * charge neither lane draws. See {@link PACKING_POLICIES}.
    */
   readonly packingPolicy?: PackingPolicy;
   /**
@@ -932,6 +946,21 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           };
         }
       }
+    }
+    // A reserved charge that consumes the whole total leaves neither lane
+    // anything to draw - the same silent delivery the zero-budget
+    // short-circuit refuses, reached through the reserved charge instead
+    // of a zero maxTokens. Both lanes hold candidates here (the
+    // empty-lane refusal passed above), so packing by the named order
+    // would answer with zeroed lane accounting; refuse by name instead,
+    // before any receipt or telemetry exists to record a delivery that
+    // never happened.
+    if (attention !== null && attention.tokens >= opts.maxTokens) {
+      throw ContextPackPackingLaneEmptyError.reservedCharge(
+        policy,
+        attention.tokens,
+        opts.maxTokens,
+      );
     }
     // Per-memory char cap stays lane-internal: trim inside the lane
     // first, then price the emitted text so the allocation charges what
