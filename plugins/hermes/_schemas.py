@@ -529,133 +529,190 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = ({'name': 'brain_feedback',
                  'unavailable (Cursor, Aider, raw Claude API). Read-only.',
   'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
  {'name': 'brain_context_pack',
-  'description': 'Return the highest-tier, most recent vault slice that fits under `max_tokens`. '
-                 'Ordered core → supporting → peripheral, newest first; stops adding pages when '
-                 'the next page would exceed the budget. Read-only.',
-  'inputSchema': {'type': 'object',
-                  'properties': {'max_tokens': {'type': 'integer',
-                                                'minimum': 1,
-                                                'description': 'Strict upper bound on the returned '
-                                                               "slice's token count."},
-                                 'query': {'type': 'string',
-                                           'maxLength': 2000,
-                                           'description': 'Optional query. Read as a '
-                                                          'case/Unicode-insensitive substring '
-                                                          'filter on topic + principle unless '
-                                                          '`query_mode` says otherwise.'},
-                                 'query_mode': {'type': 'string',
-                                                'enum': ['substring', 'ranked', 'semantic'],
-                                                'description': 'How `query` is read: `substring` '
-                                                               '(default) drops misses; `ranked` '
-                                                               'orders by token overlap; '
-                                                               '`semantic` orders by stored belief '
-                                                               'vectors, embedding the query '
-                                                               'once.'},
-                                 'focus_session': {'type': 'string',
-                                                   'minLength': 1,
-                                                   'maxLength': 128,
-                                                   'description': 'Session id whose bound search '
-                                                                  'focus boosts matching memories '
-                                                                  '(requires '
-                                                                  'search_focus_context_pack).'},
-                                 'max_chars_per_memory': {'type': 'integer',
-                                                          'minimum': 1,
-                                                          'description': 'Optional per-page '
-                                                                         'character cap so one '
-                                                                         'huge page cannot crowd '
-                                                                         'out the rest; trimmed '
-                                                                         'pages carry `trimmed: '
-                                                                         'true`.'},
-                                 'max_total_chars': {'type': 'integer',
-                                                     'minimum': 1,
-                                                     'description': 'Optional second ceiling (code '
-                                                                    'points) on the cumulative '
-                                                                    'size of the returned slice. '
-                                                                    'Lowest-priority overflow is '
-                                                                    'dropped with an '
-                                                                    '`over-char-budget` skip '
-                                                                    'reason.'},
-                                 'lanes': {'type': 'boolean',
-                                           'description': 'When true, also return polarity-aware '
-                                                          'directives, constraints, and consider '
-                                                          'lanes. Legacy flat `items` remains '
-                                                          'present.'},
-                                 'cache_stable': {'type': 'boolean',
-                                                  'description': 'When true, reorder the selected '
-                                                                 'items by stable id and annotate '
-                                                                 'their original rank.'},
-                                 'dedup_repeated': {'type': 'boolean',
-                                                    'description': 'When true, replace repeated '
-                                                                   'context bodies with reference '
-                                                                   'hints to an earlier emitted '
-                                                                   'item.'},
-                                 'attention_flow_ids': {'type': 'array',
-                                                        'items': {'type': 'string'},
-                                                        'description': 'Optional declarative '
-                                                                       'attention flow ids to '
-                                                                       'inject as a synthetic '
-                                                                       'context block.'},
-                                 'receipt': {'type': 'boolean',
-                                             'description': 'When true, emit an opt-in context '
-                                                            'receipt for this context-pack run.'},
-                                 'receipt_host': {'type': 'string',
-                                                  'description': 'Optional host/runtime name for '
-                                                                 'emitted receipts; defaults to '
-                                                                 '`mcp`.'},
-                                 'recall_scores': {'type': 'array',
-                                                   'maxItems': 200,
-                                                   'items': {'type': 'number'},
-                                                   'description': 'Optional top-k recall scores; '
-                                                                  'requires `match_quality`. '
-                                                                  'Together they add an adequacy '
-                                                                  'verdict: sufficient/proceed, '
-                                                                  'weak/re_recall, '
-                                                                  'insufficient/abstain.'},
-                                 'match_quality': {'type': 'number',
-                                                   'minimum': 0,
-                                                   'maximum': 1,
-                                                   'description': 'Absolute match quality in '
-                                                                  "[0,1]: a search outcome's "
-                                                                  '`idf_weighted_coverage`. '
-                                                                  'Required with `recall_scores`; '
-                                                                  'the adequacy level reads this, '
-                                                                  'never a score.'},
-                                 'decision_answerable': {'type': 'number',
-                                                         'minimum': 0,
-                                                         'maximum': 1,
-                                                         'description': 'Advisory [0,1] '
-                                                                        'probability from a '
-                                                                        "search's "
-                                                                        '`decision_model.answerable`. '
-                                                                        'Needs `recall_scores` and '
-                                                                        '`match_quality`; never '
-                                                                        'changes the level.'},
-                                 'telemetry': {'type': 'boolean',
-                                               'description': 'When true, emit an opt-in recall '
-                                                              'telemetry record for this '
-                                                              'context-pack run.'},
-                                 'telemetry_host': {'type': 'string',
-                                                    'description': 'Optional host/runtime name for '
-                                                                   'emitted telemetry; defaults to '
-                                                                   '`mcp`.'},
-                                 'session_id': {'type': 'string',
-                                                'description': 'Optional session id recorded on '
-                                                               'emitted telemetry.'},
-                                 'turn_id': {'type': 'string',
-                                             'description': 'Optional turn id recorded on emitted '
-                                                            'telemetry.'},
-                                 'agent_scope': {'type': 'string',
-                                                 'description': 'Optional agent-ownership scope; '
-                                                                'shared (ownerless) memories '
-                                                                'always match, owner-tagged '
-                                                                'memories only their owner. Absent '
-                                                                '= no ownership filtering.'}},
-                  'required': ['max_tokens'],
-                  'dependentRequired': {'recall_scores': ['match_quality'],
-                                        'match_quality': ['recall_scores'],
-                                        'decision_answerable': ['recall_scores', 'match_quality'],
-                                        'query_mode': ['query']},
-                  'additionalProperties': False}},
+   'description': 'Return the highest-tier, most recent vault slice that fits under '
+                  '`max_tokens`. Ordered core → supporting → peripheral, newest first; '
+                  'stops adding pages when the next page would exceed the budget. '
+                  'Read-only.',
+   'inputSchema': {'type': 'object',
+                   'properties': {'max_tokens': {'type': 'integer',
+                                                 'minimum': 1,
+                                                 'description': 'Strict upper bound on '
+                                                                "the returned slice's "
+                                                                'token count.'},
+                                  'query': {'type': 'string',
+                                            'maxLength': 2000,
+                                            'description': 'Optional query. Read as a '
+                                                           'case/Unicode-insensitive '
+                                                           'substring filter on topic + '
+                                                           'principle unless '
+                                                           '`query_mode` says '
+                                                           'otherwise.'},
+                                  'query_mode': {'type': 'string',
+                                                 'enum': ['substring',
+                                                          'ranked',
+                                                          'semantic'],
+                                                 'description': 'How `query` is read: '
+                                                                '`substring` (default) '
+                                                                'drops misses; `ranked` '
+                                                                'orders by token '
+                                                                'overlap; `semantic` '
+                                                                'orders by stored belief '
+                                                                'vectors, embedding the '
+                                                                'query once.'},
+                                  'packing_policy': {'type': 'string',
+                                                     'enum': ['facts_first',
+                                                              'query_first'],
+                                                     'description': 'Which lane claims '
+                                                                    'the token budget '
+                                                                    'first: '
+                                                                    '`facts_first` (the '
+                                                                    'distilled '
+                                                                    'preference layer) '
+                                                                    'or `query_first` '
+                                                                    '(the pages lane). '
+                                                                    'Requires `query`.'},
+                                  'focus_session': {'type': 'string',
+                                                    'minLength': 1,
+                                                    'maxLength': 128,
+                                                    'description': 'Session id whose '
+                                                                   'bound search focus '
+                                                                   'boosts matching '
+                                                                   'memories (requires '
+                                                                   'search_focus_context_pack).'},
+                                  'max_chars_per_memory': {'type': 'integer',
+                                                           'minimum': 1,
+                                                           'description': 'Optional '
+                                                                          'per-page '
+                                                                          'character cap '
+                                                                          'so one huge '
+                                                                          'page cannot '
+                                                                          'crowd out the '
+                                                                          'rest; trimmed '
+                                                                          'pages carry '
+                                                                          '`trimmed: '
+                                                                          'true`.'},
+                                  'max_total_chars': {'type': 'integer',
+                                                      'minimum': 1,
+                                                      'description': 'Optional second '
+                                                                     'ceiling (code '
+                                                                     'points) on the '
+                                                                     'cumulative size of '
+                                                                     'the returned '
+                                                                     'slice. '
+                                                                     'Lowest-priority '
+                                                                     'overflow is '
+                                                                     'dropped with an '
+                                                                     '`over-char-budget` '
+                                                                     'skip reason.'},
+                                  'lanes': {'type': 'boolean',
+                                            'description': 'When true, also return '
+                                                           'polarity-aware directives, '
+                                                           'constraints, and consider '
+                                                           'lanes. Legacy flat `items` '
+                                                           'remains present.'},
+                                  'cache_stable': {'type': 'boolean',
+                                                   'description': 'When true, reorder '
+                                                                  'the selected items by '
+                                                                  'stable id and '
+                                                                  'annotate their '
+                                                                  'original rank.'},
+                                  'dedup_repeated': {'type': 'boolean',
+                                                     'description': 'When true, replace '
+                                                                    'repeated context '
+                                                                    'bodies with '
+                                                                    'reference hints to '
+                                                                    'an earlier emitted '
+                                                                    'item.'},
+                                  'attention_flow_ids': {'type': 'array',
+                                                         'items': {'type': 'string'},
+                                                         'description': 'Optional '
+                                                                        'declarative '
+                                                                        'attention flow '
+                                                                        'ids to inject '
+                                                                        'as a synthetic '
+                                                                        'context block.'},
+                                  'receipt': {'type': 'boolean',
+                                              'description': 'When true, emit an opt-in '
+                                                             'context receipt for this '
+                                                             'context-pack run.'},
+                                  'receipt_host': {'type': 'string',
+                                                   'description': 'Optional host/runtime '
+                                                                  'name for emitted '
+                                                                  'receipts; defaults to '
+                                                                  '`mcp`.'},
+                                  'recall_scores': {'type': 'array',
+                                                    'maxItems': 200,
+                                                    'items': {'type': 'number'},
+                                                    'description': 'Optional top-k '
+                                                                   'recall scores; '
+                                                                   'requires '
+                                                                   '`match_quality`. '
+                                                                   'Together they add an '
+                                                                   'adequacy verdict: '
+                                                                   'sufficient/proceed, '
+                                                                   'weak/re_recall, '
+                                                                   'insufficient/abstain.'},
+                                  'match_quality': {'type': 'number',
+                                                    'minimum': 0,
+                                                    'maximum': 1,
+                                                    'description': 'Absolute match '
+                                                                   'quality in [0,1]: a '
+                                                                   "search outcome's "
+                                                                   '`idf_weighted_coverage`. '
+                                                                   'Required with '
+                                                                   '`recall_scores`; the '
+                                                                   'adequacy level reads '
+                                                                   'this, never a '
+                                                                   'score.'},
+                                  'decision_answerable': {'type': 'number',
+                                                          'minimum': 0,
+                                                          'maximum': 1,
+                                                          'description': 'Advisory [0,1] '
+                                                                         'probability '
+                                                                         'from a '
+                                                                         "search's "
+                                                                         '`decision_model.answerable`. '
+                                                                         'Needs '
+                                                                         '`recall_scores` '
+                                                                         'and '
+                                                                         '`match_quality`; '
+                                                                         'never changes '
+                                                                         'the level.'},
+                                  'telemetry': {'type': 'boolean',
+                                                'description': 'When true, emit an '
+                                                               'opt-in recall telemetry '
+                                                               'record for this '
+                                                               'context-pack run.'},
+                                  'telemetry_host': {'type': 'string',
+                                                     'description': 'Optional '
+                                                                    'host/runtime name '
+                                                                    'for emitted '
+                                                                    'telemetry; defaults '
+                                                                    'to `mcp`.'},
+                                  'session_id': {'type': 'string',
+                                                 'description': 'Optional session id '
+                                                                'recorded on emitted '
+                                                                'telemetry.'},
+                                  'turn_id': {'type': 'string',
+                                              'description': 'Optional turn id recorded '
+                                                             'on emitted telemetry.'},
+                                  'agent_scope': {'type': 'string',
+                                                  'description': 'Optional '
+                                                                 'agent-ownership scope; '
+                                                                 'shared (ownerless) '
+                                                                 'memories always match, '
+                                                                 'owner-tagged memories '
+                                                                 'only their owner. '
+                                                                 'Absent = no ownership '
+                                                                 'filtering.'}},
+                   'required': ['max_tokens'],
+                   'dependentRequired': {'recall_scores': ['match_quality'],
+                                         'match_quality': ['recall_scores'],
+                                         'decision_answerable': ['recall_scores',
+                                                                 'match_quality'],
+                                         'query_mode': ['query'],
+                                         'packing_policy': ['query']},
+                   'additionalProperties': False}},
  {'name': 'brain_context_pack_outcome',
   'description': 'Context-pack outcome loop. `post` records an outcome row for a carried sample id '
                  '— first-pass/repair/retry counters plus three SEPARATE token signals (exact, '
