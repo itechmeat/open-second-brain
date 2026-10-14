@@ -256,8 +256,8 @@ function normalizeStandingQueryScopes(value: unknown): ReadonlyArray<string> {
 
 /** Item annotation prefix for a first mention resolved to a real turn. */
 const FIRST_MENTION_TURN_PREFIX = " [first mention turn ";
-/** Item annotation prefix for a first mention resolved to a capture-lane event, which is not guaranteed to be a turn id. */
-const FIRST_MENTION_EVENT_PREFIX = " [first mention event ";
+/** Item annotation prefix for a first mention resolved to a capture-lifecycle coordinate: the fragment is the hook event's NAME, so the annotation claims the session, never a turn. */
+const FIRST_MENTION_SESSION_PREFIX = " [first mention session ";
 /** Item annotation suffix. */
 const FIRST_MENTION_SUFFIX = "]";
 
@@ -343,7 +343,7 @@ function listConfirmedPreferencesByScope(
         }
         const first = provenance.origins[0]!;
         const prefix =
-          first.kind === "turn" ? FIRST_MENTION_TURN_PREFIX : FIRST_MENTION_EVENT_PREFIX;
+          first.kind === "turn" ? FIRST_MENTION_TURN_PREFIX : FIRST_MENTION_SESSION_PREFIX;
         items.push(`${base}${prefix}${first.sessionKey}#${first.fragment}${FIRST_MENTION_SUFFIX}`);
         facets.push({
           key: provenance.key,

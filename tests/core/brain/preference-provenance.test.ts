@@ -13,9 +13,9 @@
  *     a machine-local path);
  *   - capture lifecycle: `session:<id>#<event>` — composed by
  *     `sessionReference` at src/core/brain/session-lifecycle.ts:858;
- *     the fragment is an event id, turn-correlated but not guaranteed
- *     to be a turn id, so it resolves as an ORIGIN EVENT and is
- *     labeled as such;
+ *     the fragment is a hook event NAME (UserPromptSubmit, Stop,
+ *     SessionEnd), not an event id, so it resolves as SESSION-level
+ *     provenance (kind `session`) and is labeled as such;
  *   - auto-extract: a bare session reference with no fragment —
  *     src/core/brain/extract-signals.ts:646 stores the caller's
  *     session id verbatim, so no turn is available.
@@ -49,13 +49,16 @@ describe("parseSessionRef: producer shapes", () => {
     });
   });
 
-  test("a capture-lifecycle ref resolves as an origin event, labeled as such", () => {
+  test("a capture-lifecycle ref resolves as session-level provenance, labeled as such", () => {
     // Live writer shape: `session:${payload.sessionId}#${payload.event}`.
+    // The fragment is the hook event's NAME, not an event id, so every
+    // prompt-sourced signal in a session shares the one coordinate: the
+    // kind says session, never a turn claim.
     const origin = parseSessionRef("session:00000000-0000-0000-0000-000000000001#UserPromptSubmit");
     expect(origin).toEqual({
       sessionKey: "session:00000000-0000-0000-0000-000000000001",
       fragment: "UserPromptSubmit",
-      kind: "origin_event",
+      kind: "session",
     });
   });
 
@@ -66,7 +69,7 @@ describe("parseSessionRef: producer shapes", () => {
     expect(origin).toEqual({
       sessionKey: "session:unknown",
       fragment: "SessionEnd",
-      kind: "origin_event",
+      kind: "session",
     });
   });
 
@@ -132,7 +135,7 @@ describe("resolvePreferenceProvenance", () => {
       {
         sessionKey: "session:00000000-0000-0000-0000-000000000002",
         fragment: "UserPromptSubmit",
-        kind: "origin_event",
+        kind: "session",
       },
     ]);
     // The earliest evidence is the first mention.
@@ -200,7 +203,7 @@ describe("resolvePreferenceProvenance", () => {
       {
         sessionKey: "session:00000000-0000-0000-0000-000000000002",
         fragment: "UserPromptSubmit",
-        kind: "origin_event",
+        kind: "session",
       },
     ]);
   });

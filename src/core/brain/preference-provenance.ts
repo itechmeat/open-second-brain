@@ -18,9 +18,11 @@
  *     `sessionRefIdentity`'s basename key; the fragment is a real
  *     turn id) — resolves with kind `turn`;
  *   - capture lifecycle: `session:<id>#<event>` (composed in
- *     `src/core/brain/session-lifecycle.ts`; the fragment is an event
- *     id, turn-correlated but not guaranteed to be a turn id) —
- *     resolves with kind `origin_event`, labeled as what it is;
+ *     `src/core/brain/session-lifecycle.ts`; the fragment is a hook
+ *     event NAME — UserPromptSubmit, Stop, SessionEnd — not an event
+ *     id, so every prompt-sourced signal in a session shares the one
+ *     coordinate) — resolves with kind `session`: session-level
+ *     provenance, labeled as what it is;
  *   - auto-extract: a bare session reference with no fragment
  *     (`src/core/brain/extract-signals.ts` stores the caller's
  *     session id verbatim) — resolves to NOTHING, because no turn is
@@ -38,7 +40,7 @@
  */
 
 /** How the fragment of a parsed `session_ref` should be read. */
-export type SessionRefOriginKind = "turn" | "origin_event";
+export type SessionRefOriginKind = "turn" | "session";
 
 /**
  * One origin coordinate parsed from a signal's `session_ref`.
@@ -49,7 +51,7 @@ export type SessionRefOriginKind = "turn" | "origin_event";
  */
 export interface SessionRefOrigin {
   readonly sessionKey: string;
-  /** The ref's fragment: a turn id (`turn`) or an event id (`origin_event`). */
+  /** The ref's fragment: a turn id (`turn`) or a hook event name (`session`). */
   readonly fragment: string;
   readonly kind: SessionRefOriginKind;
 }
@@ -90,7 +92,7 @@ const CAPTURE_LIFECYCLE_UNKNOWN_ID = "unknown";
  * The lifecycle writer's session-id grammar: the host's session id is a
  * UUID. The prefix alone is not evidence - an imported session file could
  * be named with the same prefix, and import keys are verbatim basenames -
- * so only the documented producer shapes mark an event fragment.
+ * so only the documented producer shapes mark a session-level fragment.
  */
 const CAPTURE_LIFECYCLE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -102,7 +104,8 @@ const CAPTURE_LIFECYCLE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
  * writes. The split is on the FIRST `#`, per the documented
  * `<key>#<fragment>` contract. A key in the capture-lifecycle writer's
  * exact forms - `session:<uuid>` or the `session:unknown` stand-in -
- * marks an event fragment and resolves as `origin_event`. Import keys
+ * marks a hook-event fragment and resolves as `session` (session-level
+ * provenance: the fragment names the hook, never a turn). Import keys
  * are verbatim basenames, so a basename that merely starts with the
  * scheme cannot be told from a lifecycle key by the ref alone: such a
  * ref yields no provenance rather than a guessed label - the
@@ -124,7 +127,7 @@ export function parseSessionRef(ref: string): SessionRefOrigin | null {
   if (sessionKey.startsWith(CAPTURE_LIFECYCLE_SCHEME)) {
     const id = sessionKey.slice(CAPTURE_LIFECYCLE_SCHEME.length);
     if (id === CAPTURE_LIFECYCLE_UNKNOWN_ID || CAPTURE_LIFECYCLE_ID_RE.test(id)) {
-      return Object.freeze({ sessionKey, fragment, kind: "origin_event" });
+      return Object.freeze({ sessionKey, fragment, kind: "session" });
     }
     // Neither lifecycle shape: a basename that collides with the scheme
     // (or an id no writer emits). The kind cannot be read without
