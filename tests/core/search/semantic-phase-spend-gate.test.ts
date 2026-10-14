@@ -295,6 +295,35 @@ test("an empty-fit lane with no keyword hit still reads as a stopped lane", asyn
   expect(semanticLaneMissing(out.degraded.map((d) => d.code))).toBe(true);
 });
 
+test("the lane reads the keyword count at completion, not at start", async () => {
+  // The overlapped caller (recall-lane-latency) starts this lane before
+  // the keyword lanes run, so the count it holds at start time is zero by
+  // construction. The lane must therefore read the count when the embed
+  // settles - by then the keyword lanes have produced their hits - and a
+  // count captured at start would silently drop the hybrid_degraded
+  // signal the contract owes the caller.
+  let keywordHits = 0;
+  server.setHandler(() => {
+    // The keyword lanes complete while this embed is in flight.
+    keywordHits = 3;
+    return { status: 500, body: { error: { message: "embed down" } } };
+  });
+  const out = await runSemanticLane({
+    ...laneInput(gatedConfig(), "q", "local"),
+    keywordHitCount: () => keywordHits,
+  });
+  expect(out.attempted).toBe(false);
+  expect(codes(out.degraded)).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+  expect(out.warnings.some((w) => w.startsWith("hybrid_degraded:"))).toBe(true);
+});
+
+test("the keyword count still accepts a plain number and grades the signal with it", async () => {
+  const hit = await runSemanticLane({ ...laneInput(gatedConfig(), "q"), keywordHitCount: 2 });
+  expect(codes(hit.degraded)).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+  const none = await runSemanticLane({ ...laneInput(gatedConfig(), "q"), keywordHitCount: 0 });
+  expect(codes(none.degraded)).not.toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+});
+
 // ── search() over a real index ───────────────────────────────────────────────
 
 const NOTE = "# Fox\n\nThe quick brown fox jumps over the lazy dog.";

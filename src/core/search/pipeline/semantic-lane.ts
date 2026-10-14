@@ -28,8 +28,15 @@ export interface SemanticLaneInput {
   readonly kind?: "page" | "section";
   /** Promoted property pushdown (recall-quality, C4); absent leaves it unfiltered. */
   readonly pushdown?: PropertyPushdown;
-  /** Keyword pool size, the other half of the hybrid-degrade signal. */
-  readonly keywordHitCount: number;
+  /**
+   * Keyword pool size, the other half of the hybrid-degrade signal. A
+   * supplier is read when the lane completes, not when it starts: the
+   * overlapped caller starts this lane before the keyword lanes run and
+   * can only hand over a closure over the pool they will have produced
+   * (recall-lane-latency). A plain number is the snapshot form, for
+   * callers that already hold the count.
+   */
+  readonly keywordHitCount: number | (() => number);
   /** The composite deadline's cancellation; absent when no deadline runs. */
   readonly signal?: AbortSignal;
   /**
@@ -105,11 +112,16 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
   // structural warning when the caller wanted the semantic lane but it
   // did not run, so the query was served keyword-only. The granular
   // runSemanticPhase warnings above explain WHY; this is the single
-  // greppable flag a caller can test for.
+  // greppable flag a caller can test for. The keyword count resolves
+  // HERE, at completion: under the overlapped join the lane started
+  // before the keyword lanes ran, and this is the first moment the
+  // pool they produced exists to be counted.
+  const keywordHitCount =
+    typeof input.keywordHitCount === "function" ? input.keywordHitCount() : input.keywordHitCount;
   const degrade = detectHybridDegrade({
     wantSemantic: policy.wantSemantic,
     semanticAttempted: attempted,
-    keywordHitCount: input.keywordHitCount,
+    keywordHitCount,
   });
   if (degrade !== null) {
     warnings.push(degrade);
