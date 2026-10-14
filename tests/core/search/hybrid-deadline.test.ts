@@ -198,6 +198,37 @@ test("a stalled semantic lane past the budget yields keyword-only results and na
   expect(out.warnings.some((w) => w.includes("hybrid deadline"))).toBe(true);
 });
 
+test("under the overlapped join the clock stays authoritative and its own abort stays unnamed", async () => {
+  // The lane now starts before the keyword lanes and is joined where the
+  // serial await stood, so the stall races the SAME clock from an earlier
+  // point: the fire still voids whatever the lane squeezed in, the answer
+  // is keyword-only inside the budget, and the abandoned lane's rejection
+  // - which is the deadline's own abort, propagated by the phase - is
+  // recognised by name and never becomes a second sentence beside the
+  // fire note.
+  if (!sqliteVecLoadable()) return;
+  await seedCorpus();
+  const cfg = configWithDeadline(300);
+  await indexVault(cfg, { embeddings: true });
+
+  server.setHandler(stallHandler());
+  const started = Date.now();
+  const out = await search(cfg, { query: "fox", limit: 5, semantic: true });
+  expect(Date.now() - started).toBeLessThan(3_000);
+  expect(out.results.map((r) => r.searchType)).toEqual(["keyword"]);
+  const codes = out.retrievalTrail?.degraded.map((d) => d.code) ?? [];
+  expect(codes).toContain(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);
+  expect(codes).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+
+  // Let the abandoned lane's rejection settle before judging the
+  // warnings, so a late sentence cannot land after the assertion.
+  await Bun.sleep(50);
+  const abandonedSentences = out.warnings.filter((w) =>
+    w.startsWith("hybrid deadline: an abandoned lane failed after the answer:"),
+  );
+  expect(abandonedSentences).toEqual([]);
+});
+
 test("the deadline degrade is keyword-only byte-shaped like the provider-unavailable degrade", async () => {
   if (!sqliteVecLoadable()) return;
   await seedCorpus();
