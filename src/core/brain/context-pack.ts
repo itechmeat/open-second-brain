@@ -48,7 +48,14 @@ import { estimateTokens } from "./text/tokenizer.ts";
 import { densityScore } from "./context-density.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { jaccard, tokenise } from "./similarity.ts";
-import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
+import {
+  allocateRecallBudget,
+  applyCharBudget,
+  type CharBudgetDegradationMode,
+  type PackingPolicy,
+  type RecallBudgetAllocation,
+  type RecallBudgetLaneName,
+} from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
@@ -141,6 +148,23 @@ export class ContextPackSemanticRelevanceMissingError extends Error {
   }
 }
 
+/**
+ * A named packing policy was asked for against a pack where one of its
+ * two lanes has no candidate in reach. Packing by the named order would
+ * silently do nothing, so the call fails by name - the lane and the
+ * policy member are both in the message - and fails before the receipt
+ * and telemetry are written, so a refused pack leaves no record of a
+ * delivery.
+ */
+export class ContextPackPackingLaneEmptyError extends Error {
+  constructor(policy: PackingPolicy, emptyLane: RecallBudgetLaneName) {
+    super(
+      `context pack: packing_policy ${policy} needs both lanes; the ${emptyLane} lane is empty`,
+    );
+    this.name = "ContextPackPackingLaneEmptyError";
+  }
+}
+
 export interface ContextPackItem extends ContextTransformAnnotations {
   readonly id: string;
   readonly path: string;
@@ -195,6 +219,35 @@ export interface ContextPackSkipped {
   readonly reason: "over-budget" | "filter-miss" | "guard-blocked" | "over-char-budget";
 }
 
+/**
+ * What one packing lane held under the correlated budget. `spent` sums
+ * the tokens of the items DELIVERED from the lane, so the two spends
+ * and the reserved charge always add up to `tokensUsed` plus what the
+ * char budget dropped.
+ */
+export interface ContextPackPackingLaneReport {
+  /** The share of the shared total the lane held (first claim or remainder). */
+  readonly allocation: number;
+  /** Tokens actually delivered from this lane. */
+  readonly spent: number;
+  /** Candidates the lane brought into the budget, after the query filter. */
+  readonly candidates: number;
+  /** Items delivered from this lane. */
+  readonly items: number;
+}
+
+/**
+ * Accounting for the opt-in packing policy: which member was named and
+ * what each lane held under the one shared budget. Present ONLY when
+ * the caller named {@link ContextPackOptions.packingPolicy} - the same
+ * conditional shape as `stamp`, `lanes` and `semantic`.
+ */
+export interface ContextPackPackingReport {
+  readonly policy: PackingPolicy;
+  readonly pages: ContextPackPackingLaneReport;
+  readonly facts: ContextPackPackingLaneReport;
+}
+
 export interface ContextPackReport {
   readonly maxTokens: number;
   readonly tokensUsed: number;
@@ -221,6 +274,11 @@ export interface ContextPackReport {
   readonly stamp?: ContextPackStamp;
   /** Present only in `semantic` mode; see {@link ContextPackSemanticReport}. */
   readonly semantic?: ContextPackSemanticReport;
+  /**
+   * Present only when the caller named a packing policy; see
+   * {@link ContextPackPackingReport}.
+   */
+  readonly packing?: ContextPackPackingReport;
 }
 
 /**
@@ -264,6 +322,22 @@ export interface ContextPackOptions {
    * read in no other.
    */
   readonly semanticRelevance?: ReadonlyMap<string, number>;
+  /**
+   * Opt-in packing policy (recall-lane-latency wave): which lane claims
+   * the pack's one existing token budget first when both candidate
+   * populations are in reach - the preference-derived candidates (the
+   * facts lane, the distilled layer) and the page candidates from the
+   * retired directory (the pages lane). `facts_first` claims facts-side
+   * first, `query_first` hands the first claim to the pages lane; the
+   * losing lane fills the exact remainder and the total never grows.
+   * Omitted runs the unified comparator pack byte-identical to every
+   * release before this one - no partition, no `packing` accounting.
+   * With the option set, a lane with no candidate in reach is refused
+   * by name ({@link ContextPackPackingLaneEmptyError}), never a silent
+   * no-op, and the synthesized attention block stays a reserved charge
+   * neither lane draws. See {@link PACKING_POLICIES}.
+   */
+  readonly packingPolicy?: PackingPolicy;
   /**
    * Per-memory character cap (v0.20.0): trim any single page's body to
    * this many code points before it consumes the token budget, so one
@@ -387,6 +461,12 @@ interface Candidate {
    * the caller opts into `includeHistorical`.
    */
   readonly supersededBy: string | null;
+  /**
+   * Which delivery directory the candidate came from. The opt-in
+   * packing policy splits its two lanes on exactly this: preference
+   * pages are the facts lane, retired pages are the pages lane.
+   */
+  readonly source: "preferences" | "retired";
 }
 
 function withOptionalLanes(
@@ -408,6 +488,55 @@ function withOptionalLanes(
       })),
     ),
   };
+}
+
+/**
+ * Build one emitted pack item from a budgeted candidate. Shared by the
+ * unified budget loop and the opt-in packing-policy loop so both
+ * construct byte-identical items; the density recompute reads the
+ * emitted (post-trim) body exactly as the unified loop always has.
+ */
+function toContextPackItem(
+  c: Candidate,
+  body: string,
+  trimmed: boolean,
+  tokens: number,
+  densityRanking: boolean,
+  densityScoreById: ReadonlyMap<string, number>,
+): ContextPackItem {
+  return {
+    id: c.id,
+    path: c.path,
+    tier: c.tier,
+    tokens,
+    body,
+    principle: c.principle,
+    contextLane: c.contextLane,
+    trimmed,
+    epistemic: c.epistemic,
+    evidenceRefs: c.evidenceRefs,
+    ...(c.commitment !== null ? { commitment: c.commitment } : {}),
+    // When the per-memory char budget trimmed this item, recompute density
+    // from the emitted (post-trim) body/tokens so the surfaced value reflects
+    // the actual content/token-cost the agent receives, not the pre-budget
+    // candidate. Untrimmed items reuse the pre-computed score.
+    ...(densityRanking
+      ? {
+          density: trimmed
+            ? densityScore({ body, evidenceRefs: c.evidenceRefs, epistemic: c.epistemic }, tokens)
+            : (densityScoreById.get(c.id) ?? 0),
+        }
+      : {}),
+    ...(c.safety ? { safety: c.safety } : {}),
+  };
+}
+
+/** A priced lane entry: the candidate as the lane would emit it, in tokens. */
+interface PackedLaneEntry {
+  readonly candidate: Candidate;
+  readonly body: string;
+  readonly trimmed: boolean;
+  readonly tokens: number;
 }
 
 /**
@@ -461,6 +590,7 @@ function collectCandidates(
     // the "Why most readers keep the two-tuple form" section in
     // src/core/vault.ts. A pack returns injected content and carries no
     // per-candidate report, so it opens no channel of its own.
+    const source: "preferences" | "retired" = dir === dirs.preferences ? "preferences" : "retired";
     const collected = collectPreferencePages(dir, { ownerScope });
     hiddenByOwnerScope += collected.hiddenByOwnerScope;
     for (const { name, path: full, meta, body } of collected.entries) {
@@ -516,6 +646,7 @@ function collectCandidates(
         evidenceRefs: epistemic.evidenceRefs,
         commitment: readCommitmentTier(meta),
         supersededBy,
+        source,
         ...(contextSafetyReport(guarded) ? { safety: contextSafetyReport(guarded) } : {}),
       });
     }
@@ -538,6 +669,19 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   const startedAtMs = Date.now();
   const semanticRelevance = semanticRelevanceFor(opts);
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
+    // The zero-budget short-circuit reads no vault: when a policy was
+    // named its accounting still rides the one funnel, zeroed, because
+    // neither lane was ever offered a budget to hold.
+    const packing =
+      opts.packingPolicy !== undefined
+        ? {
+            packing: Object.freeze({
+              policy: opts.packingPolicy,
+              pages: Object.freeze({ allocation: 0, spent: 0, candidates: 0, items: 0 }),
+              facts: Object.freeze({ allocation: 0, spent: 0, candidates: 0, items: 0 }),
+            }),
+          }
+        : {};
     return finalizeContextPackReport(
       vault,
       opts,
@@ -547,6 +691,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
         items: Object.freeze([]),
         skipped: Object.freeze([]),
         ...withOptionalLanes(opts, []),
+        ...packing,
       },
       startedAtMs,
     );
@@ -708,6 +853,231 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
+  // Opt-in packing policy (recall-lane-latency wave): correlate the two
+  // candidate populations that share this one budget - preference pages
+  // (the facts lane, the distilled layer) and retired pages (the pages
+  // lane) - and let the caller name the claim order. The whole branch
+  // runs ONLY when the policy is named; an omitted option never reaches
+  // it, which is what keeps the unified pack byte-identical.
+  if (opts.packingPolicy !== undefined) {
+    const policy = opts.packingPolicy;
+    const factsCandidates = candidates.filter((c) => c.source === "preferences");
+    const pagesCandidates = candidates.filter((c) => c.source === "retired");
+    const laneSkipped: ContextPackSkipped[] = [];
+    // The substring reading still applies per lane, BEFORE the
+    // allocation: a query-missed page never occupies its lane's budget.
+    const applyLaneQuery = (list: ReadonlyArray<Candidate>): Candidate[] =>
+      list.filter((c) => {
+        if (query === null) return true;
+        const haystack = normalizeForDedup(`${c.topic} ${c.principle}`);
+        if (haystack.includes(query)) return true;
+        laneSkipped.push({ id: c.id, tokens: c.tokens, reason: "filter-miss" });
+        return false;
+      });
+    const factsFiltered = applyLaneQuery(factsCandidates);
+    const pagesFiltered = applyLaneQuery(pagesCandidates);
+    // A policy against an empty lane would silently do nothing; refuse
+    // by name, before any receipt or telemetry exists to record a
+    // delivery that never happened.
+    if (factsFiltered.length === 0 || pagesFiltered.length === 0) {
+      throw new ContextPackPackingLaneEmptyError(
+        policy,
+        factsFiltered.length === 0 ? "facts" : "pages",
+      );
+    }
+    // The synthesized attention block is a reserved charge against the
+    // same total, prepared before the allocation so neither lane can
+    // draw over it; the charge itself stays exactly where the unified
+    // path draws it, after the lanes.
+    let attention: {
+      readonly body: string;
+      readonly tokens: number;
+      readonly safetyReport: ContextSafetyReport | undefined;
+    } | null = null;
+    if (opts.attentionFlowIds && opts.attentionFlowIds.length > 0) {
+      const attentionBody = buildAttentionContextBlock(vault, opts.attentionFlowIds);
+      if (attentionBody && attentionBody.trim()) {
+        const guarded = guardBrainContextSnippet(attentionBody, {
+          source: { id: "attention-flows", path: join(vault, "Brain", "attention", "flows") },
+          ...(delimitUntrusted
+            ? { delimitUntrusted: true, provenancePath: "Brain/attention/flows" }
+            : {}),
+        });
+        const safeAttentionBody = guarded.safeText;
+        if (!safeAttentionBody.trim()) {
+          // The guard reduced the whole block to nothing - surface nothing
+          // rather than an empty attention-flows item.
+          laneSkipped.push({ id: "attention-flows", tokens: 0, reason: "filter-miss" });
+        } else {
+          const safetyReport = contextSafetyReport(guarded);
+          attention = {
+            body: safeAttentionBody,
+            tokens: estimateTokens(safeAttentionBody),
+            safetyReport,
+          };
+        }
+      }
+    }
+    // Per-memory char cap stays lane-internal: trim inside the lane
+    // first, then price the emitted text so the allocation charges what
+    // the lane would actually deliver.
+    const priceLane = (list: ReadonlyArray<Candidate>): PackedLaneEntry[] =>
+      applyCharBudget(
+        list.map((c) => ({ item: c, text: c.body })),
+        {
+          maxCharsPerEntry: opts.maxCharsPerMemory,
+          ...(opts.degradation !== undefined ? { degradation: opts.degradation } : {}),
+        },
+      ).kept.map((k) => ({
+        candidate: k.item,
+        body: k.text,
+        trimmed: k.trimmed,
+        tokens: k.trimmed ? estimateTokens(k.text) : k.item.tokens,
+      }));
+    const factsEntries = priceLane(factsFiltered);
+    const pagesEntries = priceLane(pagesFiltered);
+    const allocation = allocateRecallBudget(
+      opts.maxTokens,
+      pagesEntries.map((entry) => ({ item: entry, tokens: entry.tokens })),
+      factsEntries.map((entry) => ({ item: entry, tokens: entry.tokens })),
+      policy,
+      attention?.tokens ?? 0,
+    );
+    const claimOrder: ReadonlyArray<RecallBudgetLaneName> =
+      policy === "query_first" ? ["pages", "facts"] : ["facts", "pages"];
+    // Lane overflow is an `over-budget` skip exactly like the unified
+    // loop's; the policy adds no skip reason of its own.
+    const tokensById = new Map<string, number>();
+    for (const entry of [...factsEntries, ...pagesEntries]) {
+      tokensById.set(entry.candidate.id, entry.tokens);
+    }
+    for (const lane of claimOrder) {
+      for (const dropped of allocation[lane].dropped) {
+        laneSkipped.push({
+          id: dropped.candidate.id,
+          tokens: tokensById.get(dropped.candidate.id) ?? 0,
+          reason: "over-budget",
+        });
+      }
+    }
+    const items: ContextPackItem[] = [];
+    for (const lane of claimOrder) {
+      for (const kept of allocation[lane].kept) {
+        items.push(
+          toContextPackItem(
+            kept.candidate,
+            kept.body,
+            kept.trimmed,
+            kept.tokens,
+            densityRanking,
+            densityScoreById,
+          ),
+        );
+      }
+    }
+    if (attention !== null) {
+      const used = items.reduce((sum, item) => sum + item.tokens, 0);
+      if (used + attention.tokens <= opts.maxTokens) {
+        items.unshift({
+          id: "attention-flows",
+          path: join(vault, "Brain", "attention", "flows"),
+          tier: PAGE_TIER.core,
+          tokens: attention.tokens,
+          body: attention.body,
+          principle: "Declarative attention flow output",
+          contextLane: "directives",
+          trimmed: false,
+          // Synthesized from the vault's attention-flow graph, not a
+          // source-backed page, so it is `derived` with no evidence refs.
+          epistemic: EPISTEMIC_STATUS.derived,
+          evidenceRefs: [],
+          ...(attention.safetyReport ? { safety: attention.safetyReport } : {}),
+        });
+      } else {
+        laneSkipped.push({
+          id: "attention-flows",
+          tokens: attention.tokens,
+          reason: "over-budget",
+        });
+      }
+    }
+    // Lane membership by id, so the delivered spends stay honest after
+    // the char budget and the transforms have had their say.
+    const laneById = new Map<string, RecallBudgetLaneName>();
+    for (const c of factsCandidates) laneById.set(c.id, "facts");
+    for (const c of pagesCandidates) laneById.set(c.id, "pages");
+    const packingFor = (
+      finalItems: ReadonlyArray<ContextPackItem>,
+    ): { readonly packing: ContextPackPackingReport } => ({
+      packing: Object.freeze({
+        policy,
+        pages: packingLaneReport("pages", allocation, laneById, finalItems, pagesFiltered.length),
+        facts: packingLaneReport("facts", allocation, laneById, finalItems, factsFiltered.length),
+      }),
+    });
+    // Total recall character cap: the same second ceiling the unified
+    // path applies over the emitted items, dropping the lowest-priority
+    // overflow - here, the tail of the lane order.
+    if (opts.maxTotalChars && opts.maxTotalChars > 0) {
+      const capped = applyCharBudget(
+        items.map((i) => ({ item: i, text: i.body })),
+        { maxTotalChars: opts.maxTotalChars },
+      );
+      if (capped.dropped.length > 0) {
+        const keptItems = applyContextTransforms(
+          capped.kept.map((k) => k.item),
+          opts.transforms,
+        );
+        const droppedSet = new Set(capped.dropped);
+        let recomputed = 0;
+        for (const i of keptItems) recomputed += i.tokens;
+        for (const d of items) {
+          if (droppedSet.has(d)) {
+            laneSkipped.push({
+              id: d.id,
+              tokens: d.tokens,
+              reason: "over-char-budget",
+            });
+          }
+        }
+        return finalizeContextPackReport(
+          vault,
+          opts,
+          {
+            maxTokens: opts.maxTokens,
+            tokensUsed: recomputed,
+            items: Object.freeze(keptItems),
+            skipped: Object.freeze(laneSkipped),
+            ...withOptionalLanes(opts, keptItems),
+            ...semanticReport,
+            ...packingFor(keptItems),
+          },
+          startedAtMs,
+          [],
+          withheldIds,
+        );
+      }
+    }
+    const finalItems = applyContextTransforms(items, opts.transforms);
+    const finalTokensUsed = finalItems.reduce((sum, item) => sum + item.tokens, 0);
+    return finalizeContextPackReport(
+      vault,
+      opts,
+      {
+        maxTokens: opts.maxTokens,
+        tokensUsed: finalTokensUsed,
+        items: Object.freeze(finalItems),
+        skipped: Object.freeze(laneSkipped),
+        ...withOptionalLanes(opts, finalItems),
+        ...semanticReport,
+        ...packingFor(finalItems),
+      },
+      startedAtMs,
+      ownerScopeWarnings,
+      withheldIds,
+    );
+  }
+
   // Per-memory character cap (v0.20.0): trim oversized bodies in priority
   // order via the shared budget primitive before the token budget runs,
   // so one huge page cannot starve the rest. A trimmed body is re-tokenised
@@ -736,31 +1106,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       skipped.push({ id: c.id, tokens, reason: "over-budget" });
       continue;
     }
-    items.push({
-      id: c.id,
-      path: c.path,
-      tier: c.tier,
-      tokens,
-      body,
-      principle: c.principle,
-      contextLane: c.contextLane,
-      trimmed,
-      epistemic: c.epistemic,
-      evidenceRefs: c.evidenceRefs,
-      ...(c.commitment !== null ? { commitment: c.commitment } : {}),
-      // When the per-memory char budget trimmed this item, recompute density
-      // from the emitted (post-trim) body/tokens so the surfaced value reflects
-      // the actual content/token-cost the agent receives, not the pre-budget
-      // candidate. Untrimmed items reuse the pre-computed score.
-      ...(densityRanking
-        ? {
-            density: trimmed
-              ? densityScore({ body, evidenceRefs: c.evidenceRefs, epistemic: c.epistemic }, tokens)
-              : (densityScoreById.get(c.id) ?? 0),
-          }
-        : {}),
-      ...(c.safety ? { safety: c.safety } : {}),
-    });
+    items.push(toContextPackItem(c, body, trimmed, tokens, densityRanking, densityScoreById));
     used += tokens;
   }
 
@@ -868,6 +1214,29 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     ownerScopeWarnings,
     withheldIds,
   );
+}
+
+/**
+ * What one lane delivered: the allocation the correlated budget handed
+ * it and the tokens actually present in the FINAL items, so the two
+ * spends plus the reserved charge account for the whole budget no
+ * matter what the char cap or the transforms dropped.
+ */
+function packingLaneReport(
+  lane: RecallBudgetLaneName,
+  allocation: RecallBudgetAllocation<PackedLaneEntry, PackedLaneEntry>,
+  laneById: ReadonlyMap<string, RecallBudgetLaneName>,
+  finalItems: ReadonlyArray<ContextPackItem>,
+  candidates: number,
+): ContextPackPackingLaneReport {
+  let spent = 0;
+  let items = 0;
+  for (const item of finalItems) {
+    if (laneById.get(item.id) !== lane) continue;
+    spent += item.tokens;
+    items += 1;
+  }
+  return Object.freeze({ allocation: allocation[lane].allocation, spent, candidates, items });
 }
 
 /**
