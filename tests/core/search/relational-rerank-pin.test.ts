@@ -222,8 +222,8 @@ function rerankEnabled() {
 }
 
 test("pin on: the cross-encoder cannot sink the relational hit below its heuristic position", async () => {
-  await build();
   try {
+    await build();
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
@@ -263,8 +263,8 @@ test("pin on: the cross-encoder cannot sink the relational hit below its heurist
 });
 
 test("pin on: a relational hit the cross-encoder genuinely prefers may rise", async () => {
-  await build();
   try {
+    await build();
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
@@ -288,8 +288,8 @@ const project = (o: Awaited<ReturnType<typeof search>>) =>
   o.results.map((r) => ({ path: r.path, score: r.score, reasons: r.reasons }));
 
 test("pin off keeps rerank behavior byte-identical", async () => {
-  await build();
   try {
+    await build();
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
