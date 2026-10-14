@@ -110,6 +110,14 @@ export interface BenchQuestion {
   /** session_handoff: which session's turns must be readable. */
   readonly session_id?: string;
   readonly expected_turns?: number;
+  /**
+   * standing_instruction: the full earliest-cited annotation that must
+   * close the item of `expected_ids[0]`, compared exactly with the
+   * closing bracket included - a near-miss origin cannot satisfy the
+   * expectation as a substring. (session_handoff reads the same field
+   * as an in-turns substring, so the exact-match rule is
+   * category-specific.)
+   */
   readonly expected_text?: string;
   /**
    * Official-prompt judge glue (longmemeval), absent for suites that

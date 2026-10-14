@@ -131,10 +131,11 @@ function standingFixture(): BenchFixture {
         category: "standing_instruction",
         // The facet key (the preference id) that must be delivered ...
         expected_ids: ["pref:pref-tabs"],
-        // ... and the origin turn that must annotate it. The kind word
-        // is part of the expectation on purpose: a session-annotated
-        // origin satisfies neither this string nor the gate.
-        expected_text: "earliest cited turn bench-session.json#turn-2",
+        // ... and the full annotation that must close that preference's
+        // item: compared exactly, closing bracket included, so a
+        // near-miss origin (turn-2 vs turn-20) and a session-annotated
+        // origin both fail by name.
+        expected_text: "earliest cited turn bench-session.json#turn-2]",
       },
       {
         // The auto-extract shape resolves to no origin, so its facet is
@@ -284,6 +285,42 @@ describe("bench standing_instruction category", () => {
     // The bare auto-extract ref resolves to no origin, so the facet is
     // absent - a named failure, never an implied provenance.
     expect(unresolved.failure).toContain("pref:pref-commits");
+  }, 30_000);
+
+  test("a near-miss origin never satisfies the expectation, closing bracket included", async () => {
+    // The surfaced annotation ends ...#t10]; the expectation names
+    // ...#t1 - a substring the old includes() check accepted as a false
+    // positive. Tied to the expected preference's item and compared
+    // exactly against the annotation with its closing bracket, it fails
+    // by name instead.
+    const nearMiss = parseBenchFixture({
+      name: "standing-near-miss",
+      notes: [
+        ...STANDING_NOTES.filter((note) => note.path !== "Brain/inbox/sig-bench-turn.md"),
+        {
+          path: "Brain/inbox/sig-bench-turn.md",
+          body: signalMd(
+            "sig-bench-turn",
+            "tabs",
+            "use tabs for indentation",
+            "bench-session.json#t10",
+          ),
+        },
+      ],
+      continuity: [],
+      questions: [
+        {
+          id: "q-standing",
+          category: "standing_instruction",
+          expected_ids: ["pref:pref-tabs"],
+          expected_text: "earliest cited turn bench-session.json#t1",
+        },
+      ],
+    });
+    const report = await runMemoryBench({ fixture: nearMiss, runsDir });
+    const failing = report.questions.find((question) => question.id === "q-standing")!;
+    expect(failing.pass).toBe(false);
+    expect(failing.failure).toContain("earliest cited turn bench-session.json#t1");
   }, 30_000);
 
   test("the default knob pin serializes byte-for-byte unchanged", () => {

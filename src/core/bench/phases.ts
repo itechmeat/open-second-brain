@@ -168,7 +168,7 @@ interface RetrievedQuestion {
   /**
    * The item strings the standing_query sections rendered, annotations
    * included (standing_instruction). The evaluator asserts the expected
-   * first-mention coordinates against these.
+   * earliest-cited coordinates against these.
    */
   readonly standing_items?: ReadonlyArray<string>;
   /**
@@ -823,11 +823,16 @@ function evaluateWriteFidelity(
  *
  * `expected_ids` are facet keys - `pref:<preference id>`, so the
  * preference id itself is what is asserted delivered. `expected_text`
- * is the first-mention annotation that must appear on a surfaced item;
- * a fixture states the kind word ("first mention turn ...") so an
- * event-annotated origin cannot satisfy a turn expectation. A preference
- * the lane surfaced but could not resolve is a named failure, never an
- * implied provenance.
+ * is the full earliest-cited annotation that must CLOSE the first named
+ * preference's item: the assertion finds the item for `expected_ids[0]`
+ * and compares the annotation exactly, closing bracket included, so a
+ * near-miss origin (`...#t1`) cannot satisfy an expectation about
+ * another (`...#t10`) and an origin cannot pass by sitting on a
+ * different preference's item. A fixture states the kind word ("earliest
+ * cited turn ..."/"earliest cited session ...") so a session-annotated
+ * origin cannot satisfy a turn expectation. A preference the lane
+ * surfaced but could not resolve is a named failure, never an implied
+ * provenance.
  */
 function evaluateStandingInstruction(
   question: BenchQuestion,
@@ -845,12 +850,25 @@ function evaluateStandingInstruction(
   }
   const expectedOrigin = question.expected_text;
   if (expectedOrigin !== undefined) {
-    const items = retrieved.standing_items ?? [];
-    if (!items.some((item) => item.includes(expectedOrigin))) {
+    // Tie the annotation to the expected preference's own item: the
+    // first expected facet key names the preference, and its item is the
+    // `id (scope)` string the lane renders for it.
+    const expectedKey = question.expected_ids?.[0];
+    const expectedId =
+      expectedKey !== undefined && expectedKey.startsWith("pref:")
+        ? expectedKey.slice("pref:".length)
+        : undefined;
+    const item =
+      expectedId === undefined
+        ? undefined
+        : (retrieved.standing_items ?? []).find((candidate) =>
+            candidate.startsWith(`${expectedId} (`),
+          );
+    if (item === undefined || !item.endsWith(expectedOrigin)) {
       return Object.freeze({
         ...base,
         pass: false,
-        failure: `expected first mention not found in the surfaced standing instructions: ${expectedOrigin}`,
+        failure: `expected origin annotation not found on the item for ${expectedKey ?? "(no facet named)"}: ${expectedOrigin}`,
       });
     }
   }

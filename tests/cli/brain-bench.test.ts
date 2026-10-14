@@ -834,7 +834,7 @@ describe("bench standing_instruction human line", () => {
             id: "q-standing",
             category: "standing_instruction",
             expected_ids: ["pref:pref-tabs"],
-            expected_text: "earliest cited turn bench-session.json#turn-2",
+            expected_text: "earliest cited turn bench-session.json#turn-2]",
           },
         ],
       }),
