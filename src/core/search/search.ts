@@ -483,6 +483,41 @@ export async function search(
       return outcome;
     };
 
+    // Semantic candidates (may be skipped). The lane starts BEFORE the
+    // keyword lanes (recall-lane-latency): its query embed is the one
+    // caller wait the keyword work can hide, so it is put in flight here,
+    // in this tick, and joined where the serial await stood below. The
+    // keyword pool size rides the lane's lazy supplier - at start time the
+    // keyword lanes have not run yet, and the lane reads the pool they
+    // produced when it completes, the same snapshot the serial pipeline
+    // captured at the join. Under the composite deadline the lane races
+    // the clock from the join (the remaining budget is computed there, so
+    // an early start neither starts the clock sooner nor extends it), the
+    // deadline's signal rides in the lane input so a fire aborts the
+    // in-flight embed, and a clock that already ran out starts nothing.
+    let keywordHits: ReturnType<typeof runKeywordLane>["hits"] = [];
+    const semanticLaneInput = {
+      store,
+      config: effectiveConfig,
+      policy,
+      query,
+      semanticLaneQuery: shape.semanticLaneQuery,
+      limit,
+      pathPrefix,
+      ...(kind !== undefined ? { kind } : {}),
+      ...(pushdown !== null ? { pushdown } : {}),
+      keywordHitCount: () => keywordHits.length,
+      ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
+    };
+    const semanticLaneJoin = startSemanticLane({
+      deadline,
+      fallback: emptySemanticLane,
+      start: () =>
+        runSemanticLane(
+          deadline === null ? semanticLaneInput : { ...semanticLaneInput, signal: deadline.signal },
+        ),
+    });
+
     // Keyword candidates, with the plan the synonym step may have re-built.
     const keywordLane = runKeywordLane({
       store,
@@ -500,7 +535,7 @@ export async function search(
       ...(pushdown !== null ? { pushdown } : {}),
       matchMode: request.matchMode,
     });
-    let keywordHits = keywordLane.hits;
+    keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);
     for (const d of keywordLane.degraded) degraded.push(d);
 
@@ -509,30 +544,11 @@ export async function search(
       keywordLane.plan,
     );
 
-    // Semantic candidates (may be skipped). Under the composite deadline
-    // the lane races the clock and is abandoned past it, serving the empty
-    // lane outcome - the fire note explains the keyword-only answer.
-    const semanticLaneInput = {
-      store,
-      config: effectiveConfig,
-      policy,
-      query,
-      semanticLaneQuery: shape.semanticLaneQuery,
-      limit,
-      pathPrefix,
-      ...(kind !== undefined ? { kind } : {}),
-      ...(pushdown !== null ? { pushdown } : {}),
-      keywordHitCount: keywordHits.length,
-      ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
-    };
-    const semanticLane =
-      deadline === null
-        ? await runSemanticLane(semanticLaneInput)
-        : await awaitWithinDeadline(
-            () => runSemanticLane({ ...semanticLaneInput, signal: deadline.signal }),
-            deadline,
-            emptySemanticLane,
-          );
+    // The join, where the serial await stood: the keyword lanes ran to
+    // completion above while the embed round trip was outstanding. Their
+    // warnings merged first, and the lane's merge here keeps the same
+    // keyword-before-semantic order the serial pipeline emitted.
+    const semanticLane = await semanticLaneJoin.join();
     let semanticHits = semanticLane.hits;
     let semanticAttempted = semanticLane.attempted;
     for (const w of semanticLane.warnings) warnings.push(w);
