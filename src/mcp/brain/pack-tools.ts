@@ -26,9 +26,15 @@ import {
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
 import {
   CONTEXT_PACK_QUERY_MODES,
+  ContextPackPackingLaneEmptyError,
   isContextPackQueryMode,
   packContext,
 } from "../../core/brain/context-pack.ts";
+import {
+  isPackingPolicy,
+  PACKING_POLICIES,
+  type PackingPolicy,
+} from "../../core/brain/recall-budget.ts";
 import { assessRecallAdequacy } from "../../core/brain/recall-adequacy.ts";
 import { recordRecallAdequacyDemand } from "../../core/brain/query-demand.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
@@ -205,6 +211,25 @@ async function toolBrainContextPack(
       );
     }
   }
+  // Opt-in packing policy (recall-lane-latency wave). Refused beside the
+  // `dependentRequired` that declares it, exactly as query_mode is: a
+  // policy with no query has no turn to pack for and would be the silent
+  // no-op this project refuses.
+  const packingPolicy = coerceStr(args, "packing_policy", false);
+  if (packingPolicy !== null) {
+    if (!isPackingPolicy(packingPolicy)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_context_pack: packing_policy must be one of ${PACKING_POLICIES.join(", ")}`,
+      );
+    }
+    if (query === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: packing_policy requires query; a policy with nothing to order is inert",
+      );
+    }
+  }
   if (query !== undefined && exceedsMcpQueryCap(query)) {
     throw new MCPError(INVALID_PARAMS, `brain_context_pack: ${MCP_QUERY_CAP_MESSAGE}`);
   }
@@ -332,44 +357,56 @@ async function toolBrainContextPack(
           );
         })
       : null;
-  const report = await withSearchErrorsOnWire(
-    async () =>
-      packContext(ctx.vault, {
-        ...(remote
-          ? { visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)) }
-          : {}),
-        maxTokens,
-        ...(agentScope !== undefined ? { agentScope } : {}),
-        ...(densityRanking ? { densityRanking: true } : {}),
-        ...(sessionFocus !== null ? { sessionFocus } : {}),
-        ...(query ? { query } : {}),
-        ...(queryMode !== null ? { queryMode } : {}),
-        ...(includeLanes ? { includeLanes: true } : {}),
-        ...(receipt !== undefined ? { receipt } : {}),
-        ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
-        ...(answerableVerdict !== undefined ? { decisionAnswerable: answerableVerdict } : {}),
-        ...(cacheStable || dedupRepeated
-          ? {
-              transforms: {
-                ...(cacheStable ? { cacheStableOrdering: true } : {}),
-                ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
-              },
-            }
-          : {}),
-        ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
-        ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
-        ...(configuredDegradation(ctx.vault) !== undefined
-          ? { degradation: configuredDegradation(ctx.vault)! }
-          : {}),
-        ...(telemetry !== undefined ? { telemetry } : {}),
-        // The synthesized attention-flow block has no page of its own to ask
-        // the reach view about, so a remote caller does not get it (fail
-        // closed, as the per-item filter this replaced did).
-        ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
-        ...(semantic !== null ? { semanticRelevance: semantic.relevanceByPath } : {}),
-      }),
-    discloseSpentPackQuery(semantic),
-  );
+  let report: Awaited<ReturnType<typeof packContext>>;
+  try {
+    report = await withSearchErrorsOnWire(
+      async () =>
+        packContext(ctx.vault, {
+          ...(remote
+            ? { visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)) }
+            : {}),
+          maxTokens,
+          ...(agentScope !== undefined ? { agentScope } : {}),
+          ...(densityRanking ? { densityRanking: true } : {}),
+          ...(sessionFocus !== null ? { sessionFocus } : {}),
+          ...(query ? { query } : {}),
+          ...(queryMode !== null ? { queryMode } : {}),
+          ...(packingPolicy !== null ? { packingPolicy: packingPolicy as PackingPolicy } : {}),
+          ...(includeLanes ? { includeLanes: true } : {}),
+          ...(receipt !== undefined ? { receipt } : {}),
+          ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
+          ...(answerableVerdict !== undefined ? { decisionAnswerable: answerableVerdict } : {}),
+          ...(cacheStable || dedupRepeated
+            ? {
+                transforms: {
+                  ...(cacheStable ? { cacheStableOrdering: true } : {}),
+                  ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
+                },
+              }
+            : {}),
+          ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+          ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+          ...(configuredDegradation(ctx.vault) !== undefined
+            ? { degradation: configuredDegradation(ctx.vault)! }
+            : {}),
+          ...(telemetry !== undefined ? { telemetry } : {}),
+          // The synthesized attention-flow block has no page of its own to ask
+          // the reach view about, so a remote caller does not get it (fail
+          // closed, as the per-item filter this replaced did).
+          ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
+          ...(semantic !== null ? { semanticRelevance: semantic.relevanceByPath } : {}),
+        }),
+      discloseSpentPackQuery(semantic),
+    );
+  } catch (e) {
+    // A policy against a one-lane vault is a caller error the core
+    // refuses by name; on the wire it is INVALID_PARAMS carrying that
+    // same named message, never an internal error and never a no-op.
+    if (e instanceof ContextPackPackingLaneEmptyError) {
+      throw new MCPError(INVALID_PARAMS, e.message);
+    }
+    throw e;
+  }
   const warnings = [
     ...(report.warnings ?? []),
     ...(semantic?.warnings ?? []),
@@ -413,6 +450,9 @@ async function toolBrainContextPack(
     ...(semantic !== null && report.semantic !== undefined
       ? { semantic: semanticReportField(semantic, report.semantic) }
       : {}),
+    // The packing accounting appears only when the caller named a
+    // policy - the same conditional shape as `semantic` above.
+    ...(report.packing ? { packing: report.packing } : {}),
     ...(adequacy !== undefined
       ? {
           adequacy: {
@@ -1059,6 +1099,12 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "How `query` is read: `substring` (default) drops misses; `ranked` orders by token overlap; `semantic` orders by stored belief vectors, embedding the query once.",
         },
+        packing_policy: {
+          type: "string",
+          enum: [...PACKING_POLICIES],
+          description:
+            "Which lane claims the token budget first: `facts_first` (the distilled preference layer) or `query_first` (the pages lane). Requires `query`.",
+        },
         focus_session: {
           type: "string",
           minLength: 1,
@@ -1134,11 +1180,14 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       // discover the pairing instead of learning it from an INVALID_PARAMS
       // at call time. Built beside the enforcement; see
       // `recallAdequacyPairing`. `query_mode` joins it one-directionally:
-      // a mode needs a query, a query needs no mode.
+      // a mode needs a query, a query needs no mode. `packing_policy`
+      // joins the same way: a policy with nothing to order is inert, so
+      // it is refused beside its `dependentRequired` entry.
       dependentRequired: {
         ...recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
         ...decisionAnswerablePairing(RECALL_SCORES_ARG_NAME),
         query_mode: ["query"],
+        packing_policy: ["query"],
       },
       additionalProperties: false,
     },
