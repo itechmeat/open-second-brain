@@ -71,10 +71,12 @@ describe("search outcome shape census", () => {
   }, 30_000);
 
   test("the outcome's top-level key set is exactly the sanctioned list", () => {
+    if (outcome === undefined) throw new Error("the setup run produced no outcome");
     expect(Object.keys(outcome).sort()).toEqual(SANCTIONED_TOP_LEVEL_KEYS);
   });
 
   test("no key anywhere in the serialized outcome names the timing vocabulary", () => {
+    if (outcome === undefined) throw new Error("the setup run produced no outcome");
     const keys = new Set<string>();
     collectKeys(outcome, keys);
     const offenders = TIMING_VOCABULARY.filter((name) => keys.has(name));
