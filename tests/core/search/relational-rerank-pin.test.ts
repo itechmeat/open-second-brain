@@ -25,6 +25,12 @@ import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import type { BrainSearchResult } from "../../../src/core/search/search-result.ts";
+import {
+  startFakeHttp,
+  type FakeHttp,
+  type FakeRequest,
+  type FakeResponseSpec,
+} from "../../helpers/fake-http.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure protect rule
@@ -143,19 +149,32 @@ test("search_relational_rerank_pin: true resolves onto the rerank config", () =>
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
+let server: FakeHttp;
 
-const realFetch = globalThis.fetch;
+/** The score of the document containing `winner`. */
+const WINNER_SCORE = 0.99;
+/** The score of every document that does not contain `winner`. */
+const REST_SCORE = 0.01;
 
-/** Stub the rerank endpoint: passages matching `winner` score high, the rest ~0. */
-function stubRerankFetch(winner: string): void {
-  globalThis.fetch = (async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as { documents: string[] };
-    const results = body.documents.map((doc, index) => ({
-      index,
-      relevance_score: doc.includes(winner) ? 0.99 : 0.01,
-    }));
-    return new Response(JSON.stringify({ results }), { status: 200 });
-  }) as unknown as typeof fetch;
+/** Handler scoring the document that contains `winner` highest. */
+function winnerHandler(winner: string): (req: FakeRequest) => FakeResponseSpec {
+  return (req) => {
+    const documents = (req.body as { documents: string[] }).documents;
+    return {
+      status: 200,
+      body: {
+        results: documents.map((doc, index) => ({
+          index,
+          relevance_score: doc.includes(winner) ? WINNER_SCORE : REST_SCORE,
+        })),
+      },
+    };
+  };
+}
+
+/** A 503 endpoint answer: rerank degrades to the heuristic order. */
+function unavailable(): FakeResponseSpec {
+  return { status: 503, body: { error: "boom" } };
 }
 
 /**
@@ -166,6 +185,7 @@ function stubRerankFetch(winner: string): void {
  * fresh, so the heuristic order puts it first.
  */
 async function build(): Promise<void> {
+  server = await startFakeHttp();
   const v = createTempVault("relational-rerank-pin");
   vault = v.vault;
   dbPath = v.dbPath;
@@ -189,13 +209,16 @@ async function build(): Promise<void> {
   await indexVault(makeConfig({ vault, dbPath }));
 }
 
-const RERANK_ENABLED = {
-  enabled: true,
-  baseUrl: "https://api.example.com/v1",
-  model: "rerank-1",
-  apiKey: "secret",
-  topK: 10,
-} as const;
+/** The rerank endpoint config, pointed at the per-test fixture. */
+function rerankEnabled() {
+  return {
+    enabled: true,
+    baseUrl: server.url,
+    model: "rerank-1",
+    apiKey: "secret",
+    topK: 10,
+  } as const;
+}
 
 test("pin on: the cross-encoder cannot sink the relational hit below its heuristic position", async () => {
   await build();
@@ -203,18 +226,17 @@ test("pin on: the cross-encoder cannot sink the relational hit below its heurist
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
-      rerank: RERANK_ENABLED,
+      rerank: rerankEnabled(),
     };
     // The heuristic order (the endpoint fails -> rerank degrades to it):
     // the freshly-written relational hit leads.
-    globalThis.fetch = (async () =>
-      new Response("boom", { status: 503 })) as unknown as typeof fetch;
+    server.setHandler(unavailable);
     const heuristic = await search(makeConfig({ vault, dbPath, ...base }), {
       query: "[[hub]] related",
     });
     expect(heuristic.results[0]!.path).toBe("neighbor.md");
     // The cross-encoder prefers the far node and buries the relational hit.
-    stubRerankFetch("gamma");
+    server.setHandler(winnerHandler("gamma"));
     const buried = await search(makeConfig({ vault, dbPath, ...base }), {
       query: "[[hub]] related",
     });
@@ -225,7 +247,7 @@ test("pin on: the cross-encoder cannot sink the relational hit below its heurist
         vault,
         dbPath,
         ...base,
-        rerank: { ...RERANK_ENABLED, relationalRerankPin: true },
+        rerank: { ...rerankEnabled(), relationalRerankPin: true },
       }),
       { query: "[[hub]] related" },
     );
@@ -234,7 +256,7 @@ test("pin on: the cross-encoder cannot sink the relational hit below its heurist
       "relational_pin: floored at pre-rerank position 0",
     );
   } finally {
-    globalThis.fetch = realFetch;
+    await server.close();
     cleanup();
   }
 });
@@ -245,9 +267,9 @@ test("pin on: a relational hit the cross-encoder genuinely prefers may rise", as
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
-      rerank: { ...RERANK_ENABLED, relationalRerankPin: true },
+      rerank: { ...rerankEnabled(), relationalRerankPin: true },
     };
-    stubRerankFetch("beta");
+    server.setHandler(winnerHandler("beta"));
     const pinned = await search(makeConfig({ vault, dbPath, ...base }), {
       query: "[[hub]] related",
     });
@@ -255,7 +277,7 @@ test("pin on: a relational hit the cross-encoder genuinely prefers may rise", as
     expect(pinned.results[0]!.reasons.some((r) => r.startsWith("relational_pin:"))).toBe(false);
     expect(pinned.results[0]!.reasons.some((r) => r.startsWith("cross_encoder:"))).toBe(true);
   } finally {
-    globalThis.fetch = realFetch;
+    await server.close();
     cleanup();
   }
 });
@@ -270,9 +292,9 @@ test("pin off keeps rerank behavior byte-identical", async () => {
     const base = {
       fusionMode: "rrf" as const,
       relationalArmEnabled: true,
-      rerank: RERANK_ENABLED,
+      rerank: rerankEnabled(),
     };
-    stubRerankFetch("gamma");
+    server.setHandler(winnerHandler("gamma"));
     // One frozen clock across both calls: recency decay is a continuous
     // function of wall-clock time, and two real Date.now() reads would
     // perturb the low-order digits of `score` for reasons that have
@@ -290,7 +312,7 @@ test("pin off keeps rerank behavior byte-identical", async () => {
           vault,
           dbPath,
           ...base,
-          rerank: { ...RERANK_ENABLED, relationalRerankPin: false },
+          rerank: { ...rerankEnabled(), relationalRerankPin: false },
         }),
         { query: "[[hub]] related" },
       );
@@ -299,7 +321,7 @@ test("pin off keeps rerank behavior byte-identical", async () => {
     }
     expect(project(off)).toEqual(project(absent));
   } finally {
-    globalThis.fetch = realFetch;
+    await server.close();
     cleanup();
   }
 });

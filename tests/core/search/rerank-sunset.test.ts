@@ -202,23 +202,18 @@ describe("through search()", () => {
   let vault: string;
   let dbPath: string;
   let cleanup: () => void;
-  const realFetch = globalThis.fetch;
-  let calls = 0;
+  let fake: FakeHttp;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     ({ vault, dbPath, cleanup } = createTempVault("rerank-sunset"));
     writeMd(vault, "strong.md", "# Strong\n\nfox fox fox fox the quick brown fox jumps high.");
     writeMd(vault, "weak.md", "# Weak\n\nA note mostly about cats, with one fox mention here.");
-    calls = 0;
-    globalThis.fetch = (async (_url: string, init: RequestInit) => {
-      calls += 1;
-      const body = JSON.parse(String(init.body)) as { documents: string[] };
-      const results = body.documents.map((_d, index) => ({ index, relevance_score: index }));
-      return new Response(JSON.stringify({ results }), { status: 200 });
-    }) as unknown as typeof fetch;
+    // No per-test handler: the healthy call rides the fixture's default
+    // /rerank route, and the skip verdicts must never reach HTTP at all.
+    fake = await startFakeHttp();
   });
-  afterEach(() => {
-    globalThis.fetch = realFetch;
+  afterEach(async () => {
+    await fake.close();
     cleanup();
   });
 
@@ -227,7 +222,7 @@ describe("through search()", () => {
       vault,
       dbPath,
       cacheEnabled: true,
-      rerank: { enabled: true, baseUrl: "https://api.example.com/v1", model, apiKey: "k" },
+      rerank: { enabled: true, baseUrl: fake.url, model, apiKey: "k" },
     });
   }
 
@@ -236,7 +231,7 @@ describe("through search()", () => {
     await indexVault(config);
     const base = await search(makeConfig({ vault, dbPath }), { query: "fox", limit: 10 });
     const first = await search(config, { query: "fox", limit: 10 });
-    expect(calls).toBe(0);
+    expect(fake.callCount()).toBe(0);
     expect(first.results.map((r) => r.path)).toEqual(base.results.map((r) => r.path));
     expect(first.retrievalTrail?.degraded).toContainEqual({
       code: RETRIEVAL_DEGRADATION.rerankModelSunset,
@@ -245,7 +240,7 @@ describe("through search()", () => {
     // the answer is written to the query cache.
     expect(queryCacheRows(dbPath)).toBe(1);
     const second = await search(config, { query: "fox", limit: 10 });
-    expect(calls).toBe(0);
+    expect(fake.callCount()).toBe(0);
     expect(second.retrievalTrail).toEqual(first.retrievalTrail);
   });
 
@@ -253,7 +248,7 @@ describe("through search()", () => {
     const config = cfg(NEGATIVE_SHIPPED_MODEL);
     await indexVault(config);
     const out = await search(config, { query: "fox", limit: 10 });
-    expect(calls).toBe(1);
+    expect(fake.callCount()).toBe(1);
     expect(out.retrievalTrail).toBeUndefined();
   });
 });

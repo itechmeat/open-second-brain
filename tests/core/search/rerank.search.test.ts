@@ -3,9 +3,12 @@
  * (retrieval-precision-quality-loop, card A / t_110867f5).
  *
  * End-to-end: config-enabled rerank widens the candidate pool, calls the
- * OpenAI-compatible `/rerank` endpoint (stubbed `fetch`), and re-orders
- * the final window. Disabled stays byte-identical; enabled-but-unconfigured
- * fails closed; an endpoint error degrades gracefully with a warning.
+ * OpenAI-compatible `/rerank` endpoint on the shared fake HTTP fixture,
+ * and re-orders the final window. Disabled stays byte-identical;
+ * enabled-but-unconfigured fails closed; an endpoint error degrades
+ * gracefully with a warning. The one warning pin that names a raw
+ * (non-JSON) 503 body stays at the fetch seam, which the fixture cannot
+ * express.
  */
 
 import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
@@ -18,65 +21,86 @@ import {
 } from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import {
+  startFakeHttp,
+  type FakeHttp,
+  type FakeRequest,
+  type FakeResponseSpec,
+} from "../../helpers/fake-http.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
+let server: FakeHttp;
 
 const realFetch = globalThis.fetch;
 
-beforeEach(() => {
+beforeEach(async () => {
   ({ vault, dbPath, cleanup } = createTempVault("rerank-search"));
   writeMd(vault, "strong.md", "# Strong\n\nfox fox fox fox the quick brown fox jumps high.");
   writeMd(vault, "weak.md", "# Weak\n\nA note mostly about cats, with one fox mention here.");
   writeMd(vault, "mid.md", "# Mid\n\nThe fox and the hound; a fox story about foxes.");
+  server = await startFakeHttp();
 });
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = realFetch;
+  await server.close();
   cleanup();
 });
 
-const ENABLED = {
-  enabled: true,
-  baseUrl: "https://api.example.com/v1",
-  model: "rerank-1",
-  apiKey: "secret",
-  topK: 10,
-} as const;
+/** The score of the document containing `winner`. */
+const WINNER_SCORE = 0.99;
+/** The score of every document that does not contain `winner`. */
+const REST_SCORE = 0.01;
 
-/** Score the document containing `winner` highest, everything else low. */
-function stubRerankFetch(winner: string): void {
-  globalThis.fetch = (async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as { documents: string[] };
-    const results = body.documents.map((doc, index) => ({
-      index,
-      relevance_score: doc.includes(winner) ? 0.99 : 0.01,
-    }));
-    return new Response(JSON.stringify({ results }), { status: 200 });
-  }) as unknown as typeof fetch;
+/** Handler scoring the document that contains `winner` highest. */
+function winnerHandler(winner: string): (req: FakeRequest) => FakeResponseSpec {
+  return (req) => {
+    const documents = (req.body as { documents: string[] }).documents;
+    return {
+      status: 200,
+      body: {
+        results: documents.map((doc, index) => ({
+          index,
+          relevance_score: doc.includes(winner) ? WINNER_SCORE : REST_SCORE,
+        })),
+      },
+    };
+  };
+}
+
+/** A 503 endpoint answer: rerank degrades to the heuristic order. */
+function unavailable(): FakeResponseSpec {
+  return { status: 503, body: { error: "upstream boom" } };
+}
+
+/** The rerank endpoint config, pointed at the per-test fixture. */
+function rerankEnabled() {
+  return {
+    enabled: true,
+    baseUrl: server.url,
+    model: "rerank-1",
+    apiKey: "secret",
+    topK: 10,
+  } as const;
 }
 
 test("disabled (default) is byte-identical to the pre-feature baseline", async () => {
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);
-  let called = false;
-  globalThis.fetch = (async () => {
-    called = true;
-    return new Response("[]", { status: 200 });
-  }) as unknown as typeof fetch;
   const base = await search(cfg, { query: "fox", limit: 10 });
-  expect(called).toBe(false); // zero HTTP cost when disabled
+  expect(server.callCount()).toBe(0); // zero HTTP cost when disabled
   expect(base.results.length).toBeGreaterThanOrEqual(3);
   // The heuristic ranker puts the dense "strong" hit first.
   expect(base.results[0]!.path).toBe("strong.md");
 });
 
 test("enabled: the cross-encoder's top-scored doc lands first", async () => {
-  const cfg = makeConfig({ vault, dbPath, rerank: ENABLED });
+  const cfg = makeConfig({ vault, dbPath, rerank: rerankEnabled() });
   await indexVault(cfg);
   // Promote the "cats" note (weak.md) that the heuristic ranker placed low.
-  stubRerankFetch("cats");
+  server.setHandler(winnerHandler("cats"));
   const out = await search(cfg, { query: "fox", limit: 10 });
   expect(out.results[0]!.path).toBe("weak.md");
   expect(out.results[0]!.reasons.some((r) => r.startsWith("cross_encoder: "))).toBe(true);
@@ -89,10 +113,9 @@ test("enabled + unconfigured endpoint fails closed", async () => {
 });
 
 test("enabled + endpoint error degrades to heuristic order with a warning", async () => {
-  const cfg = makeConfig({ vault, dbPath, rerank: ENABLED });
+  const cfg = makeConfig({ vault, dbPath, rerank: rerankEnabled() });
   await indexVault(cfg);
-  globalThis.fetch = (async () =>
-    new Response("upstream boom", { status: 503 })) as unknown as typeof fetch;
+  server.setHandler(unavailable);
   const base = await search(makeConfig({ vault, dbPath }), { query: "fox", limit: 10 });
   const out = await search(cfg, { query: "fox", limit: 10 });
   expect(out.results.map((r) => r.path)).toEqual(base.results.map((r) => r.path));
@@ -101,21 +124,15 @@ test("enabled + endpoint error degrades to heuristic order with a warning", asyn
 
 // ─── the rerank liveness code on the retrieval trail ─────────────────────────
 
-/** A 503 endpoint that counts the requests it answered. */
-function failingRerankFetch(): { calls: () => number } {
-  let calls = 0;
-  globalThis.fetch = (async () => {
-    calls += 1;
-    return new Response("upstream boom", { status: 503 });
-  }) as unknown as typeof fetch;
-  return { calls: () => calls };
-}
-
 test("a failed rerank names rerank-provider-unavailable with its category", async () => {
-  const cfg = makeConfig({ vault, dbPath, rerank: ENABLED });
+  const cfg = makeConfig({ vault, dbPath, rerank: rerankEnabled() });
   await indexVault(cfg);
   const base = await search(makeConfig({ vault, dbPath }), { query: "fox", limit: 10 });
-  failingRerankFetch();
+  // The raw (non-JSON) 503 body is the one rerank case the fixture cannot
+  // express: the fixture JSON-encodes every body, and this test pins the
+  // resulting warning byte-identical to v1.65.0. It stays at the fetch seam.
+  globalThis.fetch = (async () =>
+    new Response("upstream boom", { status: 503 })) as unknown as typeof fetch;
   const out = await search(cfg, { query: "fox", limit: 10 });
   expect(out.results.map((r) => r.path)).toEqual(base.results.map((r) => r.path));
   // The human signal is byte-identical to v1.65.0.
@@ -127,36 +144,30 @@ test("a failed rerank names rerank-provider-unavailable with its category", asyn
 });
 
 test("a failed rerank is served but never cached, so the next query retries", async () => {
-  const cfg = makeConfig({ vault, dbPath, rerank: ENABLED, cacheEnabled: true });
+  const cfg = makeConfig({ vault, dbPath, rerank: rerankEnabled(), cacheEnabled: true });
   await indexVault(cfg);
-  const endpoint = failingRerankFetch();
+  server.setHandler(unavailable);
   await search(cfg, { query: "fox", limit: 10 });
   const second = await search(cfg, { query: "fox", limit: 10 });
-  expect(endpoint.calls()).toBe(2);
+  expect(server.callCount()).toBe(2);
   expect(second.retrievalTrail?.degraded.map((d) => d.code)).toContain(
     RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
   );
 });
 
 test("a healthy rerank is cached as before", async () => {
-  const cfg = makeConfig({ vault, dbPath, rerank: ENABLED, cacheEnabled: true });
+  const cfg = makeConfig({ vault, dbPath, rerank: rerankEnabled(), cacheEnabled: true });
   await indexVault(cfg);
-  let calls = 0;
-  stubRerankFetch("cats");
-  const scoring = globalThis.fetch;
-  globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
-    calls += 1;
-    return scoring(...args);
-  }) as unknown as typeof fetch;
+  server.setHandler(winnerHandler("cats"));
   await search(cfg, { query: "fox", limit: 10 });
   await search(cfg, { query: "fox", limit: 10 });
-  expect(calls).toBe(1);
+  expect(server.callCount()).toBe(1);
 });
 
 test("a healthy rerank and a disabled rerank carry no trail", async () => {
-  const enabled = makeConfig({ vault, dbPath, rerank: ENABLED });
+  const enabled = makeConfig({ vault, dbPath, rerank: rerankEnabled() });
   await indexVault(enabled);
-  stubRerankFetch("cats");
+  server.setHandler(winnerHandler("cats"));
   expect((await search(enabled, { query: "fox", limit: 10 })).retrievalTrail).toBeUndefined();
   const disabled = makeConfig({ vault, dbPath });
   expect((await search(disabled, { query: "fox", limit: 10 })).retrievalTrail).toBeUndefined();
