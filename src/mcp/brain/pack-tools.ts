@@ -215,7 +215,11 @@ async function toolBrainContextPack(
   // Opt-in packing policy (recall-lane-latency wave). Refused beside the
   // `dependentRequired` that declares it, exactly as query_mode is: a
   // policy with no query has no turn to pack for and would be the silent
-  // no-op this project refuses.
+  // no-op this project refuses. A blank or whitespace-only query is the
+  // same refusal, not a pass: the empty string is dropped before the core
+  // and the null query filter-passes every candidate, so the policy would
+  // silently reorder an unordered pack - the exact evasion the raw read
+  // above would otherwise allow.
   const packingPolicy = coerceStr(args, "packing_policy", false);
   if (packingPolicy !== null) {
     if (!isPackingPolicy(packingPolicy)) {
@@ -224,7 +228,7 @@ async function toolBrainContextPack(
         `brain_context_pack: packing_policy must be one of ${PACKING_POLICIES.join(", ")}`,
       );
     }
-    if (query === undefined) {
+    if (query === undefined || query.trim() === "") {
       throw new MCPError(
         INVALID_PARAMS,
         "brain_context_pack: packing_policy requires query; a policy with nothing to order is inert",

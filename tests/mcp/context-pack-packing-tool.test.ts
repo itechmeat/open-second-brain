@@ -10,8 +10,9 @@
  *      style so a schema-driven client discovers it without a refusal.
  *   2. A non-member is refused with INVALID_PARAMS naming the frozen
  *      members.
- *   3. A policy without a query is refused - a policy with nothing to
- *      order is inert - exactly like a mode with nothing to read.
+ *   3. A policy without a query - absent, blank or whitespace-only - is
+ *      refused: a policy with nothing to order is inert, exactly like a
+ *      mode with nothing to read.
  *   4. The omitted argument is byte-identical: no `packing` member
  *      exists on the response and the unified order is untouched.
  *   5. With a policy, the response carries the `packing` accounting -
@@ -159,6 +160,28 @@ describe("brain_context_pack packing_policy refusals", () => {
     expect(r.error!.message).toContain("packing_policy");
     expect(r.error!.message).toContain("query");
     expect(r.error!.message).toContain("inert");
+  });
+
+  test("a policy with a blank or whitespace-only query is refused as inert exactly like an absent one", async () => {
+    // An empty string survives the raw read, is dropped before the core
+    // as falsy, and the null query filter-passes every candidate - so the
+    // policy would silently reorder an unordered pack. Whitespace survives
+    // the drop and substring-passes every haystack. Both are the same
+    // nothing-to-order call the absent-query refusal names.
+    writeBothLanes();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    for (const query of ["", " ", "   "]) {
+      const r = await callPackRaw(server, {
+        max_tokens: 10_000,
+        query,
+        packing_policy: "query_first",
+      });
+      expect(r.error?.code).toBe(-32602);
+      expect(r.error!.message).toContain("packing_policy");
+      expect(r.error!.message).toContain("query");
+      expect(r.error!.message).toContain("inert");
+    }
   });
 
   test("a policy against a one-lane vault is refused by name as INVALID_PARAMS", async () => {
