@@ -66,6 +66,15 @@ export interface ResolvedSearchRequest {
   readonly sessionFocus: SearchSessionFocus | null;
   /** One clock for every time-resolving decision in this call. */
   readonly nowMs: number;
+  /**
+   * The request's clock, readable: the port every later wall-clock read
+   * on the call - the lane-interval stamps, the composite deadline's
+   * expiry checks - goes through, so the clock is read nowhere but this
+   * module (the rank-clock census pins the site,
+   * `tests/core/search/rank-clock-determinism.test.ts`). Each read is an
+   * epoch-ms instant, the same register `nowMs` was resolved from.
+   */
+  readonly clock: () => number;
   readonly timeRange: ResolvedTimeRange | null;
   readonly temporalIntent: TemporalIntent | null;
   /** Whether local query expansion runs for this call. */
@@ -138,6 +147,19 @@ export function resolveSearchRequest(
   // filter, the session-focus expiry and the query-declared window below
   // cannot disagree by a few milliseconds of wall-clock drift.
   const nowMs = Date.now();
+  // The readable form of the same clock, handed to the phases that must
+  // time a duration (the overlapped lane intervals, the composite
+  // deadline): they read THROUGH this port, so the wall-clock read site
+  // stays in this module and a downstream phase can never quietly bring
+  // a second clock of its own. The port also keeps the call agreeing
+  // with itself: a reading can never precede the instant the request was
+  // resolved at, so no interval stamped through it starts before the
+  // request that owns it, and a deadline's elapsed time is never
+  // negative, however the host clock drifts between two reads.
+  const clock = (): number => {
+    const reading = Date.now();
+    return reading > nowMs ? reading : nowMs;
+  };
   const sessionFocus =
     opts.sessionFocus === undefined
       ? readActiveSessionFocus(resolvedConfig, opts.focusSession, nowMs)
@@ -207,6 +229,7 @@ export function resolveSearchRequest(
     policy,
     sessionFocus,
     nowMs,
+    clock,
     timeRange,
     temporalIntent,
     expandActive,

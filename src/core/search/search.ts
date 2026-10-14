@@ -135,6 +135,8 @@ export interface CompositeDeadline {
   readonly budgetMs: number;
   /** Absolute fire time, on the request's clock so one clock rules the call. */
   readonly expiresAt: number;
+  /** The request's clock, readable: every expiry check reads through it. */
+  readonly clock: () => number;
   /**
    * Note the expiry once: the human warning sentence and the typed
    * degradation (with the elapsed/budget detail), plus the same
@@ -158,13 +160,15 @@ export interface CompositeDeadline {
 }
 
 function deadlineExpired(deadline: CompositeDeadline | null): boolean {
-  return deadline !== null && Date.now() >= deadline.expiresAt;
+  return deadline !== null && deadline.clock() >= deadline.expiresAt;
 }
 
 export function createCompositeDeadline(input: {
   readonly budgetMs: number | null;
   /** The request's clock: the one `nowMs` every timed decision shares. */
   readonly startMs: number;
+  /** The request's clock, readable: every check below reads through it. */
+  readonly clock: () => number;
   readonly warnings: string[];
   readonly degraded: RetrievalDegradationSink;
   readonly wantSemantic: boolean;
@@ -179,7 +183,7 @@ export function createCompositeDeadline(input: {
     if (fired) return;
     fired = true;
     controller.abort();
-    const elapsedMs = Date.now() - input.startMs;
+    const elapsedMs = input.clock() - input.startMs;
     input.warnings.push(
       `hybrid deadline ${budgetMs}ms exceeded after ${elapsedMs}ms; returning keyword-only results`,
     );
@@ -206,6 +210,7 @@ export function createCompositeDeadline(input: {
   return {
     budgetMs,
     expiresAt: input.startMs + budgetMs,
+    clock: input.clock,
     fire,
     hasFired: () => fired,
     signal: controller.signal,
@@ -222,6 +227,11 @@ export function createCompositeDeadline(input: {
 export interface LaneDeadline {
   /** Absolute fire time, on the request's clock. */
   readonly expiresAt: number;
+  /**
+   * Read the request's clock: the port the resolved request hands the
+   * call, so a lane seam never reads the wall clock for itself.
+   */
+  readonly clock: () => number;
   /** Note the expiry (once) and abort the signal the lanes carry. */
   fire(): void;
   /** Name an abandoned lane's late, non-abort failure. */
@@ -241,7 +251,7 @@ async function awaitWithinDeadline<T>(
   deadline: LaneDeadline,
   fallback: () => T,
 ): Promise<T> {
-  const remainingMs = deadline.expiresAt - Date.now();
+  const remainingMs = deadline.expiresAt - deadline.clock();
   if (remainingMs <= 0) {
     deadline.fire();
     return fallback();
@@ -309,7 +319,7 @@ export function startSemanticLane<T>(input: {
   /** The empty lane the deadline serves when it consumed the lane. */
   readonly fallback: () => T;
 }): SemanticLaneJoin<T> {
-  if (input.deadline !== null && input.deadline.expiresAt - Date.now() <= 0) {
+  if (input.deadline !== null && input.deadline.expiresAt - input.deadline.clock() <= 0) {
     input.deadline.fire();
     const served = input.fallback();
     return { join: () => Promise.resolve(served) };
@@ -345,6 +355,7 @@ export async function search(
     policy,
     sessionFocus,
     nowMs,
+    clock,
     timeRange,
     temporalIntent,
     hybridDeadlineMs,
@@ -398,6 +409,7 @@ export async function search(
     const deadline = createCompositeDeadline({
       budgetMs: hybridDeadlineMs,
       startMs: nowMs,
+      clock,
       warnings,
       degraded,
       wantSemantic: policy.wantSemantic,
@@ -528,7 +540,9 @@ export async function search(
     });
 
     // Keyword candidates, with the plan the synonym step may have re-built.
-    const keywordStartMs = Date.now();
+    // The interval stamps read the request's clock port, never the wall
+    // clock directly - the rank-clock census pins the read site.
+    const keywordStartMs = clock();
     const keywordLane = runKeywordLane({
       store,
       recall: effectiveConfig.recall,
@@ -545,7 +559,7 @@ export async function search(
       ...(pushdown !== null ? { pushdown } : {}),
       matchMode: request.matchMode,
     });
-    const keywordEndMs = Date.now();
+    const keywordEndMs = clock();
     keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);
     for (const d of keywordLane.degraded) degraded.push(d);

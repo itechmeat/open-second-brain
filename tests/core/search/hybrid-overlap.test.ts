@@ -38,6 +38,7 @@ function realDeadline(expiresAt: number): {
   const deadline = createCompositeDeadline({
     budgetMs,
     startMs: expiresAt - budgetMs,
+    clock: () => Date.now(),
     warnings,
     degraded: [],
     wantSemantic: true,
