@@ -1033,7 +1033,7 @@ explicit use; auto-migration just reuses their logic.
 ## Why updates used to break (and no longer do)
 
 `hooks/hooks.json` previously invoked the bare `o2b-hook` launcher through a
-`~/.local/bin` symlink that `o2b install-cli` pinned to a _versioned_ cache
+`~/.local/bin` symlink that `o2b install-cli` pinned to a *versioned* cache
 directory. When Claude Code rotated that directory on update, the symlink
 dangled, the launcher resolved an old checkout, and it `exit 2`-ed — the one
 hook exit code that blocks the agent. Every prompt was rejected until the user
