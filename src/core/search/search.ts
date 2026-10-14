@@ -125,8 +125,11 @@ const ABANDONED_LANE_FAILURE_PREFIX = "hybrid deadline: an abandoned lane failed
  * fires, the search completes keyword-only and names it with
  * `RETRIEVAL_DEGRADATION.hybridDeadlineExceeded` - never a stall, never a
  * silent partial.
+ *
+ * Exported for the overlap seam's tests, which build a real clock and pin
+ * the abandoned-lane sentence byte for byte.
  */
-interface CompositeDeadline {
+export interface CompositeDeadline {
   /** The configured budget, as resolved onto the request. */
   readonly budgetMs: number;
   /** Absolute fire time, on the request's clock so one clock rules the call. */
@@ -157,7 +160,7 @@ function deadlineExpired(deadline: CompositeDeadline | null): boolean {
   return deadline !== null && Date.now() >= deadline.expiresAt;
 }
 
-function createCompositeDeadline(input: {
+export function createCompositeDeadline(input: {
   readonly budgetMs: number | null;
   /** The request's clock: the one `nowMs` every timed decision shares. */
   readonly startMs: number;
@@ -210,6 +213,21 @@ function createCompositeDeadline(input: {
 }
 
 /**
+ * The clock members the deadline-bounded lanes read. The full
+ * {@link CompositeDeadline} satisfies it; the narrow shape keeps the
+ * lane seams honest about what they touch and unit-testable without the
+ * whole machinery.
+ */
+export interface LaneDeadline {
+  /** Absolute fire time, on the request's clock. */
+  readonly expiresAt: number;
+  /** Note the expiry (once) and abort the signal the lanes carry. */
+  fire(): void;
+  /** Name an abandoned lane's late, non-abort failure. */
+  noteAbandonedFailure(error: unknown): void;
+}
+
+/**
  * Run one async lane under the deadline. A lane whose clock has already
  * run out is never started. A lane that loses the race is abandoned, not
  * awaited: the fire aborts the signal its provider request carries, and
@@ -219,7 +237,7 @@ function createCompositeDeadline(input: {
  */
 async function awaitWithinDeadline<T>(
   start: () => Promise<T>,
-  deadline: CompositeDeadline,
+  deadline: LaneDeadline,
   fallback: () => T,
 ): Promise<T> {
   const remainingMs = deadline.expiresAt - Date.now();
@@ -252,6 +270,62 @@ async function awaitWithinDeadline<T>(
 /** The semantic-lane outcome when the deadline consumed the lane. */
 function emptySemanticLane(): SemanticLaneOutcome {
   return { hits: [], attempted: false, warnings: [], degraded: [] };
+}
+
+/**
+ * A lane started BEFORE the keyword lanes (recall-lane-latency): the
+ * query embed is the one caller wait the keyword work can hide, so it is
+ * put in flight here and joined where the serial await stood. The embed
+ * request leaves in the caller's own tick; the keyword lanes then run to
+ * completion synchronously while the round trip is outstanding.
+ *
+ * Two rules travel with the seam:
+ *
+ *   - The never-start rule moves to the start site: a clock that has
+ *     already run out starts no embed at all, notes the expiry, and
+ *     serves the fallback at the join - the same rule
+ *     {@link awaitWithinDeadline} applies to a lane it starts itself.
+ *   - The rejection handler attaches at START, not at join. Between the
+ *     two stand the synchronous keyword lanes, and a throw there unwinds
+ *     the call with the embed still in flight. With a deadline the
+ *     stranded lane's failure is the deadline's to name; without one the
+ *     keyword step's own error is what the caller sees, and the handler
+ *     only keeps the stranded rejection from crashing the process. Once
+ *     joined, the race inside {@link awaitWithinDeadline} owns the
+ *     rejection (rethrow before the fire, note after it) and this
+ *     handler defuses only.
+ */
+export interface SemanticLaneJoin<T> {
+  /** Resolve the lane: its outcome, the fallback, or the lane's own error. */
+  join(): Promise<T>;
+}
+
+export function startSemanticLane<T>(input: {
+  /** Starts the lane; called in the caller's tick unless the clock ran out. */
+  readonly start: () => Promise<T>;
+  /** The composite clock; null runs the lane unbounded. */
+  readonly deadline: LaneDeadline | null;
+  /** The empty lane the deadline serves when it consumed the lane. */
+  readonly fallback: () => T;
+}): SemanticLaneJoin<T> {
+  if (input.deadline !== null && input.deadline.expiresAt - Date.now() <= 0) {
+    input.deadline.fire();
+    const served = input.fallback();
+    return { join: () => Promise.resolve(served) };
+  }
+  const work = input.start();
+  let joined = false;
+  void work.catch((error: unknown) => {
+    if (joined || input.deadline === null) return;
+    input.deadline.noteAbandonedFailure(error);
+  });
+  return {
+    join: async (): Promise<T> => {
+      joined = true;
+      if (input.deadline === null) return await work;
+      return await awaitWithinDeadline(() => work, input.deadline, input.fallback);
+    },
+  };
 }
 
 export async function search(
