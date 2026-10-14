@@ -127,7 +127,11 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     const unlink = linkAbortSignal(opts?.signal, cancel);
 
     const tasks = batches.map(async (batch) => {
-      const permit = await sem.acquire();
+      // A free permit is taken synchronously, so the batch reaches `fetch`
+      // in the caller's tick (recall-lane-latency): `await acquire()` alone
+      // would park the dispatch on a microtask until the caller's
+      // synchronous work - the keyword lanes - had finished.
+      const permit = sem.tryAcquire() ?? (await sem.acquire());
       try {
         if (cancel.signal.aborted) return;
         const vectors = await this.embedBatchWithRetry(

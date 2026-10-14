@@ -8,7 +8,11 @@
  * that already ran out starts nothing. The integration half runs search()
  * against the fake embed endpoint and pins the overlapped contract: the
  * same rows as the serial pipeline produced, the embed in flight across
- * the join, and keyword sentences before semantic sentences.
+ * the join, keyword sentences before semantic sentences - and the one
+ * property the lane exists for, that the embed request actually DISPATCHES
+ * before the keyword lanes finish (a semaphore acquire that yields a
+ * microtask on the free-permit path would ship the dispatch after them,
+ * and the ordering test below is the pin that catches it).
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
@@ -21,6 +25,7 @@ import {
   search,
   startSemanticLane,
 } from "../../../src/core/search/search.ts";
+import type { SearchLaneTiming } from "../../../src/core/search/types.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import type { RetrievalDegradationSink } from "../../../src/core/search/retrieval-trail.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
@@ -382,6 +387,86 @@ test("the embed request is in flight across the join while the answer is pending
   // embed delay it joined rather than cutting the lane short.
   expect(Date.now() - started).toBeGreaterThanOrEqual(180);
   expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
+});
+
+test("the embed request dispatches before the keyword lanes finish", async () => {
+  if (!sqliteVecLoadable()) return;
+  await seedCorpus();
+  const cfg = semanticConfig();
+  await indexVault(cfg, { embeddings: true });
+
+  // The ordering is read as EVENT order at two synchronous seams, not as
+  // wall-clock arithmetic: a millisecond-resolution clock stamps a
+  // dispatch and a keyword lane that share a tick with the same reading,
+  // so a timestamp comparison flakes on exactly the runs it exists to
+  // catch. The fetch seam records the embed dispatch; the keyword lane's
+  // bm25 read records the keyword lanes' execution - the one
+  // `bm25(chunk_fts` query in the store, so the query-shape step's
+  // document-frequency reads (a COUNT, no bm25) never log a false marker.
+  const events: string[] = [];
+  let dispatchMs: number | undefined;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    const input = args[0];
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith("/embeddings") && !events.includes("dispatch")) {
+      events.push("dispatch");
+      dispatchMs = Date.now();
+    }
+    return realFetch(...args);
+  }) as typeof fetch;
+  const realQuery = Database.prototype.query;
+  Database.prototype.query = function (this: Database, sql: string): unknown {
+    if (sql.includes("bm25(chunk_fts")) events.push("keyword-fts");
+    return (realQuery as unknown as (this: Database, sql: string) => unknown).call(this, sql);
+  } as typeof Database.prototype.query;
+
+  // The fake server shares this process's event loop, so its handler can
+  // only observe the request once the synchronous keyword work yields -
+  // arrival at the handler can never precede the keyword stamps. The
+  // dispatch at the fetch seam is the ordering observable; the arrival
+  // log pins that the observed dispatch reached the endpoint.
+  const arrivals: number[] = [];
+  server.setHandler((req) => {
+    if (req.path.endsWith("/embeddings")) arrivals.push(Date.now());
+    return { ...embeddingsBody(req), delayMs: 150 };
+  });
+
+  let timing: SearchLaneTiming | undefined;
+  let out: Awaited<ReturnType<typeof search>>;
+  try {
+    out = await search(cfg, {
+      query: "fox",
+      limit: 5,
+      semantic: true,
+      laneTiming: (t) => void (timing = t),
+    });
+  } finally {
+    Database.prototype.query = realQuery;
+    globalThis.fetch = realFetch;
+  }
+
+  // Both seams were hit, and the answer joined the ranked lanes.
+  expect(events).toContain("dispatch");
+  expect(events).toContain("keyword-fts");
+  expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
+  // The load-bearing ordering: the request left inside the lane-start
+  // tick, before the keyword lanes' own read ran - the keyword lanes
+  // executed while the round trip was outstanding, which is the overlap
+  // the lane exists to buy. A dispatch parked on a microtask by a
+  // yielding semaphore acquire lands after that read and fails here.
+  expect(events.indexOf("dispatch")).toBeLessThan(events.indexOf("keyword-fts"));
+  // The same ordering in the sink's stamps: the dispatch precedes the
+  // keyword interval's opening and, with it, the keyword lane's end stamp.
+  if (timing === undefined || dispatchMs === undefined) {
+    throw new Error("the lane timing sink or the dispatch stamp never arrived");
+  }
+  expect(dispatchMs).toBeLessThanOrEqual(timing.keywordStartMs);
+  expect(dispatchMs).toBeLessThanOrEqual(timing.keywordEndMs);
+  // The delayed endpoint kept the lane's resolution behind the keyword
+  // lane, so the dispatch really did precede the answer.
+  expect(arrivals.length).toBeGreaterThan(0);
+  expect(arrivals[0]).toBeLessThan(timing.embedEndMs ?? Number.MAX_SAFE_INTEGER);
 });
 
 test("keyword sentences precede semantic sentences in the merged warnings", async () => {

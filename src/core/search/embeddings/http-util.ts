@@ -339,6 +339,26 @@ export class Semaphore {
     await new Promise<void>((res) => this.waiters.push(res));
     return this.enter();
   }
+  /**
+   * Take a free permit WITHOUT ever yielding, or see there is none.
+   *
+   * `acquire()` is an `async` method, so `await acquire()` parks the
+   * caller on a microtask even when a permit is free - and a microtask
+   * cannot run until the caller's synchronous execution finishes. The
+   * overlapped hybrid search (recall-lane-latency) starts the embed lane
+   * in the caller's tick precisely so the HTTP request leaves before the
+   * synchronous keyword lanes run; an await in the free-permit path
+   * shipped the dispatch after them and the overlap never happened. The
+   * fast path is `enter()` itself, which is synchronous: a free permit
+   * reaches the caller in its own tick, `null` sends it to
+   * {@link acquire} unchanged, and the permit contract (one release,
+   * loud on a second) is identical either way.
+   */
+  tryAcquire(): SemaphorePermit | null {
+    if (this.permits <= 0) return null;
+    this.permits--;
+    return this.enter();
+  }
 }
 
 /**
