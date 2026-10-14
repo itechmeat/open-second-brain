@@ -36,7 +36,18 @@ import {
   type ContextPackReport,
 } from "../../../src/core/brain/context-pack.ts";
 import { listAttentionFlows } from "../../../src/core/brain/attention-flows.ts";
-import { listContextReceipts } from "../../../src/core/brain/context-receipts.ts";
+import {
+  getContextReceipt,
+  listContextReceipts,
+} from "../../../src/core/brain/context-receipts.ts";
+import { listMetrics } from "../../../src/core/brain/metrics.ts";
+import {
+  canonicalSegment,
+  deterministicPrefix,
+  PROMPT_PREFIX_SURFACE,
+} from "../../../src/core/brain/prompt-prefix.ts";
+import { RECALL_CHANNEL, listRecallTelemetry } from "../../../src/core/brain/recall-telemetry.ts";
+import { isPackingPolicy } from "../../../src/core/brain/recall-budget.ts";
 
 let vault: string;
 
@@ -329,5 +340,80 @@ describe("context pack packing policy", () => {
     // plus the attention block's charge fill the total exactly.
     expect(packing.facts.allocation + packing.pages.allocation + attentionTokens).toBe(10_000);
     expect(packing.facts.spent + packing.pages.spent + attentionTokens).toBe(r.tokensUsed);
+  });
+
+  test("receipt budget metadata names the policy only when one was named", () => {
+    writeMixedVault();
+    const unnamed = packContext(vault, {
+      maxTokens: 10_000,
+      receipt: { trigger: "context_pack", host: "packing-test" },
+    });
+    const unnamedRecord = getContextReceipt(vault, unnamed.receiptId!)!;
+    const unnamedBudget = unnamedRecord.payload["budget"] as Record<string, unknown>;
+    expect(unnamedBudget["max_tokens"]).toBe(10_000);
+    expect(Object.hasOwn(unnamedBudget, "packing_policy")).toBe(false);
+    const named = packContext(vault, {
+      maxTokens: 10_000,
+      packingPolicy: "facts_first",
+      receipt: { trigger: "context_pack", host: "packing-test" },
+    });
+    const namedRecord = getContextReceipt(vault, named.receiptId!)!;
+    const namedBudget = namedRecord.payload["budget"] as Record<string, unknown>;
+    expect(namedBudget["packing_policy"]).toBe("facts_first");
+  });
+
+  test("the synced telemetry carries the policy as a closed enum member", () => {
+    writeMixedVault();
+    const named = packContext(vault, {
+      maxTokens: 10_000,
+      packingPolicy: "query_first",
+      telemetry: { host: "packing-test", channel: RECALL_CHANNEL.cli },
+    });
+    expect(named.telemetryId).toStartWith("ctn_");
+    const records = listRecallTelemetry(vault, { mode: "context_pack" });
+    expect(records).toHaveLength(1);
+    const metadata = records[0]!.payload["metadata"] as Record<string, unknown>;
+    // A member of the frozen vocabulary, never a free-form string.
+    expect(metadata["packing_policy"]).toBe("query_first");
+    expect(isPackingPolicy(metadata["packing_policy"])).toBe(true);
+  });
+
+  test("the prompt-prefix segment gains the policy only when it was named", () => {
+    writeMixedVault();
+    const plain = packContext(vault, { maxTokens: 10_000, promptPrefix: true });
+    const before = listMetrics(vault, { surface: PROMPT_PREFIX_SURFACE });
+    expect(before).toHaveLength(1);
+    // Exact pre-change bytes for an unnamed caller: the deterministic
+    // segment carries no packing_policy key at all.
+    const unnamedExpected = deterministicPrefix({
+      kind: "context_pack",
+      segments: [
+        canonicalSegment({ lanes: "false", max_tokens: String(plain.maxTokens), query: "" }),
+      ],
+    });
+    expect(before[0]!.payload["prefix_hash"]).toBe(unnamedExpected.hash);
+    const named = packContext(vault, {
+      maxTokens: 10_000,
+      packingPolicy: "facts_first",
+      promptPrefix: true,
+    });
+    const after = listMetrics(vault, { surface: PROMPT_PREFIX_SURFACE });
+    expect(after).toHaveLength(2);
+    // The named caller's prefix moves, deterministically, by the policy;
+    // both records share one run_at second, so compare the hash pair.
+    const namedExpected = deterministicPrefix({
+      kind: "context_pack",
+      segments: [
+        canonicalSegment({
+          lanes: "false",
+          max_tokens: String(named.maxTokens),
+          query: "",
+          packing_policy: "facts_first",
+        }),
+      ],
+    });
+    const hashes = after.map((r) => r.payload["prefix_hash"]).toSorted();
+    expect(hashes).toEqual([namedExpected.hash, unnamedExpected.hash].toSorted());
+    expect(namedExpected.hash).not.toBe(unnamedExpected.hash);
   });
 });

@@ -1365,6 +1365,14 @@ function finalizeContextPackReport(
                   // query read two ways is two different requests, but a
                   // caller that named none must keep the prefix it had.
                   ...(opts.queryMode !== undefined ? { query_mode: opts.queryMode } : {}),
+                  // Added only when the caller named a policy, on the
+                  // same rule: the policy decides what the budget buys,
+                  // so the same query under two policies is two
+                  // different requests - and a caller that named none
+                  // keeps its cacheable prefix byte for byte.
+                  ...(opts.packingPolicy !== undefined
+                    ? { packing_policy: opts.packingPolicy }
+                    : {}),
                 }),
               ],
             }),
@@ -1388,6 +1396,11 @@ function contextPackBudgetMetadata(
       ? { max_chars_per_memory: opts.maxCharsPerMemory }
       : {}),
     ...(opts.maxTotalChars !== undefined ? { max_total_chars: opts.maxTotalChars } : {}),
+    // Named only when the caller named a policy: the receipt and the
+    // synced telemetry record then carry a member of the frozen
+    // PACKING_POLICIES vocabulary - which names nothing sensitive - and
+    // an unnamed caller's records never grow the key.
+    ...(opts.packingPolicy !== undefined ? { packing_policy: opts.packingPolicy } : {}),
   };
 }
 

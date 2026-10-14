@@ -2067,6 +2067,28 @@ format characters), when it contains NUL, or when it exceeds the cap.
   tension warnings and the owner-scope observation now reach the caller as
   `brain_pre_compress_pack` has always passed them, absent when empty. No new
   tool - the surface stays at 113.
+- Since v1.84.0 `brain_context_pack` accepts `packing_policy`, a strictly
+  opt-in claim order over the two candidate populations that already share
+  the one `max_tokens` budget: the preference-derived pages (the facts
+  lane, the distilled layer) and the retired pages (the pages lane).
+  `facts_first` claims for the facts lane first; `query_first` hands the
+  first claim to the pages lane and lets the facts lane fill the exact
+  remainder. The total never grows, claiming is strictly sequential with
+  no minimum-page floor, the per-memory character cap stays lane-internal,
+  and the synthesized attention block stays a reserved charge neither lane
+  draws. `packing_policy` requires `query` (the schema states the pairing
+  as `dependentRequired` and the handler refuses a policy with nothing to
+  order, exactly like a mode with nothing to read); a policy against a
+  vault where one lane holds no candidate is refused by name with
+  INVALID_PARAMS naming the lane and the member, never a silent no-op. The
+  response gains a `packing` object - the policy name and each lane's
+  allocation, delivered spend, candidate count and item count - only when
+  the caller named a policy; an omitted `packing_policy` runs the unified
+  comparator pack byte-identical, adds no member, and writes no receipts
+  or telemetry keys. The receipt and telemetry budget metadata and the
+  prompt-prefix metric segment carry the policy under the same rule, as a
+  closed-vocabulary member of the frozen tuple. No new tool - the surface
+  stays at 113.
 - Since v1.54.0 a page may RESERVE itself against remote reads, and the
   reservation is enforced rather than advisory. A vault page whose
   `visibility:` frontmatter carries the reserved token is not returned, not

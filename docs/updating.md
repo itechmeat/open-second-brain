@@ -58,6 +58,17 @@ surfaces are additive options: `search --explain` reports `overlapped_ms`
 flag is on, and the bench latency family reports the same figure only for
 runs whose questions attempted the semantic lane.
 
+
+**`brain_context_pack` accepts `packing_policy`, strictly opt-in.** The new
+MCP argument lets a caller name which candidate population claims the pack's
+existing `max_tokens` budget first - the preference-derived pages
+(`facts_first`) or the retired pages (`query_first`) - and a policy against a
+vault where one lane holds no candidate is refused by name. Omitted, it
+changes no bytes of any response, receipt, telemetry record or prompt-prefix
+metric; named, the response gains a `packing` accounting object and the
+receipt and telemetry budget metadata gain a `packing_policy` member of the
+frozen two-value vocabulary. There is no CLI flag and no config key - the
+knob rides the MCP tool only, following the `query_mode` parity precedent.
 ## Upgrading to 1.83.0
 
 Nothing below needs a migration step. Every new surface in this release
