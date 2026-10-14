@@ -58,8 +58,8 @@ export interface AttentionFlowSection {
  * of `ThreadFacet` in `thread-topics.ts` - a stable key, ordered
  * origin coordinates, pure derivation - for a different corpus. A
  * thread facet selects the turns of one thread for the coverage pass;
- * this facet annotates a standing instruction with where it was first
- * mentioned. The distinct name is deliberate, so the coverage lane's
+ * this facet annotates a standing instruction with the origin its
+ * evidence cites first. The distinct name is deliberate, so the coverage lane's
  * meaning of "facet" stays unambiguous.
  */
 export interface StandingInstructionFacet {
@@ -67,7 +67,11 @@ export interface StandingInstructionFacet {
   readonly key: string;
   readonly preferenceId: string;
   readonly scope: string;
-  /** Resolved origins in evidence order; `[0]` is the first mention. */
+  /**
+   * Resolved origins in the preference's `evidenced_by` order - never
+   * re-sorted, and not a chronological claim; `[0]` is the earliest
+   * cited origin, not the earliest signal in time.
+   */
   readonly origins: ReadonlyArray<SessionRefOrigin>;
 }
 
@@ -76,7 +80,7 @@ export interface AttentionFlowEvaluationOptions {
    * Opt-in standing-instruction provenance (recall lane). Omitted or
    * false, every emitted string is the legacy `id (scope)` output and
    * sections carry no `facets` field. True, a surfaced preference whose
-   * provenance join resolves gains a first-mention annotation on its
+   * provenance join resolves gains an earliest-cited annotation on its
    * item string plus a facet entry; the option changes annotations,
    * never membership - no preference is admitted that the plain lane
    * would not already deliver.
@@ -254,12 +258,12 @@ function normalizeStandingQueryScopes(value: unknown): ReadonlyArray<string> {
   return Object.freeze([...new Set(out)]);
 }
 
-/** Item annotation prefix for a first mention resolved to a real turn. */
-const FIRST_MENTION_TURN_PREFIX = " [first mention turn ";
-/** Item annotation prefix for a first mention resolved to a capture-lifecycle coordinate: the fragment is the hook event's NAME, so the annotation claims the session, never a turn. */
-const FIRST_MENTION_SESSION_PREFIX = " [first mention session ";
+/** Item annotation lead for an origin resolved to a real turn. */
+const EARLIEST_CITED_TURN_PREFIX = " [earliest cited turn ";
+/** Item annotation lead for an origin resolved to a capture-lifecycle coordinate: the fragment is the hook event's NAME, so the annotation claims the session, never a turn. */
+const EARLIEST_CITED_SESSION_PREFIX = " [earliest cited session ";
 /** Item annotation suffix. */
-const FIRST_MENTION_SUFFIX = "]";
+const EARLIEST_CITED_SUFFIX = "]";
 
 /**
  * Read-only signal-id → `session_ref` lookup over the directories the
@@ -299,8 +303,8 @@ interface SurfacedStandingInstruction {
  * Confirmed preferences whose `scope` is one the flow declared. Structural
  * match on the frontmatter scope token; no natural-language matching. Returns
  * `id (scope)` items, sorted for deterministic output. With the facet option
- * on, a preference whose provenance join resolves additionally gains a
- * first-mention annotation on its item string and a facet entry - annotations
+ * on, a preference whose provenance join resolves additionally gains an
+ * earliest-cited annotation on its item string and a facet entry - annotations
  * only, never a membership change, so a facet cannot surface a preference the
  * plain lane would withhold.
  */
@@ -341,10 +345,12 @@ function listConfirmedPreferencesByScope(
           items.push(base);
           continue;
         }
-        const first = provenance.origins[0]!;
+        const earliest = provenance.origins[0]!;
         const prefix =
-          first.kind === "turn" ? FIRST_MENTION_TURN_PREFIX : FIRST_MENTION_SESSION_PREFIX;
-        items.push(`${base}${prefix}${first.sessionKey}#${first.fragment}${FIRST_MENTION_SUFFIX}`);
+          earliest.kind === "turn" ? EARLIEST_CITED_TURN_PREFIX : EARLIEST_CITED_SESSION_PREFIX;
+        items.push(
+          `${base}${prefix}${earliest.sessionKey}#${earliest.fragment}${EARLIEST_CITED_SUFFIX}`,
+        );
         facets.push({
           key: provenance.key,
           preferenceId: pref.id,

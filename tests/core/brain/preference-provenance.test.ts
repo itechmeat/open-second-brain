@@ -119,7 +119,7 @@ describe("resolvePreferenceProvenance", () => {
   };
   const lookup = (signalId: string): string | undefined => LOOKUP[signalId];
 
-  test("resolves both producer kinds in evidence order, first mention first", () => {
+  test("resolves both producer kinds in evidence order, earliest cited first", () => {
     const provenance = resolvePreferenceProvenance(
       {
         id: "pref-db-mocking",
@@ -138,7 +138,8 @@ describe("resolvePreferenceProvenance", () => {
         kind: "session",
       },
     ]);
-    // The earliest evidence is the first mention.
+    // The earliest cited origin leads: the preference's evidence order,
+    // never re-sorted, and never a chronological claim.
     expect(provenance?.origins[0]).toEqual({
       sessionKey: "claude-minimal.jsonl",
       fragment: "turn-user-1",

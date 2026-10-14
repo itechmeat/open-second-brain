@@ -6,9 +6,13 @@
  * the coordinates of the conversation moment the fact came from. This
  * module joins the two at READ time: parse the ref, order the origins
  * by the preference's own evidence order, and hand the caller the
- * first mention. Nothing is written: no new frontmatter field, no
- * preference rewrite, so a join cannot corrupt the provenance it only
- * reads.
+ * earliest cited one. The order is the preference's `evidenced_by`
+ * order — never re-sorted, and never a chronological claim: merges
+ * sort evidence lexically and windowed rewrites can drop older
+ * signals from the list, so `origins[0]` is the earliest origin the
+ * preference cites, not the earliest signal in time. Nothing is
+ * written: no new frontmatter field, no preference rewrite, so a join
+ * cannot corrupt the provenance it only reads.
  *
  * Three producers write `session_ref` today, each with its own shape,
  * and the parser is per-producer aware rather than shape-guessing:
@@ -75,7 +79,8 @@ export type SignalSessionRefLookup = (signalId: string) => string | undefined;
  * The resolved provenance of one preference. `origins` follows the
  * preference's `evidenced_by` order (never re-sorted), with duplicate
  * coordinates folded into their first position, so `origins[0]` is the
- * first mention.
+ * earliest cited origin - an evidence-order figure, never a
+ * chronological claim.
  */
 export interface PreferenceProvenance {
   /** Stable facet key: `pref:<preference id>`. */

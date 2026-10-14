@@ -5,7 +5,7 @@
  * With the facet option unset, every emitted string is the legacy
  * `pref-<slug> (scope)` output, byte for byte, and sections carry no
  * facet data at all. With it set, a surfaced preference whose
- * provenance join resolves gains a first-mention annotation on its item
+ * provenance join resolves gains an earliest-cited annotation on its item
  * string plus a structured facet entry; a preference whose join does
  * not resolve keeps the plain string and is absent from `facets` — an
  * honestly-unresolved preference, never an implied provenance.
@@ -154,9 +154,9 @@ function standingSection(evaluation: ReturnType<typeof evaluateAttentionFlow>) {
   return section!;
 }
 
-/** Strip a first-mention annotation, leaving the legacy `id (scope)` string. */
+/** Strip an earliest-cited annotation, leaving the legacy `id (scope)` string. */
 function stripAnnotation(item: string): string {
-  return item.split(" [first mention ")[0]!;
+  return item.split(" [earliest cited ")[0]!;
 }
 
 describe("standing-instruction facets: opt-in gate", () => {
@@ -185,7 +185,7 @@ describe("standing-instruction facets: opt-in gate", () => {
     expect(on.items.map(stripAnnotation)).toEqual([...off.items]);
     expect(off.items).toEqual(["pref-secret (testing)"]);
     expect(on.items).toEqual([
-      "pref-secret (testing) [first mention turn claude-minimal.jsonl#turn-user-1]",
+      "pref-secret (testing) [earliest cited turn claude-minimal.jsonl#turn-user-1]",
     ]);
   });
 });
@@ -208,8 +208,8 @@ describe("standing-instruction facets: provenance annotation", () => {
     // to no origin, so that preference keeps the plain string.
     expect(section.items).toEqual([
       "pref-bare (testing)",
-      "pref-imported (testing) [first mention turn claude-minimal.jsonl#turn-user-1]",
-      "pref-lifecycle (testing) [first mention session session:00000000-0000-0000-0000-000000000003#UserPromptSubmit]",
+      "pref-imported (testing) [earliest cited turn claude-minimal.jsonl#turn-user-1]",
+      "pref-lifecycle (testing) [earliest cited session session:00000000-0000-0000-0000-000000000003#UserPromptSubmit]",
       "pref-noevidence (testing)",
     ]);
     expect(section.facets).toEqual([

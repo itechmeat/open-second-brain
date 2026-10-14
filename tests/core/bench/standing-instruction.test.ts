@@ -155,9 +155,9 @@ function standingFixture(): BenchFixture {
         // The facet key (the preference id) that must be delivered ...
         expected_ids: ["pref:pref-tabs"],
         // ... and the origin turn that must annotate it. The kind word
-        // is part of the expectation on purpose: an event-annotated
+        // is part of the expectation on purpose: a session-annotated
         // origin satisfies neither this string nor the gate.
-        expected_text: "first mention turn bench-session.json#turn-2",
+        expected_text: "earliest cited turn bench-session.json#turn-2",
       },
       {
         // The auto-extract shape resolves to no origin, so its facet is
