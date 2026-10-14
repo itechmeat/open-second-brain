@@ -9,7 +9,7 @@ import { runSemanticPhase, semanticPoolSize } from "../semantic-phase.ts";
 import { contradictedAbiFields, formatEmbeddingAbiDrift } from "../store.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
-import type { SemanticPolicy } from "../semantic-phase.ts";
+import type { SemanticEmbedTiming, SemanticPolicy } from "../semantic-phase.ts";
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import type { Store } from "../store.ts";
 import type { TransportReach } from "../../graph/transport-reach.ts";
@@ -39,6 +39,11 @@ export interface SemanticLaneInput {
   readonly keywordHitCount: number | (() => number);
   /** The composite deadline's cancellation; absent when no deadline runs. */
   readonly signal?: AbortSignal;
+  /**
+   * The embed-interval record to stamp (recall-lane-latency), forwarded
+   * to the phase and read by the join's caller. Absent records nothing.
+   */
+  readonly timing?: SemanticEmbedTiming;
   /**
    * The caller's reach, forwarded to the query-embed gateway. Absent
    * resolves to remote there, so an internal caller that must embed
@@ -75,6 +80,7 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
       explicit: policy.explicit,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
       ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
+      ...(input.timing !== undefined ? { timing: input.timing } : {}),
     });
     attempted = semOutcome.attempted;
     hits = semOutcome.hits;

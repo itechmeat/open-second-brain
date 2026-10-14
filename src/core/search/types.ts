@@ -861,6 +861,33 @@ export interface EvidencePack {
   readonly completeness?: CompletenessReport;
 }
 
+/**
+ * Per-call lane timing (recall-lane-latency): when the embed round trip
+ * ran relative to the keyword lanes, and how much of it they hid - the
+ * intersection of the two intervals, `max(0, min(embedEnd, keywordEnd) -
+ * max(embedStart, keywordStart))`, zero whenever the lane never attempted
+ * the embed.
+ *
+ * This record rides a per-call sink and NEVER lands on
+ * {@link SearchOutcome}: the query cache persists whole outcomes, so an
+ * outcome field would freeze one call's timings into every cached row
+ * served afterwards. Absent embed stamps mean the embed never ran.
+ */
+export interface SearchLaneTiming {
+  /** Absolute `Date.now()` stamp of the query embed's start; absent when it never ran. */
+  readonly embedStartMs?: number;
+  /** Absolute `Date.now()` stamp of the query embed's end; absent when it never ran. */
+  readonly embedEndMs?: number;
+  /** Absolute `Date.now()` stamp taken when the keyword lanes started. */
+  readonly keywordStartMs: number;
+  /** Absolute `Date.now()` stamp taken when the keyword lanes completed. */
+  readonly keywordEndMs: number;
+  /** The overlapped milliseconds, an integer >= 0; 0 when the embed never ran. */
+  readonly overlappedMs: number;
+  /** Whether the semantic lane attempted the embed. */
+  readonly attempted: boolean;
+}
+
 export interface SearchOptions {
   readonly query: string;
   readonly limit?: number;
@@ -1129,6 +1156,15 @@ export interface SearchOptions {
    * it unset.
    */
   readonly freshenSpawn?: (argv: string[]) => void;
+  /**
+   * Per-call lane-timing sink (recall-lane-latency), in the
+   * {@link SearchOptions.freshenSpawn} mold: invoked once at the
+   * semantic-lane join with the embed and keyword intervals and their
+   * overlap. Nothing timing-shaped reaches the outcome or the query
+   * cache - surfaces that want the figure project it themselves
+   * (`search --explain`, the bench). Omitted records nothing.
+   */
+  readonly laneTiming?: (timing: SearchLaneTiming) => void;
   /**
    * Skip rerank kind `decision-model` for this call. Set by the hook
    * surfaces (recall inject), whose time budget is shorter than a decision

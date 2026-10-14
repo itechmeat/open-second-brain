@@ -47,6 +47,17 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.84.0
+
+No step is required. Hybrid search now starts its semantic lane before the
+keyword lanes run and joins it where the serial await stood, so the query
+embed is hidden behind the keyword work; results, warnings and the
+query-cache keys are byte-identical, and no configuration changes. The new
+surfaces are additive options: `search --explain` reports `overlapped_ms`
+(how much of the embed round trip the keyword lanes hid) only while the
+flag is on, and the bench latency family reports the same figure only for
+runs whose questions attempted the semantic lane.
+
 ## Upgrading to 1.83.0
 
 Nothing below needs a migration step. Every new surface in this release

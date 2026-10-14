@@ -60,6 +60,18 @@ export function semanticPoolSize(limit: number): number {
   return Math.max(limit * POOL_OVERFETCH, POOL_FLOOR);
 }
 
+/**
+ * The embed interval the phase stamps for the overlapped-lane timing
+ * (recall-lane-latency). A plain mutable record the JOIN caller owns: the
+ * lane forwards it, the phase writes it around the one caller wait it
+ * has, and the caller reads it at the join. Absent stamps mean the embed
+ * never ran - a pre-flight guard refused before any provider existed.
+ */
+export interface SemanticEmbedTiming {
+  embedStartMs?: number;
+  embedEndMs?: number;
+}
+
 interface SemanticPhaseOutcome {
   readonly attempted: boolean;
   readonly hits: ReturnType<Store["semanticTopK"]>;
@@ -97,6 +109,11 @@ export async function runSemanticPhase(
      * everywhere else in the tree.
      */
     transportReach?: TransportReach;
+    /**
+     * The embed-interval record to stamp (recall-lane-latency), written
+     * around the embed await. Absent records nothing.
+     */
+    timing?: SemanticEmbedTiming;
   },
 ): Promise<SemanticPhaseOutcome> {
   const warnings: string[] = [];
@@ -182,13 +199,20 @@ export async function runSemanticPhase(
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
+    if (opts.timing !== undefined) opts.timing.embedStartMs = Date.now();
     const vectors = await provider.embed(
       [prepared.text],
       "query",
       opts.signal !== undefined ? { signal: opts.signal } : undefined,
     );
+    if (opts.timing !== undefined) opts.timing.embedEndMs = Date.now();
     queryVec = vectors[0] ?? [];
   } catch (e) {
+    // The interval closes even on the failure arm: the overlap figure
+    // stays coherent for a lane that ran and lost its embed.
+    if (opts.timing !== undefined && opts.timing.embedStartMs !== undefined) {
+      opts.timing.embedEndMs = Date.now();
+    }
     if (opts.signal?.aborted === true) throw opts.signal.reason;
     if (opts.explicit) {
       // Defensive: provider methods are expected to throw SearchError,

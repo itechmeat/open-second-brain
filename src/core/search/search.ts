@@ -53,6 +53,7 @@ import { ResponseShapeError } from "../brain/response-shape.ts";
 import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
+import type { SemanticEmbedTiming } from "./semantic-phase.ts";
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
 import { detectHybridDegrade } from "./enrich.ts";
@@ -496,6 +497,13 @@ export async function search(
     // deadline's signal rides in the lane input so a fire aborts the
     // in-flight embed, and a clock that already ran out starts nothing.
     let keywordHits: ReturnType<typeof runKeywordLane>["hits"] = [];
+    // Per-call lane timing (recall-lane-latency): the record is owned
+    // here, stamped by the phase around the embed, and folded into one
+    // sink call at the join. Never an outcome field - the query cache
+    // persists whole outcomes, so a field there would freeze this call's
+    // timings into every cached row served afterwards.
+    const laneTimingSink = opts.laneTiming;
+    const embedTiming: SemanticEmbedTiming = {};
     const semanticLaneInput = {
       store,
       config: effectiveConfig,
@@ -508,6 +516,7 @@ export async function search(
       ...(pushdown !== null ? { pushdown } : {}),
       keywordHitCount: () => keywordHits.length,
       ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
+      ...(laneTimingSink !== undefined ? { timing: embedTiming } : {}),
     };
     const semanticLaneJoin = startSemanticLane({
       deadline,
@@ -519,6 +528,7 @@ export async function search(
     });
 
     // Keyword candidates, with the plan the synonym step may have re-built.
+    const keywordStartMs = Date.now();
     const keywordLane = runKeywordLane({
       store,
       recall: effectiveConfig.recall,
@@ -535,6 +545,7 @@ export async function search(
       ...(pushdown !== null ? { pushdown } : {}),
       matchMode: request.matchMode,
     });
+    const keywordEndMs = Date.now();
     keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);
     for (const d of keywordLane.degraded) degraded.push(d);
@@ -549,6 +560,27 @@ export async function search(
     // warnings merged first, and the lane's merge here keeps the same
     // keyword-before-semantic order the serial pipeline emitted.
     const semanticLane = await semanticLaneJoin.join();
+    // One sink call at the join, on both deadline arms: the intervals and
+    // their intersection, zero whenever the lane never attempted the
+    // embed (keyword-only, or a pre-flight refusal left no stamps).
+    if (laneTimingSink !== undefined) {
+      const embedStartMs = embedTiming.embedStartMs;
+      const embedEndMs = embedTiming.embedEndMs;
+      laneTimingSink({
+        ...(embedStartMs !== undefined ? { embedStartMs } : {}),
+        ...(embedEndMs !== undefined ? { embedEndMs } : {}),
+        keywordStartMs,
+        keywordEndMs,
+        overlappedMs:
+          semanticLane.attempted && embedStartMs !== undefined && embedEndMs !== undefined
+            ? Math.max(
+                0,
+                Math.min(embedEndMs, keywordEndMs) - Math.max(embedStartMs, keywordStartMs),
+              )
+            : 0,
+        attempted: semanticLane.attempted,
+      });
+    }
     let semanticHits = semanticLane.hits;
     let semanticAttempted = semanticLane.attempted;
     for (const w of semanticLane.warnings) warnings.push(w);

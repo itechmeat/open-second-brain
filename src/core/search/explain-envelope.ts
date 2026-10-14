@@ -25,7 +25,7 @@
  * projection and not a re-serialization.
  */
 
-import type { SearchOutcome } from "./types.ts";
+import type { SearchLaneTiming, SearchOutcome } from "./types.ts";
 
 /** Config key that engages the retrieval trust gate. */
 export const TRUST_GATE_CONFIG_KEY = "search_trust_gate_enabled";
@@ -75,6 +75,12 @@ export const MEMORY_TRUST_ASSESSMENT_KEY = "memory_trust_assessment";
 /** Response key carrying the reason there is no trace to show. */
 export const RETRIEVAL_TRACE_UNAVAILABLE_KEY = "retrieval_trace_unavailable";
 
+/** Response key carrying the overlapped-lane milliseconds. */
+export const OVERLAPPED_MS_KEY = "overlapped_ms";
+
+/** Response key carrying whether the semantic lane attempted the embed. */
+export const SEMANTIC_ATTEMPTED_KEY = "semantic_attempted";
+
 /**
  * What a surface asks the envelope for. `crossVault` is not derivable
  * from the outcome - a union and a single-vault search with the gate off
@@ -118,24 +124,37 @@ export function retrievalTraceUnavailableReason(
  * The explain keys for one outcome, ready to spread into a response
  * object. `explain: false` yields an empty object - the caller's payload
  * is then byte-identical to the pre-change one.
+ *
+ * `timing` (recall-lane-latency) is the per-call record the search's
+ * timing sink handed the caller. It rides beside the receipts only under
+ * an on flag - off means absent, never a null placeholder - and the
+ * cross-vault union never captures one, so a merged payload carries no
+ * timing rather than one origin's figure mislabeled as the union's.
  */
 export function explainEnvelope(
   outcome: SearchOutcome,
   request: ExplainRequest,
+  timing?: SearchLaneTiming,
 ): Record<string, unknown> {
   if (!request.explain) return {};
   const trace = outcome.retrievalDecisionTrace;
   const assessment = outcome.memoryTrustAssessment;
-  if (trace === undefined || assessment === undefined) {
-    return {
-      [RETRIEVAL_TRACE_UNAVAILABLE_KEY]: retrievalTraceUnavailableReason(
-        request.crossVault,
-        request.trustGateEnabled,
-      ),
-    };
-  }
+  const receipts =
+    trace === undefined || assessment === undefined
+      ? {
+          [RETRIEVAL_TRACE_UNAVAILABLE_KEY]: retrievalTraceUnavailableReason(
+            request.crossVault,
+            request.trustGateEnabled,
+          ),
+        }
+      : {
+          [RETRIEVAL_DECISION_TRACE_KEY]: trace,
+          [MEMORY_TRUST_ASSESSMENT_KEY]: assessment,
+        };
+  if (timing === undefined) return receipts;
   return {
-    [RETRIEVAL_DECISION_TRACE_KEY]: trace,
-    [MEMORY_TRUST_ASSESSMENT_KEY]: assessment,
+    ...receipts,
+    [OVERLAPPED_MS_KEY]: timing.overlappedMs,
+    [SEMANTIC_ATTEMPTED_KEY]: timing.attempted,
   };
 }

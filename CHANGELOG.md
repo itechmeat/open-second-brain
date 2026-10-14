@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.84.0] - 2026-10-14
+
+Open Second Brain 1.84.0 hides the recall lane's embed round trip behind the keyword work and accounts for the overlap: hybrid search now starts the semantic lane before the keyword lanes run and joins it where the serial await stood, `search --explain` reports the overlapped milliseconds, and the bench latency family carries the same figure per question and in aggregate. Every surface is byte-identical when the new option is absent, and no configuration changes.
+
+### Added
+
+- **The semantic lane starts before the keyword lanes.** Hybrid search's one caller wait - the query embed - is now put in flight before `runKeywordLane` runs: the lane starts through a join seam that attaches its rejection handler in the same tick, and the join stands where the serial await stood, in both deadline arms. The lane start stays after the query-cache probe, so cached answers still cost nothing; an already-expired composite deadline starts no embed at all (the never-start rule moved to the start site); and a keyword-step throw with the embed in flight can no longer strand an unhandled rejection - with a deadline the lane's late, non-abort failure is named by the `hybrid deadline: an abandoned lane failed after the answer:` sentence, without one it is defused. The keyword pool size reaches the lane as a supplier read at lane completion, so the `hybrid_degraded` signal keeps grading the same snapshot the serial pipeline captured; the post-join void and every later deadline checkpoint are untouched. Results, warning order and the query-cache keys are byte-identical: the deadline-degraded answer stays keyword-only, and the wall-clock budget is neither started earlier nor extended.
+- **`overlapped_ms` on `search --explain`.** The overlap of the embed and keyword intervals - `max(0, min(embedEnd, keywordEnd) - max(embedStart, keywordStart))`, zero whenever the embed never ran - rides a per-call timing sink on the search options, never the outcome: the query cache persists whole outcomes, so an outcome field would freeze one call's timings into every cached row served afterwards. With `--explain`, the JSON payload carries an integer `overlapped_ms` beside `semantic_attempted`, and the human transcript prints the overlapped line in the explain block; without the flag the payload is byte-identical (off means absent). A cross-vault union captures no timing, because a union merges one search per origin and no honest single figure exists for it.
+
 ## [1.83.0] - 2026-10-13
 
 Open Second Brain 1.83.0 wires four shipped seams, each opt-in and byte-identical when off: a per-source-session cap on the search candidate pool, usage-ordered skill offers on `skills_attach`, seeded question-type-proportional sampling for the LongMemEval bench suite, and the OpenCode V2 config shape for the opencode install. No new MCP tools, no new continuity record kinds, no new external dependencies.
@@ -8497,6 +8506,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.84.0]: https://github.com/itechmeat/open-second-brain/compare/v1.83.0...v1.84.0
 [1.83.0]: https://github.com/itechmeat/open-second-brain/compare/v1.82.0...v1.83.0
 [1.82.0]: https://github.com/itechmeat/open-second-brain/compare/v1.81.1...v1.82.0
 [1.81.1]: https://github.com/itechmeat/open-second-brain/compare/v1.81.0...v1.81.1

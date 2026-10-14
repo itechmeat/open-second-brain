@@ -85,6 +85,7 @@ export type {
   ResolvedSearchConfig,
   SearchCard,
   SearchErrorCode,
+  SearchLaneTiming,
   SearchOptions,
   SearchOutcome,
   SearchSessionFocus,

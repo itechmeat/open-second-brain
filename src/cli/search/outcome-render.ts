@@ -6,7 +6,7 @@
 
 import { decisionModelSearchEnvelope } from "../../core/decision-model/answerable.ts";
 import { serializeEvidencePack, serializeSearchCard } from "../../core/search/index.ts";
-import type { SearchOutcome } from "../../core/search/index.ts";
+import type { SearchLaneTiming, SearchOutcome } from "../../core/search/index.ts";
 import {
   EXPLAIN_OFF,
   explainEnvelope,
@@ -36,6 +36,17 @@ const NO_RESULTS = `(${NO_RESULTS_LABEL})`;
 
 /** Longest snippet body shown per hit before it is elided. */
 const SNIPPET_MAX_CHARS = 140;
+
+/**
+ * The `--explain` overlapped-lane line (recall-lane-latency): how much of
+ * the embed round trip the keyword lanes hid, printed only under the
+ * flag, like the rest of the explain block.
+ */
+const OVERLAPPED_LINE_LABEL = "overlapped";
+
+function overlappedLine(timing: SearchLaneTiming): string {
+  return `    ${OVERLAPPED_LINE_LABEL}: ${timing.overlappedMs} ms`;
+}
 
 /**
  * Merged-away exact-duplicate locations for the `--json` payload, in the
@@ -111,7 +122,11 @@ function joinLines(lines: ReadonlyArray<string>): string {
   return lines.join("\n") + (lines.length > 0 ? "" : "\n");
 }
 
-export function jsonForOutcome(o: SearchOutcome, options: ExplainRequest = EXPLAIN_OFF): unknown {
+export function jsonForOutcome(
+  o: SearchOutcome,
+  options: ExplainRequest = EXPLAIN_OFF,
+  laneTiming?: SearchLaneTiming,
+): unknown {
   return {
     results: o.results.map((r) => ({
       path: r.path,
@@ -152,8 +167,9 @@ export function jsonForOutcome(o: SearchOutcome, options: ExplainRequest = EXPLA
     ...retrievalTrailEnvelope(o),
     // Retrieval receipts (task F): the trace and the trust assessment the
     // gate already built, appended only when --explain asks. Absent, never
-    // null, otherwise.
-    ...explainEnvelope(o, options),
+    // null, otherwise. The overlapped-lane timing rides the same flag-on
+    // rule beside them.
+    ...explainEnvelope(o, options, laneTiming),
     // Advisory decision-model answer (issue #213, Part 8); absent unless
     // the rerank request carried a valid `answerable` answer.
     ...decisionModelSearchEnvelope(o),
@@ -195,17 +211,25 @@ function noResultsLine(o: SearchOutcome): string {
  * exclusion set folded into a reason histogram, so the transcript renders
  * the trace (the superset) and `--json` carries both receipts verbatim.
  */
-function explainLines(o: SearchOutcome, request: ExplainRequest): ReadonlyArray<string> {
+function explainLines(
+  o: SearchOutcome,
+  request: ExplainRequest,
+  laneTiming?: SearchLaneTiming,
+): ReadonlyArray<string> {
   const trace = o.retrievalDecisionTrace;
   const assessment = o.memoryTrustAssessment;
+  // The overlapped-lane line rides the explain block, after its lead
+  // line, only when the caller captured a timing record.
+  const overlap = laneTiming !== undefined ? [overlappedLine(laneTiming)] : [];
   // The trailing empty entry terminates the block with a newline, the way
   // a result entry does - `joinLines` adds no separator of its own.
   if (trace === undefined || assessment === undefined) {
     const why = retrievalTraceUnavailableReason(request.crossVault, request.trustGateEnabled);
-    return [`explain: ${why}`, ""];
+    return [`explain: ${why}`, ...overlap, ""];
   }
   const lines = [
     `explain: evaluated ${trace.evaluated}${BULLET}surfaced ${trace.surfaced}${BULLET}excluded ${trace.excluded}`,
+    ...overlap,
   ];
   for (const exclusion of trace.exclusions) {
     lines.push(`    excluded: ${exclusion.path}${BULLET}${exclusion.reasons.join(", ")}`);
@@ -225,6 +249,7 @@ export function renderOutcomeHuman(
   verbose: boolean,
   query: string,
   options: ExplainRequest = EXPLAIN_OFF,
+  laneTiming?: SearchLaneTiming,
 ): string {
   // Progressive disclosure layer 1: render compact cards. The agent
   // drills a hit with `o2b search expand --chunk <chunk_id>`.
@@ -242,7 +267,7 @@ export function renderOutcomeHuman(
       lines.push("");
     });
     for (const w of o.warnings) lines.push(`warning: ${w}`);
-    if (options.explain) lines.push(...explainLines(o, options));
+    if (options.explain) lines.push(...explainLines(o, options, laneTiming));
     return joinLines(lines);
   }
   const lines: string[] = [];
@@ -282,6 +307,6 @@ export function renderOutcomeHuman(
     lines.push("");
   });
   for (const w of o.warnings) lines.push(`warning: ${w}`);
-  if (options.explain) lines.push(...explainLines(o, options));
+  if (options.explain) lines.push(...explainLines(o, options, laneTiming));
   return joinLines(lines);
 }

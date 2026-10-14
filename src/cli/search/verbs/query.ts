@@ -13,6 +13,7 @@ import {
   SEARCH_LIMIT_MAX,
 } from "../../../core/search/index.ts";
 import { searchAcrossVaults } from "../../../core/search/cross-vault.ts";
+import type { SearchLaneTiming } from "../../../core/search/index.ts";
 import {
   parseDegreePredicate,
   type DegreePredicate,
@@ -138,6 +139,13 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   const until = flagString(flags, "until");
   const isGlobal = flagBoolean(flags, "global");
 
+  // Overlapped-lane timing (recall-lane-latency): captured only when
+  // --explain asks and only on the single-vault path - a cross-vault
+  // union merges one search per origin and no honest single figure
+  // exists for it. Omitted, the pipeline records nothing and every
+  // projection stays byte-identical.
+  const captureTiming = flagBoolean(flags, "explain") && !isGlobal;
+  let laneTiming: SearchLaneTiming | undefined;
   const searchOpts = {
     query,
     limit: limitNum,
@@ -169,6 +177,9 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     // surface opts in by default; --no-record-access suppresses it, and
     // cross-vault union never records (results span foreign vaults).
     ...(!isGlobal && !flagBoolean(flags, "no-record-access") ? { recordAccess: true } : {}),
+    ...(captureTiming
+      ? { laneTiming: (timing: SearchLaneTiming) => void (laneTiming = timing) }
+      : {}),
   };
   // Cross-vault union (t_72a22658): explicit per-call opt-in fans the
   // query out over profiles and read-only sources with origin labels.
@@ -187,11 +198,13 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   };
 
   if (flagBoolean(flags, "json")) {
-    process.stdout.write(JSON.stringify(jsonForOutcome(outcome, explainOptions)) + "\n");
+    process.stdout.write(
+      JSON.stringify(jsonForOutcome(outcome, explainOptions, laneTiming)) + "\n",
+    );
     return 0;
   }
   process.stdout.write(
-    renderOutcomeHuman(outcome, flagBoolean(flags, "verbose"), query, explainOptions),
+    renderOutcomeHuman(outcome, flagBoolean(flags, "verbose"), query, explainOptions, laneTiming),
   );
   return 0;
 }
