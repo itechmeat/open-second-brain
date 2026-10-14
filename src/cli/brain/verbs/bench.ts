@@ -144,6 +144,10 @@ const BENCH_PIN_KNOBS = [
   "scopeRules",
   "semantic",
   "rerank",
+  // The standing-instruction facet lane's arm (recall-lane-latency):
+  // listing it is what makes the lane-off arm reachable from the CLI
+  // (`--pin '{"standingInstructionFacets":false}'`), not only the API.
+  "standingInstructionFacets",
 ] as const satisfies ReadonlyArray<keyof BenchPinnedKnobs>;
 
 /**

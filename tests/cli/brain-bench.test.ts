@@ -439,6 +439,12 @@ describe("bench knob pin and recall floor", () => {
     // A scalar knob's VALUE is not shape-checked here: an out-of-range
     // number is resolveSearchConfig's named error, not this parser's.
     expect(parseBenchPinnedKnobs('{"keywordWeight":99}')).toEqual({ keywordWeight: 99 });
+    // The standing-instruction facet lane's arm is pinnable, so the
+    // lane-off arm of the category is reachable from the CLI too
+    // (recall-lane-latency).
+    expect(parseBenchPinnedKnobs('{"standingInstructionFacets":false}')).toEqual({
+      standingInstructionFacets: false,
+    });
     expect(() => parseBenchPinnedKnobs('{"semantic":false}')).toThrow(
       /'semantic' must be a JSON object/,
     );

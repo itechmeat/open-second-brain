@@ -329,7 +329,13 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
     // oxlint-disable-next-line no-await-in-loop
     for (const question of opts.fixture.questions) {
       // oxlint-disable-next-line no-await-in-loop
-      const retrieved = await retrieveQuestion(vault, config, question, opts.recallFloor);
+      const retrieved = await retrieveQuestion(
+        vault,
+        config,
+        question,
+        pinnedKnobs,
+        opts.recallFloor,
+      );
       writeFileSync(
         join(benchResultsDir(run.runDir), `${question.id}.json`),
         `${JSON.stringify(retrieved, null, 2)}\n`,
@@ -419,6 +425,7 @@ async function retrieveQuestion(
   vault: string,
   config: ReturnType<typeof resolveSearchConfig>,
   question: BenchQuestion,
+  pinnedKnobs: BenchPinnedKnobs,
   recallFloor?: number,
 ): Promise<RetrievedQuestion> {
   const startedAt = Date.now();
@@ -506,7 +513,7 @@ async function retrieveQuestion(
     };
   }
   if (question.category === "standing_instruction") {
-    return retrieveStandingInstruction(vault, question, startedAt);
+    return retrieveStandingInstruction(vault, question, startedAt, pinnedKnobs);
   }
   if (question.category === "write_fidelity") {
     return retrieveWriteFidelity(vault, question, startedAt);
@@ -590,9 +597,12 @@ function provenanceKeys(record: ContinuityRecord): ReadonlyArray<string> {
  * Run the shipped standing_query surfacing lane over the fixture's
  * attention flows (standing_instruction, recall-lane-latency).
  *
- * The facet option is ON for this category by definition - the category
- * exists to measure the provenance join, so a run that measured the
- * plain strings would measure nothing new. Every flow that declares the
+ * The lane's arm follows the run's knob pin: absent or true, the facet
+ * option is on - the category exists to measure the provenance join.
+ * Pinned false, the plain lane runs and emits the legacy strings, so the
+ * category's facet assertions fail by name: the off arm of the A/B the
+ * design promises, which is what makes the pin change what a run
+ * measures instead of only naming it. Every flow that declares the
  * `standing_query` action is evaluated and its surfaced items and
  * resolved facet keys persisted; a preference the lane surfaces but
  * whose join does not resolve contributes its plain string and no facet,
@@ -602,14 +612,18 @@ function retrieveStandingInstruction(
   vault: string,
   question: BenchQuestion,
   startedAt: number,
+  pinnedKnobs: BenchPinnedKnobs,
 ): RetrievedQuestion {
+  // Absent keeps the lane on, so existing runs and the default pin
+  // measure the facet lane exactly as before the pin was wired.
+  const facetsOn = pinnedKnobs.standingInstructionFacets !== false;
   const items: string[] = [];
   const facetIds: string[] = [];
   for (const flow of listAttentionFlows(vault)) {
     if (!flow.actions.includes("standing_query")) continue;
-    const evaluation = evaluateAttentionFlow(vault, flow.id, {
-      standingInstructionFacets: true,
-    });
+    const evaluation = facetsOn
+      ? evaluateAttentionFlow(vault, flow.id, { standingInstructionFacets: true })
+      : evaluateAttentionFlow(vault, flow.id, { standingInstructionFacets: false });
     for (const section of evaluation.sections) {
       if (section.action !== "standing_query") continue;
       items.push(...section.items);

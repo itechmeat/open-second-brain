@@ -244,6 +244,31 @@ describe("bench standing_instruction category", () => {
     expect(JSON.stringify(DEFAULT_BENCH_KNOB_PIN)).toBe('{"semantic":{"enabled":false}}');
   });
 
+  test("a pin of false runs the lane off and the facet expectations fail by name", async () => {
+    const laneOffPin: BenchPinnedKnobs = {
+      semantic: { enabled: false },
+      standingInstructionFacets: false,
+    };
+    const report = await runMemoryBench({
+      fixture: standingFixture(),
+      runsDir,
+      pinnedKnobs: laneOffPin,
+    });
+    // The plain lane emitted only the legacy strings, so both facet-key
+    // expectations fail, naming the missing facet keys.
+    expect(report.quality.by_category["standing_instruction"]).toEqual({ passed: 0, total: 2 });
+    const failing = report.questions.find((question) => question.id === "q-standing")!;
+    expect(failing.pass).toBe(false);
+    expect(failing.failure).toContain("pref:pref-tabs");
+    // The persisted raw record proves the off arm ran: plain legacy
+    // strings, no annotations, and no facet ids at all.
+    const raw = JSON.parse(
+      readFileSync(join(runsDir, report.run_id, "results", "q-standing.json"), "utf8"),
+    ) as { standing_items?: string[]; facet_ids?: string[] };
+    expect(raw.standing_items).toEqual(["pref-commits (testing)", "pref-tabs (testing)"]);
+    expect(raw.facet_ids).toEqual([]);
+  }, 30_000);
+
   test("the facet-lane pin marker is part of the run identity", async () => {
     const laneOnPin: BenchPinnedKnobs = {
       semantic: { enabled: false },

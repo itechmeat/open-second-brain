@@ -256,16 +256,17 @@ export type BenchPinnedKnobs = Partial<
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
   readonly rerank?: Partial<ResolvedRerankConfig>;
   /**
-   * The standing-instruction facet lane's run-identity marker
-   * (recall-lane-latency). The category itself is armed by a fixture
-   * naming `standing_instruction` questions - the retrieve branch then
-   * always drives the surfacing call with the facet option on - so this
-   * field changes no behavior; it exists so a lane-on run can declare
-   * itself and get a distinct run identity: the marker folds into the
-   * checkpoint hash, so a resumed run that would mix a facet-gate arm
-   * with a plain one fails the guard loudly instead of comparing them.
-   * Absent on every other run, so `DEFAULT_BENCH_KNOB_PIN` and the
-   * existing run identities serialize byte-identically.
+   * The standing-instruction facet lane's arm (recall-lane-latency), read
+   * by the retrieve branch: absent or true, the `standing_instruction`
+   * category evaluates with the provenance facet on; false runs the plain
+   * lane, which emits the legacy strings so the category's facet
+   * assertions fail by name - the off arm of the measured A/B, and the
+   * reason the pin changes what a run measures instead of only naming it.
+   * The value folds into the checkpoint hash either way, so a resumed run
+   * that would mix a facet-gate arm with a plain one fails the guard
+   * loudly instead of comparing them. Absent on every other run, so
+   * `DEFAULT_BENCH_KNOB_PIN` and the existing run identities serialize
+   * byte-identically.
    */
   readonly standingInstructionFacets?: boolean;
 };
