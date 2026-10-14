@@ -13,8 +13,9 @@
  *      comparator pack - no partition runs, no `packing` key exists,
  *      and a retired core page still outranks a newer supporting
  *      preference across lanes.
- *   2. With a policy, the report carries both lane spends and the
- *      policy name, and the lane order decides emission order.
+ *   2. With a policy, the report carries both lane spends, the reserved
+ *      attention charge and the policy name, and the lane order decides
+ *      emission order; a refused pack has no report at all.
  *   3. Skip reasons keep the shipped vocabulary; lane overflow is an
  *      `over-budget` skip, never a new reason.
  *   4. A policy against an empty lane is refused BY NAME before any
@@ -118,6 +119,7 @@ function tokensOf(report: ContextPackReport, id: string): number {
 
 interface PackingShape {
   policy: string;
+  reservedTokens: number;
   pages: { allocation: number; spent: number; candidates: number; items: number };
   facts: { allocation: number; spent: number; candidates: number; items: number };
 }
@@ -149,6 +151,9 @@ describe("context pack packing policy", () => {
     expect(r.skipped).toEqual([]);
     const packing = packingOf(r);
     expect(packing.policy).toBe("facts_first");
+    // The report names the reserved charge so the lane accounting is
+    // whole: zero here, because no attention block was requested.
+    expect(packing.reservedTokens).toBe(0);
     expect(packing.facts.spent).toBe(
       tokensOf(unified, "pref-alpha") + tokensOf(unified, "pref-beta"),
     );
@@ -345,8 +350,11 @@ describe("context pack packing policy", () => {
       expect(err.message).toContain(String(attentionTokens));
       expect(err.message).toContain(String(total));
     }
-    // The refusal ran before the funnel: no delivery record exists.
+    // A refused pack has no accounting to read: the throw precedes the
+    // funnel, so no `packing` report exists for either total - and no
+    // receipt or telemetry record was written either.
     expect(listContextReceipts(vault)).toHaveLength(0);
+    expect(listRecallTelemetry(vault, { mode: "context_pack" })).toHaveLength(0);
   });
 
   test("the refusal names both lanes when both are empty", () => {
@@ -414,6 +422,9 @@ describe("context pack packing policy", () => {
     expect(r.items[0]!.id).toBe("attention-flows");
     const attentionTokens = r.items[0]!.tokens;
     const packing = packingOf(r);
+    // The report carries the reserved charge itself (external review L3):
+    // the caller can see what the two lane allocations were reduced by.
+    expect(packing.reservedTokens).toBe(attentionTokens);
     // Conservation, reserved charge included: the two lane allocations
     // plus the attention block's charge fill the total exactly.
     expect(packing.facts.allocation + packing.pages.allocation + attentionTokens).toBe(10_000);

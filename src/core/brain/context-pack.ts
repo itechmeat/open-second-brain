@@ -268,13 +268,23 @@ export interface ContextPackPackingLaneReport {
 }
 
 /**
- * Accounting for the opt-in packing policy: which member was named and
- * what each lane held under the one shared budget. Present ONLY when
- * the caller named {@link ContextPackOptions.packingPolicy} - the same
- * conditional shape as `stamp`, `lanes` and `semantic`.
+ * Accounting for the opt-in packing policy: which member was named, the
+ * reserved charge the lane allocations were reduced by, and what each lane
+ * held under the one shared budget. Present ONLY when the caller named
+ * {@link ContextPackOptions.packingPolicy} - the same conditional shape as
+ * `stamp`, `lanes` and `semantic`.
  */
 export interface ContextPackPackingReport {
   readonly policy: PackingPolicy;
+  /**
+   * The reserved attention charge (the synthesized attention block) that
+   * was paid before either lane claimed, so both lane allocations were
+   * reduced by it. Present even when zero, so the accounting the caller
+   * reads is whole: the two allocations plus this charge always sum to
+   * the pack's `maxTokens`. A refused pack has no report at all - the
+   * reserved-charge refusal throws before anything is returned.
+   */
+  readonly reservedTokens: number;
   readonly pages: ContextPackPackingLaneReport;
   readonly facts: ContextPackPackingLaneReport;
 }
@@ -1055,6 +1065,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     ): { readonly packing: ContextPackPackingReport } => ({
       packing: Object.freeze({
         policy,
+        reservedTokens: allocation.reservedTokens,
         pages: packingLaneReport("pages", allocation, laneById, finalItems, pagesFiltered.length),
         facts: packingLaneReport("facts", allocation, laneById, finalItems, factsFiltered.length),
       }),

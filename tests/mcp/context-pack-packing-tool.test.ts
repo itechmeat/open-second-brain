@@ -16,7 +16,8 @@
  *   4. The omitted argument is byte-identical: no `packing` member
  *      exists on the response and the unified order is untouched.
  *   5. With a policy, the response carries the `packing` accounting -
- *      policy name and both lane spends - and only then.
+ *      policy name, the reserved attention charge and both lane spends -
+ *      and only then.
  *   6. A policy against a one-lane vault is refused by name through the
  *      wire as INVALID_PARAMS, never a silent no-op.
  */
@@ -233,14 +234,20 @@ describe("brain_context_pack packing_policy response", () => {
     });
     const packing = out["packing"] as {
       policy: string;
+      reservedTokens: number;
       pages: { allocation: number; spent: number; candidates: number; items: number };
       facts: { allocation: number; spent: number; candidates: number; items: number };
     };
     expect(packing.policy).toBe("facts_first");
+    // The reserved charge rides the wire accounting too; zero here, since
+    // the fixture requests no attention block.
+    expect(packing.reservedTokens).toBe(0);
     expect(packing.facts.items).toBe(1);
     expect(packing.pages.items).toBe(1);
     expect(packing.facts.spent + packing.pages.spent).toBe(out["tokens_used"] as number);
-    expect(packing.facts.allocation + packing.pages.allocation).toBe(10_000);
+    expect(packing.facts.allocation + packing.pages.allocation + packing.reservedTokens).toBe(
+      10_000,
+    );
     // Facts first: the preference page leads despite the retired page's
     // unified-order slot.
     const items = out["items"] as Array<{ id: string }>;
