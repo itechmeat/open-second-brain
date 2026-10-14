@@ -2073,7 +2073,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   lane, the distilled layer) and the retired pages (the pages lane).
   `facts_first` claims for the facts lane first; `retired_first` hands the
   first claim to the pages lane and lets the facts lane fill the exact
-  remainder. The total never grows, claiming is strictly sequential with
+  remainder. Inside a lane the shipped comparator order holds: tier first,
+  then recency, with query relevance joining the comparator only in the
+  `ranked` and `semantic` modes - the pages lane is query-ordered only
+  there, never in the default substring mode, where the query filtered
+  rather than ranked. The total never grows, claiming is strictly sequential with
   no minimum-page floor, the per-memory character cap stays lane-internal,
   and the synthesized attention block stays a reserved charge neither lane
   draws. `packing_policy` requires `query` (the schema states the pairing
