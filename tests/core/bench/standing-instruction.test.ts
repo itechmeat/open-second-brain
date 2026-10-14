@@ -12,12 +12,15 @@
  * a resumed run whose pin changed fails the guard instead of mixing
  * identities.
  *
- * The fixture vault files below are hand-written in the exact on-disk
- * shapes the live writers emit (the preference and signal frontmatter
- * `parsePreference`/`parseSignal` read, the attention-flow frontmatter
- * `listAttentionFlows` reads), because the bench materializes its vault
- * from raw fixture notes - the producer formats themselves are pinned at
- * the unit layer (tests/core/brain/standing-instruction-facets.test.ts)
+ * The fixture vault files below hand-write the same facts the live
+ * writers emit, in a YAML form `parsePreference`/`parseSignal` and the
+ * attention-flow reader `listAttentionFlows` read to identical values -
+ * the bytes are not the writers' own output (the writers quote
+ * `#`-bearing scalars and emit inline arrays where the fixture writes
+ * unquoted scalars and block lists). The bench materializes its vault
+ * from raw fixture notes, so the parsers are the seam under
+ * measurement; the producer formats themselves are pinned at the unit
+ * layer (tests/core/brain/standing-instruction-facets.test.ts)
  * against the live writers.
  */
 
