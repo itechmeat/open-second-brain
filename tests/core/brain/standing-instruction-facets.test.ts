@@ -182,7 +182,7 @@ describe("standing-instruction facets: opt-in gate", () => {
     );
     // Same preference ids on both sides: the facet annotates what the
     // lane already delivers and admits nothing new.
-    expect(on.items.map(stripAnnotation)).toEqual(off.items);
+    expect(on.items.map(stripAnnotation)).toEqual([...off.items]);
     expect(off.items).toEqual(["pref-secret (testing)"]);
     expect(on.items).toEqual([
       "pref-secret (testing) [first mention turn claude-minimal.jsonl#turn-user-1]",

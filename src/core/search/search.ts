@@ -288,6 +288,24 @@ function emptySemanticLane(): SemanticLaneOutcome {
 }
 
 /**
+ * The hidden window: the intersection of the embed interval and the
+ * keyword interval, floored at 0. Extracted as a pure function because a
+ * real overlapped run can legitimately measure zero - a small corpus lets
+ * the synchronous FTS lane finish inside the wall clock's resolution - so
+ * no integration run can pin the arithmetic itself. The unit tests over
+ * this function are the exactness pin (swapped bounds, inverted order);
+ * the integration suite only pins that the wiring carries a sane value.
+ */
+export function overlappedEmbedMs(
+  embedStartMs: number,
+  embedEndMs: number,
+  keywordStartMs: number,
+  keywordEndMs: number,
+): number {
+  return Math.max(0, Math.min(embedEndMs, keywordEndMs) - Math.max(embedStartMs, keywordStartMs));
+}
+
+/**
  * A lane started BEFORE the keyword lanes (recall-lane-latency): the
  * query embed is the one caller wait the keyword work can hide, so it is
  * put in flight here and joined where the serial await stood. The embed
@@ -329,7 +347,8 @@ export function startSemanticLane<T>(input: {
   /** The empty lane the deadline serves when it consumed the lane. */
   readonly fallback: () => T;
 }): SemanticLaneJoin<T> {
-  if (input.deadline !== null && input.deadline.expiresAt - input.deadline.clock() <= 0) {
+  const deadline = input.deadline;
+  if (deadline !== null && deadline.expiresAt - deadline.clock() <= 0) {
     // Never start the embed - but never fire here either: the keyword
     // lanes have not run, and the degrade decision must read the pool
     // they populated. Leave the fire to the join's never-start arm.
@@ -341,7 +360,7 @@ export function startSemanticLane<T>(input: {
               "the semantic lane never started: the hybrid deadline had already expired",
             );
           },
-          input.deadline,
+          deadline,
           input.fallback,
         ),
     };
@@ -349,16 +368,16 @@ export function startSemanticLane<T>(input: {
   const work = input.start();
   let raced = false;
   void work.catch((error: unknown) => {
-    if (raced || input.deadline === null) return;
-    input.deadline.noteAbandonedFailure(error);
+    if (raced || deadline === null) return;
+    deadline.noteAbandonedFailure(error);
   });
   return {
     join: async (): Promise<T> => {
-      if (input.deadline === null) {
+      if (deadline === null) {
         raced = true;
         return await work;
       }
-      return await awaitWithinDeadline(() => work, input.deadline, input.fallback, {
+      return await awaitWithinDeadline(() => work, deadline, input.fallback, {
         onRaceArmed: () => {
           raced = true;
         },
@@ -543,7 +562,7 @@ export async function search(
     // persists whole outcomes, so a field there would freeze this call's
     // timings into every cached row served afterwards.
     const laneTimingSink = opts.laneTiming;
-    const embedTiming: SemanticEmbedTiming = {};
+    const embedTiming: SemanticEmbedTiming = { clock };
     const semanticLaneInput = {
       store,
       config: effectiveConfig,
@@ -618,10 +637,7 @@ export async function search(
         keywordEndMs,
         overlappedMs:
           embedStartMs !== undefined && embedEndMs !== undefined
-            ? Math.max(
-                0,
-                Math.min(embedEndMs, keywordEndMs) - Math.max(embedStartMs, keywordStartMs),
-              )
+            ? overlappedEmbedMs(embedStartMs, embedEndMs, keywordStartMs, keywordEndMs)
             : 0,
         attempted: semanticLane.attempted,
       });

@@ -17,10 +17,12 @@ import { Database } from "bun:sqlite";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import {
   createCompositeDeadline,
+  overlappedEmbedMs,
   search,
   startSemanticLane,
 } from "../../../src/core/search/search.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+import type { RetrievalDegradationSink } from "../../../src/core/search/retrieval-trail.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
@@ -146,7 +148,7 @@ test("an already-expired deadline starts nothing and fires at the join, after th
 test("a join-time fire reads the keyword pool the lanes populated, not the empty initializer", async () => {
   const pool: number[] = [];
   const warnings: string[] = [];
-  const degraded: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
   const budgetMs = 60_000;
   const deadline = createCompositeDeadline({
     budgetMs,
@@ -176,7 +178,7 @@ test("a join-time fire reads the keyword pool the lanes populated, not the empty
 test("a lane that fails after a join-time fire is named, not defused", async () => {
   const gate = Promise.withResolvers<string>();
   const warnings: string[] = [];
-  const degraded: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
   let now = Date.now();
   const deadline = createCompositeDeadline({
     budgetMs: 60_000,
@@ -230,6 +232,22 @@ test("a joined lane that loses the race serves the fallback and names a late fai
       ),
     ),
   ).toBe(true);
+});
+
+test("the overlap arithmetic is the exact intersection of the two intervals", () => {
+  // The embed starts with the seam and the keyword lane runs wholly
+  // underneath it: the overlap is the keyword interval, byte for byte.
+  expect(overlappedEmbedMs(1_000, 1_500, 1_010, 1_090)).toBe(80);
+  // The keyword lane outlasts the embed: the embed tail is what hid.
+  expect(overlappedEmbedMs(1_000, 1_050, 1_020, 1_200)).toBe(30);
+  // Disjoint intervals never invent overlap, in either order.
+  expect(overlappedEmbedMs(1_000, 1_050, 1_100, 1_200)).toBe(0);
+  expect(overlappedEmbedMs(1_100, 1_200, 1_000, 1_050)).toBe(0);
+  // Identical stamps (a sub-millisecond lane on a coarse clock) are zero,
+  // never negative.
+  expect(overlappedEmbedMs(1_000, 1_000, 1_000, 1_000)).toBe(0);
+  // A stamp pair that crosses (end before start) floors at zero.
+  expect(overlappedEmbedMs(1_050, 1_000, 1_000, 1_200)).toBe(0);
 });
 
 test("a lane that rejects before the fire rethrows through the join", async () => {

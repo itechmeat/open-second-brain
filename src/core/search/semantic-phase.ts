@@ -68,6 +68,13 @@ export function semanticPoolSize(limit: number): number {
  * never ran - a pre-flight guard refused before any provider existed.
  */
 export interface SemanticEmbedTiming {
+  /**
+   * The request's clock port: every stamp below reads through it, so the
+   * wall clock is read nowhere but the request module (the rank-clock
+   * census pins the site) and no stamp precedes the instant the request
+   * was resolved at.
+   */
+  readonly clock: () => number;
   embedStartMs?: number;
   embedEndMs?: number;
 }
@@ -199,19 +206,19 @@ export async function runSemanticPhase(
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
-    if (opts.timing !== undefined) opts.timing.embedStartMs = Date.now();
+    if (opts.timing !== undefined) opts.timing.embedStartMs = opts.timing.clock();
     const vectors = await provider.embed(
       [prepared.text],
       "query",
       opts.signal !== undefined ? { signal: opts.signal } : undefined,
     );
-    if (opts.timing !== undefined) opts.timing.embedEndMs = Date.now();
+    if (opts.timing !== undefined) opts.timing.embedEndMs = opts.timing.clock();
     queryVec = vectors[0] ?? [];
   } catch (e) {
     // The interval closes even on the failure arm: the overlap figure
     // stays coherent for a lane that ran and lost its embed.
     if (opts.timing !== undefined && opts.timing.embedStartMs !== undefined) {
-      opts.timing.embedEndMs = Date.now();
+      opts.timing.embedEndMs = opts.timing.clock();
     }
     if (opts.signal?.aborted === true) throw opts.signal.reason;
     if (opts.explicit) {

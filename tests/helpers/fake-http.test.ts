@@ -66,9 +66,12 @@ test("the default handler answers POST /rerank with one deterministic score per 
   const scores = body.results.map((r) => r.relevance_score);
   // A document sharing no query token scores lowest; sharing more query
   // tokens scores higher (monotone in overlap).
-  expect(scores[1]).toBe(0);
-  expect(scores[0]).toBeGreaterThan(scores[1]);
-  expect(scores[2]).toBeGreaterThan(scores[0]);
+  const unshared = scores[1]!;
+  const shared = scores[0]!;
+  const richer = scores[2]!;
+  expect(unshared).toBe(0);
+  expect(shared).toBeGreaterThan(unshared);
+  expect(richer).toBeGreaterThan(shared);
   // The same request answers byte-identically: no randomness, no clock.
   const replay = await postJson(base, "/rerank", RERANK_REQUEST);
   expect(replay.status).toBe(200);
