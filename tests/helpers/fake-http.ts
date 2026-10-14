@@ -34,8 +34,66 @@ export interface FakeHttp {
   callCount: () => number;
 }
 
+/** Path tail the default handler serves embeddings on. */
+const EMBEDDINGS_ROUTE = "/embeddings";
+/** Path tail the default handler serves rerank on. */
+const RERANK_ROUTE = "/rerank";
+/** Model name echoed when a request carries none. */
+const DEFAULT_FAKE_MODEL = "fake-model";
+/**
+ * Smoothing that keeps the overlap score in [0, 1) and monotone in the
+ * number of shared tokens: matches / (matches + SMOOTHING).
+ */
+const RERANK_OVERLAP_SMOOTHING = 1;
+
+/** Lowercased word tokens with punctuation stripped, deduplicated. */
+function tokensOf(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const word of text.toLowerCase().split(/\s+/)) {
+    const token = word.replace(/\p{P}+/gu, "");
+    if (token !== "") out.add(token);
+  }
+  return out;
+}
+
+/**
+ * Deterministic query-document score from token overlap, in [0, 1) and
+ * monotone in the number of tokens the two share. No randomness and no
+ * clock, so identical requests replay byte-identically.
+ */
+function overlapScore(query: string, document: string): number {
+  const queryTokens = tokensOf(query);
+  let matches = 0;
+  for (const token of tokensOf(document)) {
+    if (queryTokens.has(token)) matches += 1;
+  }
+  return matches / (matches + RERANK_OVERLAP_SMOOTHING);
+}
+
+interface RerankRequestBody {
+  model?: string;
+  query?: unknown;
+  documents?: unknown;
+}
+
+function rerankRoute(req: FakeRequest): FakeResponseSpec {
+  const body = (req.body ?? {}) as RerankRequestBody;
+  if (typeof body.query !== "string" || !Array.isArray(body.documents)) {
+    return { status: 400, body: { error: "rerank request: query and documents are required" } };
+  }
+  if (!body.documents.every((d) => typeof d === "string")) {
+    return { status: 400, body: { error: "rerank request: documents must be strings" } };
+  }
+  const query = body.query;
+  const results = (body.documents as string[]).map((document, index) => ({
+    index,
+    relevance_score: overlapScore(query, document),
+  }));
+  return { status: 200, body: { results, model: body.model ?? DEFAULT_FAKE_MODEL } };
+}
+
 function defaultHandler(req: FakeRequest): FakeResponseSpec {
-  if (req.path.endsWith("/embeddings") && req.method === "POST") {
+  if (req.path.endsWith(EMBEDDINGS_ROUTE) && req.method === "POST") {
     const body = (req.body ?? {}) as { input?: string[]; model?: string };
     const inputs = Array.isArray(body.input) ? body.input : [];
     const data = inputs.map((text, index) => {
@@ -44,7 +102,10 @@ function defaultHandler(req: FakeRequest): FakeResponseSpec {
       const v = [tokens, index, text.length, 1];
       return { object: "embedding", embedding: v, index };
     });
-    return { status: 200, body: { data, model: body.model ?? "fake-model" } };
+    return { status: 200, body: { data, model: body.model ?? DEFAULT_FAKE_MODEL } };
+  }
+  if (req.method === "POST" && req.path.endsWith(RERANK_ROUTE)) {
+    return rerankRoute(req);
   }
   return { status: 404, body: { error: "not_found" } };
 }
