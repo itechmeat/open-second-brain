@@ -895,7 +895,13 @@ export interface SearchLaneTiming {
   readonly keywordStartMs: number;
   /** Absolute `Date.now()` stamp taken when the keyword lanes and the weights resolution completed. */
   readonly keywordEndMs: number;
-  /** The overlapped milliseconds, an integer >= 0; 0 when no embed interval was stamped. */
+  /**
+   * The overlapped milliseconds, an integer >= 0; 0 when no embed
+   * interval was stamped. This key answers HOW MUCH of the keyword
+   * interval the embed's dispatch-to-resolution hid, and it is reported
+   * whenever both embed stamps exist - the interval was measured, even
+   * if the lane's hits were discarded afterwards.
+   */
   readonly overlappedMs: number;
   /**
    * Whether the semantic lane delivered a result to the join. An embed
@@ -903,6 +909,14 @@ export interface SearchLaneTiming {
    * deadline's post-join void then discarded can still report true - the
    * sink is read at the join, and the void past it is the deadline's,
    * not this flag's.
+   *
+   * This key answers a different question than `overlappedMs` - whether
+   * the lane's hits joined the answer, not whether embed time was
+   * measured - so the two can legitimately disagree: a deadline fallback
+   * that wins after the embed ran reports measured overlap alongside
+   * `attempted: false`. Consumers pick per question; the bench reports
+   * `overlapped_ms` only for questions that attempted, `--explain`
+   * prints both as measured.
    */
   readonly attempted: boolean;
 }
