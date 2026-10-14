@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { evaluateAttentionFlow, listAttentionFlows } from "../brain/attention-flows.ts";
 import { packContext } from "../brain/context-pack.ts";
 import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
 import { loadNormalizedContinuityRecords } from "../brain/continuity/read-model.ts";
@@ -158,6 +159,18 @@ interface RetrievedQuestion {
   readonly provenance_keys?: ReadonlyArray<string>;
   /** Whether a second identical extraction produced the same record ids. */
   readonly dedup_stable?: boolean;
+  /**
+   * The item strings the standing_query sections rendered, annotations
+   * included (standing_instruction). The evaluator asserts the expected
+   * first-mention coordinates against these.
+   */
+  readonly standing_items?: ReadonlyArray<string>;
+  /**
+   * Facet keys (`pref:<preference id>`) whose provenance join resolved
+   * (standing_instruction). A preference the lane surfaced but could not
+   * resolve is honestly absent - never an implied origin.
+   */
+  readonly facet_ids?: ReadonlyArray<string>;
 }
 
 /**
@@ -492,6 +505,9 @@ async function retrieveQuestion(
       injected_tokens: injectedTokens(brief),
     };
   }
+  if (question.category === "standing_instruction") {
+    return retrieveStandingInstruction(vault, question, startedAt);
+  }
   if (question.category === "write_fidelity") {
     return retrieveWriteFidelity(vault, question, startedAt);
   }
@@ -568,6 +584,44 @@ function retrieveWriteFidelity(
  */
 function provenanceKeys(record: ContinuityRecord): ReadonlyArray<string> {
   return [...Object.keys(record), ...Object.keys(record.payload)];
+}
+
+/**
+ * Run the shipped standing_query surfacing lane over the fixture's
+ * attention flows (standing_instruction, recall-lane-latency).
+ *
+ * The facet option is ON for this category by definition - the category
+ * exists to measure the provenance join, so a run that measured the
+ * plain strings would measure nothing new. Every flow that declares the
+ * `standing_query` action is evaluated and its surfaced items and
+ * resolved facet keys persisted; a preference the lane surfaces but
+ * whose join does not resolve contributes its plain string and no facet,
+ * exactly as the option contract renders it.
+ */
+function retrieveStandingInstruction(
+  vault: string,
+  question: BenchQuestion,
+  startedAt: number,
+): RetrievedQuestion {
+  const items: string[] = [];
+  const facetIds: string[] = [];
+  for (const flow of listAttentionFlows(vault)) {
+    if (!flow.actions.includes("standing_query")) continue;
+    const evaluation = evaluateAttentionFlow(vault, flow.id, {
+      standingInstructionFacets: true,
+    });
+    for (const section of evaluation.sections) {
+      if (section.action !== "standing_query") continue;
+      items.push(...section.items);
+      for (const facet of section.facets ?? []) facetIds.push(facet.key);
+    }
+  }
+  return {
+    id: question.id,
+    latency_ms: Date.now() - startedAt,
+    standing_items: items,
+    facet_ids: facetIds,
+  };
 }
 
 /**
@@ -654,6 +708,9 @@ function evaluateQuestion(
     }
     return Object.freeze({ ...base, pass: true });
   }
+  if (question.category === "standing_instruction") {
+    return evaluateStandingInstruction(question, retrieved, base);
+  }
   // budget
   const ids = retrieved.item_ids ?? [];
   const missingIds = (question.expected_ids ?? []).filter((id) => !ids.includes(id));
@@ -736,6 +793,46 @@ function evaluateWriteFidelity(
       pass: false,
       failure: "a second identical intake did not resolve to the same records",
     });
+  }
+  return Object.freeze({ ...base, pass: true });
+}
+
+/**
+ * Assert the standing-instruction facet lane delivered what the fixture
+ * named (standing_instruction, recall-lane-latency).
+ *
+ * `expected_ids` are facet keys - `pref:<preference id>`, so the
+ * preference id itself is what is asserted delivered. `expected_text`
+ * is the first-mention annotation that must appear on a surfaced item;
+ * a fixture states the kind word ("first mention turn ...") so an
+ * event-annotated origin cannot satisfy a turn expectation. A preference
+ * the lane surfaced but could not resolve is a named failure, never an
+ * implied provenance.
+ */
+function evaluateStandingInstruction(
+  question: BenchQuestion,
+  retrieved: RetrievedQuestion,
+  base: ResultBase,
+): BenchQuestionResult {
+  const facetIds = retrieved.facet_ids ?? [];
+  const missingFacets = (question.expected_ids ?? []).filter((id) => !facetIds.includes(id));
+  if (missingFacets.length > 0) {
+    return Object.freeze({
+      ...base,
+      pass: false,
+      failure: `expected facet missing from the surfaced standing instructions: ${missingFacets.join(", ")}`,
+    });
+  }
+  const expectedOrigin = question.expected_text;
+  if (expectedOrigin !== undefined) {
+    const items = retrieved.standing_items ?? [];
+    if (!items.some((item) => item.includes(expectedOrigin))) {
+      return Object.freeze({
+        ...base,
+        pass: false,
+        failure: `expected first mention not found in the surfaced standing instructions: ${expectedOrigin}`,
+      });
+    }
   }
   return Object.freeze({ ...base, pass: true });
 }

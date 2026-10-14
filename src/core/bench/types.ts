@@ -45,6 +45,11 @@ export const BENCH_CATEGORIES = [
   "proactive_recall",
   "write_fidelity",
   "source_isolation",
+  // The standing-instruction facet suite (recall-lane-latency). Like the
+  // failure-mode categories it drives a seam the search pipeline never
+  // touches: the `standing_query` attention action, run with the opt-in
+  // provenance facet on, so the join ships measured rather than assumed.
+  "standing_instruction",
 ] as const;
 export type BenchCategory = (typeof BENCH_CATEGORIES)[number];
 
@@ -250,6 +255,19 @@ export type BenchPinnedKnobs = Partial<
   readonly scopeRules?: VaultScopeRules;
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
   readonly rerank?: Partial<ResolvedRerankConfig>;
+  /**
+   * The standing-instruction facet lane's run-identity marker
+   * (recall-lane-latency). The category itself is armed by a fixture
+   * naming `standing_instruction` questions - the retrieve branch then
+   * always drives the surfacing call with the facet option on - so this
+   * field changes no behavior; it exists so a lane-on run can declare
+   * itself and get a distinct run identity: the marker folds into the
+   * checkpoint hash, so a resumed run that would mix a facet-gate arm
+   * with a plain one fails the guard loudly instead of comparing them.
+   * Absent on every other run, so `DEFAULT_BENCH_KNOB_PIN` and the
+   * existing run identities serialize byte-identically.
+   */
+  readonly standingInstructionFacets?: boolean;
 };
 
 /**
