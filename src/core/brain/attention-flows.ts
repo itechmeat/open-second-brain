@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
@@ -8,6 +8,12 @@ import { listProceduralMemory } from "./procedural-memory.ts";
 import { listPendingSkillProposals } from "./skill-proposals.ts";
 import { listRecurrenceEntries } from "./recurrence.ts";
 import { parsePreference } from "./preference.ts";
+import { parseSignal } from "./signal.ts";
+import {
+  resolvePreferenceProvenance,
+  type SessionRefOrigin,
+  type SignalSessionRefLookup,
+} from "./preference-provenance.ts";
 import { BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
 export type AttentionFlowAction =
@@ -33,6 +39,49 @@ export interface AttentionFlowRecipe {
 export interface AttentionFlowSection {
   readonly action: AttentionFlowAction;
   readonly items: ReadonlyArray<string>;
+  /**
+   * Structured standing-instruction facets, present ONLY while the
+   * evaluation named `standingInstructionFacets` - omitted otherwise,
+   * so an unset option leaves the section shape byte-identical to the
+   * legacy one. A preference whose provenance join resolves gains an
+   * entry; one whose join does not resolve stays absent, an honest
+   * zero rather than an implied provenance.
+   */
+  readonly facets?: ReadonlyArray<StandingInstructionFacet>;
+}
+
+/**
+ * One confirmed preference surfaced by the `standing_query` action,
+ * with the origin coordinates its provenance join resolved.
+ *
+ * Contract-style cross-reference: this is the preference-corpus sibling
+ * of `ThreadFacet` in `thread-topics.ts` - a stable key, ordered
+ * origin coordinates, pure derivation - for a different corpus. A
+ * thread facet selects the turns of one thread for the coverage pass;
+ * this facet annotates a standing instruction with where it was first
+ * mentioned. The distinct name is deliberate, so the coverage lane's
+ * meaning of "facet" stays unambiguous.
+ */
+export interface StandingInstructionFacet {
+  /** Stable facet key: `pref:<preference id>`. */
+  readonly key: string;
+  readonly preferenceId: string;
+  readonly scope: string;
+  /** Resolved origins in evidence order; `[0]` is the first mention. */
+  readonly origins: ReadonlyArray<SessionRefOrigin>;
+}
+
+export interface AttentionFlowEvaluationOptions {
+  /**
+   * Opt-in standing-instruction provenance (recall lane). Omitted or
+   * false, every emitted string is the legacy `id (scope)` output and
+   * sections carry no `facets` field. True, a surfaced preference whose
+   * provenance join resolves gains a first-mention annotation on its
+   * item string plus a facet entry; the option changes annotations,
+   * never membership - no preference is admitted that the plain lane
+   * would not already deliver.
+   */
+  readonly standingInstructionFacets?: boolean;
 }
 
 export interface AttentionFlowEvaluation {
@@ -102,7 +151,11 @@ export function listAttentionFlows(vault: string): ReadonlyArray<AttentionFlowRe
   return Object.freeze(out);
 }
 
-export function evaluateAttentionFlow(vault: string, flowId: string): AttentionFlowEvaluation {
+export function evaluateAttentionFlow(
+  vault: string,
+  flowId: string,
+  options: AttentionFlowEvaluationOptions = {},
+): AttentionFlowEvaluation {
   const flow = listAttentionFlows(vault).find((item) => item.id === flowId);
   if (!flow) throw new Error(`attention flow not found: ${flowId}`);
 
@@ -130,8 +183,21 @@ export function evaluateAttentionFlow(vault: string, flowId: string): AttentionF
       continue;
     }
     if (action === "standing_query") {
-      const items = listConfirmedPreferencesByScope(vault, flow.standingQueryScopes);
-      sections.push({ action, items: Object.freeze(items) });
+      const facetsWanted = options.standingInstructionFacets === true;
+      const surfaced = listConfirmedPreferencesByScope(
+        vault,
+        flow.standingQueryScopes,
+        facetsWanted,
+      );
+      sections.push({
+        action,
+        items: Object.freeze(surfaced.items),
+        // Key present only under the opt-in: an unset option leaves the
+        // section byte-identical to the legacy shape.
+        ...(options.standingInstructionFacets === true
+          ? { facets: Object.freeze(surfaced.facets) }
+          : {}),
+      });
     }
   }
 
@@ -188,20 +254,68 @@ function normalizeStandingQueryScopes(value: unknown): ReadonlyArray<string> {
   return Object.freeze([...new Set(out)]);
 }
 
+/** Item annotation prefix for a first mention resolved to a real turn. */
+const FIRST_MENTION_TURN_PREFIX = " [first mention turn ";
+/** Item annotation prefix for a first mention resolved to a capture-lane event, which is not guaranteed to be a turn id. */
+const FIRST_MENTION_EVENT_PREFIX = " [first mention event ";
+/** Item annotation suffix. */
+const FIRST_MENTION_SUFFIX = "]";
+
+/**
+ * Read-only signal-id → `session_ref` lookup over the directories the
+ * signal readers walk. The on-disk signal id always equals the file's
+ * basename stem (see `writeSignal`), so a lookup is a direct probe per
+ * directory; an absent, unreadable, or path-shaped id contributes no
+ * provenance rather than an error.
+ */
+function signalSessionRefLookup(vault: string): SignalSessionRefLookup {
+  const dirs = brainDirs(vault);
+  const searchDirs = [dirs.inbox, dirs.processed, dirs.archived];
+  return (signalId) => {
+    // Filename-stem ids only: a lookup key is never a path.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(signalId)) return undefined;
+    for (const dir of searchDirs) {
+      const path = join(dir, `${signalId}.md`);
+      if (!existsSync(path)) continue;
+      try {
+        return parseSignal(path).session_ref;
+      } catch {
+        // A signal that cannot be parsed proves nothing about where a
+        // preference came from - no provenance, never a guess.
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+}
+
+/** The item string plus the facet for one surfaced preference, per the option state. */
+interface SurfacedStandingInstruction {
+  readonly items: string[];
+  readonly facets: StandingInstructionFacet[];
+}
+
 /**
  * Confirmed preferences whose `scope` is one the flow declared. Structural
  * match on the frontmatter scope token; no natural-language matching. Returns
- * `id (scope)` items, sorted for deterministic output.
+ * `id (scope)` items, sorted for deterministic output. With the facet option
+ * on, a preference whose provenance join resolves additionally gains a
+ * first-mention annotation on its item string and a facet entry - annotations
+ * only, never a membership change, so a facet cannot surface a preference the
+ * plain lane would withhold.
  */
 function listConfirmedPreferencesByScope(
   vault: string,
   scopes: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  if (scopes.length === 0) return Object.freeze([]);
+  facetsWanted: boolean,
+): SurfacedStandingInstruction {
+  const items: string[] = [];
+  const facets: StandingInstructionFacet[] = [];
+  if (scopes.length === 0) return { items, facets };
   const wanted = new Set(scopes);
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return Object.freeze([]);
-  const out: string[] = [];
+  if (!existsSync(dir)) return { items, facets };
+  const lookup = facetsWanted ? signalSessionRefLookup(vault) : null;
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".md")) continue;
     try {
@@ -211,13 +325,38 @@ function listConfirmedPreferencesByScope(
         pref.scope !== undefined &&
         wanted.has(pref.scope)
       ) {
-        out.push(`${pref.id} (${pref.scope})`);
+        const base = `${pref.id} (${pref.scope})`;
+        // Off means the legacy bytes: no lookup runs, no annotation is
+        // composed, the section gains no facet field.
+        if (lookup === null) {
+          items.push(base);
+          continue;
+        }
+        const provenance = resolvePreferenceProvenance(
+          { id: pref.id, evidenced_by: pref.evidenced_by },
+          lookup,
+        );
+        if (provenance === null) {
+          // Nothing resolved: the honest plain string, no implied origin.
+          items.push(base);
+          continue;
+        }
+        const first = provenance.origins[0]!;
+        const prefix =
+          first.kind === "turn" ? FIRST_MENTION_TURN_PREFIX : FIRST_MENTION_EVENT_PREFIX;
+        items.push(`${base}${prefix}${first.sessionKey}#${first.fragment}${FIRST_MENTION_SUFFIX}`);
+        facets.push({
+          key: provenance.key,
+          preferenceId: pref.id,
+          scope: pref.scope,
+          origins: provenance.origins,
+        });
       }
     } catch {
       continue;
     }
   }
-  return Object.freeze(out);
+  return { items, facets };
 }
 
 export function buildAttentionContextBlock(
