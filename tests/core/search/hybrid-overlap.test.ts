@@ -458,8 +458,13 @@ test("the embed request dispatches before the keyword lanes finish", async () =>
   expect(events.indexOf("dispatch")).toBeLessThan(events.indexOf("keyword-fts"));
   // The same ordering in the sink's stamps: the dispatch precedes the
   // keyword interval's opening and, with it, the keyword lane's end stamp.
-  if (timing === undefined || dispatchMs === undefined) {
-    throw new Error("the lane timing sink or the dispatch stamp never arrived");
+  if (
+    timing === undefined ||
+    dispatchMs === undefined ||
+    timing.embedStartMs === undefined ||
+    timing.embedEndMs === undefined
+  ) {
+    throw new Error("the lane timing sink or the dispatch/resolution stamps never arrived");
   }
   expect(dispatchMs).toBeLessThanOrEqual(timing.keywordStartMs);
   expect(dispatchMs).toBeLessThanOrEqual(timing.keywordEndMs);
@@ -491,8 +496,13 @@ test("a provider that never reports a dispatch keeps the pre-call interval as th
     semantic: true,
     laneTiming: (t) => void (timing = t),
   });
-  if (timing === undefined) throw new Error("the lane timing sink never arrived");
-  expect(timing.embedStartMs).toBeDefined();
+  if (
+    timing === undefined ||
+    timing.embedStartMs === undefined ||
+    timing.embedEndMs === undefined
+  ) {
+    throw new Error("the lane timing sink or its fallback interval never arrived");
+  }
   expect(timing.embedEndMs).toBeGreaterThanOrEqual(timing.embedStartMs);
   expect(timing.overlappedMs).toBe(0);
   expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
