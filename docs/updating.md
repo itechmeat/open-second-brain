@@ -57,7 +57,11 @@ query-cache keys are byte-identical, and no configuration changes. The new
 surfaces are additive options: `search --explain` reports `overlapped_ms`
 (how much of the embed round trip the keyword lanes hid) only while the
 flag is on, and the bench latency family reports the same figure only for
-runs whose questions attempted the semantic lane.
+runs whose questions attempted the semantic lane. One absence is expected:
+a warm query-cache hit serves the answer before the lanes start, so the
+timing sink never fires and a cached answer's `--explain` output carries
+neither `overlapped_ms` nor `semantic_attempted`; a fresh keyword-only run
+still reports `overlapped_ms: 0` and the semantic attempt as false.
 
 **`brain_context_pack` accepts `packing_policy`, strictly opt-in.** The new
 MCP argument lets a caller name which candidate population claims the pack's
