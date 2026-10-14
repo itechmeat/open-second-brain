@@ -562,29 +562,16 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = ({'name': 'brain_feedback',
                                   'packing_policy': {'type': 'string',
                                                      'enum': ['facts_first',
                                                               'retired_first'],
-                                                     'description': 'Which lane claims '
-                                                                    'the token budget '
-                                                                    'first: '
-                                                                    '`facts_first` (the '
-                                                                    'distilled '
-                                                                    'preference layer) '
-                                                                    'or `retired_first` '
-                                                                    '(the retired '
-                                                                    'preference pages). '
+                                                     'description': 'Budget claim order: '
+                                                                    '`facts_first` or '
+                                                                    '`retired_first`. '
                                                                     'Neither is the '
-                                                                    'omitted default: a '
-                                                                    'named policy '
-                                                                    'reserves the '
-                                                                    'attention charge '
-                                                                    'up front and '
-                                                                    'refuses a vault '
-                                                                    'where one lane has '
-                                                                    'no candidate in '
-                                                                    'reach '
-                                                                    '(INVALID_PARAMS '
-                                                                    'naming the lane '
-                                                                    'and the member). '
-                                                                    'Requires `query`.'},
+                                                                    'omitted default; a '
+                                                                    'vault where one '
+                                                                    'lane has no '
+                                                                    'candidate is '
+                                                                    'refused. Requires '
+                                                                    '`query`.'},
                                   'focus_session': {'type': 'string',
                                                     'minLength': 1,
                                                     'maxLength': 128,
