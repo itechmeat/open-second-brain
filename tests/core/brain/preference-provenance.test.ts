@@ -70,6 +70,15 @@ describe("parseSessionRef: producer shapes", () => {
     });
   });
 
+  test("a session-prefixed key that is neither lifecycle form yields no provenance", () => {
+    // Import keys are verbatim basenames: a session file named with the
+    // lifecycle scheme collides with it, and the ref alone cannot tell
+    // the two apart. The join refuses the label instead of guessing one -
+    // no provenance, never a wrong kind.
+    expect(parseSessionRef("session:my-session.jsonl#turn-user-1")).toBeNull();
+    expect(parseSessionRef("session:conv-01#UserPromptSubmit")).toBeNull();
+  });
+
   test("an auto-extract ref carries no fragment and yields no provenance", () => {
     // Live writer shape: the bare caller session id, no `#`.
     expect(parseSessionRef("session:conv-01")).toBeNull();
@@ -101,7 +110,7 @@ describe("parseSessionRef: malformed shapes are refused, never guessed", () => {
 describe("resolvePreferenceProvenance", () => {
   const LOOKUP: Record<string, string | undefined> = {
     "sig-2026-05-16-mocking": "claude-minimal.jsonl#turn-user-1",
-    "sig-2026-05-17-lifecycle": "session:conv-01#UserPromptSubmit",
+    "sig-2026-05-17-lifecycle": "session:00000000-0000-0000-0000-000000000002#UserPromptSubmit",
     "sig-2026-05-18-bare": "session:conv-02",
     "sig-2026-05-19-dup": "claude-minimal.jsonl#turn-user-1",
   };
@@ -120,7 +129,11 @@ describe("resolvePreferenceProvenance", () => {
     expect(provenance?.preferenceId).toBe("pref-db-mocking");
     expect(provenance?.origins).toEqual([
       { sessionKey: "claude-minimal.jsonl", fragment: "turn-user-1", kind: "turn" },
-      { sessionKey: "session:conv-01", fragment: "UserPromptSubmit", kind: "origin_event" },
+      {
+        sessionKey: "session:00000000-0000-0000-0000-000000000002",
+        fragment: "UserPromptSubmit",
+        kind: "origin_event",
+      },
     ]);
     // The earliest evidence is the first mention.
     expect(provenance?.origins[0]).toEqual({
@@ -146,7 +159,7 @@ describe("resolvePreferenceProvenance", () => {
   test("an existing signal without a session_ref contributes no origin", () => {
     const provenance = resolvePreferenceProvenance(
       { id: "pref-noref", evidenced_by: ["[[sig-no-session-ref]]"] },
-      (signalId) => (signalId === "sig-no-session-ref" ? undefined : undefined),
+      () => undefined,
     );
     expect(provenance).toBeNull();
   });
@@ -184,7 +197,11 @@ describe("resolvePreferenceProvenance", () => {
     );
     expect(provenance?.origins).toEqual([
       { sessionKey: "claude-minimal.jsonl", fragment: "turn-user-1", kind: "turn" },
-      { sessionKey: "session:conv-01", fragment: "UserPromptSubmit", kind: "origin_event" },
+      {
+        sessionKey: "session:00000000-0000-0000-0000-000000000002",
+        fragment: "UserPromptSubmit",
+        kind: "origin_event",
+      },
     ]);
   });
 

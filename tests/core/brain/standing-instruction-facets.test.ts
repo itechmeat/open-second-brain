@@ -127,8 +127,8 @@ function writeLifecycleSignal(): string {
     date: "2026-06-01",
     slug: "lifecycle-rule",
     scope: "testing",
-    session_ref: "session:conv-01#UserPromptSubmit",
-    source: ["[[session:conv-01#UserPromptSubmit]]"],
+    session_ref: "session:00000000-0000-0000-0000-000000000003#UserPromptSubmit",
+    source: ["[[session:00000000-0000-0000-0000-000000000003#UserPromptSubmit]]"],
   }).id;
 }
 
@@ -209,7 +209,7 @@ describe("standing-instruction facets: provenance annotation", () => {
     expect(section.items).toEqual([
       "pref-bare (testing)",
       "pref-imported (testing) [first mention turn claude-minimal.jsonl#turn-user-1]",
-      "pref-lifecycle (testing) [first mention event session:conv-01#UserPromptSubmit]",
+      "pref-lifecycle (testing) [first mention event session:00000000-0000-0000-0000-000000000003#UserPromptSubmit]",
       "pref-noevidence (testing)",
     ]);
     expect(section.facets).toEqual([
@@ -224,7 +224,11 @@ describe("standing-instruction facets: provenance annotation", () => {
         preferenceId: "pref-lifecycle",
         scope: "testing",
         origins: [
-          { sessionKey: "session:conv-01", fragment: "UserPromptSubmit", kind: "origin_event" },
+          {
+            sessionKey: "session:00000000-0000-0000-0000-000000000003",
+            fragment: "UserPromptSubmit",
+            kind: "origin_event",
+          },
         ],
       },
     ]);

@@ -84,15 +84,29 @@ export interface PreferenceProvenance {
 
 /** The capture-lifecycle key prefix; the one producer key that is not a basename. */
 const CAPTURE_LIFECYCLE_SCHEME = "session:";
+/** The stand-in id the lifecycle writer emits when the payload carries none. */
+const CAPTURE_LIFECYCLE_UNKNOWN_ID = "unknown";
+/**
+ * The lifecycle writer's session-id grammar: the host's session id is a
+ * UUID. The prefix alone is not evidence - an imported session file could
+ * be named with the same prefix, and import keys are verbatim basenames -
+ * so only the documented producer shapes mark an event fragment.
+ */
+const CAPTURE_LIFECYCLE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Parse one signal `session_ref` into its origin coordinates, or
  * `null` when the ref is absent, blank, fragment-less (the auto-extract
  * shape — no turn exists to cite), double-hashed (no producer emits
- * it), or halves-empty. The split is on the FIRST `#`, per the
- * documented `<key>#<fragment>` contract; a key with the
- * capture-lifecycle prefix marks an event fragment and resolves as
- * `origin_event`, every other key as a `turn`.
+ * it), halves-empty, or `session:`-prefixed in a form neither producer
+ * writes. The split is on the FIRST `#`, per the documented
+ * `<key>#<fragment>` contract. A key in the capture-lifecycle writer's
+ * exact forms - `session:<uuid>` or the `session:unknown` stand-in -
+ * marks an event fragment and resolves as `origin_event`. Import keys
+ * are verbatim basenames, so a basename that merely starts with the
+ * scheme cannot be told from a lifecycle key by the ref alone: such a
+ * ref yields no provenance rather than a guessed label - the
+ * coordinates are never wrong, and no origin reads as no mention.
  */
 export function parseSessionRef(ref: string): SessionRefOrigin | null {
   const trimmed = ref.trim();
@@ -108,8 +122,14 @@ export function parseSessionRef(ref: string): SessionRefOrigin | null {
   const fragment = trimmed.slice(hash + 1);
   if (sessionKey.length === 0 || fragment.length === 0) return null;
   if (sessionKey.startsWith(CAPTURE_LIFECYCLE_SCHEME)) {
-    if (sessionKey.length === CAPTURE_LIFECYCLE_SCHEME.length) return null;
-    return Object.freeze({ sessionKey, fragment, kind: "origin_event" });
+    const id = sessionKey.slice(CAPTURE_LIFECYCLE_SCHEME.length);
+    if (id === CAPTURE_LIFECYCLE_UNKNOWN_ID || CAPTURE_LIFECYCLE_ID_RE.test(id)) {
+      return Object.freeze({ sessionKey, fragment, kind: "origin_event" });
+    }
+    // Neither lifecycle shape: a basename that collides with the scheme
+    // (or an id no writer emits). The kind cannot be read without
+    // guessing - no provenance, never a guessed label.
+    return null;
   }
   return Object.freeze({ sessionKey, fragment, kind: "turn" });
 }
