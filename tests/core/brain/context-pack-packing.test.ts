@@ -48,6 +48,7 @@ import {
 } from "../../../src/core/brain/prompt-prefix.ts";
 import { RECALL_CHANNEL, listRecallTelemetry } from "../../../src/core/brain/recall-telemetry.ts";
 import { isPackingPolicy } from "../../../src/core/brain/recall-budget.ts";
+import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 
 let vault: string;
 
@@ -63,7 +64,7 @@ afterEach(() => {
 
 function writePref(
   slug: string,
-  fields: { tier: string; created_at: string; principle?: string },
+  fields: { tier: string; created_at: string; principle?: string; owner?: string },
 ): void {
   writeFileSync(
     join(vault, "Brain", "preferences", `pref-${slug}.md`),
@@ -74,6 +75,7 @@ function writePref(
       `principle: ${fields.principle ?? `pref ${slug} principle`}`,
       `tier: ${fields.tier}`,
       `created_at: ${fields.created_at}`,
+      ...(fields.owner !== undefined ? [`owner: ${fields.owner}`] : []),
       "---",
       "",
       `body of pref ${slug}`,
@@ -351,6 +353,29 @@ describe("context pack packing policy", () => {
     expect(() => packContext(vault, { maxTokens: 10_000, packingPolicy: "facts_first" })).toThrow(
       /the facts and pages lanes are empty/,
     );
+  });
+
+  test("the owner-scope warning survives the policy char-budget overflow", () => {
+    // Owner scope in warn mode with one other-agent memory hidden: the
+    // warning rides extraWarnings, and the char-budget early return used
+    // to pass an empty array there, dropping it exactly when the caller
+    // also asked for the packing policy.
+    writeFileSync(
+      brainConfigPath(vault),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: warn\n",
+    );
+    writePref("alpha", { tier: "core", created_at: "2026-03-01T00:00:00Z", owner: "agent-a" });
+    writePref("beta", { tier: "supporting", created_at: "2026-02-01T00:00:00Z", owner: "agent-b" });
+    writeRetired("old", { tier: "core", created_at: "2026-01-01T00:00:00Z" });
+    const r = packContext(vault, {
+      maxTokens: 10_000,
+      packingPolicy: "facts_first",
+      agentScope: "agent-a",
+      maxTotalChars: 40,
+    });
+    expect(r.warnings?.some((w) => w.startsWith('owner scope "agent-a"'))).toBe(true);
+    // The dropped tail is still the char-budget drop, by name.
+    expect(r.skipped.some((s) => s.reason === "over-char-budget")).toBe(true);
   });
 
   test("the char-budget path agrees with the funnel", () => {

@@ -1097,7 +1097,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
             ...packingFor(keptItems),
           },
           startedAtMs,
-          [],
+          ownerScopeWarnings,
           withheldIds,
         );
       }
@@ -1235,7 +1235,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           ...semanticReport,
         },
         startedAtMs,
-        [],
+        ownerScopeWarnings,
         withheldIds,
       );
     }
