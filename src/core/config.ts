@@ -1712,6 +1712,21 @@ export function resolveGapLoopEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Session-start backlog nudge gate (session-mining-economy, t_0358af42).
+ * Default OFF: the SessionStart hook that reports the undistilled-session
+ * count stays dormant unless `backlog_nudge_enabled: "true"` (or the
+ * matching env override). Flag off keeps the session preamble
+ * byte-identical and writes no throttle state.
+ */
+export function resolveBacklogNudgeEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED",
+    "backlog_nudge_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional gap-loop recurrence threshold override (A3). A valid positive
  * integer (env first, then config) wins; anything else returns undefined so
  * the caller falls back to the named-constant default. Env-overridable so an

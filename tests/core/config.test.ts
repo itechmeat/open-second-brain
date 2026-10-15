@@ -9,6 +9,7 @@ import {
   discoverConfig,
   parseSimpleYaml,
   resolveAgentName,
+  resolveBacklogNudgeEnabled,
   resolveExposeHostPaths,
   resolveLinkOutputFormat,
   resolveDecisionRecallMaxPerSession,
@@ -45,6 +46,7 @@ beforeEach(() => {
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_WEAK",
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS",
     "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS",
+    "OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED",
     "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION",
     "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS",
   ]) {
@@ -514,6 +516,37 @@ describe("resolveExposeHostPaths", () => {
     writeFileSync(cfg, "expose_host_paths: false\n");
     process.env["OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS"] = "true";
     expect(resolveExposeHostPaths(cfg)).toBe(true);
+  });
+});
+
+describe("resolveBacklogNudgeEnabled", () => {
+  test("defaults to false when nothing configured", () => {
+    expect(resolveBacklogNudgeEnabled(join(tmp, "missing.yaml"))).toBe(false);
+  });
+
+  test("reads true from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'backlog_nudge_enabled: "true"\n');
+    expect(resolveBacklogNudgeEnabled(cfg)).toBe(true);
+  });
+
+  test("accepts 1 as truthy", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'backlog_nudge_enabled: "1"\n');
+    expect(resolveBacklogNudgeEnabled(cfg)).toBe(true);
+  });
+
+  test("any other value stays false", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'backlog_nudge_enabled: "yes"\n');
+    expect(resolveBacklogNudgeEnabled(cfg)).toBe(false);
+  });
+
+  test("env wins over config", () => {
+    process.env["OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED"] = "true";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'backlog_nudge_enabled: "false"\n');
+    expect(resolveBacklogNudgeEnabled(cfg)).toBe(true);
   });
 });
 
