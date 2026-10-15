@@ -349,9 +349,28 @@ test("the tools that stamp a caller-supplied agent are enumerated from the tool 
  */
 describe("a request-scoped identity threads through the dispatcher", () => {
   let server: MCPServer;
+  const savedEnv: Record<string, string | undefined> = {};
 
+  // A server built with `configPath: null` still discovers a config from
+  // the environment, so the fallback identity is pinned here: a config
+  // with no `agent_name` and no `VAULT_AGENT_NAME`, whatever an earlier
+  // file or the developer's shell left behind.
   beforeEach(() => {
+    for (const key of ["OPEN_SECOND_BRAIN_CONFIG", "VAULT_AGENT_NAME"]) {
+      savedEnv[key] = process.env[key];
+    }
+    const unnamedConfig = join(configHome, "unnamed-config.yaml");
+    atomicWriteFileSync(unnamedConfig, `vault: ${vault}\n`);
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = unnamedConfig;
+    delete process.env["VAULT_AGENT_NAME"];
     server = new MCPServer({ vault, configPath: null, repoRoot: null });
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   async function rpcCall(
@@ -390,8 +409,8 @@ describe("a request-scoped identity threads through the dispatcher", () => {
     setGate(GATE_MODE.fail);
     const refused = await rpcCall({ agent_scope: OWNER_A });
     const message = (refused.error as { message: string } | undefined)?.message ?? "";
-    // The fixture vault has no config behind this server (configPath null),
-    // so the fallback identity is the placeholder the identity chain bottoms
+    // The config this server discovers names no agent (pinned above), so
+    // the fallback identity is the placeholder the identity chain bottoms
     // out at - the unresolved refusal, exactly as the pre-token dispatcher
     // answered. Absent identity changes nothing.
     expect(message).toContain(OWNER_SCOPE_REFUSAL.unresolvedIdentity);

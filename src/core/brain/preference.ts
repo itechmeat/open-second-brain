@@ -44,7 +44,7 @@ import {
   slugify,
   writeFrontmatterAtomic,
 } from "../vault.ts";
-import { requireObsidianTagValue } from "./tag-syntax.ts";
+import { requireObsidianTagValue, scopeTagValues } from "./tag-syntax.ts";
 import { BrainParseError } from "./parse-error.ts";
 import { FrontmatterTierConflictError, mergeFrontmatterTiered } from "./frontmatter-tiers.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
@@ -931,12 +931,14 @@ function composePreferenceTags(input: WritePreferenceInput): string[] {
   // `tag-syntax.ts`), with the same polarity as the signal composer: the
   // topic segment is slugified then validated; scope segments and
   // `extraTags` entries are caller-controlled input, refused unrewritten
-  // with the field named.
+  // with the field named. A comma-separated scope composes one tag per
+  // segment (`scopeTagValues`).
   push("brain");
   push("brain/preference");
   push(`brain/topic/${requireObsidianTagValue(slugify(input.topic.trim()), "topic")}`);
-  if (input.scope?.trim())
-    push(`brain/scope/${requireObsidianTagValue(input.scope.trim(), "scope")}`);
+  for (const scope of scopeTagValues(input.scope ?? "", `pref-${input.slug}`)) {
+    push(`brain/scope/${scope}`);
+  }
   for (const t of input.extraTags ?? []) {
     if (t.trim()) push(requireObsidianTagValue(t.trim(), "extraTags"));
   }

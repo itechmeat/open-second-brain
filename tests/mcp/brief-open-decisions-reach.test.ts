@@ -19,10 +19,12 @@ import { openDecision } from "../../src/core/brain/decisions/open-store.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 const bases: string[] = [];
+const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
 
 afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
-  delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+  if (savedConfig === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+  else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfig;
 });
 
 interface Vault {

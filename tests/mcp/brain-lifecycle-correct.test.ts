@@ -28,8 +28,11 @@ import { cmdBrainLifecycle } from "../../src/cli/brain/verbs/lifecycle.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { tempDirs } from "../helpers/temp-dir.ts";
 
+const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+
 afterAll(() => {
-  delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+  if (savedConfig === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+  else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfig;
 });
 
 const mkTemp = tempDirs();

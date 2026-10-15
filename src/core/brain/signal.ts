@@ -45,7 +45,7 @@ import {
 } from "../origin-channel.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter, slugify } from "../vault.ts";
-import { requireObsidianTagValue } from "./tag-syntax.ts";
+import { requireObsidianTagValue, scopeTagValues } from "./tag-syntax.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { resolveWriteDisposition } from "./write-disposition.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
@@ -867,8 +867,8 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   push("brain");
   push("brain/signal");
   push(`brain/topic/${requireObsidianTagValue(slugify(input.topic.trim()), "topic")}`);
-  if (input.scope && input.scope.trim()) {
-    push(`brain/scope/${requireObsidianTagValue(input.scope.trim(), "scope")}`);
+  for (const scope of scopeTagValues(input.scope ?? "")) {
+    push(`brain/scope/${scope}`);
   }
   // Non-default source_type gets its own tag so Obsidian users can
   // filter `tag:brain/source/inline` etc. `live` is the implicit

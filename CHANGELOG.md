@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.84.1] - 2026-10-15
+
+### Fixed
+
+- **A stored comma-separated scope no longer aborts the dream pass.** `parsePreference` reads `scope: alpha,beta` back verbatim, and records written before the v1.78.0 tag hardening can carry that shape, but the refresh writer composed the whole value as one `brain/scope/...` tag, the shared tag rule refused the comma, and `dream` threw `TagSyntaxError` on a record the reader accepts - whether the stored tag was the valid original or a legacy comma-bearing one. A comma-separated scope is now a list at the tag boundary: each trimmed, non-empty segment composes its own `brain/scope/<segment>` tag, duplicates collapse, and the `scope` field stays verbatim, so the record keeps its meaning. Preferences and signals share the one rule (`scopeTagValues`). A stored segment that still fails the tag rule (a space, a special character) is refused as before, now naming the record (`fix the scope field of pref-<slug>`), so an operator can find the file to fix. Reported by @Padde86 in #253.
+- **The MCP identity tests no longer read the developer's real config.** Two test files cleared `OPEN_SECOND_BRAIN_CONFIG` after they ran instead of restoring it, so every later file in the same process lost the test preload's throwaway config and config discovery reached the real user config; the owner-scope fallback-identity test then saw a configured agent name instead of the unresolved placeholder and failed whenever it ran after them. Both files now restore the prior value, and the fallback-identity test pins its own config with no `agent_name` and no `VAULT_AGENT_NAME`.
+- **The iterative-recall deadline test no longer races wall time.** It simulated an expired deadline by shifting `Date.now` a constant 10 s, but the search reads its own start instant through the same clock, so the offset cancelled out and expiry still depended on real elapsed time; on a fast enough run the looped search reached the loop gate before the 1 ms budget lapsed and ran a round the plain search never runs. The stub now steps the clock forward on every read, so every check after the start is expired regardless of load. The search code was already correct.
+- **The overlap fallback test asserts the interval it can actually measure.** For a provider that never reports a dispatch (the offline local embedder) the embed interval is the whole awaited call, and its resolution stamp is written only after the synchronous keyword lanes yield, so the interval encloses the keyword interval and `overlapped_ms` is that interval's length - 0 or 1 ms on the wall clock depending on whether the lanes crossed a tick. The test expected exactly 0 and failed under load; it now steps the clock the request reads and asserts the ordering (pre-call start before the keyword lanes, resolution after them) and that the overlap equals the keyword interval.
+
 ## [1.84.0] - 2026-10-14
 
 Open Second Brain 1.84.0 hides the recall lane's embed round trip behind the keyword work and accounts for the overlap: hybrid search now starts the semantic lane before the keyword lanes run and joins it where the serial await stood, `search --explain` reports the overlapped milliseconds, and the bench latency family carries the same figure per question and in aggregate. Every surface is byte-identical when the new option is absent, and no configuration changes.
@@ -8510,6 +8519,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.84.1]: https://github.com/itechmeat/open-second-brain/compare/v1.84.0...v1.84.1
 [1.84.0]: https://github.com/itechmeat/open-second-brain/compare/v1.83.0...v1.84.0
 [1.83.0]: https://github.com/itechmeat/open-second-brain/compare/v1.82.0...v1.83.0
 [1.82.0]: https://github.com/itechmeat/open-second-brain/compare/v1.81.1...v1.82.0

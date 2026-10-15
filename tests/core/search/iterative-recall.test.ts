@@ -481,12 +481,18 @@ describe("iterative round driver over a seeded vault", () => {
     const query = `warehouse rotation ${COMMON.join(" ")}`;
     const structured = structuredFor();
     // Both runs see a clock 10 seconds past the 1 ms budget at every
-    // deadline check, by construction: Date.now is shifted for the calls
-    // and restored after. A real 1 ms budget raced wall time instead,
-    // and under load the two runs degraded at different phase boundaries
-    // (the plain run skipped the semantic lanes, the looped one did not).
+    // deadline check, by construction: every Date.now read steps the
+    // clock 10 s forward, and the stub is restored after. A constant
+    // offset is not enough - the request resolves its start instant
+    // through the same Date.now, so the offset cancels out and expiry
+    // still raced real wall time; a run that reached the loop gate
+    // within the same millisecond ran a loop round the plain run never
+    // saw. Stepping on every read makes each check after the request's
+    // own start read expired, independent of real time.
     const realNow = Date.now;
-    Date.now = () => realNow.call(Date) + 10_000;
+    const base = realNow.call(Date);
+    let ticks = 0;
+    Date.now = () => base + 10_000 * ++ticks;
     let off: Awaited<ReturnType<typeof search>>;
     let on: Awaited<ReturnType<typeof search>>;
     try {

@@ -483,19 +483,33 @@ test("the embed request dispatches before the keyword lanes finish", async () =>
 test("a provider that never reports a dispatch keeps the pre-call interval as the fallback", async () => {
   if (!sqliteVecLoadable()) return;
   await seedCorpus();
-  // The offline local embedder predates the dispatch report and finishes
-  // synchronously: the phase's pre-call stamp is the only start it can
-  // have, and the honest overlap for it is zero - its embed is done
-  // before the keyword lanes open, so none of that interval was hidden.
+  // The offline local embedder never reports a dispatch, so the phase's
+  // pre-call stamp is the only start it can have, and its interval is the
+  // whole awaited call. Its embed finishes synchronously, but the
+  // resolution stamp is written by the await's continuation, which runs
+  // only once the caller's synchronous keyword lanes have yielded - so the
+  // fallback interval always encloses the keyword interval, and the
+  // overlap is the keyword interval's length. On the wall clock that
+  // length is 0 or 1 ms depending on whether the lanes crossed a tick, so
+  // the clock the request reads is stepped: every read is one millisecond
+  // later than the last, which makes each stamp distinct and ordered.
   const cfg = semanticConfig({ provider: "local" });
   await indexVault(cfg, { embeddings: true });
   let timing: SearchLaneTiming | undefined;
-  const out = await search(cfg, {
-    query: "fox",
-    limit: 5,
-    semantic: true,
-    laneTiming: (t) => void (timing = t),
-  });
+  const realNow = Date.now;
+  let tick = realNow();
+  Date.now = () => (tick += 1);
+  let out: Awaited<ReturnType<typeof search>>;
+  try {
+    out = await search(cfg, {
+      query: "fox",
+      limit: 5,
+      semantic: true,
+      laneTiming: (t) => void (timing = t),
+    });
+  } finally {
+    Date.now = realNow;
+  }
   if (
     timing === undefined ||
     timing.embedStartMs === undefined ||
@@ -503,8 +517,11 @@ test("a provider that never reports a dispatch keeps the pre-call interval as th
   ) {
     throw new Error("the lane timing sink or its fallback interval never arrived");
   }
-  expect(timing.embedEndMs).toBeGreaterThanOrEqual(timing.embedStartMs);
-  expect(timing.overlappedMs).toBe(0);
+  // The start is the pre-call stamp from the lane-start tick, before the
+  // keyword lanes open; the end is the continuation past their close.
+  expect(timing.embedStartMs).toBeLessThan(timing.keywordStartMs);
+  expect(timing.embedEndMs).toBeGreaterThan(timing.keywordEndMs);
+  expect(timing.overlappedMs).toBe(timing.keywordEndMs - timing.keywordStartMs);
   expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
 });
 

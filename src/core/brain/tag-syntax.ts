@@ -48,3 +48,32 @@ export function requireObsidianTagValue(value: string, field: string): string {
   }
   return value;
 }
+
+/**
+ * The `brain/scope/<value>` tag values a stored `scope` field composes
+ * to. A comma-separated scope (`alpha,beta`, the shape records written
+ * before v1.78.0 can carry and the reader has always accepted) is a list:
+ * each trimmed, non-empty segment becomes its own tag, duplicates
+ * collapse, and the `scope` field itself stays verbatim. Every segment
+ * must satisfy the shared tag rule; a segment that does not is refused
+ * unrewritten with the field named and, when `record` is given, the
+ * record named too so an operator can find and fix it.
+ */
+export function scopeTagValues(scope: string, record?: string): string[] {
+  const out: string[] = [];
+  for (const raw of scope.split(",")) {
+    const segment = raw.trim();
+    if (segment === "" || out.includes(segment)) continue;
+    if (!isObsidianTagValue(segment)) {
+      throw new TagSyntaxError(
+        "scope",
+        segment,
+        record === undefined
+          ? TAG_VALUE_RULE_TEXT
+          : `${TAG_VALUE_RULE_TEXT}; fix the scope field of ${record}`,
+      );
+    }
+    out.push(segment);
+  }
+  return out;
+}
