@@ -32,16 +32,14 @@
  * content is inspected.
  */
 
-import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 
-import { PRE_EXTRACT_MAX_SOURCE_BYTES, SOURCE_UNREAD, type SourceUnread } from "./ingest.ts";
-
-/**
- * How a single {@link readTail} read is opened: read-only and never
- * blocking, so a FIFO met where a file was expected cannot stall the
- * caller - the same discipline `readSourceBounded` applies.
- */
-const SOURCE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+import {
+  PRE_EXTRACT_MAX_SOURCE_BYTES,
+  SOURCE_OPEN_FLAGS,
+  SOURCE_UNREAD,
+  type SourceUnread,
+} from "./source-read.ts";
 
 /** Bytes pulled per positioned read, so a delta never over-allocates. */
 const READ_CHUNK_BYTES = 65_536;

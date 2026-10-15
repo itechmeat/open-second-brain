@@ -1,6 +1,6 @@
 /**
- * `o2b brain extract <file> [--json]`: preview what ingest derives from one
- * source file, for every registered format.
+ * `o2b brain extract <file> [--json] [--vault <vault>]`: preview what ingest
+ * derives from one source file, for every registered format.
  *
  * An HTML file answers its title, its text and its heading-derived parts; a
  * CSV or TSV file answers its table note (the counts and the rendered
@@ -10,9 +10,17 @@
  * the bounded reader refuses (not a regular file, larger than the read
  * limit). "Could not extract" is data: every such answer exits 0. Read-only
  * and deterministic; nothing is written.
+ *
+ * With a resolvable vault (`--vault`, else the configured one) and a source
+ * the ingest manifest has already extracted, the preview also reports the
+ * `appended` slice: the boundary-safe byte range the file grew by since its
+ * recorded extraction watermark. It is additive data for an incremental
+ * pass - a source with no watermark, a rewritten source, or no vault at all
+ * answers without the section, never with a fake range.
  */
 
-import { lstatSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 
 import { oneLine } from "../../../core/brain/architect/manifests.ts";
 import {
@@ -20,8 +28,11 @@ import {
   HTML_EXTRACT_MAX_SOURCE_BYTES,
   type HtmlPart,
 } from "../../../core/brain/ingest/extract-html.ts";
+import { extractedBytesOf, readManifest } from "../../../core/brain/ingest/content-manifest.ts";
 import { extractSource, type SourceExtraction } from "../../../core/brain/ingest/extract-source.ts";
 import { readSourceBounded, type SourceUnread } from "../../../core/brain/ingest/ingest.ts";
+import { readTail } from "../../../core/brain/ingest/tail-read.ts";
+import { canonicalNotePath } from "../../../core/path-safety.ts";
 import {
   SOURCE_EXTRACT_SKIP_REASON,
   SOURCE_EXTRACTOR,
@@ -30,9 +41,9 @@ import {
   sourceFormatSpec,
   type SourceExtractSkipReason,
 } from "../../../core/brain/ingest/source-formats.ts";
-import { fail, ok, okJson, parse, usageError } from "../helpers.ts";
+import { brainVerbContext, CliError, fail, ok, okJson, parse, usageError } from "../helpers.ts";
 
-const USAGE = "usage: o2b brain extract <file> [--json]";
+const USAGE = "usage: o2b brain extract <file> [--json] [--vault <vault>]";
 /** The bytes handed to the dispatch for a format answered by name. */
 const NO_BYTES = new Uint8Array(0);
 /** How the text output names the format of an unregistered extension. */
@@ -70,6 +81,50 @@ function extractFile(file: string): SourceExtraction {
     return { extractor: null, format, reason: UNREAD_REASON[read.unread] };
   }
   return extractSource(file, read.bytes);
+}
+
+/** The appended slice a previously-extracted source grew by, in bytes. */
+interface AppendedSlice {
+  readonly fromByte: number;
+  readonly toByte: number;
+}
+
+/**
+ * The vault the appended section answers against, when one resolves. The
+ * preview itself is vault-independent - it answers any file - so an
+ * unresolvable vault is not an error here; it only means there is no ingest
+ * manifest to consult and the section stays absent.
+ */
+function resolveOptionalVault(
+  flags: Record<string, string | boolean | string[] | undefined>,
+): string | null {
+  try {
+    return brainVerbContext(flags).vault;
+  } catch (err) {
+    if (err instanceof CliError) return null;
+    throw err;
+  }
+}
+
+/**
+ * The appended slice `file` grew by since its recorded extraction watermark,
+ * when the file sits inside `vault` and the manifest records one. Everything
+ * else - a file outside the vault, no watermark, a rewritten source, a tail
+ * with no complete line yet - answers undefined: the section is additive
+ * data for an incremental pass, never a second verdict on the extraction.
+ */
+function appendedSlice(vault: string | null, file: string): AppendedSlice | undefined {
+  if (vault === null) return undefined;
+  const rel = relative(vault, file);
+  if (rel.length === 0 || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) {
+    return undefined;
+  }
+  const entry = readManifest(vault).entries[canonicalNotePath(rel.split(sep).join("/"))];
+  const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
+  if (watermark <= 0 || !existsSync(file)) return undefined;
+  const tail = readTail(file, watermark, { maxBytes: HTML_EXTRACT_MAX_SOURCE_BYTES });
+  if (tail.kind !== "appended" || tail.toByte <= watermark) return undefined;
+  return { fromByte: tail.fromByte, toByte: tail.toByte };
 }
 
 /** The wire shape of one HTML part. */
@@ -161,20 +216,35 @@ function extractionText(path: string, extraction: SourceExtraction): string[] {
   return [...lines, notExtractedLine(extraction.reason)];
 }
 
+/** The text line naming the appended slice, for the non-JSON output. */
+function appendedLine(appended: AppendedSlice): string {
+  return `  appended: byte ${appended.fromByte}..${appended.toByte} since the recorded extraction watermark`;
+}
+
 export async function runBrainExtract(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     json: { type: "boolean" },
+    vault: { type: "string" },
   });
   const file = positional[0];
   if (!file) return usageError(USAGE);
 
   try {
     const extraction = extractFile(file);
+    // A corrupted manifest fails the command by name, like every ingest-lane
+    // read of it; everything else about the appended section is additive.
+    const appended = appendedSlice(resolveOptionalVault(flags), file);
     if (flags["json"]) {
-      okJson(extractionJson(file, extraction));
+      const payload = extractionJson(file, extraction);
+      if (appended !== undefined) {
+        payload["appended"] = { from_byte: appended.fromByte, to_byte: appended.toByte };
+      }
+      okJson(payload);
       return 0;
     }
-    for (const line of extractionText(file, extraction)) ok(line);
+    const lines = extractionText(file, extraction);
+    if (appended !== undefined) lines.push(appendedLine(appended));
+    for (const line of lines) ok(line);
     return 0;
   } catch (err) {
     return fail((err as Error).message ?? String(err));

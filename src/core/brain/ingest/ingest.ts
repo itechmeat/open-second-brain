@@ -21,14 +21,14 @@
 
 import {
   closeSync,
-  constants as fsConstants,
   existsSync,
-  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
+  statSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -81,7 +81,15 @@ import {
   type Provenance,
 } from "../provenance/provenance.ts";
 import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
-import { readManifest, updateManifest } from "./content-manifest.ts";
+import { extractedBytesOf, hashPath, readManifest, updateManifest } from "./content-manifest.ts";
+import { computeExtractionContractFingerprint } from "./contract.ts";
+import { readTail } from "./tail-read.ts";
+import {
+  PRE_EXTRACT_MAX_SOURCE_BYTES,
+  SOURCE_OPEN_FLAGS,
+  SOURCE_UNREAD,
+  readSourceBounded,
+} from "./source-read.ts";
 import { deriveSourceSection, type PartsOutcome, type TableOutcome } from "./extract-source.ts";
 import {
   isCodeStructureSource,
@@ -238,6 +246,17 @@ export interface IngestSourceResult {
    * the ordinary idempotent path once both endpoints are published.
    */
   readonly deferredRelations?: ReadonlyArray<IntakeRelation>;
+  /**
+   * The appended delta this source grew by since its recorded extraction
+   * watermark (t_a9cd4221): the boundary-safe byte range
+   * {@link ./tail-read.ts} verified as a pure append - the recorded digest
+   * still described the leading bytes. Present ONLY on that append shape: a
+   * first ingest, a rewritten source, or a source with no watermark reports
+   * no delta and reprocesses fully. The range is reporting, not state - the
+   * stamp below always records the whole current source, because this
+   * pipeline's contract is a whole-source extraction per run.
+   */
+  readonly extractionDelta?: { readonly fromByte: number; readonly toByte: number };
 }
 
 /**
@@ -446,6 +465,7 @@ export function ingestSource(
   // stays unrecorded until a publish arm actually writes; a re-ingest then
   // re-classifies the source as new and re-runs, which is the fail-safe
   // direction.
+  let extractionDelta: IngestSourceResult["extractionDelta"];
   if (
     !withheld &&
     disposition.verdict !== "stage" &&
@@ -453,7 +473,22 @@ export function ingestSource(
     resolvesInsideVault(vault, canonicalSource) &&
     existsSync(join(vault, canonicalSource))
   ) {
-    updateManifest(vault, [canonicalSource]);
+    const sourceAbs = join(vault, canonicalSource);
+    extractionDelta = appendedExtractionDelta(vault, sourceAbs, canonicalSource);
+    // Record the source's state under the live contract, WITH the extraction
+    // watermark: this run's contract is a whole-source extraction, so the
+    // stamp covers the full current file. That is what makes the NEXT
+    // append verifiable - the recorded digest describes exactly the leading
+    // extracted_bytes, so a later read either proves a pure append (delta
+    // above) or classifies modified and reprocesses fully.
+    updateManifest(vault, [canonicalSource], {
+      [canonicalSource]: {
+        sha256: hashPath(sourceAbs),
+        fingerprint: computeExtractionContractFingerprint(vault),
+        extracted_bytes: statSync(sourceAbs).size,
+        extracted_at: isoSecond(opts.now),
+      },
+    });
     // Record plan-scoped progress so an interrupted batch resumes at the item
     // boundary (t_ba1fa5f6). Only for real vault files - a URL/identity-only
     // source has no place in a folder plan's checkpoint. Best-effort: a
@@ -486,6 +521,7 @@ export function ingestSource(
     ...(intake.deferredRelations !== undefined
       ? { deferredRelations: intake.deferredRelations }
       : {}),
+    ...(extractionDelta !== undefined ? { extractionDelta } : {}),
     ...(preExtract !== undefined ? { preExtract } : {}),
     ...(derivation?.parts !== undefined ? { parts: derivation.parts } : {}),
     ...(derivation?.table !== undefined ? { table: derivation.table } : {}),
@@ -493,11 +529,17 @@ export function ingestSource(
 }
 
 /**
- * The largest source the code-structure pass reads. A hand-written module
- * is far smaller; a larger file is generated or vendored, and its seeds are
- * not worth a parse whose cost grows with the file.
+ * The shared bounded source-read substrate moved to {@link ./source-read.ts}:
+ * the open discipline, the named refusal vocabulary, the whole-source bounded
+ * read and the shared scale cap. The names re-export here so every existing
+ * consumer keeps its import.
  */
-export const PRE_EXTRACT_MAX_SOURCE_BYTES = 1_048_576;
+export {
+  PRE_EXTRACT_MAX_SOURCE_BYTES,
+  readSourceBounded,
+  SOURCE_UNREAD,
+  type SourceUnread,
+} from "./source-read.ts";
 
 /** What the trusted-local branch's archive attempt concluded. */
 interface ArchiveCapture {
@@ -569,59 +611,64 @@ function captureTrustedSourceArchive(
   }
 }
 
-/** Why a source read yields no text, apart from a thrown error. Exported as
- * the shared bounded-read refusal vocabulary; `tail-read.ts` refuses with the
- * same names. */
-export const SOURCE_UNREAD = Object.freeze({
-  notAFile: "not a regular file",
-  tooLarge: "larger than the read limit",
-} as const);
+const EXTRACTION_DELTA_MAX_BYTES = PRE_EXTRACT_MAX_SOURCE_BYTES;
 
-/** Why {@link readSourceBounded} read no text. */
-export type SourceUnread = (typeof SOURCE_UNREAD)[keyof typeof SOURCE_UNREAD];
+/** Bytes hashed per positioned read while verifying an append's prefix. */
+const PREFIX_HASH_CHUNK_BYTES = 65_536;
 
 /**
- * How a source is opened: read-only and never blocking, so a FIFO met
- * where a file was expected cannot stall the server. No `O_NOFOLLOW`: an
- * in-vault symlink is admitted by the containment check in
- * `runPreExtract` (`resolvesInsideVault`). The flag
- * is POSIX; where the platform lacks it it is simply absent.
+ * The appended delta `sourceAbs` grew by since its recorded extraction
+ * watermark, when it grew by a PROVABLE pure append: the recorded digest
+ * must still describe exactly the leading watermark bytes, or the source was
+ * rewritten rather than appended and the honest answer is no delta - the
+ * full reprocess the modified classification already triggers. The returned
+ * range is boundary-safe ({@link ./tail-read.ts}): it ends at the last
+ * complete newline, and it is empty when the append has none yet.
  */
-const SOURCE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
-
-/**
- * Read a source through ONE descriptor, so the checks hold for the bytes
- * read: the descriptor must be a regular file, and no more than `maxBytes`
- * is read however large the file has grown since the `fstat`. The buffer is
- * sized to the file plus one byte, so a small source costs a small buffer;
- * a file that grew under the cap is read on into one buffer of the cap plus
- * one byte. `bytes` are exactly the bytes read, for a caller that must judge
- * their encoding itself.
- */
-export function readSourceBounded(
-  absolute: string,
-  maxBytes: number,
-):
-  | { readonly text: string; readonly bytes: Uint8Array; readonly unread?: undefined }
-  | { readonly text: null; readonly bytes?: undefined; readonly unread: SourceUnread } {
-  const fd = openSync(absolute, SOURCE_OPEN_FLAGS);
+function appendedExtractionDelta(
+  vault: string,
+  sourceAbs: string,
+  canonicalSource: string,
+): { readonly fromByte: number; readonly toByte: number } | undefined {
+  const entry = readManifest(vault).entries[canonicalSource];
+  const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
+  if (watermark <= 0) return undefined;
+  let size: number;
   try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) return { text: null, unread: SOURCE_UNREAD.notAFile };
-    if (stat.size > maxBytes) return { text: null, unread: SOURCE_UNREAD.tooLarge };
-    // One byte past the size, so growth since the fstat is seen.
-    let buffer = Buffer.allocUnsafe(stat.size + 1);
-    let filled = 0;
-    for (;;) {
-      // A full buffer is under the cap here: past it, the loop has returned.
-      if (filled === buffer.length) buffer = Buffer.concat([buffer], maxBytes + 1);
-      const count = readSync(fd, buffer, filled, buffer.length - filled, null);
-      if (count === 0) break;
-      filled += count;
-      if (filled > maxBytes) return { text: null, unread: SOURCE_UNREAD.tooLarge };
+    size = statSync(sourceAbs).size;
+  } catch {
+    return undefined;
+  }
+  if (size <= watermark) return undefined;
+  if (entry === undefined || !prefixHashMatches(sourceAbs, watermark, entry.sha256)) {
+    return undefined;
+  }
+  const tail = readTail(sourceAbs, watermark, { maxBytes: EXTRACTION_DELTA_MAX_BYTES });
+  if (tail.kind !== "appended") return undefined;
+  return { fromByte: tail.fromByte, toByte: tail.toByte };
+}
+
+/**
+ * Does the SHA-256 of the first `watermark` bytes of `sourceAbs` equal
+ * `expected`? An unreadable or too-short prefix cannot PROVE an append, so
+ * it answers false - the modified classification and its full reprocess are
+ * the safe direction, never a skipped stale delta.
+ */
+function prefixHashMatches(sourceAbs: string, watermark: number, expected: string): boolean {
+  const fd = openSync(sourceAbs, SOURCE_OPEN_FLAGS);
+  try {
+    const hash = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(Math.min(PREFIX_HASH_CHUNK_BYTES, watermark));
+    let position = 0;
+    let remaining = watermark;
+    while (remaining > 0) {
+      const count = readSync(fd, chunk, 0, Math.min(chunk.length, remaining), position);
+      if (count === 0) return false;
+      hash.update(count === chunk.length ? chunk : chunk.subarray(0, count));
+      position += count;
+      remaining -= count;
     }
-    const bytes = buffer.subarray(0, filled);
-    return { text: bytes.toString("utf8"), bytes };
+    return hash.digest("hex") === expected;
   } finally {
     closeSync(fd);
   }
