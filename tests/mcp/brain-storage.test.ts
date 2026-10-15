@@ -6,8 +6,10 @@
  *   1. The tool and `o2b brain storage` derive from one builder: driven
  *      on the same vault state, their reports are equal on every field
  *      except the two per-invocation identity fields (`usage.measuredAt`
- *      and `sample.runId`). No flag-or-property exclusion list is needed
- *      because the payload IS the shared source.
+ *      and `sample.runId`), which are masked to a fixed marker - never
+ *      value-compared, because their values ride the invoking clock and
+ *      can collide when two calls share one tick. No flag-or-property
+ *      exclusion list is needed because the payload IS the shared source.
  *   2. An uncapped vault answers tier `unbounded` - bytes reported, no
  *      invented cap, nothing refused.
  *   3. Each invocation appends exactly one `storage_usage` sample.
@@ -124,6 +126,33 @@ function differingPaths(a: unknown, b: unknown, prefix = ""): string[] {
   return Object.is(a, b) ? [] : [prefix];
 }
 
+/**
+ * The leaf paths whose values are the invoking call's own identity: the
+ * instant the census was taken and the run id the sample was recorded
+ * under. A value comparison over them would make this claim depend on
+ * the clock - two calls that straddle a tick differ, two that share one
+ * collide - so the observed flake. Masking to a fixed marker, instead
+ * of dropping the paths, keeps each field's PRESENCE part of the parity
+ * claim while taking its value off the clock entirely.
+ */
+const INVOCATION_IDENTITY_PATHS: ReadonlyArray<string> = ["sample.runId", "usage.measuredAt"];
+const MASKED_IDENTITY = "<invocation identity>";
+
+/** A deep copy of `value` whose leaves at the invocation identity paths are masked. */
+function maskPaths(value: unknown, prefix = ""): unknown {
+  if (INVOCATION_IDENTITY_PATHS.includes(prefix)) return MASKED_IDENTITY;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(record).map(([key, child]) => [
+        key,
+        maskPaths(child, prefix === "" ? key : `${prefix}.${key}`),
+      ]),
+    );
+  }
+  return value;
+}
+
 describe("brain_storage", () => {
   test("the tool and the verb derive from one source", async () => {
     const fromVerb = await cliReport();
@@ -135,12 +164,11 @@ describe("brain_storage", () => {
     // `format` is the transport's rendering hint, not report content.
     const { format, ...report } = fromTool;
     void format;
-    // Only the per-invocation identity fields may differ: the stamp the
-    // census took and the run id the sample was recorded under.
-    expect(differingPaths(fromVerb, report).toSorted()).toEqual([
-      "sample.runId",
-      "usage.measuredAt",
-    ]);
+    // The two per-invocation identity fields are masked, not excluded
+    // from the diff: masking keeps their presence in the claim while
+    // taking their values off the clock, so two calls that share a tick
+    // and two that straddle one prove the same thing.
+    expect(differingPaths(maskPaths(fromVerb), maskPaths(report))).toEqual([]);
   });
 
   test("an uncapped vault answers unbounded, measured", async () => {
