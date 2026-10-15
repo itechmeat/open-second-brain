@@ -1,0 +1,179 @@
+/**
+ * Receipt surface: scan / compact over the receipt ledgers
+ * (storage-lifecycle, Lane 3 task 3.4).
+ *
+ * One tool, two modes, derived from the shared receipts vocabulary the
+ * `o2b brain receipts` verb uses, so the two surfaces cannot disagree on
+ * the mode names or the `family:name` shard spelling; the responses are
+ * the same views the verb's `--json` renders
+ * (`src/core/brain/receipts/views.ts`), so neither can drift on field
+ * spellings either:
+ *
+ *   - `scan` (default): read-only inventory of both receipt ledgers -
+ *     per-shard record, foldable, protected and unparseable counts with
+ *     byte sizes. Writes nothing.
+ *   - `compact`: fold expired records into per-(kind, month) aggregates
+ *     in EXPLICITLY named shards. Preview-bound: without `apply` it is a
+ *     dry run; with `apply` the core runs the count guard, consults the
+ *     permissions document, takes the recovery point and rewrites each
+ *     shard atomically. The operation names itself receipt compaction -
+ *     deliberately disjoint from the Hermes context-compaction
+ *     vocabulary on every surface.
+ */
+
+import { resolveAgentName } from "../../core/config.ts";
+import { compactReceiptLedgers } from "../../core/brain/receipts/compact.ts";
+import { scanReceiptLedgers } from "../../core/brain/receipts/scan.ts";
+import { compactView, scanView } from "../../core/brain/receipts/views.ts";
+import {
+  isReceiptMode,
+  parseReceiptShardRef,
+  RECEIPT_FOLD_DEFAULT_AGE_DAYS,
+  RECEIPT_MODE,
+  RECEIPT_MODES,
+  type ReceiptShardRef,
+} from "../../core/brain/receipts/types.ts";
+import { CountGuardError } from "../../core/brain/count-guard.ts";
+import { WriteRefusedError } from "../../core/brain/write-disposition.ts";
+import { coerceBool } from "../coerce.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+import { COUNT_GUARD_WIRE_CODE } from "../tool-error-codes.ts";
+import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { readCountGuardArgs } from "./shared.ts";
+
+/** Read and bound the age-threshold argument. */
+function readOlderThanDays(args: Record<string, unknown>): number {
+  const raw = args["older_than_days"];
+  if (raw === undefined || raw === null) return RECEIPT_FOLD_DEFAULT_AGE_DAYS;
+  const days = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(days) || days <= 0) {
+    throw new MCPError(INVALID_PARAMS, "'older_than_days' must be a positive integer");
+  }
+  return days;
+}
+
+/** Parse the explicit `family:name` shard list compact requires. */
+function readShards(args: Record<string, unknown>): ReceiptShardRef[] {
+  const raw = args["shards"];
+  if (!Array.isArray(raw) || raw.length === 0 || !raw.every((v) => typeof v === "string")) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "compact requires explicit 'shards' (array of family:name strings) from a scan",
+    );
+  }
+  return (raw as string[]).map((value) => {
+    try {
+      return parseReceiptShardRef(value);
+    } catch (exc) {
+      throw new MCPError(INVALID_PARAMS, (exc as Error).message);
+    }
+  });
+}
+
+async function toolBrainReceipts(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const mode = args["mode"] ?? RECEIPT_MODE.scan;
+  if (!isReceiptMode(mode)) {
+    throw new MCPError(INVALID_PARAMS, `'mode' must be one of: ${RECEIPT_MODES.join(", ")}`);
+  }
+  const olderThanDays = readOlderThanDays(args);
+
+  if (mode === RECEIPT_MODE.scan) {
+    return scanView(scanReceiptLedgers(ctx.vault, { olderThanDays, now: new Date() }));
+  }
+
+  const shards = readShards(args);
+  const apply = coerceBool(args, "apply") === true;
+  const { expect, strict } = readCountGuardArgs(args);
+  try {
+    const result = compactReceiptLedgers(ctx.vault, {
+      shards,
+      olderThanDays,
+      now: new Date(),
+      dryRun: !apply,
+      expect,
+      strict,
+      subject: ctx.requestIdentity ?? {
+        agent: resolveAgentName(ctx.configPath ?? undefined),
+        via: "config",
+      },
+      configPath: ctx.configPath ?? undefined,
+    });
+    return compactView(result);
+  } catch (err) {
+    // The caller's fault, by name: a permissions-document rule denied the
+    // compact, or the count guard measured a different population than
+    // the `expect` asserted - the mismatch numbers are the whole remedy,
+    // so they travel beside the code.
+    if (err instanceof WriteRefusedError) {
+      throw new MCPError(INVALID_PARAMS, `brain_receipts: ${err.message}`, {
+        code: err.code,
+        rule: err.rule,
+        agent: err.agent,
+        next_command: err.nextCommand,
+      });
+    }
+    if (err instanceof CountGuardError) {
+      throw new MCPError(INVALID_PARAMS, `brain_receipts: ${err.message}`, {
+        code: COUNT_GUARD_WIRE_CODE,
+        matched: err.matched,
+        expected: err.expected,
+      });
+    }
+    throw err;
+  }
+}
+
+export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
+  {
+    name: "brain_receipts",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Receipt compaction over the append-only receipt ledgers (continuity log, metrics sink). " +
+      "`scan` (default): read-only per-shard inventory of record, foldable, protected and " +
+      "unparseable counts. `compact`: fold records older than the age threshold into per-kind, " +
+      "per-month aggregate lines in EXPLICITLY named shards; previews without `apply`, and a " +
+      "confirmed run takes a recovery point first. Never touches decision-change receipts, the " +
+      "source archive, or the context-compaction records.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: [...RECEIPT_MODES],
+          description: "Surface mode: scan, compact. Default `scan`.",
+        },
+        older_than_days: {
+          type: "integer",
+          minimum: 1,
+          description: `Age threshold for foldable records. Default ${RECEIPT_FOLD_DEFAULT_AGE_DAYS}.`,
+        },
+        shards: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Shards to compact, as `family:name` ids from a scan (compact mode; required there).",
+        },
+        apply: {
+          type: "boolean",
+          description: "Perform the fold (compact mode). Without it compact is a dry run.",
+        },
+        expect: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Count guard (compact mode): assert exactly N records will fold. On mismatch the run aborts without writing.",
+        },
+        strict: {
+          type: "boolean",
+          description: "Refuse a guardless confirmed compact (no `expect`). Default false.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainReceipts,
+  },
+]);

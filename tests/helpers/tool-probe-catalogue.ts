@@ -296,8 +296,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 101;
-export const PROBE_RECIPE_COUNT = 235;
+export const PROBE_ENTRY_COUNT = 102;
+export const PROBE_RECIPE_COUNT = 237;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -921,6 +921,21 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { operation: "gate_summary" }, reason: REASON.ownerlessLane },
       { args: { operation: "observed_reuse" }, reason: REASON.ownerlessLane },
       { args: { operation: "cost" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_receipts",
+    calls: [
+      // Default mode is the scan: counts, byte sizes and vault-relative
+      // shard paths over the receipt ledgers, which carry no `owner:`
+      // field to filter on - the same lane as the telemetry above.
+      { args: {}, reason: REASON.ownerlessLane },
+      // A dry-run compact over an absent shard: the fold plan and the
+      // collected unreadable-shard failure, no write and no record body.
+      {
+        args: { mode: "compact", shards: ["continuity:receipt-probe-absent.jsonl"] },
+        reason: REASON.ownerlessLane,
+      },
     ],
   },
   {

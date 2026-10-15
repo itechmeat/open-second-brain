@@ -54,6 +54,52 @@ export function isReceiptLedgerFamily(value: unknown): value is ReceiptLedgerFam
 export const RECEIPT_COMPACTION_OPERATION = "receipt compaction";
 
 /**
+ * The two surface modes, shared by the CLI verb and the MCP tool so the
+ * tool's input schema and the verb's usage line cannot disagree. `scan`
+ * is the default and writes nothing; `compact` previews unless the
+ * caller applies it, and never runs without explicit shard ids.
+ */
+export const RECEIPT_MODE = Object.freeze({
+  scan: "scan",
+  compact: "compact",
+} as const);
+
+/** Closed union over {@link RECEIPT_MODE}. */
+export type ReceiptMode = (typeof RECEIPT_MODE)[keyof typeof RECEIPT_MODE];
+
+/** Every mode, in surface order. */
+export const RECEIPT_MODES: ReadonlyArray<ReceiptMode> = Object.freeze([
+  RECEIPT_MODE.scan,
+  RECEIPT_MODE.compact,
+]);
+
+/** Narrow an unvalidated mode from a CLI flag or a tool argument. */
+export function isReceiptMode(value: unknown): value is ReceiptMode {
+  return typeof value === "string" && (RECEIPT_MODES as ReadonlyArray<string>).includes(value);
+}
+
+/**
+ * Parse one `family:name` shard reference as the surfaces spell it. The
+ * same parser the shard-name grammar enforces, so a flag that names no
+ * real shard is a usage error on both surfaces, before anything runs.
+ */
+export function parseReceiptShardRef(value: string): ReceiptShardRef {
+  const separator = value.indexOf(":");
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error(`'${value}' is not a family:name shard reference`);
+  }
+  const family = value.slice(0, separator);
+  const name = value.slice(separator + 1);
+  if (!isReceiptLedgerFamily(family)) {
+    throw new Error(
+      `'${value}' names unknown ledger family '${family}'; expected one of: ` +
+        RECEIPT_LEDGER_FAMILIES.join(", "),
+    );
+  }
+  return Object.freeze({ family, name });
+}
+
+/**
  * The schema stamp on a fold aggregate line. A line carrying this stamp
  * is not a record: it is the per-(kind, month) summary the fold engine
  * replaced a run of expired records with. Both ledger readers tolerate
