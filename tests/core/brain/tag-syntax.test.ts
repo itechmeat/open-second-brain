@@ -27,6 +27,7 @@ import {
   TagSyntaxError,
   isObsidianTagValue,
   requireObsidianTagValue,
+  scopeTagValues,
 } from "../../../src/core/brain/tag-syntax.ts";
 
 describe("isObsidianTagValue — the one shared rule", () => {
@@ -126,5 +127,44 @@ describe("requireObsidianTagValue / TagSyntaxError", () => {
       "extraTags: must start with a letter or underscore and contain only " +
         "letters, numbers, dashes, underscores, or slashes (never only digits)",
     );
+  });
+});
+
+describe("scopeTagValues", () => {
+  test.each([
+    ["a single segment", "alpha", ["alpha"]],
+    ["a comma list, trimmed", "alpha, beta", ["alpha", "beta"]],
+    ["empty segments skipped", "alpha,, ,beta", ["alpha", "beta"]],
+    ["duplicates collapsed", "alpha,beta,alpha", ["alpha", "beta"]],
+  ])("strict: %s", (_label, scope, expected) => {
+    expect(scopeTagValues(scope)).toEqual(expected);
+  });
+
+  test("strict: a failing segment throws naming the field, the token and the record", () => {
+    let thrown: unknown;
+    try {
+      scopeTagValues("alpha,front end", { record: "pref-example" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    const err = thrown as TagSyntaxError;
+    expect(err.field).toBe("scope");
+    expect(err.token).toBe("front end");
+    expect(err.message).toContain("fix the scope field of pref-example");
+  });
+
+  test("strict: without a record the message omits the record hint", () => {
+    expect(() => scopeTagValues("front end")).toThrow(TagSyntaxError);
+    expect(() => scopeTagValues("front end")).not.toThrow(/fix the scope field/);
+  });
+
+  test.each([
+    ["slugifies a failing segment", "front end", ["front-end"]],
+    ["keeps valid segments beside a slugified one", "alpha,front end", ["alpha", "front-end"]],
+    ["drops a segment whose slug still fails", "alpha,2024", ["alpha"]],
+    ["dedupes after slugging", "front end, front-end", ["front-end"]],
+  ])("lenient: %s", (_label, scope, expected) => {
+    expect(scopeTagValues(scope, { lenient: true })).toEqual(expected);
   });
 });

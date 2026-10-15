@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -259,5 +259,36 @@ describe("mergePreferences — happy path", () => {
     mergePreferences(vault, "pref-keep", "pref-drop", { now: NOW });
     const keep = parsePreference(join(vault, "Brain", "preferences", "pref-keep.md"));
     expect(keep.pinned).toBe(true);
+  });
+});
+
+describe("mergePreferences — legacy keep scope", () => {
+  test("a keep record with a pre-v1.78.0 invalid scope still merges, tagging the slug", () => {
+    const { path } = writePreference(vault, basePref("keep", { scope: "frontend" }));
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8")
+        .replace("scope: frontend", "scope: front end")
+        .replace("brain/scope/frontend", '"brain/scope/front end"'),
+    );
+    // Guard against a writer format change turning the edit into a no-op.
+    const edited = readFileSync(path, "utf8");
+    expect(edited).toContain("scope: front end");
+    expect(edited).toContain('"brain/scope/front end"');
+    // Merge requires matching scopes; the drop record carries the same legacy value.
+    const { path: dropPath } = writePreference(vault, basePref("drop", { scope: "frontend" }));
+    writeFileSync(
+      dropPath,
+      readFileSync(dropPath, "utf8")
+        .replace("scope: frontend", "scope: front end")
+        .replace("brain/scope/frontend", '"brain/scope/front end"'),
+    );
+
+    expect(() => mergePreferences(vault, "pref-keep", "pref-drop", { now: NOW })).not.toThrow();
+
+    const raw = readFileSync(path, "utf8");
+    expect(raw).toContain("brain/scope/front-end");
+    expect(raw).not.toContain("brain/scope/front end");
+    expect(parsePreference(path).scope).toBe("front end");
   });
 });
