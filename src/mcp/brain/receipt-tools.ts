@@ -113,15 +113,18 @@ async function toolBrainReceipts(
   // no shard list, no figures, no write lane entered. The scan above
   // stays readable at any reach: it writes nothing.
   if (contextReach(ctx) !== TRANSPORT_REACH.local) {
-    const refusal: ReceiptCompactRefusal = {
+    // Returned as the literal, `satisfies`-checked against the refusal
+    // interface: the handler's wire type is Record<string, unknown>, and
+    // a value held in the interface's name would not carry the index
+    // signature that type asks for.
+    return {
       operation: RECEIPT_COMPACTION_OPERATION,
       measured: false,
       reason: RECEIPT_COMPACT_REACH_REASON satisfies ReceiptCompactRefusalReason,
       detail:
         "receipt compaction folds records in named ledger shards and reports " +
         "whole-ledger byte totals; it answers at local reach only",
-    };
-    return refusal;
+    } satisfies ReceiptCompactRefusal;
   }
 
   const shards = readShards(args);

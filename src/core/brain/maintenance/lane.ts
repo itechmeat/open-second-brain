@@ -540,7 +540,12 @@ export async function runMaintenance(
               capacity_tier: capacity.tier,
               // The reading rides the row the way the pressure percent
               // does - written together, only when the gate took one.
-              ...(capacity.measured_bytes !== null
+              // All three figures come from one reading, so the guard
+              // names each field it writes: the journal entry carries no
+              // null reading, only an absent one.
+              ...(capacity.measured_bytes !== null &&
+              capacity.capacity_percent !== null &&
+              capacity.cap_bytes !== null
                 ? {
                     capacity_percent: capacity.capacity_percent,
                     capacity_measured_bytes: capacity.measured_bytes,

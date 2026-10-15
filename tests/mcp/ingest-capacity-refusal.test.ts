@@ -38,7 +38,7 @@ import { STORAGE_USAGE_METRIC_SURFACE } from "../../src/core/brain/storage/forec
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { isToolErrorCode } from "../../src/mcp/tool-error-codes.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -71,7 +71,10 @@ interface Fixture {
   readonly server: MCPServer;
 }
 
-function fixture(capBytes: number | undefined, reach = TRANSPORT_REACH.local): Fixture {
+function fixture(
+  capBytes: number | undefined,
+  reach: TransportReach = TRANSPORT_REACH.local,
+): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-ingest-cap-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -243,7 +246,10 @@ describe("the admission refusal at the caller's reach", () => {
     expect(refused).toBeDefined();
     expect(refused!.code).toBe(INVALID_PARAMS);
     expect(String(refused!.message)).toContain("capacity_exhausted");
-    const data = refused!.data ?? {};
+    // The admission envelope is always built as a record (the refusal
+    // mapper spreads the leaf's fields into one), so the keys below are
+    // read off that record.
+    const data = (refused!.data ?? {}) as Record<string, unknown>;
     expect(data["code"]).toBe("capacity_exhausted");
     for (const key of FIGURE_KEYS) {
       expect(Object.hasOwn(data, key)).toBe(false);
