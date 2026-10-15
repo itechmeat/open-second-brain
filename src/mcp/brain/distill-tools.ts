@@ -152,8 +152,12 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // Note the asymmetry with `brain_intake_entities`, whose quarantine holds
     // by DEFAULT: it works through `status: quarantine` plus the entity page
     // status scope, which nothing gates. The same words mean less here.
+    //
+    // Session-mining-economy: the legacy boolean alone now mounts the gate
+    // in the measure-only shadow mode, so exclusion requires the mode to
+    // name `enforce` explicitly. The description states both keys.
     description:
-      "Distill one source into atomic claims; runs no model, checks quotes. Writes one idempotent page citing each claim as `[[source#^block]]`. A source outside this vault is marked `untrusted_source`, which ordinary reads still return unless `search_trust_gate_enabled` is on. `trust` names the lane.",
+      "Distill one source into atomic claims; runs no model, checks quotes. Writes an idempotent page citing each claim as `[[source#^block]]`. `untrusted_source` pages surface unless the gate enforces (`search_trust_gate_mode: enforce`; `search_trust_gate_enabled` alone measures). `trust` names the lane.",
     inputSchema: {
       type: "object",
       properties: {

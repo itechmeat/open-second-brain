@@ -10,6 +10,8 @@ import { test, expect, describe } from "bun:test";
 import {
   buildMemoryTrustAssessment,
   buildRetrievalDecisionTrace,
+  RETRIEVAL_TRUST_REFUSAL_LANE,
+  type RetrievalTrustRefusal,
 } from "../../../../src/core/brain/trust/retrieval-receipts.ts";
 import type { RankAdjustExclusion } from "../../../../src/core/search/rank-adjust.ts";
 
@@ -86,5 +88,84 @@ describe("buildMemoryTrustAssessment", () => {
       quarantined: 0,
       reason_counts: {},
     });
+  });
+});
+
+// ── Shadow measurements (session-mining-economy, t_05a0eaa4) ────────────────
+
+const poolRefusal: RetrievalTrustRefusal = Object.freeze({
+  document_id: 4,
+  chunk_id: 40,
+  path: "would-be.md",
+  reasons: Object.freeze(["trust_gate:self_approval_quarantine"]),
+  lane: RETRIEVAL_TRUST_REFUSAL_LANE.pool,
+});
+const secondPoolRefusal: RetrievalTrustRefusal = Object.freeze({
+  document_id: 5,
+  chunk_id: 50,
+  path: "would-be-2.md",
+  reasons: Object.freeze(["trust_gate:entity_contamination"]),
+  lane: RETRIEVAL_TRUST_REFUSAL_LANE.pool,
+});
+const armRefusal: RetrievalTrustRefusal = Object.freeze({
+  document_id: 6,
+  chunk_id: 60,
+  path: "arm-reached.md",
+  reasons: Object.freeze(["relational_arm:entity_contamination"]),
+  lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+});
+
+describe("shadow refusals on the receipts", () => {
+  test("the trace keeps excluded untouched and reports refusals beside it", () => {
+    const trace = buildRetrievalDecisionTrace({
+      surfaced: 5,
+      excluded: [],
+      shadow: { refusals: [poolRefusal, armRefusal] },
+    });
+    expect(trace).toEqual({
+      evaluated: 5,
+      surfaced: 5,
+      excluded: 0,
+      exclusions: [],
+      mode: "shadow",
+      refused: 2,
+      refusals: [poolRefusal, armRefusal],
+    });
+  });
+
+  test("without shadow input the trace keeps today's exact shape", () => {
+    const trace = buildRetrievalDecisionTrace({ surfaced: 1, excluded: [] });
+    expect(Object.keys(trace)).toEqual(["evaluated", "surfaced", "excluded", "exclusions"]);
+  });
+
+  test("the assessment reports refused counts per lane, never folded into quarantined", () => {
+    const assessment = buildMemoryTrustAssessment({
+      surfaced: 5,
+      excluded: exclusions,
+      shadow: { refusals: [poolRefusal, secondPoolRefusal, armRefusal] },
+    });
+    expect(assessment.mode).toBe("shadow");
+    // `quarantined` keeps meaning actually dropped; the measured-only
+    // refusals ride beside it, split per lane.
+    expect(assessment.quarantined).toBe(2);
+    expect(assessment.refused).toBe(3);
+    expect(assessment.refusals_by_lane).toEqual({ arm: 1, pool: 2 });
+    expect(assessment.refused_reason_counts).toEqual({
+      arm: { "relational_arm:entity_contamination": 1 },
+      pool: {
+        "trust_gate:entity_contamination": 1,
+        "trust_gate:self_approval_quarantine": 1,
+      },
+    });
+  });
+
+  test("without shadow input the assessment keeps today's exact shape", () => {
+    const assessment = buildMemoryTrustAssessment({ surfaced: 4, excluded: [] });
+    expect(Object.keys(assessment)).toEqual([
+      "evaluated",
+      "surfaced",
+      "quarantined",
+      "reason_counts",
+    ]);
   });
 });

@@ -44,6 +44,8 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP",
   "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
   "OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION",
+  "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE",
+  "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE",
 ];
 
 beforeEach(() => {
@@ -508,4 +510,97 @@ test("the bench pin accepts the pool-cap knob name in a recall pin", () => {
   expect(() => parseBenchPinnedKnobs('{"recall":{"poolCapNonsense":2}}')).toThrow(
     /poolCapNonsense.*not a known knob/,
   );
+});
+
+// ── Retrieval trust gate mode (session-mining-economy, t_05a0eaa4) ──────────
+
+test("the trust gate mode defaults off and stays absent from the resolved recall config", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const recall = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  expect(recall.searchTrustGateMode).toBeUndefined();
+  // Spread-omitted at off: exact-shape assertions on the resolved config
+  // keep holding, exactly like the other opt-in recall fields.
+  expect(Object.keys(recall)).not.toContain("searchTrustGateMode");
+});
+
+test("an explicit trust gate mode resolves from config, env winning", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_mode: "shadow"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe("shadow");
+
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_mode: "enforce"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe(
+    "enforce",
+  );
+
+  process.env["OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE"] = "shadow";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe("shadow");
+});
+
+test("the legacy boolean maps true to shadow and false to off", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_enabled: true\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe("shadow");
+
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_enabled: false\n`);
+  expect(
+    resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode,
+  ).toBeUndefined();
+});
+
+test("an explicit mode wins over the legacy boolean, including explicit off", () => {
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_trust_gate_enabled: true\nsearch_trust_gate_mode: "off"\n`,
+  );
+  expect(
+    resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode,
+  ).toBeUndefined();
+
+  writeFileSync(
+    configPath,
+    `vault: "${tmp}"\nsearch_trust_gate_enabled: false\nsearch_trust_gate_mode: "enforce"\n`,
+  );
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe(
+    "enforce",
+  );
+});
+
+test("an invalid trust gate mode is refused naming the key in force", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_mode: "measure"\n`);
+  let err: SearchError | null = null;
+  try {
+    resolveSearchConfig({ vault: tmp, configPath });
+  } catch (e) {
+    err = e as SearchError;
+  }
+  expect(err?.code).toBe("INVALID_INPUT");
+  expect(err?.message).toContain("search_trust_gate_mode");
+  expect(err?.message).toContain("measure");
+
+  // Env in force: the refusal names the env var, never the config key
+  // that lost the precedence race.
+  process.env["OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE"] = "maybe";
+  let envMessage = "";
+  try {
+    resolveSearchConfig({ vault: tmp, configPath });
+  } catch (e) {
+    envMessage = (e as Error).message;
+  }
+  expect(envMessage).toContain("OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE");
+  expect(envMessage).not.toContain("search_trust_gate_mode must");
+});
+
+test("a trust gate mode change re-keys the config fingerprint", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const off = resolveSearchConfig({ vault: tmp, configPath });
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_mode: "shadow"\n`);
+  const shadow = resolveSearchConfig({ vault: tmp, configPath });
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_mode: "enforce"\n`);
+  const enforce = resolveSearchConfig({ vault: tmp, configPath });
+
+  // The mode decides whether the gate excludes, so a change must
+  // invalidate cached rows; the legacy boolean entry already re-keyed,
+  // and the mode adds its own dimension on top.
+  expect(configFingerprint(shadow)).not.toBe(configFingerprint(off));
+  expect(configFingerprint(enforce)).not.toBe(configFingerprint(shadow));
+  expect(configFingerprint(enforce)).not.toBe(configFingerprint(off));
 });

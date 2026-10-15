@@ -410,6 +410,9 @@ describe("decision-model rerank under the hybrid deadline", () => {
       decision_model_timeout_ms: String(DECISION_TIMEOUT_MS),
       search_hybrid_deadline_ms: String(DEADLINE_MS),
       search_trust_gate_enabled: "true",
+      // The gate must EXCLUDE here, and the legacy boolean alone now
+      // measures (shadow): enforcement is named explicitly.
+      search_trust_gate_mode: "enforce",
     });
     await indexVault(cfg);
     server.setReply(() => ({ hang: true }));

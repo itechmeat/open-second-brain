@@ -324,13 +324,16 @@ test("the new code rides the closed vocabulary and its sentence names the deadli
   expect(sentence.toLowerCase()).toContain("deadline");
 });
 
-/** Keyword-only config, trust gate on, remote rerank at `rerankBaseUrl`. */
+/** Keyword-only config, trust gate enforcing, remote rerank at `rerankBaseUrl`. */
 function stalledRerankConfig(opts: { cacheEnabled?: boolean; rerankBaseUrl?: string } = {}) {
   return {
     ...makeConfig({
       vault,
       dbPath,
       retrievalTrustGateEnabled: true,
+      // The gate must EXCLUDE here, and the legacy boolean alone now
+      // measures (shadow): enforcement is named explicitly.
+      searchTrustGateMode: "enforce",
       cacheEnabled: opts.cacheEnabled ?? false,
       rerank: {
         enabled: true,

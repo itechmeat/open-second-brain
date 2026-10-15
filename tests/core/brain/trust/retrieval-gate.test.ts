@@ -14,7 +14,9 @@ import { test, expect, describe } from "bun:test";
 
 import {
   RETRIEVAL_TRUST_EXCLUSION_REASON,
+  RETRIEVAL_TRUST_GATE_NAME,
   classifyRetrievalTrust,
+  collectTrustGateRefusals,
   trustGateAdjuster,
 } from "../../../../src/core/brain/trust/retrieval-gate.ts";
 import { UNTRUSTED_SOURCE_TAG } from "../../../../src/core/brain/untrusted-source.ts";
@@ -67,10 +69,18 @@ describe("classifyRetrievalTrust", () => {
   });
 });
 
-function result(path: string): BrainSearchResult {
+/** Mixed-signal frontmatter map keyed by the path names the tests use. */
+const frontmatter = (path: string): FrontmatterMap =>
+  path === "bad.md"
+    ? { status: "quarantine", [UNTRUSTED_SOURCE_TAG]: true }
+    : path === "tainted.md"
+      ? { [ENTITY_CONTAMINATION_FRONTMATTER_KEY]: true }
+      : {};
+
+function result(path: string, chunkId = 10): BrainSearchResult {
   return Object.freeze({
     documentId: 1,
-    chunkId: 10,
+    chunkId,
     path,
     title: null,
     content: "body",
@@ -100,5 +110,63 @@ describe("trustGateAdjuster", () => {
   test("keeps a clean candidate", () => {
     const adjuster = trustGateAdjuster(() => ({ status: "confirmed" }));
     expect(adjuster.adjust(result("ok.md"))).toEqual({ kind: "keep" });
+  });
+
+  test("under shadow the classification runs but every candidate is kept", () => {
+    const saw: string[] = [];
+    const adjuster = trustGateAdjuster((path) => {
+      saw.push(path);
+      return path === "bad.md" ? { status: "quarantine" } : {};
+    }, "shadow");
+    expect(adjuster.adjust(result("bad.md"))).toEqual({ kind: "keep" });
+    expect(adjuster.adjust(result("ok.md"))).toEqual({ kind: "keep" });
+    // The classification itself still ran over the candidate.
+    expect(saw).toEqual(["bad.md", "ok.md"]);
+  });
+
+  test("enforce named explicitly behaves exactly as the default", () => {
+    const adjuster = trustGateAdjuster(
+      (path): FrontmatterMap => (path === "bad.md" ? { status: "quarantine" } : {}),
+      "enforce",
+    );
+    expect(adjuster.adjust(result("bad.md"))).toEqual({
+      kind: "exclude",
+      reason: RETRIEVAL_TRUST_EXCLUSION_REASON.selfApprovalQuarantine,
+    });
+  });
+});
+
+describe("collectTrustGateRefusals", () => {
+  test("records every would-be refusal with all its structural reasons, pool lane", () => {
+    const refusals = collectTrustGateRefusals(
+      [result("bad.md", 10), result("ok.md", 11), result("tainted.md", 12)],
+      frontmatter,
+    );
+    expect(refusals).toEqual([
+      {
+        document_id: 1,
+        chunk_id: 10,
+        path: "bad.md",
+        reasons: [
+          `${RETRIEVAL_TRUST_GATE_NAME}:${RETRIEVAL_TRUST_EXCLUSION_REASON.selfApprovalQuarantine}`,
+          `${RETRIEVAL_TRUST_GATE_NAME}:${RETRIEVAL_TRUST_EXCLUSION_REASON.untrustedSourceProvenance}`,
+        ],
+        lane: "pool",
+      },
+      {
+        document_id: 1,
+        chunk_id: 12,
+        path: "tainted.md",
+        reasons: [
+          `${RETRIEVAL_TRUST_GATE_NAME}:${RETRIEVAL_TRUST_EXCLUSION_REASON.entityContamination}`,
+        ],
+        lane: "pool",
+      },
+    ]);
+  });
+
+  test("a clean pool collects nothing", () => {
+    expect(collectTrustGateRefusals([result("ok.md")], frontmatter)).toEqual([]);
+    expect(collectTrustGateRefusals([], frontmatter)).toEqual([]);
   });
 });

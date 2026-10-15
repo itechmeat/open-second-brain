@@ -32,6 +32,7 @@ import type {
   MemoryTrustAssessment,
   RetrievalDecisionTrace,
 } from "../brain/trust/retrieval-receipts.ts";
+import type { SearchTrustGateMode } from "../brain/trust/retrieval-gate.ts";
 import type { RetrievalTrail } from "./retrieval-trail.ts";
 import type { ProviderProbeState } from "./provider-probe.ts";
 
@@ -1691,6 +1692,21 @@ export interface ResolvedRecallConfig {
    * outcome shape byte-identical.
    */
   readonly retrievalTrustGateEnabled: boolean;
+  /**
+   * The retrieval trust gate's resolved mode (session-mining-economy,
+   * t_05a0eaa4): `off` (the gate does not run - ranking and the outcome
+   * shape stay byte-identical, so this value stays absent from the
+   * resolved config like every other opt-in recall field), `shadow`
+   * (the classification runs, nothing is excluded, every would-be
+   * refusal is recorded with its structural reasons into the receipts)
+   * or `enforce` (today's excluding behavior, made explicit). Resolved
+   * as the explicit `search_trust_gate_mode` key (env
+   * OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE), else the legacy
+   * `search_trust_gate_enabled` boolean mapped true to shadow, else off.
+   * The mode rides the query-cache key, and the explain envelope names
+   * it under shadow.
+   */
+  readonly searchTrustGateMode?: SearchTrustGateMode;
   /**
    * Relation-only supersede fade (t_c4a9cef8), kernel 1's second
    * consumer. Off by default: when true, a candidate a surfaced

@@ -30,6 +30,10 @@ import {
 } from "./embeddings/credential-report.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
+import {
+  resolveSearchTrustGateMode,
+  SEARCH_TRUST_GATE_MODE,
+} from "../brain/trust/retrieval-gate.ts";
 import { INPUT_WINDOW_TOKENS_KEY, resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
 import {
   EMBEDDING_PRICE_MODEL_ENV,
@@ -1314,6 +1318,12 @@ export function resolveSearchConfig(opts: {
     false,
     "search_trust_gate_enabled",
   );
+  // The gate's mode (session-mining-economy, t_05a0eaa4): an explicit
+  // `search_trust_gate_mode` wins (invalid values refused naming the key
+  // in force, `parseFusionMode` discipline), else the legacy boolean
+  // above maps true to shadow and false to off. The refusal for a bad
+  // legacy boolean is the `parseBool` one above, naming that key.
+  const searchTrustGateMode = resolveSearchTrustGateMode({ env, config });
   const supersedeFadeEnabled = parseBool(
     envOrConfig(
       env,
@@ -1484,6 +1494,9 @@ export function resolveSearchConfig(opts: {
     relationalArmEnabled,
     metadataBoostGateEnabled,
     retrievalTrustGateEnabled,
+    // Only the off value stays absent (the relationalRerankPin pattern),
+    // so exact-shape assertions on the resolved config keep holding.
+    ...(searchTrustGateMode !== SEARCH_TRUST_GATE_MODE.off ? { searchTrustGateMode } : {}),
     supersedeFadeEnabled,
     learnedWeightsEnabled,
     activationEnabled,

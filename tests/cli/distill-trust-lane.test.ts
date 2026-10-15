@@ -22,12 +22,14 @@
  * flag-gated, so its guarantee holds by default. A distillation page has
  * only the flag-gated retrieval trust gate, so the same words mean less.
  *
- * These tests pin all three facts at once: the default resolves the gate
- * off, an ordinary search DOES return the untrusted page with that
- * default, and the same search stops returning it once the setting is on.
- * The description is then required to name that setting - so if the
- * default is ever flipped to true, the last test fails and the wording
- * gets revisited rather than silently becoming understated.
+ * These tests pin the facts at once: the default resolves the gate off,
+ * an ordinary search DOES return the untrusted page with that default,
+ * the legacy boolean alone now mounts the gate in shadow (the page still
+ * returns, the refusal is counted), and the same search stops returning
+ * it once the gate is named enforcing. The description is then required
+ * to name that setting - so if the default is ever flipped, the last
+ * test fails and the wording gets revisited rather than silently
+ * becoming understated.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -112,8 +114,27 @@ describe("the quarantine is real, and it is opt-in", () => {
     expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(true);
   });
 
-  test("with the gate enabled, the same search stops returning it", async () => {
+  test("with the legacy boolean alone, the search still returns it - the gate measures in shadow", async () => {
+    // Session-mining-economy: the legacy boolean alone maps to the
+    // measure-only mode, so the page surfaces and the refusal is counted.
     const path = await seedDistillation(`${TRUST_GATE_CONFIG_KEY}: true\n`);
+    const paths = await queryPaths();
+    expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(true);
+    const explain = await runCli(["search", CLAIM_TERM, "--json", "--explain", "--limit", "20"], {
+      env: env(),
+    });
+    expect(explain.returncode).toBe(0);
+    const payload = JSON.parse(explain.stdout) as {
+      retrieval_decision_trace?: { readonly mode?: string; readonly refused?: number };
+    };
+    expect(payload.retrieval_decision_trace?.mode).toBe("shadow");
+    expect(payload.retrieval_decision_trace?.refused).toBeGreaterThanOrEqual(1);
+  });
+
+  test("with the gate enforcing, the same search stops returning it", async () => {
+    const path = await seedDistillation(
+      `${TRUST_GATE_CONFIG_KEY}: true\nsearch_trust_gate_mode: enforce\n`,
+    );
     const paths = await queryPaths();
     expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(false);
   });

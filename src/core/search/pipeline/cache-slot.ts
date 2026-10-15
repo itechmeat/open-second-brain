@@ -298,6 +298,11 @@ export function configFingerprint(config: ResolvedSearchConfig): string {
     relPol: r.relationPolarityEnabled,
     relArm: r.relationalArmEnabled,
     trustGate: r.retrievalTrustGateEnabled,
+    // The gate's resolved mode decides whether the gate excludes, so a
+    // shadow or enforce row must never be served under an off key.
+    // Present only when a mode is resolved (off stays absent), so every
+    // off key is unchanged from the pre-mode one.
+    ...(r.searchTrustGateMode !== undefined ? { trustGateMode: r.searchTrustGateMode } : {}),
     supFade: r.supersedeFadeEnabled,
     lw: r.learnedWeightsEnabled,
     // Cross-encoder rerank re-orders the cached outcome, so a toggle or

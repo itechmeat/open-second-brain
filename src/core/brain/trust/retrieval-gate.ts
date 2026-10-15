@@ -20,9 +20,19 @@
  *
  * A quarantined candidate is never silently dropped: kernel 1 records it
  * with these reasons into the retrieval_decision_trace receipt.
+ *
+ * The gate runs under a resolved tri-state mode
+ * ({@link SEARCH_TRUST_GATE_MODE}, session-mining-economy t_05a0eaa4):
+ * `enforce` excludes as described above, `shadow` runs the same
+ * classification, excludes nothing and records every would-be refusal
+ * with its structural reasons into the receipts, and `off` - the default
+ * - does not run the gate at all, keeping ranking and the outcome shape
+ * byte-identical. The legacy boolean enable flag maps `true` to `shadow`.
  */
 
 import type { FrontmatterMap } from "../../types.ts";
+import { envOrConfig, parseBool } from "../../validate.ts";
+import { SearchError } from "../../search/search-error.ts";
 import {
   excludeVerdict,
   keepVerdict,
@@ -31,6 +41,7 @@ import {
 } from "../../search/rank-adjust.ts";
 import type { BrainSearchResult } from "../../search/types.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
+import { RETRIEVAL_TRUST_REFUSAL_LANE, type RetrievalTrustRefusal } from "./retrieval-receipts.ts";
 import { hasUntrustedSourceMarker } from "./untrusted-provenance.ts";
 import { hasEntityContaminationMarker } from "../truth/contamination.ts";
 
@@ -46,6 +57,78 @@ export const RETRIEVAL_TRUST_EXCLUSION_REASON = Object.freeze({
   untrustedSourceProvenance: "untrusted_source_provenance",
   entityContamination: "entity_contamination",
 } as const);
+
+/**
+ * The resolved posture of the gate (session-mining-economy, t_05a0eaa4):
+ *   - `off`     - the gate does not run; ranking and the outcome shape
+ *                 stay byte-identical,
+ *   - `shadow`  - the classification runs, nothing is excluded, and every
+ *                 would-be refusal is recorded with its structural reasons
+ *                 into the receipts,
+ *   - `enforce` - today's excluding behavior, made explicit.
+ */
+export const SEARCH_TRUST_GATE_MODE = Object.freeze({
+  off: "off",
+  shadow: "shadow",
+  enforce: "enforce",
+} as const);
+
+export type SearchTrustGateMode =
+  (typeof SEARCH_TRUST_GATE_MODE)[keyof typeof SEARCH_TRUST_GATE_MODE];
+
+/** A mode under which the gate actually runs: shadow or enforce. */
+export type ActiveSearchTrustGateMode = Exclude<SearchTrustGateMode, "off">;
+
+/** True when `value` is one of the three mode tokens. */
+export function isSearchTrustGateMode(value: string): value is SearchTrustGateMode {
+  return (Object.values(SEARCH_TRUST_GATE_MODE) as string[]).includes(value);
+}
+
+/** Environment variable for the trust gate mode. */
+export const SEARCH_TRUST_GATE_MODE_ENV = "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE";
+/** Machine-config key for the trust gate mode. */
+export const SEARCH_TRUST_GATE_MODE_CONFIG = "search_trust_gate_mode";
+/** Environment variable of the legacy boolean enable flag. */
+export const SEARCH_TRUST_GATE_LEGACY_ENV = "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE";
+/** Machine-config key of the legacy boolean enable flag. */
+export const SEARCH_TRUST_GATE_LEGACY_CONFIG = "search_trust_gate_enabled";
+
+/**
+ * Resolve the gate's mode: an explicit mode key wins (env over machine
+ * config; an invalid value is a misconfiguration refused with a
+ * `SearchError` naming the key actually in force - never silently
+ * defaulted); absent the mode key, the legacy boolean maps `true` to
+ * `shadow` and `false` to `off`; with neither set the default is `off`.
+ * Shadow is non-destructive precisely so enablement can be the first
+ * step: a vault that wants the excluding behavior names `enforce`.
+ */
+export function resolveSearchTrustGateMode(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly config?: Readonly<Record<string, string>>;
+}): SearchTrustGateMode {
+  const env = input.env ?? {};
+  const config = input.config ?? {};
+  const raw = envOrConfig(env, config, SEARCH_TRUST_GATE_MODE_ENV, SEARCH_TRUST_GATE_MODE_CONFIG);
+  if (raw !== null) {
+    if (isSearchTrustGateMode(raw)) return raw;
+    const inForce = env[SEARCH_TRUST_GATE_MODE_ENV]
+      ? SEARCH_TRUST_GATE_MODE_ENV
+      : SEARCH_TRUST_GATE_MODE_CONFIG;
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${inForce} must be 'off', 'shadow' or 'enforce', got '${raw}'`,
+    );
+  }
+  const legacy = envOrConfig(
+    env,
+    config,
+    SEARCH_TRUST_GATE_LEGACY_ENV,
+    SEARCH_TRUST_GATE_LEGACY_CONFIG,
+  );
+  return legacy !== null && parseBool(legacy, false, SEARCH_TRUST_GATE_LEGACY_CONFIG)
+    ? SEARCH_TRUST_GATE_MODE.shadow
+    : SEARCH_TRUST_GATE_MODE.off;
+}
 
 export interface RetrievalTrustVerdict {
   readonly quarantined: boolean;
@@ -93,14 +176,57 @@ export function classifyRetrievalTrust(
  * its own. A quarantined candidate is excluded with the FIRST structural
  * reason; every reason still reaches the receipt via
  * {@link classifyRetrievalTrust} at trace-build time.
+ *
+ * Under `shadow` (session-mining-economy, t_05a0eaa4) the same
+ * classification runs and every candidate is kept: the kernel's
+ * single-pass verdict contract gains no kind, and the would-be refusals
+ * are collected for the receipts by {@link collectTrustGateRefusals}
+ * instead. `enforce` (the default) is the excluding behavior.
  */
-export function trustGateAdjuster(readFrontmatter: (path: string) => FrontmatterMap): RankAdjuster {
+export function trustGateAdjuster(
+  readFrontmatter: (path: string) => FrontmatterMap,
+  mode: ActiveSearchTrustGateMode = "enforce",
+): RankAdjuster {
   return {
     name: RETRIEVAL_TRUST_GATE_NAME,
     adjust(result: BrainSearchResult): RankAdjustVerdict {
       const verdict = classifyRetrievalTrust(readFrontmatter(result.path));
       if (!verdict.quarantined) return keepVerdict();
+      if (mode === "shadow") return keepVerdict();
       return excludeVerdict(verdict.reasons[0]!);
     },
   };
+}
+
+/**
+ * Collect the pool lane's would-be refusals for the shadow mode: every
+ * candidate the classification marks quarantined, as a compact reference
+ * carrying ALL of its structural reasons (namespaced with the gate's
+ * kernel name, matching how the kernel namespaces an exclusion), tagged
+ * with the {@link RETRIEVAL_TRUST_REFUSAL_LANE.pool} lane. Nothing is
+ * excluded here - the caller keeps ranking untouched and feeds the
+ * returned record into the receipt build. Deterministic: pool order,
+ * sorted reasons.
+ */
+export function collectTrustGateRefusals(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  readFrontmatter: (path: string) => FrontmatterMap,
+): RetrievalTrustRefusal[] {
+  const refusals: RetrievalTrustRefusal[] = [];
+  for (const candidate of ranked) {
+    const verdict = classifyRetrievalTrust(readFrontmatter(candidate.path));
+    if (!verdict.quarantined) continue;
+    refusals.push(
+      Object.freeze({
+        document_id: candidate.documentId,
+        chunk_id: candidate.chunkId,
+        path: candidate.path,
+        reasons: Object.freeze(
+          verdict.reasons.map((reason) => `${RETRIEVAL_TRUST_GATE_NAME}:${reason}`),
+        ),
+        lane: RETRIEVAL_TRUST_REFUSAL_LANE.pool,
+      }),
+    );
+  }
+  return refusals;
 }

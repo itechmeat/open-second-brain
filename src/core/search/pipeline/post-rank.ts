@@ -24,7 +24,8 @@ import {
   buildMemoryTrustAssessment,
   buildRetrievalDecisionTrace,
 } from "../../brain/trust/retrieval-receipts.ts";
-import { trustGateAdjuster } from "../../brain/trust/retrieval-gate.ts";
+import type { RetrievalTrustRefusal } from "../../brain/trust/retrieval-receipts.ts";
+import { collectTrustGateRefusals, trustGateAdjuster } from "../../brain/trust/retrieval-gate.ts";
 import { applyRelationPolarityPhase } from "../graph-phases.ts";
 import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
@@ -595,11 +596,23 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   // registered the pool is returned unchanged, so the default path is
   // byte-identical. Runs BEFORE the slice so a gate exclusion lets a
   // deeper survivor backfill the window rather than shrinking it.
+  //
+  // The trust gate's resolved mode (session-mining-economy, t_05a0eaa4)
+  // decides how it runs: off registers nothing and builds no receipts
+  // (byte-identical); enforce registers the excluding adjuster; shadow
+  // registers the mode-aware keep-only adjuster and collects the
+  // would-be refusals from the same pool the adjusters see, feeding the
+  // receipt build below. The kernel's verdict contract is untouched.
+  const trustGateMode = config.recall.searchTrustGateMode ?? "off";
+  const readGateFrontmatter = (path: string): FrontmatterMap =>
+    readCachedFrontmatter(frontmatterCache, config.vault, path);
   const rankAdjusters: RankAdjuster[] = [];
-  if (config.recall.retrievalTrustGateEnabled) {
-    rankAdjusters.push(
-      trustGateAdjuster((path) => readCachedFrontmatter(frontmatterCache, config.vault, path)),
-    );
+  let shadowRefusals: ReadonlyArray<RetrievalTrustRefusal> = [];
+  if (trustGateMode !== "off") {
+    rankAdjusters.push(trustGateAdjuster(readGateFrontmatter, trustGateMode));
+    if (trustGateMode === "shadow") {
+      shadowRefusals = collectTrustGateRefusals(pinnedReranked, readGateFrontmatter);
+    }
   }
   if (config.recall.supersedeFadeEnabled) {
     // Relation-only supersede fade (t_c4a9cef8): fetch the pool's typed
@@ -613,18 +626,23 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   // Per-pack retrieval trust receipts (t_5f61130a): compact references
   // consistent with the context-receipt model. Built only when the gate
   // ran, so the outcome shape stays byte-identical on the default path.
-  const trustReceipts = config.recall.retrievalTrustGateEnabled
-    ? {
-        retrievalDecisionTrace: buildRetrievalDecisionTrace({
-          surfaced: adjusted.results.length,
-          excluded: adjusted.excluded,
-        }),
-        memoryTrustAssessment: buildMemoryTrustAssessment({
-          surfaced: adjusted.results.length,
-          excluded: adjusted.excluded,
-        }),
-      }
-    : null;
+  // Under shadow the would-be refusals ride beside an untouched
+  // `excluded`; under enforce the receipts keep the pre-mode shape.
+  const trustReceipts =
+    trustGateMode === "off"
+      ? null
+      : {
+          retrievalDecisionTrace: buildRetrievalDecisionTrace({
+            surfaced: adjusted.results.length,
+            excluded: adjusted.excluded,
+            ...(trustGateMode === "shadow" ? { shadow: { refusals: shadowRefusals } } : {}),
+          }),
+          memoryTrustAssessment: buildMemoryTrustAssessment({
+            surfaced: adjusted.results.length,
+            excluded: adjusted.excluded,
+            ...(trustGateMode === "shadow" ? { shadow: { refusals: shadowRefusals } } : {}),
+          }),
+        };
 
   return {
     results: adjusted.results,

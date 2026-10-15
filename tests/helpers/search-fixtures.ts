@@ -80,6 +80,14 @@ export function makeConfig(opts: {
   relationalArmEnabled?: boolean;
   /** Retrieval trust gate (kernel 1); defaults to false (opt-in). */
   retrievalTrustGateEnabled?: boolean;
+  /**
+   * The gate's resolved mode (session-mining-economy). Default: the same
+   * mapping the resolver applies - the legacy boolean true alone resolves
+   * to shadow, false and absence stay off (the field stays absent, like
+   * every opt-in recall field at its off value). An explicit "off" omits
+   * the field too, matching the spread-omitted resolved shape.
+   */
+  searchTrustGateMode?: "shadow" | "enforce" | "off";
   /** Relation-only supersede fade (kernel 1); defaults to false (opt-in). */
   supersedeFadeEnabled?: boolean;
   /** Learned recall weights from feedback; defaults to false (opt-in). */
@@ -119,6 +127,18 @@ export function makeConfig(opts: {
     ...opts.semantic,
   });
   const paths = opts.ignorePaths ?? DEFAULT_VAULT_IGNORE_PATHS;
+  // The gate mode mirrors resolveSearchTrustGateMode's mapping: explicit
+  // mode wins (off stays absent), else the legacy boolean maps true to
+  // shadow - so the fixture can never build a resolved shape the
+  // resolver would not produce.
+  const gateMode: "shadow" | "enforce" | undefined =
+    opts.searchTrustGateMode !== undefined
+      ? opts.searchTrustGateMode === "off"
+        ? undefined
+        : opts.searchTrustGateMode
+      : opts.retrievalTrustGateEnabled === true
+        ? "shadow"
+        : undefined;
   const scopeRules: VaultScopeRules = Object.freeze({
     ignore: Object.freeze(paths.map(classifyVaultPathRule)),
     include:
@@ -154,6 +174,7 @@ export function makeConfig(opts: {
       relationPolarityEnabled: opts.relationPolarityEnabled ?? true,
       relationalArmEnabled: opts.relationalArmEnabled ?? false,
       retrievalTrustGateEnabled: opts.retrievalTrustGateEnabled ?? false,
+      ...(gateMode !== undefined ? { searchTrustGateMode: gateMode } : {}),
       supersedeFadeEnabled: opts.supersedeFadeEnabled ?? false,
       learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,
       activationEnabled: opts.activationEnabled ?? true,

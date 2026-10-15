@@ -33,14 +33,20 @@ export const TRUST_GATE_CONFIG_KEY = "search_trust_gate_enabled";
 /** Environment variable equivalent of {@link TRUST_GATE_CONFIG_KEY}. */
 export const TRUST_GATE_ENV_KEY = "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE";
 
+/** Config key that names the gate's mode (off | shadow | enforce). */
+export const TRUST_GATE_MODE_CONFIG_KEY = "search_trust_gate_mode";
+
 /**
  * Why an explain request carries no trace, and the exit that produces
  * one. The receipts are a by-product of the retrieval trust gate: with
- * the gate off there is no evaluated / excluded set to report.
+ * the gate off there is no evaluated / excluded set to report. The mode
+ * key is named beside the legacy boolean: naming a mode (shadow first -
+ * it measures without excluding) is the other enablement path.
  */
 export const RETRIEVAL_TRACE_UNAVAILABLE =
   `no retrieval decision trace: the retrieval trust gate is off. ` +
-  `Enable it with ${TRUST_GATE_CONFIG_KEY}: true in the config, or ${TRUST_GATE_ENV_KEY}=1.`;
+  `Enable it with ${TRUST_GATE_CONFIG_KEY}: true in the config, ${TRUST_GATE_ENV_KEY}=1, ` +
+  `or name a mode with ${TRUST_GATE_MODE_CONFIG_KEY}: shadow.`;
 
 /**
  * The cross-vault union's own reason. A union outcome is merged from one
@@ -64,13 +70,22 @@ export const RETRIEVAL_TRACE_NOT_MERGED =
 export const RETRIEVAL_TRACE_UNAVAILABLE_AND_NOT_MERGED =
   `no retrieval decision trace: the retrieval trust gate is off, and a cross-vault union ` +
   `would not merge the per-origin receipts even with it on. ` +
-  `Enable ${TRUST_GATE_CONFIG_KEY}: true (or ${TRUST_GATE_ENV_KEY}=1) and query a single vault.`;
+  `Enable ${TRUST_GATE_CONFIG_KEY}: true (or ${TRUST_GATE_ENV_KEY}=1, or ` +
+  `${TRUST_GATE_MODE_CONFIG_KEY}: shadow) and query a single vault.`;
 
 /** Response key carrying the retrieval decision trace. */
 export const RETRIEVAL_DECISION_TRACE_KEY = "retrieval_decision_trace";
 
 /** Response key carrying the memory trust assessment. */
 export const MEMORY_TRUST_ASSESSMENT_KEY = "memory_trust_assessment";
+
+/**
+ * Response key carrying the gate's resolved mode. Present only when the
+ * receipts name one - the shadow mode stamps its receipts, whose
+ * serialization is how the envelope names the mode; enforce keeps
+ * today's envelope exactly, and off has no receipts to name anything.
+ */
+export const RETRIEVAL_TRUST_GATE_MODE_KEY = "retrieval_trust_gate_mode";
 
 /** Response key carrying the reason there is no trace to show. */
 export const RETRIEVAL_TRACE_UNAVAILABLE_KEY = "retrieval_trace_unavailable";
@@ -150,6 +165,9 @@ export function explainEnvelope(
       : {
           [RETRIEVAL_DECISION_TRACE_KEY]: trace,
           [MEMORY_TRUST_ASSESSMENT_KEY]: assessment,
+          // The resolved mode, named only when the receipts carry one
+          // (shadow stamps them; enforce and off name nothing).
+          ...(trace.mode !== undefined ? { [RETRIEVAL_TRUST_GATE_MODE_KEY]: trace.mode } : {}),
         };
   if (timing === undefined) return receipts;
   return {

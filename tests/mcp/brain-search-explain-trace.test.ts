@@ -87,7 +87,12 @@ beforeEach(async () => {
   writeAged("notes/quarantined.md", QUARANTINED);
 
   const onPath = join(configHome, "gate-on.yaml");
-  atomicWriteFileSync(onPath, `vault: ${vault}\nsearch_trust_gate_enabled: true\n`);
+  // The gate must EXCLUDE here, and the legacy boolean alone now
+  // measures (shadow): enforcement is named explicitly.
+  atomicWriteFileSync(
+    onPath,
+    `vault: ${vault}\nsearch_trust_gate_enabled: true\nsearch_trust_gate_mode: enforce\n`,
+  );
   const offPath = join(configHome, "gate-off.yaml");
   atomicWriteFileSync(offPath, `vault: ${vault}\n`);
   gateOn = { vault, configPath: onPath };

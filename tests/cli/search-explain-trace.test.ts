@@ -188,7 +188,12 @@ describe("o2b search --explain end to end", () => {
         "---\ntitle: Bad\nstatus: quarantine\n---\n\n# Bad\n\nThe widget calibration is unsafe.\n",
       );
       const configPath = join(configHome, "config.yaml");
-      atomicWriteFileSync(configPath, `vault: ${vault}\nsearch_trust_gate_enabled: true\n`);
+      // The gate must EXCLUDE here, and the legacy boolean alone now
+      // measures (shadow): enforcement is named explicitly.
+      atomicWriteFileSync(
+        configPath,
+        `vault: ${vault}\nsearch_trust_gate_enabled: true\nsearch_trust_gate_mode: enforce\n`,
+      );
       const env = { OPEN_SECOND_BRAIN_CONFIG: configPath };
 
       const indexed = await runCli(["search", "index"], { env });
