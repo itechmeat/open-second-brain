@@ -126,6 +126,12 @@ describe("o2b brain explorer --export", () => {
     const parsed = JSON.parse(match![1]!);
     expect(parsed.nodes.length).toBe(1);
     expect(parsed.nodes[0].id).toBe("pref-explorer-seed");
+    // The console sections travel with the template; on a static export
+    // they state that the live routes are unreachable instead of firing
+    // fetches that can only fail against a file path.
+    expect(body).toContain('id="counts-body"');
+    expect(body).toContain('id="ops-body"');
+    expect(body).toContain("static export");
   });
 
   test("the exported graph goes through the shared egress guard", async () => {
@@ -216,7 +222,7 @@ describe("o2b brain explorer --export", () => {
 
 describe("o2b brain explorer (live)", () => {
   test(
-    "binds to 127.0.0.1, serves / and /data.json, shuts down on SIGINT",
+    "binds to 127.0.0.1, serves all four routes, shuts down on SIGINT",
     async () => {
       await bootstrap();
       seedOnePref();
@@ -265,6 +271,14 @@ describe("o2b brain explorer (live)", () => {
         expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
         const parsed = JSON.parse(dataBody);
         expect(parsed.nodes.length).toBe(1);
+        // The counts and ops sections fetch the two console routes
+        // client-side, in the page's own vanilla JS; the substituted
+        // graph payload remains the page's single inline JSON block.
+        expect(mainBody).toContain('id="counts-body"');
+        expect(mainBody).toContain('id="ops-body"');
+        expect(mainBody).toContain('fetchJson("/counts.json")');
+        expect(mainBody).toContain('fetchJson("/status.json")');
+        expect(mainBody.split('<script type="application/json" id="brain-data">').length).toBe(2);
         // The live-counts console routes (session-mining-economy): both
         // are loopback JSON re-read from the vault per GET.
         const countsRes = await fetch(`http://127.0.0.1:${port}/counts.json`);

@@ -241,6 +241,21 @@
         font-style: italic;
         font-size: 12px;
       }
+      /* Live counts console (session-mining-economy): the written-per-day
+         histogram is a plain flex row of spans - no chart dependency. */
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 40px;
+        margin: 4px 0 2px 0;
+      }
+      .bars .bar {
+        flex: 1;
+        min-height: 1px;
+        background: var(--accent);
+        opacity: 0.75;
+      }
     </style>
   </head>
   <body>
@@ -322,6 +337,15 @@
       <hr />
       <div id="details-body">
         <p class="panel-empty">Select a node to inspect.</p>
+      </div>
+      <hr />
+      <h3>Counts</h3>
+      <div id="counts-body">
+        <p class="panel-empty">Loading counts...</p>
+      </div>
+      <h3>Vault status</h3>
+      <div id="ops-body">
+        <p class="panel-empty">Loading status...</p>
       </div>
     </aside>
 
@@ -1102,10 +1126,221 @@
         // some configurations.
         window.addEventListener("pagehide", saveLayout);
 
+        // ---- Live counts and vault status (session-mining-economy) ----------
+        // The counts and ops panels fetch /counts.json and /status.json
+        // client-side, so a refresh is a fresh server-side read: the
+        // server keeps no caches and neither does this page. A failed
+        // fetch renders the route and the reason - never an empty panel,
+        // which would read as a vault with no activity. A static export
+        // cannot reach the loopback routes, so it states that instead of
+        // firing fetches that can only fail.
+        function fieldRow(k, vHtml) {
+          return (
+            '<div class="field"><span class="k">' +
+            escHtml(k) +
+            '</span><span class="v">' +
+            vHtml +
+            "</span></div>"
+          );
+        }
+
+        function fetchJson(route) {
+          return fetch(route).then((res) => {
+            if (res.ok) return res.json();
+            return res
+              .json()
+              .catch(() => ({}))
+              .then((body) => {
+                const detail = body && body.error ? ": " + body.error : "";
+                throw new Error("HTTP " + res.status + detail);
+              });
+          });
+        }
+
+        function renderLoadError(elId, route, err) {
+          const reason = err && err.message ? err.message : String(err);
+          document.getElementById(elId).innerHTML =
+            '<p class="panel-empty">' + escHtml(route + " unavailable: " + reason) + "</p>";
+        }
+
+        function renderConsoleOffline(elId) {
+          document.getElementById(elId).innerHTML =
+            '<p class="panel-empty">' +
+            escHtml(
+              "Live counts and vault status are served by the live explorer;" +
+                " a static export shows the graph only.",
+            ) +
+            "</p>";
+        }
+
+        function renderCounts(counts) {
+          const parts = [];
+          const tel = counts.telemetry || {};
+          parts.push(
+            fieldRow(
+              "recalls",
+              escHtml(String(tel.total || 0)) +
+                " total, " +
+                escHtml(String(tel.empty_runs || 0)) +
+                " empty",
+            ),
+          );
+          const channels = Object.keys(tel.by_channel || {});
+          if (channels.length > 0) {
+            parts.push(
+              fieldRow(
+                "by channel",
+                channels.map((c) => escHtml(c + " " + tel.by_channel[c])).join(", "),
+              ),
+            );
+          }
+          const recalled = counts.most_recalled || [];
+          if (recalled.length > 0) {
+            parts.push("<h3>Most recalled</h3>");
+            parts.push(
+              '<ul class="edge-list">' +
+                recalled
+                  .map((a) => {
+                    const label = a.id || a.path || "(unknown artifact)";
+                    return (
+                      "<li>" +
+                      escHtml(label) +
+                      ' <span class="kind">[' +
+                      a.access_count +
+                      "x]</span></li>"
+                    );
+                  })
+                  .join("") +
+                "</ul>",
+            );
+          }
+          const days = counts.written_per_day || [];
+          if (days.length > 0) {
+            const max = days.reduce((m, d) => Math.max(m, d.count), 0);
+            parts.push("<h3>Writes per day</h3>");
+            parts.push(
+              '<div class="bars">' +
+                days
+                  .map((d) => {
+                    const h = max > 0 ? Math.max(1, Math.round((d.count / max) * 40)) : 1;
+                    return (
+                      '<span class="bar" title="' +
+                      escHtml(d.date + ": " + d.count) +
+                      '" style="height:' +
+                      h +
+                      'px"></span>'
+                    );
+                  })
+                  .join("") +
+                "</div>",
+            );
+            parts.push(
+              '<div class="stats">' +
+                escHtml(
+                  days[0].date +
+                    " to " +
+                    days[days.length - 1].date +
+                    ", peak " +
+                    max +
+                    "/day",
+                ) +
+                "</div>",
+            );
+          }
+          const snaps = counts.report_snapshots || {};
+          if (snaps.status === "ok") {
+            const surfaces = snaps.surfaces || [];
+            parts.push(
+              fieldRow(
+                "report snapshots",
+                surfaces.length === 0
+                  ? "enabled, none yet"
+                  : surfaces
+                      .map((s) => escHtml(s.surface + ": " + (s.latest_date || "none")))
+                      .join(", "),
+              ),
+            );
+          } else {
+            parts.push(fieldRow("report snapshots", "disabled"));
+          }
+          document.getElementById("counts-body").innerHTML = parts.join("");
+        }
+
+        function renderOps(snap) {
+          const parts = [];
+          parts.push(
+            '<p><span class="pill ' +
+              (snap.healthy ? "confirmed" : "quarantine") +
+              '">' +
+              escHtml(snap.healthy ? "all clear" : snap.problems.length + " problem(s)") +
+              "</span></p>",
+          );
+          parts.push(
+            fieldRow(
+              "counts",
+              escHtml(
+                "preferences " +
+                  snap.counts.preferences +
+                  ", retired " +
+                  snap.counts.retired +
+                  ", inbox " +
+                  snap.counts.inbox,
+              ),
+            ),
+          );
+          parts.push(fieldRow("stale / review", escHtml(snap.staleTotal + " / " + snap.reviewQueue)));
+          parts.push(fieldRow("active profile", escHtml(snap.activeProfile || "none")));
+          parts.push(
+            fieldRow(
+              "state files",
+              escHtml(
+                "config " +
+                  (snap.stateFiles.config ? "ok" : "MISSING") +
+                  ", search index " +
+                  (snap.stateFiles.searchIndex ? "present" : "absent"),
+              ),
+            ),
+          );
+          parts.push(fieldRow("health", escHtml(snap.healthVerdict)));
+          if (snap.frozen) {
+            parts.push(fieldRow("frozen", "yes - " + escHtml(snap.frozen.frozen_at)));
+          }
+          const problems = snap.problems || [];
+          if (problems.length > 0) {
+            parts.push('<ul class="edge-list">');
+            for (const p of problems) {
+              parts.push(
+                "<li>" +
+                  escHtml("[" + p.code + "] " + p.detail) +
+                  '<br /><span class="kind">next: ' +
+                  escHtml(p.nextCommand) +
+                  "</span></li>",
+              );
+            }
+            parts.push("</ul>");
+          }
+          document.getElementById("ops-body").innerHTML = parts.join("");
+        }
+
+        function loadConsole() {
+          if (!VAULT_PATH) {
+            renderConsoleOffline("counts-body");
+            renderConsoleOffline("ops-body");
+            return;
+          }
+          fetchJson("/counts.json")
+            .then(renderCounts)
+            .catch((err) => renderLoadError("counts-body", "/counts.json", err));
+          fetchJson("/status.json")
+            .then(renderOps)
+            .catch((err) => renderLoadError("ops-body", "/status.json", err));
+        }
+
         // ---- Boot ------------------------------------------------------------
         resizeCanvas();
         placeInitial();
         applyFilters();
+        loadConsole();
 
         // Persist the layout once after each settle. `unsavedMotion`
         // latches true whenever any visible node has non-trivial velocity
