@@ -16,6 +16,11 @@ import { serializeImportCensus } from "../../core/brain/import-census.ts";
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
 import { clearCheckpoint, PLAN_ID_LABEL } from "../../core/brain/ingest/checkpoint.ts";
 import { assertCheckpointId } from "../../core/brain/checkpoint-store.ts";
+import { STORAGE_CAPACITY_CRITICAL_CODE } from "../../core/brain/doctor/storage-capacity.ts";
+import { MAINTENANCE_CAPACITY_REMEDY } from "../../core/brain/maintenance/lane.ts";
+import { loadStorageConfigSafe } from "../../core/brain/policy/load.ts";
+import type { StorageErrorCode } from "../../core/brain/storage/capacity-error.ts";
+import { CAPACITY_GATE_DECISION, evaluateCapacityGate } from "../../core/brain/storage/gate.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
 import type { PartsOutcome, TableOutcome } from "../../core/brain/ingest/extract-source.ts";
 import type { CodeEdgeSeed, PreExtractResult } from "../../core/brain/ingest/pre-extract.ts";
@@ -69,6 +74,59 @@ const BATCH_PLAN_TOOL = "brain_ingest_batch_plan";
 const DEFAULT_MAX_BATCH_BYTES = 1024 * 1024;
 const DEFAULT_MAX_BATCH_FILES = 25;
 
+/** The wire code of the capacity admission refusal, from the leaf's closed union. */
+const ADMISSION_REFUSAL_CODE: StorageErrorCode = "capacity_exhausted";
+
+/**
+ * Refuse the ingest when a fresh census measures the vault at its
+ * critical storage tier - the interactive half of the storage lifecycle's
+ * backpressure, beside the maintenance lane's gate.
+ *
+ * The check sits in the VALIDATE phase, before `ingestSource` opens the
+ * write path: the commit phase is never entered, so there is nothing to
+ * roll back, and a refusal leaves the vault byte-identical. Only a
+ * MEASURED critical tier closes it, exactly as the lane's gate does - an
+ * unmeasurable store stays open, because a census that could not be taken
+ * is not a vault with room, but neither is it a vault without. No
+ * configured cap is the documented default and means the check does not
+ * exist: no gate, no byte walk, no cost.
+ *
+ * The remedy is the lane's own sentence, quoted rather than restated, so
+ * the two walls an operator can hit - the paused lane and the refused
+ * write - cannot disagree about what to do next.
+ */
+function refuseWhenVaultExhausted(vault: string, now: Date): void {
+  const storage = loadStorageConfigSafe(vault);
+  if (storage.cap_bytes === null) return;
+  const decision = evaluateCapacityGate(vault, {
+    now,
+    capBytes: storage.cap_bytes,
+    warnPercent: storage.warn_percent,
+    criticalPercent: storage.critical_percent,
+    warnDays: storage.warn_days,
+    criticalDays: storage.critical_days,
+  });
+  if (decision.decision !== CAPACITY_GATE_DECISION.skip) return;
+  const reading = decision.reading;
+  throw new MCPError(
+    INVALID_PARAMS,
+    `${TOOL}: refused (${ADMISSION_REFUSAL_CODE}): the vault measured at the ` +
+      `${decision.tier} storage tier. ${MAINTENANCE_CAPACITY_REMEDY}.`,
+    {
+      code: ADMISSION_REFUSAL_CODE,
+      tier: decision.tier,
+      measured_bytes: reading?.measuredBytes ?? null,
+      cap_bytes: reading?.capBytes ?? null,
+      percent_used: reading?.percentUsed ?? null,
+      remedy: MAINTENANCE_CAPACITY_REMEDY,
+      // The registered next step for a critical vault (the storage
+      // report), resolved from the diagnostics registry - a refusal whose
+      // value is the pointer never spells the command by hand.
+      ...nextCommandField(STORAGE_CAPACITY_CRITICAL_CODE),
+    },
+  );
+}
+
 async function toolBrainIngestSource(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -105,6 +163,9 @@ async function toolBrainIngestSource(
     claimedAgent ?? ctx.requestIdentity?.agent ?? resolveAgentName(ctx.configPath ?? undefined);
 
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
+    // The admission wall, in the validate phase: past this call the write
+    // path opens, and the commit phase ahead of it is never rolled back.
+    refuseWhenVaultExhausted(ctx.vault, new Date());
     let res: IngestSourceResult;
     try {
       res = ingestSource(
