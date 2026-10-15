@@ -68,7 +68,10 @@
  * compaction: a read-only per-shard scan of the continuity and metrics
  * receipt ledgers, and the explicit-shard fold behind a count guard and
  * a recovery point - deliberately disjoint from the context-compaction
- * vocabulary).
+ * vocabulary) and `brain_storage` (the storage report: the per-surface
+ * measured-or-refused byte census, the forecast and tier against the
+ * configured cap, and the usage sample each invocation records; the
+ * vault-wide measurement answers measured: false below local reach).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -161,6 +164,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_sources",
   "brain_stale_scan",
   "brain_status",
+  "brain_storage",
   "brain_switch_vault",
   "brain_tension",
   "brain_tiers",
