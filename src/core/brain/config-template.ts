@@ -49,6 +49,7 @@ import {
   BRAIN_NOTES_DEFAULTS,
   BRAIN_SESSION_PAYLOAD_DEFAULTS,
   BRAIN_SESSIONS_DEFAULTS,
+  BRAIN_STORAGE_DEFAULTS,
   BRAIN_TEMPORAL_DEFAULTS,
   DEFAULT_BRAIN_CONFIG,
   INJECT_BUDGET_CHARS_DEFAULT,
@@ -598,6 +599,40 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("ignore_message_patterns", BRAIN_SESSIONS_DEFAULTS.ignore_message_patterns),
       def("payload_max_inline_chars", BRAIN_SESSION_PAYLOAD_DEFAULTS.max_inline_chars),
       def("payload_max_text_chars", BRAIN_SESSION_PAYLOAD_DEFAULTS.max_text_chars),
+    ],
+  },
+  {
+    key: "storage",
+    doc: [
+      "Storage capacity policy (`o2b brain storage`). An absent cap_bytes",
+      "means the vault is unbounded: nothing pauses and nothing refuses.",
+      "Setting a cap turns on the forecast tiers and the storage-capacity",
+      "doctor check; the four thresholds default to the constants the",
+      "forecast ships with, and the critical band must sit past the warn",
+      "band (a larger percent, a smaller day horizon).",
+    ],
+    emit: "commented-default",
+    keys: [
+      example("cap_bytes", 1073741824, [
+        "Measured vault storage to treat as full, in bytes. The value",
+        "below is an illustration, not a default - writing it would bound",
+        "this vault. An explicit null also means unbounded.",
+      ]),
+      def("warn_percent", BRAIN_STORAGE_DEFAULTS.warn_percent, [
+        "Percent of the cap where usage forecasts as warn.",
+      ]),
+      def("critical_percent", BRAIN_STORAGE_DEFAULTS.critical_percent, [
+        "Percent of the cap where usage forecasts as critical. Must be",
+        "greater than warn_percent.",
+      ]),
+      def("warn_days", BRAIN_STORAGE_DEFAULTS.warn_days, [
+        "Days to the cap, at the measured trend, where usage forecasts as",
+        "warn.",
+      ]),
+      def("critical_days", BRAIN_STORAGE_DEFAULTS.critical_days, [
+        "Days to the cap, at the measured trend, where usage forecasts as",
+        "critical. Must be smaller than warn_days.",
+      ]),
     ],
   },
   {

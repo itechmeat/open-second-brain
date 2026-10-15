@@ -48,6 +48,7 @@ import {
 } from "./blocks/continuity-hygiene.ts";
 import { parseFeedbackBlock } from "./blocks/feedback.ts";
 import { parseDecisionModelBlock } from "./blocks/decision-model.ts";
+import { parseStorageBlock } from "./blocks/storage.ts";
 
 export interface ValidateResult {
   readonly config: BrainConfig;
@@ -126,6 +127,7 @@ export function validateBrainConfigDetailed(
   const recall = parseRecallBlock(ctx);
   const feedback = parseFeedbackBlock(ctx);
   const decisionModel = parseDecisionModelBlock(ctx);
+  const storage = parseStorageBlock(ctx);
 
   warnUnknownTopLevelKeys(ctx);
 
@@ -159,6 +161,7 @@ export function validateBrainConfigDetailed(
     ...(recallInject !== undefined ? { recall_inject: recallInject } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(decisionModel !== undefined ? { decision_model: decisionModel } : {}),
+    ...(storage !== undefined ? { storage } : {}),
   };
 
   return { config, warnings: ctx.warnings, knownKeys: ctx.keys };

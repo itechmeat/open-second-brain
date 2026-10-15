@@ -62,6 +62,7 @@ export {
   loadNotesConfigSafe,
   loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
+  loadStorageConfigSafe,
   loadTemporalConfigSafe,
   type BrainDerivedStorePolicy,
   type LoadBrainConfigResult,
@@ -102,6 +103,20 @@ export {
   LESSONS_LIMIT_MAX,
   LESSONS_LIMIT_MIN,
 } from "./policy/blocks/lessons.ts";
+export {
+  BRAIN_STORAGE_DEFAULTS,
+  STORAGE_CAP_BYTES_MIN,
+  STORAGE_DAYS_MIN,
+  STORAGE_PERCENT_MAX,
+  STORAGE_PERCENT_MIN,
+  resolveStorage,
+} from "./policy/blocks/storage.ts";
+export {
+  STORAGE_CRITICAL_DAYS_DEFAULT,
+  STORAGE_CRITICAL_PERCENT_DEFAULT,
+  STORAGE_WARN_DAYS_DEFAULT,
+  STORAGE_WARN_PERCENT_DEFAULT,
+} from "./storage/forecast.ts";
 export {
   BRAIN_MAINTENANCE_DEFAULTS,
   MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT,

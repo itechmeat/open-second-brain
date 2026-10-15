@@ -26,6 +26,7 @@ import { brainConfigPath } from "../paths.ts";
 import { BrainConfigError, type BrainConfigLoadWarning } from "./errors.ts";
 import { validateBrainConfigDetailed } from "./validate.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./defaults.ts";
+import { BRAIN_STORAGE_DEFAULTS, resolveStorage } from "./blocks/storage.ts";
 import { BRAIN_MOST_APPLIED_DEFAULTS, resolveMostApplied } from "./blocks/active.ts";
 import { BRAIN_NOTES_DEFAULTS, resolveNotes } from "./blocks/notes.ts";
 import { BRAIN_TEMPORAL_DEFAULTS, resolveTemporal } from "./blocks/temporal.ts";
@@ -259,6 +260,23 @@ export const loadSnapshotDerivedStorePolicySafe = makeAbsentTolerantLoader<Brain
 export const loadMaintenanceConfigSafe = makeAbsentTolerantLoader(
   resolveMaintenance,
   BRAIN_MAINTENANCE_DEFAULTS,
+);
+
+/**
+ * Load + resolve the `storage:` block, falling back to
+ * `BRAIN_STORAGE_DEFAULTS` when the config file is absent - which leaves
+ * the vault unbounded, exactly as an operator who has never configured a
+ * cap has never asked for the gate.
+ *
+ * An unreadable config raises, and that is the point here as it is for
+ * the maintenance loader: both outcomes decide whether writes are
+ * refused, so answering with the defaults would run - or refuse - work
+ * the operator's own file gates differently, on a vault that otherwise
+ * looks healthy.
+ */
+export const loadStorageConfigSafe = makeAbsentTolerantLoader(
+  resolveStorage,
+  BRAIN_STORAGE_DEFAULTS,
 );
 
 /**

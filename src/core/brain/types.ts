@@ -2009,6 +2009,14 @@ export interface BrainConfig {
    * the single implicit relevance slice.
    */
   readonly recall_inject?: BrainRecallInjectConfig;
+  /**
+   * Optional `storage:` block (storage lifecycle). The operator's
+   * capacity policy: an optional byte cap and the warn / critical
+   * thresholds the forecast tiers at. Absent: callers fall back to
+   * `BRAIN_STORAGE_DEFAULTS` via `resolveStorage`, with the cap absent -
+   * unbounded, nothing pauses, nothing refuses.
+   */
+  readonly storage?: BrainStorageConfig;
 }
 
 /** Optional `hygiene:` block (continuity-hygiene-freshness suite). */
