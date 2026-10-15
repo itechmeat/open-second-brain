@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { MAINTENANCE_VERDICT, appendJournal } from "../../src/core/brain/maintenance/journal.ts";
-import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -50,6 +50,7 @@ beforeEach(() => {
   ctx = { vault, configPath: join(configHome, "config.yaml"), repoRoot: null };
   appendJournal(vault, {
     ts: "2026-10-15T12:00:00Z",
+    holder: "worker-a",
     verdict: MAINTENANCE_VERDICT.skippedCapacity,
     capacity_tier: "critical",
     capacity_percent: 96.4,
@@ -72,7 +73,7 @@ interface StatusRow {
   readonly capacity_cap_bytes?: number;
 }
 
-async function statusRows(reach: TRANSPORT_REACH): Promise<ReadonlyArray<StatusRow>> {
+async function statusRows(reach: TransportReach): Promise<ReadonlyArray<StatusRow>> {
   const res = (await maintenance({ ...ctx, reach }, { operation: "status" })) as Record<
     string,
     unknown
