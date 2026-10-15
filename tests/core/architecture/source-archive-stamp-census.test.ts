@@ -60,6 +60,7 @@ const STAMP_KEY_LITERAL = "source_archive_hash";
  * the key in the archive_get schema.
  */
 const STAMP_KEY_FILES: ReadonlyArray<string> = Object.freeze([
+  posix.join("core", "brain", "document-retire.ts"),
   posix.join("core", "brain", "hygiene", "detectors", "capture-scope.ts"),
   posix.join("core", "brain", "ingest", "ingest.ts"),
   posix.join("core", "brain", "provenance", "source-archive.ts"),

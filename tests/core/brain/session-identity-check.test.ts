@@ -355,6 +355,7 @@ const KIND_WRITERS: ReadonlyArray<{
     sessionScoped: false,
     writers: [
       "core/brain/continuity/store.ts",
+      "core/brain/document-retire.ts",
       "core/brain/source-cleanup.ts",
       "core/brain/portability/knowledge-pack.ts",
     ],

@@ -66,6 +66,14 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "never writes. It names `openSync` only to open a project manifest " +
     "read-only (O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so " +
     "the read is bounded; the file lives in the scanned project, outside the vault.",
+  "src/core/brain/ingest/source-read.ts":
+    "never writes. It names `openSync` only to open a source read-only " +
+    "(O_RDONLY | O_NONBLOCK, the shared SOURCE_OPEN_FLAGS) through one " +
+    "descriptor so the read is bounded, so there is no write to guard.",
+  "src/core/brain/ingest/tail-read.ts":
+    "never writes. Its one `openSync` reuses the read-only SOURCE_OPEN_FLAGS " +
+    "for the from-offset delta read; the watermark it feeds is written by " +
+    "the content manifest's guarded writer, not here.",
   "src/core/brain/dedup-index-cache.ts":
     "machine-local derived cache OUTSIDE the vault (the user cache dir). It " +
     "writes nothing under Brain/, and a refusal would only cost the next " +

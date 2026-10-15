@@ -44,7 +44,9 @@ import {
   loadNotesConfigSafe,
   loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
+  loadStorageConfigSafe,
   loadTemporalConfigSafe,
+  BRAIN_STORAGE_DEFAULTS,
 } from "../../../src/core/brain/policy.ts";
 
 /**
@@ -116,6 +118,15 @@ const SAFE_LOADERS = [
       include: DEFAULT_BRAIN_CONFIG.snapshots.include_derived_store,
       maxBytes: DEFAULT_BRAIN_CONFIG.snapshots.derived_store_max_bytes,
     } as unknown,
+  },
+  {
+    // The resolved cap and thresholds are what the capacity gate and the
+    // forecast read, so serving the defaults on a broken config would
+    // measure a vault against a cap the operator never wrote - and skip,
+    // or run, heavy work on the strength of a file nothing could parse.
+    name: "loadStorageConfigSafe",
+    load: loadStorageConfigSafe as (vault: string) => unknown,
+    absentValue: BRAIN_STORAGE_DEFAULTS as unknown,
   },
 ] as const;
 
