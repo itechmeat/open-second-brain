@@ -51,6 +51,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { ensureInsideVault } from "../path-safety.ts";
 import { isoSecond } from "./time.ts";
 import { readManifest, writeManifestAtomic, manifestPath } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
@@ -139,8 +140,8 @@ export interface RetiredDocumentCopy {
   readonly wikilinksSkipped: string | null;
   /** Digest named in the audit; from the page's frontmatter, or `null`. */
   readonly sourceArchiveHash: string | null;
-  /** The continuity record id, `null` only when nothing changed. */
-  readonly auditRecordId: string | null;
+  /** The id of the `source_invalidation` continuity record this retirement appended. */
+  readonly auditRecordId: string;
 }
 
 export interface RetireDocumentsResult {
@@ -271,6 +272,16 @@ function retireOneCopy(
   opts: RetireDocumentsOptions,
 ): RetiredDocumentCopy {
   const abs = join(vault, copy.path);
+  // Containment before existence: removeFile answers a vault-escaping path
+  // with the same `false` a vanished page gets, and the message below would
+  // then claim a copy vanished that was never inside the vault to begin
+  // with. Named here for what it is, so the per-copy failure says the path
+  // escapes the vault rather than inventing a disappearance.
+  try {
+    ensureInsideVault(abs, vault);
+  } catch {
+    throw new Error(`retired copy path escapes the vault: ${copy.path}`);
+  }
   if (!existsSync(abs)) {
     throw new Error(`retired copy not found on disk: ${copy.path}`);
   }
@@ -330,9 +341,13 @@ function retireOneCopy(
       } else {
         delete entries[facts.sourcePath];
         manifestDropped = writeManifestAtomic(vault, entries, manifest.contract);
+        // A `false` from the atomic write after deleting a PRESENT key means
+        // the serialized bytes were already identical - the key was already
+        // gone on disk, i.e. a concurrent retirer got there first. The
+        // reason names that success-shaped fact, not a failure to drop.
         manifestClause = manifestDropped
           ? `dropped manifest key ${facts.sourcePath}`
-          : `could not drop manifest key ${facts.sourcePath}`;
+          : `manifest already without key ${facts.sourcePath}`;
       }
     }
 

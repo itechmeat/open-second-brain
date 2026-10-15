@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   classifyPaths,
@@ -402,5 +402,47 @@ describe("retireDocumentCopies", () => {
     );
     expect(reason).toContain("no manifest key recorded");
     expect(reason).not.toContain("dropped manifest key");
+  });
+
+  test("a copy path that escapes the vault is refused as a containment breach, not a vanish", () => {
+    // A hand-built plan naming a path outside the vault: the file exists at
+    // the escaped location and looks like a retireable summary, so the run
+    // used to reach the removal and report the shared removeFile `false` as
+    // "vanished before removal" - a disappearance that never happened. The
+    // refusal is named for what it is, and the outside file is untouched.
+    // The escaped sibling sits outside the vault temp dir the afterEach
+    // removes, so it carries the run's unique suffix and cleans up itself.
+    const { canonical } = seedPair();
+    const escaped = join("..", `escaped-${basename(vault)}.md`);
+    writeFileSync(
+      join(vault, escaped),
+      [
+        "---",
+        "kind: brain-source",
+        "source_path: imports/b.md",
+        `source_hash: ${"a".repeat(64)}`,
+        "---",
+        "",
+        DUPLICATE_BODY,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const result = retireDocumentCopies(vault, [{ path: escaped, canonical }], {
+        agent: "tester",
+        now: NOW,
+      });
+
+      expect(result.retired).toEqual([]);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.path).toBe(escaped);
+      expect(result.failed[0]!.message).toContain("escapes the vault");
+      expect(result.failed[0]!.message).not.toContain("vanished");
+      expect(existsSync(join(vault, escaped))).toBe(true);
+    } finally {
+      rmSync(join(vault, escaped));
+    }
   });
 });
