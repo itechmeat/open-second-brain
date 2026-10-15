@@ -118,6 +118,20 @@ describe("forecastStorageUsage", () => {
     expect(critical.tier).toBe("critical");
   });
 
+  test("a history that cannot be listed answers samplesUnreadable, never no-samples", () => {
+    // A metrics directory replaced by a plain file makes the ledger
+    // listing throw; the forecast must NAME the unreadable history on
+    // the result instead of flattening it into "no samples ever
+    // recorded" - the two say opposite things about the vault's past.
+    seedSample(1, 400);
+    seedSample(0, 500);
+    rmSync(metricsDir(vault), { recursive: true, force: true });
+    writeFileSync(metricsDir(vault), "not a directory\n", "utf8");
+    const forecast = forecastStorageUsage(vault, { capBytes: CAP });
+    expect(forecast.samplesUnreadable).toBe(true);
+    expect(forecast.tier).toBe("no_forecast");
+  });
+
   test("a percent-only warn never outranks a critical days horizon", () => {
     // 280 of 350 bytes is exactly 80 percent (warn by percent), and a
     // slope of 10 bytes per day puts the cap exactly 7 days out
