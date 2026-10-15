@@ -476,13 +476,17 @@ per-result `score_breakdown`: `retrieval_decision_trace` (evaluated /
 surfaced / excluded counts plus every excluded candidate as a compact
 reference with its structural reasons) and `memory_trust_assessment` (the
 same exclusion set as a reason histogram). Both are by-products of the
-retrieval trust gate; with the gate off the response carries
-`retrieval_trace_unavailable` naming the switch that produces them
-(`search_trust_gate_enabled`) instead of going quiet. Without `explain` no
-key appears at all. In the same release `total` stopped echoing the row
-count: it is the ranked candidate pool the `limit` sliced the returned rows
-from, so `total > results.length` means the ranker had more candidates
-than it handed you. Read it as candidates ranked, not as a corpus
+retrieval trust gate, which runs in one of three modes
+(`search_trust_gate_mode: off | shadow | enforce`; the bare
+`search_trust_gate_enabled` alone maps to `shadow`, measuring without
+excluding, and `enforce` is what excludes): with the gate off the
+response carries `retrieval_trace_unavailable` naming the switches that
+produce them (`search_trust_gate_enabled`, or
+`search_trust_gate_mode: shadow`) instead of going quiet. Without
+`explain` no key appears at all. In the same release `total` stopped
+echoing the row count: it is the ranked candidate pool the `limit`
+sliced the returned rows from, so `total > results.length` means the
+ranker had more candidates than it handed you. Read it as candidates ranked, not as a corpus
 statistic: the pool is capped at roughly three times the requested
 `limit`, so it moves with `limit` and saturates on a large vault, and
 link traversal can add a document that matched no term at all.

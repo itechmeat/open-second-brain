@@ -838,15 +838,21 @@ the audit line; because the search reads the same policy file, the
 decision then ends in `error` with fault `retriever_failed` and nothing
 is injected until the file is fixed.
 
-Search-side trust switches: `search_trust_gate_enabled` (env
-`OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`) zero-ranks quarantined material
-(self-approval quarantine, untrusted-source provenance, entity
-contamination) out of both semantic and lexical results and attaches the
+Search-side trust switches: `search_trust_gate_mode` (env
+`OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE`, `off | shadow | enforce`)
+runs the retrieval trust gate over quarantined material (self-approval
+quarantine, untrusted-source provenance, entity contamination) in both
+semantic and lexical results: `enforce` zero-ranks it and attaches the
 `memory_trust_assessment` and `retrieval_decision_trace` receipts naming
-every exclusion; `search_supersede_fade_enabled` (env
-`OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE`) makes an inbound `supersedes` /
-`superseded_by` relation on a successor fade the unchanged superseded
-note by a named multiplier. Both default off and leave ranking
+every exclusion; `shadow` runs the same classification, excludes
+nothing, and records every would-be refusal with its structural reasons
+into the same receipts; `off` - the default - runs no gate. The legacy
+`search_trust_gate_enabled` (env `OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`)
+stays as the bare enable: true maps to `shadow`, so excluding is named
+explicitly with `enforce`; `search_supersede_fade_enabled` (env
+`OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE`) makes an inbound `supersedes`
+/ `superseded_by` relation on a successor fade the unchanged superseded
+note by a named multiplier. All default off and leave ranking
 byte-identical when unset.
 
 ### Knowledge intake and consolidation (since v1.36.0)
