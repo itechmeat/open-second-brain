@@ -19,11 +19,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { evaluateGates, runMaintenance } from "../../../src/core/brain/maintenance/lane.ts";
+import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import {
   appendJournal,
   listJournal,
@@ -102,6 +103,11 @@ function gateDecision(tier: string, skip: boolean, reason?: string): CapacityGat
 
 function samples(): number {
   return listMetrics(vault, { surface: STORAGE_USAGE_SURFACE }).length;
+}
+
+/** The lease database the lane must not create before its gates decide. */
+function leaseDb(vault: string): string {
+  return join(vault, DERIVED_STORE_DIR, "maintenance.sqlite");
 }
 
 function journalRows(verdict: string): ReadonlyArray<MaintenanceJournalEntry> {
@@ -276,6 +282,24 @@ describe("the capacity gate through the lane", () => {
     const recorded = listMetrics(vault, { surface: STORAGE_USAGE_SURFACE });
     expect(recorded).toHaveLength(before + 1);
     expect(recorded[0]!.payload["total_bytes"]).toBe(777);
+  });
+
+  test("a capacity-skipped run never touches the lease", async () => {
+    configureCap(CRITICAL_CAP_BYTES);
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: "dream", run: async () => {} }],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
+    // The fifth gate's order, pinned on disk: the capacity gate decides
+    // BEFORE the lease is acquired, so a skipped run never even creates
+    // the lease database. Lease acquisition moved ahead of the gate and
+    // this file would come into existence behind every skip.
+    expect(existsSync(leaseDb(vault))).toBe(false);
+    expect(existsSync(`${leaseDb(vault)}-wal`)).toBe(false);
+    // The verdict row is the gate's own, never a lease loss.
+    expect(journalRows(MAINTENANCE_VERDICT.skippedLease)).toEqual([]);
   });
 
   test("a sub-critical vault runs and samples nothing", async () => {
