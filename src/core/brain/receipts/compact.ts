@@ -227,6 +227,17 @@ function verdictFor(
 }
 
 /**
+ * The instant a foldable record's stamp stands for. Both classifiers
+ * stamp a foldable verdict only under a grammar-validated UTC timestamp
+ * (`isCanonicalUtcTimestamp`, `ISO_UTC_RE`), so the parse is finite by
+ * construction; the instant, not the text, is what the aggregate's
+ * first/last bounds order by.
+ */
+function instantOf(timestamp: string): number {
+  return Date.parse(timestamp);
+}
+
+/**
  * Recount one named shard against the disk. A shard that cannot be read
  * yields a failure instead of a plan - named unreadable, with its
  * `family:name` identity and no filesystem detail, since the raw error
@@ -291,8 +302,13 @@ function planShard(
     existing.group = {
       ...prior,
       count: prior.count + 1,
-      first: timestamp < prior.first ? timestamp : prior.first,
-      last: timestamp > prior.last ? timestamp : prior.last,
+      // The bounds compare by instant, never by stamp text: the canonical
+      // grammars admit optional fractional seconds, and "." sorts before
+      // "Z", so the LATER half-second stamp is the textually smaller one.
+      // A folded record's own stamp is kept verbatim on whichever bound
+      // its instant wins.
+      first: instantOf(timestamp) < instantOf(prior.first) ? timestamp : prior.first,
+      last: instantOf(timestamp) > instantOf(prior.last) ? timestamp : prior.last,
       bytes: prior.bytes + bytes,
     };
   }

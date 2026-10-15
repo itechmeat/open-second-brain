@@ -185,6 +185,32 @@ describe("compactReceiptLedgers", () => {
     }
   });
 
+  test("the aggregate's first and last compare by instant, not by stamp text", () => {
+    // Both stamps pass the canonical grammar, which admits optional
+    // fractional seconds - and "." sorts before "Z", so a text compare
+    // puts the LATER half-second stamp first. Written later-instant-first
+    // to make the text order and the instant order disagree.
+    const shard = [
+      continuityLine("recall_telemetry", "2026-08-10T12:00:00.500Z", { note: "later half" }),
+      continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "earlier whole" }),
+    ].join("");
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", shard);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+      expect: 2,
+    });
+    expect(result.totals.folded).toBe(2);
+    const aggregate = JSON.parse(
+      readShard(continuityLogDir(vault), "2026-08.jsonl")
+        .split("\n")
+        .find((line) => line.trim() !== "")!,
+    ) as { fold: Record<string, unknown> };
+    expect(aggregate.fold.first_created_at).toBe("2026-08-10T12:00:00Z");
+    expect(aggregate.fold.last_created_at).toBe("2026-08-10T12:00:00.500Z");
+  });
+
   test("metrics shards fold per (surface, month)", () => {
     writeShard(metricsDir(vault), "storage_usage.jsonl", [
       metricLine("storage_usage", "2026-08-01T00:00:00Z", { bytes: 10 }),
