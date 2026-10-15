@@ -95,6 +95,32 @@ export interface ManifestEntry {
    * contract, never skips.
    */
   readonly fingerprint?: string;
+  /**
+   * The extraction watermark (t_a9cd4221): how many leading bytes of the
+   * source the last extracting pass actually covered, when it recorded one.
+   * ADDITIVE by design - schema_version stays 3, and a read of an entry
+   * without the field answers "never extracted" ({@link extractedBytesOf}
+   * degrades to byte 0), which reprocesses fully. The lazy direction: no
+   * field shape change ever forces an eager mass reprocess. A malformed
+   * shape on disk drops the FIELD, never the entry, for the same reason.
+   */
+  readonly extracted_bytes?: number;
+  /**
+   * When the pass that reached {@link extracted_bytes} finished, ISO-8601.
+   * Absent together with the byte count on unwatermarked entries.
+   */
+  readonly extracted_at?: string;
+}
+
+/**
+ * The entry's extraction watermark, degraded the lazy way: an entry recorded
+ * before watermarks existed - or with a malformed one on disk - answers
+ * byte 0, "never extracted", so the source reprocesses fully instead of
+ * skipping. Never an eager mass reprocess: the absence costs one pass, once,
+ * per source that actually grows again.
+ */
+export function extractedBytesOf(entry: ManifestEntry): number {
+  return entry.extracted_bytes ?? 0;
 }
 
 /**
@@ -271,10 +297,35 @@ function parseEntryValue(value: unknown): ManifestEntry | null {
   const record = value as Record<string, unknown>;
   if (typeof record["sha256"] !== "string") return null;
   const fingerprint = record["fingerprint"];
+  // The watermark fields are accepted per-field and only when well-shaped:
+  // a malformed one drops JUST the field, which answers byte 0 and
+  // reprocesses lazily - dropping the whole entry would forfeit the
+  // fingerprint and force the eager contract-changed reprocess instead.
+  const extractedBytes = record["extracted_bytes"];
+  const extractedAt = record["extracted_at"];
   return {
     sha256: record["sha256"],
     ...(typeof fingerprint === "string" ? { fingerprint } : {}),
+    ...(isByteOffset(extractedBytes) ? { extracted_bytes: extractedBytes } : {}),
+    ...(typeof extractedAt === "string" && extractedAt.length > 0
+      ? { extracted_at: extractedAt }
+      : {}),
   };
+}
+
+/** Is this value a byte offset a watermark may record? */
+function isByteOffset(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Does the entry carry recorded state the bare v1 digest shape cannot hold -
+ * a per-entry fingerprint or an extraction watermark? Such an entry never
+ * serializes down to v1: data a write could read back is data the write
+ * must keep.
+ */
+function hasRecordedState(entry: ManifestEntry): boolean {
+  return entry.fingerprint !== undefined || entry.extracted_bytes !== undefined;
 }
 
 /**
@@ -317,10 +368,7 @@ function serializeManifest(
     const stamped: Record<string, ManifestEntry> = {};
     for (const key of sortedKeys) stamped[key] = { ...entries[key]!, fingerprint: live };
     body = { schema_version: SCHEMA_VERSION, contract: { fingerprint: live }, entries: stamped };
-  } else if (
-    contract === null &&
-    !Object.values(entries).some((entry) => entry.fingerprint !== undefined)
-  ) {
+  } else if (contract === null && !Object.values(entries).some(hasRecordedState)) {
     // Legacy-shaped entries: the V1 shape - digests only, contract-less - so
     // a v1 read round-trips as v1 and the changed-contract marker survives.
     const digests: Record<string, string> = {};
@@ -443,6 +491,12 @@ export function classifyPaths(
  * entirely when nothing changed. Returns `true` when the manifest was
  * rewritten.
  *
+ * `records` pins a path's FULL entry: the caller computed the digest itself
+ * and carries extra recorded state (the extraction watermark) the default
+ * hash-and-stamp must not drop. A pinned path on disk records its entry
+ * verbatim; a pinned path missing from disk is still dropped, like any
+ * deleted source.
+ *
  * The read, the merge and the write are ONE critical section, held under the
  * same sync lock every other Brain read-modify-write takes. Atomicity alone is
  * not enough: `atomicWriteFileSync` renames a complete file into place, so no
@@ -451,7 +505,11 @@ export function classifyPaths(
  * The batch planner dispatches sources across parallel subagents, so that
  * overlap is the designed case rather than a rare one.
  */
-export function updateManifest(vault: string, paths: readonly string[]): boolean {
+export function updateManifest(
+  vault: string,
+  paths: readonly string[],
+  records: Readonly<Record<string, ManifestEntry>> = {},
+): boolean {
   const handle = acquireLockSyncWithRetry(manifestPath(vault), undefined, {
     remedy: ingestLockRemedy,
   });
@@ -461,11 +519,13 @@ export function updateManifest(vault: string, paths: readonly string[]): boolean
     for (const path of paths) {
       const canonical = canonicalNotePath(path);
       const abs = join(vault, canonical);
-      if (existsSync(abs)) {
-        entries[canonical] = { sha256: hashPath(abs), fingerprint: live };
-      } else {
+      if (!existsSync(abs)) {
         delete entries[canonical];
+        continue;
       }
+      const pinned = records[canonical];
+      entries[canonical] =
+        pinned !== undefined ? pinned : { sha256: hashPath(abs), fingerprint: live };
     }
     // Explicit contract: the live fingerprint rides along as the
     // current-contract MARKER only. The omitted form would stamp every entry

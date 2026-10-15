@@ -17,6 +17,7 @@ import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import {
   classifyPaths,
+  extractedBytesOf,
   hashFile,
   hashTree,
   manifestPath,
@@ -388,6 +389,119 @@ describe("extraction contract (t_586d5d8b)", () => {
     expect(plan.skipped).toEqual([]);
     const b = plan.batches.flatMap((batch) => batch.files).find((f) => f.path === "Inbox/b.md");
     expect(b?.status).toBe("contract-changed");
+  });
+});
+
+describe("extraction watermark (t_a9cd4221)", () => {
+  const WATERMARK = { extracted_bytes: 11, extracted_at: "2026-06-13T12:00:00Z" };
+
+  test("additive watermark fields round-trip through reads and writes; schema stays 3", () => {
+    writeSource("Inbox/log.md", "first line\n");
+    updateManifest(vault, ["Inbox/log.md"]);
+    const recorded = readManifest(vault).entries["Inbox/log.md"]!;
+
+    // Hand-stamp the watermark the incremental extractor writes, through the
+    // explicit-contract write form.
+    writeManifestAtomic(
+      vault,
+      { "Inbox/log.md": { ...recorded, ...WATERMARK } },
+      readManifest(vault).contract,
+    );
+
+    const reread = readManifest(vault).entries["Inbox/log.md"]!;
+    expect(reread).toEqual({
+      sha256: hashFile(join(vault, "Inbox", "log.md")),
+      fingerprint: computeExtractionContractFingerprint(vault),
+      ...WATERMARK,
+    });
+
+    // The additive fields never bump the schema version on disk.
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+    };
+    expect(onDisk.schema_version).toBe(3);
+  });
+
+  test("an untouched watermarked entry survives an updateManifest of another path", () => {
+    writeSource("Inbox/log.md", "first line\n");
+    updateManifest(vault, ["Inbox/log.md"]);
+    const recorded = readManifest(vault).entries["Inbox/log.md"]!;
+    writeManifestAtomic(
+      vault,
+      { "Inbox/log.md": { ...recorded, ...WATERMARK } },
+      readManifest(vault).contract,
+    );
+
+    writeSource("Inbox/other.md", "a different source");
+    updateManifest(vault, ["Inbox/other.md"]);
+
+    const survivor = readManifest(vault).entries["Inbox/log.md"]!;
+    expect(survivor.extracted_bytes).toBe(WATERMARK.extracted_bytes);
+    expect(survivor.extracted_at).toBe(WATERMARK.extracted_at);
+  });
+
+  test("an entry without watermark fields degrades to byte 0", () => {
+    writeSource("Inbox/a.md", "legacy source");
+    updateManifest(vault, ["Inbox/a.md"]);
+    const entry = readManifest(vault).entries["Inbox/a.md"]!;
+    expect(entry.extracted_bytes).toBeUndefined();
+    expect(extractedBytesOf(entry)).toBe(0);
+  });
+
+  test("a malformed watermark shape drops the fields, never the entry", () => {
+    // Lazy degradation: the malformed watermark is absent, which answers
+    // byte 0, which reprocesses fully - without forfeiting the entry's
+    // fingerprint (no contract-changed cascade for one bad field).
+    writeSource("Inbox/a.md", "source bytes");
+    const digest = hashFile(join(vault, "Inbox", "a.md"));
+    writeManifestBytes(
+      JSON.stringify({
+        schema_version: 3,
+        contract: { fingerprint: computeExtractionContractFingerprint(vault) },
+        entries: {
+          "Inbox/a.md": {
+            sha256: digest,
+            fingerprint: computeExtractionContractFingerprint(vault),
+            extracted_bytes: "many",
+            extracted_at: 42,
+            extracted_bytes_offset: -1,
+          },
+        },
+      }),
+    );
+    const manifest = readManifest(vault);
+    expect(manifest.entries["Inbox/a.md"]).toEqual({
+      sha256: digest,
+      fingerprint: computeExtractionContractFingerprint(vault),
+    });
+    expect(manifest.contract).not.toBeNull();
+  });
+
+  test("unknown entry shapes still drop toward reprocessing exactly as today", () => {
+    writeSource("Inbox/b.md", "source b");
+    writeManifestBytes(
+      JSON.stringify({
+        schema_version: 3,
+        contract: { fingerprint: computeExtractionContractFingerprint(vault) },
+        entries: { "Inbox/b.md": { other: true } },
+      }),
+    );
+    const res = classifyPaths(vault, ["Inbox/b.md"], readManifest(vault));
+    expect(res.new).toEqual(["Inbox/b.md"]);
+  });
+
+  test("updateManifest records a caller-supplied full entry verbatim", () => {
+    writeSource("Inbox/log.md", "first line\n");
+    const live = computeExtractionContractFingerprint(vault);
+    const digest = hashFile(join(vault, "Inbox", "log.md"));
+    updateManifest(vault, ["Inbox/log.md"], {
+      "Inbox/log.md": { sha256: digest, fingerprint: live, ...WATERMARK },
+    });
+    expect(readManifest(vault).entries["Inbox/log.md"]).toEqual({
+      sha256: digest,
+      fingerprint: live,
+      ...WATERMARK,
+    });
   });
 });
 
