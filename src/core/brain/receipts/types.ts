@@ -182,6 +182,8 @@ export interface ReceiptScanTotals {
 export interface ReceiptScanError {
   /** The `family:name` spelling of the shard. */
   readonly shard: string;
+  /** Vault-relative POSIX path of the shard file. */
+  readonly path: string;
   readonly message: string;
 }
 

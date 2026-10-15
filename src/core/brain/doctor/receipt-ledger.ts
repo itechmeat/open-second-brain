@@ -73,6 +73,10 @@ export const receiptLedgerCheck: DoctorCheck = {
     for (const error of report.errors) {
       pushUncertain(out.uncertain, {
         code: RECEIPT_LEDGER_UNMEASURED_CODE,
+        // The shard's own vault-relative path: the stream merges on
+        // (code, path), so two dark shards without it collapse into one
+        // anonymous entry and every shard after the first goes unreported.
+        path: error.path,
         message:
           `the receipt shard ${error.shard} could not be read (${error.message}), so its ` +
           "foldable count is unknown",

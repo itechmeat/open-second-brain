@@ -232,7 +232,11 @@ function scanShard(
     bytes = statSync(shard.path).size;
   } catch (err) {
     return {
-      error: { shard: ref, message: err instanceof Error ? err.message : String(err) },
+      error: {
+        shard: ref,
+        path: toPosix(relative(vault, shard.path)),
+        message: err instanceof Error ? err.message : String(err),
+      },
     };
   }
   let records = 0;
