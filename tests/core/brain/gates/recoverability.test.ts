@@ -344,6 +344,10 @@ describe("the two pre-existing call sites return byte-identical payloads", () =>
         '    "Brain/entities/concept/ent-concept-benchwidget.md",',
         '    "Brain/sources/src-imports-benchmark-md-54d80ede894c.md"',
         "  ],",
+        // The per-entry failure list the batch decomposition added (empty on
+        // a clean run) - a deliberate shape change, measured and typed here
+        // for the same reason the recoverability block below is.
+        '  "failed": [],',
         '  "manifestEntryRemoved": true,',
         '  "auditRecordId": "ctn_20260601000000_a68bcc9d65569947",',
         '  "snapshotRunId": "delete-by-source-2026-06-01-000000",',

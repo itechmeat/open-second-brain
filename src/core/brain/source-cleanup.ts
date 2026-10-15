@@ -79,6 +79,9 @@ import { REVIEW_LANE } from "./write-gate.ts";
 /** How a page was found to trace back to the source. */
 export type SourceCleanupMatch = "source_path" | "session_ref" | "wikilink" | "evidenced_by";
 
+/** The shared empty failure list a dry run (and every clean run) reports. */
+const NO_FAILURES: ReadonlyArray<SourceCleanupFailure> = Object.freeze([]);
+
 /** Coarse classification of the referencing page, by its home directory. */
 export type SourceCleanupKind =
   | "summary"
@@ -132,6 +135,15 @@ export interface NoteDerivationEntry extends SourceCleanupEntry {
   readonly structuredProvenance: boolean;
 }
 
+/**
+ * One per-entry removal failure: the vault-relative path that stayed on disk
+ * and the named fs error, so a retry knows exactly what is left.
+ */
+export interface SourceCleanupFailure {
+  readonly path: string;
+  readonly message: string;
+}
+
 export interface SourceCleanupPlan {
   /** Canonical form of the queried source. */
   readonly source: string;
@@ -148,6 +160,14 @@ export interface SourceCleanupPlan {
   readonly manifestEntry: string | null;
   /** Paths actually removed this run (empty on a dry run). */
   readonly deleted: ReadonlyArray<string>;
+  /**
+   * Per-entry removal failures this run, with the named fs error (empty on a
+   * dry run and on a clean run). One blocked file never aborts the cleanup:
+   * every remaining entry is still attempted, the failures are reported here
+   * with the failed paths left on disk, and the audit record counts both
+   * sides honestly.
+   */
+  readonly failed: ReadonlyArray<SourceCleanupFailure>;
   readonly manifestEntryRemoved: boolean;
   /** Id of the audit continuity record, when one was written. */
   readonly auditRecordId: string | null;
@@ -666,7 +686,14 @@ function findOriginals(
   return [canonical];
 }
 
-function removeFile(vault: string, relPath: string): boolean {
+/**
+ * Remove one vault-relative file. `false` for an already-absent path (the
+ * idempotent re-run), `true` when it was removed. Any other fs error throws:
+ * callers that sweep many files collect per-file failures around this call
+ * ({@link deleteBySource} does; the retire applier consumes it the same way),
+ * never silently.
+ */
+export function removeFile(vault: string, relPath: string): boolean {
   let abs: string;
   try {
     abs = ensureInsideVault(join(vault, relPath), vault);
@@ -749,6 +776,7 @@ export function deleteBySource(
       originals: Object.freeze(originals),
       manifestEntry: manifestKey,
       deleted: Object.freeze([]),
+      failed: NO_FAILURES,
       manifestEntryRemoved: false,
       auditRecordId: null,
       snapshotRunId: null,
@@ -764,7 +792,22 @@ export function deleteBySource(
   // Confirmed path — delete the derived entries first, then (opt-in) the
   // originals, then drop the manifest entry (an index artifact).
   const deleted: string[] = [];
+  const failed: SourceCleanupFailure[] = [];
   let manifestEntryRemoved = false;
+
+  /**
+   * Attempt one removal, collecting a failure instead of throwing: one
+   * blocked file must not abort the entries still queued behind it. The
+   * collected failures ride the result and the audit, and the paths stay on
+   * disk for a retry.
+   */
+  const removeCollecting = (relPath: string): void => {
+    try {
+      if (removeFile(vault, relPath)) deleted.push(relPath);
+    } catch (err) {
+      failed.push({ path: relPath, message: (err as Error)?.message ?? String(err) });
+    }
+  };
 
   // Audit only a run that actually changed something; a no-op re-run writes
   // no record (idempotent). Factored so both the success path AND a partial
@@ -772,13 +815,17 @@ export function deleteBySource(
   const writeInvalidationAudit = (): string | null => {
     if (deleted.length === 0 && !manifestEntryRemoved) return null;
     const agent = opts.agent?.trim() ? opts.agent.trim() : "delete_by_source";
+    const reason =
+      `${agent}: removed ${deleted.length} derived/original entr${deleted.length === 1 ? "y" : "ies"}` +
+      `${manifestEntryRemoved ? " and the ingest manifest entry" : ""}` +
+      `${includeOriginals ? " (originals included)" : ""}` +
+      (failed.length > 0
+        ? `; failed to remove ${failed.length}: ${failed.map((f) => f.path).join(", ")}`
+        : "");
     const record = appendContinuitySourceInvalidation(vault, {
       createdAt: isoSecond(opts.now ?? new Date()),
       source: { id: canonical, path: canonical, kind: "source" },
-      reason:
-        `${agent}: removed ${deleted.length} derived/original entr${deleted.length === 1 ? "y" : "ies"}` +
-        `${manifestEntryRemoved ? " and the ingest manifest entry" : ""}` +
-        `${includeOriginals ? " (originals included)" : ""}`,
+      reason,
     });
     return record.id;
   };
@@ -790,13 +837,9 @@ export function deleteBySource(
   // gate so every confirmed cleanup has a pre-deletion recovery point.
   const runDeletion = (): void => {
     try {
-      for (const entry of derived) {
-        if (removeFile(vault, entry.path)) deleted.push(entry.path);
-      }
+      for (const entry of derived) removeCollecting(entry.path);
       if (includeOriginals) {
-        for (const original of originals) {
-          if (removeFile(vault, original)) deleted.push(original);
-        }
+        for (const original of originals) removeCollecting(original);
       }
 
       if (manifestKey !== null && existsSync(manifestPath(vault))) {
@@ -815,10 +858,11 @@ export function deleteBySource(
         }
       }
     } catch (err) {
-      // A removeFile (or manifest write) that throws mid-cleanup would otherwise
-      // exit before the audit append, leaving already-deleted paths with no
-      // record for a retry to reconstruct. Persist what was removed so far, then
-      // rethrow; never let an audit-write error mask the original failure.
+      // A manifest read/write that throws mid-cleanup would otherwise exit
+      // before the audit append, leaving already-deleted paths with no record
+      // for a retry to reconstruct. Persist what was removed (and what was
+      // collected as failed) so far, then rethrow; never let an audit-write
+      // error mask the original failure.
       try {
         writeInvalidationAudit();
       } catch {
@@ -866,6 +910,7 @@ export function deleteBySource(
     originals: Object.freeze(originals),
     manifestEntry: manifestKey,
     deleted: Object.freeze(deleted),
+    failed: Object.freeze(failed),
     manifestEntryRemoved,
     auditRecordId,
     snapshotRunId,

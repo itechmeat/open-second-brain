@@ -19,9 +19,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 import { ingestSource } from "../../../src/core/brain/ingest/ingest.ts";
 import { readManifest } from "../../../src/core/brain/ingest/content-manifest.ts";
@@ -306,6 +308,63 @@ describe("deleteBySource - D1 snapshot gate", () => {
     expect(plan.snapshotRunId).toBeNull();
     expect(plan.snapshotPath).toBeNull();
     expect(listSnapshots(vault).snapshots.length).toBe(before);
+  });
+});
+
+describe("deleteBySource — per-entry failure collection", () => {
+  test("dry-run and clean confirmed runs report an empty failed array", () => {
+    seedContaminatedVault();
+    const dry = deleteBySource(vault, SOURCE, { now: NOW });
+    expect(dry.failed).toEqual([]);
+
+    const plan = deleteBySource(vault, SOURCE, { confirm: true, now: NOW });
+    expect(plan.failed).toEqual([]);
+    expect(plan.deleted.length).toBeGreaterThan(0);
+  });
+
+  test("a removal failure is collected; the remaining entries are still removed", () => {
+    if (CHMOD_CANNOT_DENY) return;
+    seedContaminatedVault();
+
+    // Learn the derived entries first, then make one of them undeletable:
+    // removing a file needs the write bit on its DIRECTORY, so a read-only
+    // directory makes exactly that one removal fail.
+    const preview = deleteBySource(vault, SOURCE, { now: NOW });
+    const blockedPath = preview.derived.find((e) => e.kind === "entity")!.path;
+    const blockedDir = join(vault, dirname(blockedPath));
+    chmodSync(blockedDir, 0o555);
+    try {
+      const plan = deleteBySource(vault, SOURCE, { confirm: true, now: NOW });
+
+      // The blocked entry is reported, named, and left on disk.
+      expect(plan.failed.length).toBe(1);
+      expect(plan.failed[0]!.path).toBe(blockedPath);
+      expect(plan.failed[0]!.message).toContain("EACCES");
+      expect(existsSync(join(vault, blockedPath))).toBe(true);
+      expect(plan.deleted).not.toContain(blockedPath);
+
+      // The remaining entries were still removed - one blocked file never
+      // aborts the run.
+      expect(plan.deleted.length).toBe(preview.derived.length - 1);
+      for (const entry of preview.derived) {
+        if (entry.path === blockedPath) continue;
+        expect(existsSync(join(vault, entry.path))).toBe(false);
+        expect(plan.deleted).toContain(entry.path);
+      }
+      expect(plan.manifestEntryRemoved).toBe(true);
+
+      // The audit record is honest about both counts.
+      expect(plan.auditRecordId).not.toBeNull();
+      const audit = listContinuityRecords(vault, { kind: "source_invalidation" });
+      expect(audit.length).toBe(1);
+      const reason = String(audit[0]!.payload["reason"]);
+      expect(reason).toContain(`removed ${plan.deleted.length}`);
+      expect(reason).toContain("failed to remove 1");
+      expect(reason).toContain(blockedPath);
+    } finally {
+      // Restore the write bit so afterEach can remove the sandbox.
+      chmodSync(blockedDir, 0o755);
+    }
   });
 });
 
