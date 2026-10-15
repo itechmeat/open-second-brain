@@ -192,4 +192,19 @@ describe("the CLI extract preview reports the appended slice", () => {
     const second = ingestSource(vault, INPUT, OPTS);
     expect(second.extractionDelta).toBeUndefined();
   });
+
+  test("a rewritten source that grew answers without a section, like the pipeline", async () => {
+    writeSource("one\ntwo\n");
+    ingestSource(vault, INPUT, OPTS);
+    // Bigger than the watermark, but the leading bytes no longer match the
+    // recorded digest: the pipeline classifies this modified and reports no
+    // delta, so the preview must not label it an append either.
+    writeSource("ONE\nTWO\nTHREE\n");
+    const res = await runCli(["brain", "extract", join(vault, SOURCE), "--json", "--vault", vault]);
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as { appended?: unknown };
+    expect(payload.appended).toBeUndefined();
+    const second = ingestSource(vault, INPUT, OPTS);
+    expect(second.extractionDelta).toBeUndefined();
+  });
 });

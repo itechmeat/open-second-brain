@@ -19,7 +19,7 @@
  * answers without the section, never with a fake range.
  */
 
-import { existsSync, lstatSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { oneLine } from "../../../core/brain/architect/manifests.ts";
@@ -28,14 +28,12 @@ import {
   HTML_EXTRACT_MAX_SOURCE_BYTES,
   type HtmlPart,
 } from "../../../core/brain/ingest/extract-html.ts";
-import { extractedBytesOf, readManifest } from "../../../core/brain/ingest/content-manifest.ts";
 import { extractSource, type SourceExtraction } from "../../../core/brain/ingest/extract-source.ts";
 import {
-  EXTRACTION_DELTA_MAX_BYTES,
+  appendedExtractionDelta,
   readSourceBounded,
   type SourceUnread,
 } from "../../../core/brain/ingest/ingest.ts";
-import { readTail } from "../../../core/brain/ingest/tail-read.ts";
 import { canonicalNotePath } from "../../../core/path-safety.ts";
 import {
   SOURCE_EXTRACT_SKIP_REASON,
@@ -112,12 +110,15 @@ function resolveOptionalVault(
 
 /**
  * The appended slice `file` grew by since its recorded extraction watermark,
- * when the file sits inside `vault` and the manifest records one. Everything
- * else - a file outside the vault, no watermark, a rewritten source, a tail
- * with no complete line yet, or a tail past the pipeline's own delta cap -
- * answers undefined: the section is additive data for an incremental pass,
- * never a second verdict on the extraction, and never a slice the delta
- * pass itself would refuse.
+ * when the file sits inside `vault` and the manifest records one. The
+ * pipeline's own delta pass answers this (`appendedExtractionDelta`), so the
+ * preview reports the same fact the pipeline would: a source whose leading
+ * watermark bytes no longer match the recorded digest is a rewrite, not an
+ * append, and answers undefined exactly as the ingest's delta report does -
+ * as do a file outside the vault, no watermark, a tail with no complete
+ * line yet, and a tail past the pipeline's delta cap. The section is
+ * additive data for an incremental pass, never a second verdict on the
+ * extraction.
  */
 function appendedSlice(vault: string | null, file: string): AppendedSlice | undefined {
   if (vault === null) return undefined;
@@ -125,12 +126,7 @@ function appendedSlice(vault: string | null, file: string): AppendedSlice | unde
   if (rel.length === 0 || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) {
     return undefined;
   }
-  const entry = readManifest(vault).entries[canonicalNotePath(rel.split(sep).join("/"))];
-  const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
-  if (watermark <= 0 || !existsSync(file)) return undefined;
-  const tail = readTail(file, watermark, { maxBytes: EXTRACTION_DELTA_MAX_BYTES });
-  if (tail.kind !== "appended" || tail.toByte <= watermark) return undefined;
-  return { fromByte: tail.fromByte, toByte: tail.toByte };
+  return appendedExtractionDelta(vault, file, canonicalNotePath(rel.split(sep).join("/")));
 }
 
 /** The wire shape of one HTML part. */

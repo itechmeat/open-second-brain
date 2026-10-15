@@ -646,8 +646,13 @@ const PREFIX_HASH_CHUNK_BYTES = 65_536;
  * full reprocess the modified classification already triggers. The returned
  * range is boundary-safe ({@link ./tail-read.ts}): it ends at the last
  * complete newline, and it is empty when the append has none yet.
+ *
+ * Exported because the CLI extract preview reports the same fact (`o2b
+ * brain extract`'s appended section): one helper, so the preview can never
+ * announce a slice the pipeline's own delta pass would refuse, nor call an
+ * append what the prefix proof calls a rewrite.
  */
-function appendedExtractionDelta(
+export function appendedExtractionDelta(
   vault: string,
   sourceAbs: string,
   canonicalSource: string,
