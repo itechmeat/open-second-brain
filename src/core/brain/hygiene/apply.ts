@@ -31,6 +31,7 @@ import { brainDirsForWrite } from "../paths.ts";
 import { archivePage, executeRecompile, planRecompile } from "../recompile.ts";
 import { appendClaimEvent } from "../truth/store.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import type { WriteSubject } from "../write-disposition.ts";
 import type { HygienePlan } from "./plan.ts";
 import type { HygieneFinding } from "./types.ts";
 
@@ -38,6 +39,15 @@ export interface HygieneApplyOptions {
   readonly dryRun?: boolean;
   readonly agent: string;
   readonly now: Date;
+  /**
+   * Credential subject for the destructive routes' deny consult. Only
+   * the `retire` executor consults a permissions document today (through
+   * the retirement core, the same ladder deleteBySource climbs); with no
+   * subject the consult falls back to the ambient agent, so a surface
+   * holding a request identity must pass it here or a rule naming that
+   * identity is silently bypassed on this route.
+   */
+  readonly subject?: WriteSubject;
 }
 
 export interface HygieneAppliedAction {
@@ -153,6 +163,7 @@ async function executeFinding(
       const result = retireDocumentCopies(vault, copies, {
         agent: opts.agent,
         now: opts.now,
+        ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
       });
       // Per-copy failures already left the copies that failed on disk;
       // surfacing the first through the finding's error keeps the

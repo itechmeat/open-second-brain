@@ -403,6 +403,11 @@ async function toolBrainHygiene(
     dryRun,
     agent: resolveAgentName(ctx.configPath ?? undefined),
     now,
+    // The deny consult on the destructive retire route answers for the
+    // credential-minted subject, never for the config agent - the same
+    // threading every other destructive surface applies (write-side
+    // trust, Task 7).
+    ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
   });
   return {
     mode,

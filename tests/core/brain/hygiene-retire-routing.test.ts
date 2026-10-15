@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,8 +29,13 @@ import {
   type HygieneFinding,
 } from "../../../src/core/brain/hygiene/types.ts";
 import { requireRepairCapability } from "../../../src/core/brain/applier-capability.ts";
+import {
+  WRITE_REFUSAL_CODES,
+  type WriteSubject,
+} from "../../../src/core/brain/write-disposition.ts";
 
 let vault: string;
+let savedAgentName: string | undefined;
 
 const NOW = new Date("2026-06-01T00:00:00Z");
 const CANONICAL_BODY =
@@ -42,9 +47,12 @@ beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-retire-routing-"));
   mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
   mkdirSync(join(vault, "imports"), { recursive: true });
+  savedAgentName = process.env["VAULT_AGENT_NAME"];
 });
 
 afterEach(() => {
+  if (savedAgentName === undefined) delete process.env["VAULT_AGENT_NAME"];
+  else process.env["VAULT_AGENT_NAME"] = savedAgentName;
   rmSync(vault, { recursive: true, force: true });
 });
 
@@ -203,5 +211,86 @@ describe("applyHygienePlan dispatches retire to the retirement core", () => {
     expect(result.errors[0]!.message).toContain("canonical");
     // The failed copy stays on disk.
     expect(existsSync(join(vault, retired))).toBe(true);
+  });
+});
+
+describe("the retire deny consult answers for the credential subject", () => {
+  /** The subject a credential-minted request would carry (write-side trust). */
+  const SUBJECT: WriteSubject = { agent: "codex", via: "token" };
+
+  /**
+   * A permissions document closing `codex` out of the ingest action the
+   * retirement lane consults. The ambient agent is `claude`, so ONLY a
+   * consult answering for the passed subject can produce this refusal -
+   * the config fallback must never decide the retire route.
+   */
+  function seedDeniedPair(): { canonical: string; retired: string; finding: HygieneFinding } {
+    process.env["VAULT_AGENT_NAME"] = "claude";
+    const seeded = seedPair();
+    writeFileSync(
+      join(vault, "Brain", "_permissions.yaml"),
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze\n    agent: codex\n" +
+        "    action: ingest\n    verdict: deny\n",
+      "utf8",
+    );
+    return { ...seeded, finding: scanRetireFinding() };
+  }
+
+  function planFor(finding: HygieneFinding) {
+    return buildHygienePlan(runHygieneScan(vault, { detectors: ["document-dedup"], now: NOW }), {
+      ids: [finding.id],
+    });
+  }
+
+  test("a document deny for the subject refuses the retire route before any write", async () => {
+    const { canonical, retired, finding } = seedDeniedPair();
+
+    const result = await applyHygienePlan(vault, planFor(finding), {
+      agent: "tester",
+      now: NOW,
+      subject: SUBJECT,
+    });
+
+    expect(result.applied).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.finding_id).toBe(finding.id);
+    // The refusal answers for the credential subject, the ingest action
+    // the lane consults and the deciding rule - the same typed refusal
+    // deleteBySource produces.
+    expect(result.errors[0]!.message).toContain(WRITE_REFUSAL_CODES.documentDeny);
+    expect(result.errors[0]!.message).toContain('"codex"');
+    expect(result.errors[0]!.message).toContain("ingest");
+    expect(result.errors[0]!.message).toContain("entry:freeze");
+    // The deny consult ran before anything was snapshotted or removed:
+    // the copy, its manifest entry and the canonical all survive.
+    expect(existsSync(join(vault, retired))).toBe(true);
+    expect(existsSync(join(vault, canonical))).toBe(true);
+    expect(readManifest(vault).entries["imports/a.md"]).toBeDefined();
+    expect(listContinuityRecords(vault, { kind: "source_invalidation" })).toHaveLength(0);
+    const snapshots = join(vault, "Brain", ".snapshots");
+    expect(existsSync(snapshots) ? readdirSync(snapshots) : []).toEqual([]);
+  });
+
+  test("a deny naming another agent leaves the retire applying under the same subject", async () => {
+    process.env["VAULT_AGENT_NAME"] = "codex";
+    const { canonical, retired } = seedPair();
+    writeFileSync(
+      join(vault, "Brain", "_permissions.yaml"),
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze-gemini\n    agent: gemini\n" +
+        "    action: ingest\n    verdict: deny\n",
+      "utf8",
+    );
+    const finding = scanRetireFinding();
+
+    const result = await applyHygienePlan(vault, planFor(finding), {
+      agent: "tester",
+      now: NOW,
+      subject: { agent: "claude", via: "token" },
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.applied).toHaveLength(1);
+    expect(existsSync(join(vault, retired))).toBe(false);
+    expect(existsSync(join(vault, canonical))).toBe(true);
   });
 });
