@@ -596,7 +596,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           // A caller reaching for the widest escape has to be told what
           // it actually switches off.
           description:
-            "Bypass the window, busy, host-pressure and storage-capacity gates and every streak refusal - never the lease (run). retry_tasks passes one task's streak with the gates kept.",
+            "Bypass the window, busy, host-pressure and storage-capacity gates and every streak refusal; never the lease (run). retry_tasks passes one streak, gates kept.",
         },
         retry_tasks: {
           type: "array",

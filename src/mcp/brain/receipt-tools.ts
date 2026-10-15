@@ -132,19 +132,18 @@ export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_receipts",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Receipt compaction over the append-only receipt ledgers (continuity log, metrics sink). " +
-      "`scan` (default): read-only per-shard inventory of record, foldable, protected and " +
-      "unparseable counts. `compact`: fold records older than the age threshold into per-kind, " +
-      "per-month aggregate lines in EXPLICITLY named shards; previews without `apply`, and a " +
-      "confirmed run takes a recovery point first. Never touches decision-change receipts, the " +
-      "source archive, or the context-compaction records.",
+      "Fold a receipt ledger's expired records into per-kind, per-month aggregates. `scan` " +
+      "(default) inventories both ledgers read-only; `compact` rewrites explicitly named " +
+      "shards, preview-bound without `apply`. Never touches decision-change receipts, the " +
+      "source archive, or context-compaction records.",
     inputSchema: {
       type: "object",
       properties: {
         mode: {
           type: "string",
           enum: [...RECEIPT_MODES],
-          description: "Surface mode: scan, compact. Default `scan`.",
+          description:
+            "Surface mode: scan inventories both ledgers (continuity, metrics); compact folds. Default `scan`.",
         },
         older_than_days: {
           type: "integer",
@@ -159,7 +158,9 @@ export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         apply: {
           type: "boolean",
-          description: "Perform the fold (compact mode). Without it compact is a dry run.",
+          description:
+            "Perform the fold (compact mode). Without it compact is a dry run; a confirmed run " +
+            "takes a recovery point first and rewrites each shard atomically.",
         },
         expect: {
           type: "integer",
