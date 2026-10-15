@@ -533,7 +533,7 @@ o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [
 o2b brain session-describe    --session-id <id> [--topics] [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
-o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness,slug-collisions,tags,capture-scope] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope; since v1.67.0 `capture-scope` is default-on and warns, with proposed action review, when a retrievable page of active knowledge cites only sources that are currently url-only; since v1.81.0 the detector also names a cited source whose durable archive entry under Brain/.archives/ is missing or no longer matches the hash stamped on the page)
+o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,document-dedup,freshness,usefulness,slug-collisions,tags,capture-scope] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope; since v1.67.0 `capture-scope` is default-on and warns, with proposed action review, when a retrievable page of active knowledge cites only sources that are currently url-only; since v1.81.0 the detector also names a cited source whose durable archive entry under Brain/.archives/ is missing or no longer matches the hash stamped on the page; since v1.85.0 `document-dedup` is opt-in - near-duplicate ingest summary copies at a lexical similarity of 0.8 or an embedding similarity of 0.97, keeping the newest `created_at` copy as the canonical, a page without `created_at` ineligible - because its remediation is the destructive-class `retire` action, which `apply` routes through the retirement core: inbound wikilinks retarget to the canonical within the detector's scope, the copy's manifest entry drops, one `source_invalidation` audit records each copy, and the whole span sits behind the destructive-snapshot gate, failing soft per copy)
 o2b brain hygiene             scan: with the optional `dedup` decision-model use in enforce, dedup findings carry an advisory `decision_model` verdict and a confident `different` is listed last; `o2b brain doctor` annotates `entity-alias-candidate` warnings the same way; `apply` ignores verdicts
 o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
 o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
@@ -655,7 +655,7 @@ o2b brain maintenance         run --cron-template [--interval N] [--format cron|
 
 The schema pack gains four additive ontology fields (`labels`, `link_constraints`, `attributes`, `frontmatter_tiers`) with audited mutations through `o2b brain schema apply`. Link constraints enforce at index materialization: a typed edge whose endpoint page types violate the declared pairs falls back to an untyped link, `o2b brain schema lint` lists each violation, and removing the constraint restores the edges on the next index run. Tier drift detection rides the same index pass - the snapshot keeps the expected value, so reindexes never absorb a hand-edit, and `brain_doctor` warns with the open count. Filter labelled recall with `o2b search <q> --property labels=<dim>/<value>`. Secrets protect against context leakage and vault sync exposure, not against root; every custody operation lands a no-values record in `Brain/log/secret-custody/`. A maintenance gate skip exits 0 so cron never alarms on a quiet hour.
 
-The lane's two vault-side knobs live in `Brain/_brain.yaml` under `maintenance:`, because they answer what the cron line cannot. `host_pressure_percent` adds a fourth gate: skip when the host's one-minute run queue stands at or above that percentage of the CPUs this process may use. Unset by default, which leaves the gate off. Where the metric is degenerate - a platform whose load average is a constant, or a cgroup with a CPU bandwidth quota, where the run queue is the whole host's - the gate stays **open** and the journal carries a separate `pressure:unmeasurable` row naming the reason, so an unreadable host is never reported as a quiet one. `failure_streak_limit` (default 3) refuses a lane task that has failed that many times in a row in the run journal, naming the streak; a single journaled success clears it. The refusal is per task - the other three still run under the same lease - and there are two ways past it: `--retry <task>` (repeatable) attempts just that task with every gate the operator configured still in force, and `--force` runs the whole lane past every soft gate and every refusal. Both escapes exist on the MCP surface too - `brain_maintenance` takes `retry_tasks`, `busy_minutes`, `busy_threshold` and a `status` `limit`, so an agent reading the refusal can act on it without reaching for `force`, which switches off three gates it never meant to touch. A refused task is reported as `REFUSED`, never `FAILED`, and the run exits **7** rather than 1: nothing was attempted, so nothing failed, but a standing refusal is not the quiet hour that exits 0 either. An attempted failure still exits 1 and outranks a refusal in the same run. The `refused:streak` journal row carries the count it refused on, so the streak does not silently reset when its evidence rolls off the journal cap.
+The lane's vault-side knobs live in `Brain/_brain.yaml` - the two original ones under `maintenance:`, the storage cap and its thresholds under `storage:` (since v1.85.0, see "Storage lifecycle" below) - because they answer what the cron line cannot. `host_pressure_percent` adds a gate over the window and busy checks: skip when the host's one-minute run queue stands at or above that percentage of the CPUs this process may use. Unset by default, which leaves the gate off. Where the metric is degenerate - a platform whose load average is a constant, or a cgroup with a CPU bandwidth quota, where the run queue is the whole host's - the gate stays **open** and the journal carries a separate `pressure:unmeasurable` row naming the reason, so an unreadable host is never reported as a quiet one. Since v1.85.0 a configured storage cap adds the lane's fifth gate, evaluated last because it is the most expensive: a fresh byte census of the whole vault, skipping the pass at a measured critical tier with its own `skipped:capacity` verdict, the journal row carrying the tier and the reading behind it while the skipped run still appends its usage sample first. A capacity skip is a gate skip like any other - it exits 0 - and where the caller has no local reach the `status` surface renders the tier word and the unmeasurable reason without the byte-and-percent figures. `failure_streak_limit` (default 3) refuses a lane task that has failed that many times in a row in the run journal, naming the streak; a single journaled success clears it. The refusal is per task - the other three still run under the same lease - and there are two ways past it: `--retry <task>` (repeatable) attempts just that task with every gate the operator configured still in force, and `--force` runs the whole lane past the four soft gates - window, busy, pressure and capacity - and every streak refusal, never past the lease. Both escapes exist on the MCP surface too - `brain_maintenance` takes `retry_tasks`, `busy_minutes`, `busy_threshold` and a `status` `limit`, so an agent reading the refusal can act on it without reaching for `force`, which widens its bypass to every soft gate and every streak refusal. A refused task is reported as `REFUSED`, never `FAILED`, and the run exits **7** rather than 1: nothing was attempted, so nothing failed, but a standing refusal is not the quiet hour that exits 0 either. An attempted failure still exits 1 and outranks a refusal in the same run. The `refused:streak` journal row carries the count it refused on, so the streak does not silently reset when its evidence rolls off the journal cap.
 
 Since v1.64.0 the lane's timeouts are honest and its embedding spend is named. A task killed at its safeguard deadline exits **6** (`probeIncomplete`), keyed on `timed_out` rows alone: the only proved fact is that the pass did not finish, which is not the same as a task failing; a proved failure (1) outranks a timeout, a timeout outranks a refusal (7), and the render says TIMED OUT with the safeguard detail. The reindex task stays keyword-only unless `maintenance_embeddings: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`, default `false`) opts it in; then it requests the embedding phase whenever the resolved semantic config can reach a provider, announces the pending-spend estimate before the pass, and journals the phase's own cost-gate result as the per-run receipt - model, tokens, estimated cost, and whether a bypass fired - on the task row, the journal line and the `maintenance_spend` metrics surface; the preview is an estimate by position, the receipt prices what the completed pass embedded, and a run killed mid-spend receipts nothing. `--force-cost` (MCP `force_cost`) bypasses a positive `embedding_cost_gate_usd` for this run, recorded on the receipt when it overrode a gate that would have refused. A safeguard timeout is journaled as `timed_out` and neither counts toward nor resets the failure streak that refuses a task.
 
@@ -1357,6 +1357,68 @@ never answered with an empty result. The operations keep their flags to
 themselves: `--query`, `--since`, `--before`, `--limit` and
 `--snippet-chars` refuse under coverage, and `--char-budget` refuses under
 match.
+
+### Storage lifecycle (since v1.85.0)
+
+```text
+o2b brain storage             [--vault V] [--json] - the vault storage report: what the vault holds per surface (measured or refused by name), the forecast tier against the configured cap with the percent and days figures it rests on, and the storage_usage sample this invocation records; a report never fails on a finding, so a critical tier still exits 0
+o2b brain receipts            scan [--older-than-days N] [--json] | compact --shard <family:name> [--older-than-days N] [--apply] [--expect N] [--strict] [--json] - receipt compaction over the continuity and metrics ledgers; scan is the default and a pure read; compact folds expired records into per-kind, per-month aggregates in the named shards and previews without --apply; scan exits 1 when a shard error was collected, compact exits 1 when a fold failure was collected, and a usage error exits 2
+```
+
+An uncapped vault is unbounded: `o2b brain storage` reports the bytes and
+the per-surface census, states `unbounded` plainly, invents no
+days-to-exhaustion figure, and nothing pauses and nothing refuses.
+Setting `storage.cap_bytes` in `Brain/_brain.yaml` turns on the tiers and
+every consumer of them; the four thresholds (`warn_percent`,
+`critical_percent`, `warn_days`, `critical_days`) default to 80 and 95
+percent of the cap and 30 and 7 days to it at the measured trend, and the
+critical band must sit past the warn band - a larger percent, a smaller
+day horizon. Each invocation takes one census and appends one
+`storage_usage` sample; from two or more samples a linear trend yields
+the days-to-capacity figure, and a tier is decided by the worse of its
+two bands. The census covers `brain_tree` and the dot-directories
+(`.snapshots/`, `.artifacts/`, `.archives/`, `.payloads/`, `.state/`)
+plus the derived store with its WAL/SHM sidecars; a surface that cannot
+be measured is refused by name, never reported as zero. Below local
+reach the census is not taken: the report answers `measured: false` with
+the reason named and carries no figures. The CLI runs at local reach, so
+it always sees the measured form.
+
+The consumers are the maintenance lane's fifth gate (see "Write-time
+integrity and governance" above): a fresh census at decision time, never
+the stored aggregate, skipping the pass at a measured critical tier with
+its own `skipped:capacity` verdict; `brain_ingest_source`'s admission
+refusal, which answers `capacity_exhausted` in the validate phase before
+the write path opens, so a refused ingest leaves the vault
+byte-identical; and the `storage-capacity` doctor check, which reports
+fullness for a capped vault and answers in the uncertain stream that the
+reading was not taken when it cannot take one. A second doctor check
+watches the ledgers rather than the vault: `receipt-ledger-growth` warns
+per family once its foldable population crosses 1,000 records, naming
+`o2b brain receipts scan` as the next command, and reports a ledger it
+could not read in the uncertain stream - growth unknown, never flattened
+to growth fine.
+
+Receipt compaction gives the two append-only receipt ledgers - the
+continuity ledger and the metrics ledger - a drain. `scan` inventories
+every shard read-only (records, foldable, protected, unparseable,
+aggregates, bytes) and names each shard it could not read; `compact`
+folds the records older than `--older-than-days` (default 30) into
+per-kind, per-month aggregate lines inside the shards the caller names
+with `--shard family:name` ids from a scan - a compact with no shard ids
+is a usage error, never a guess. It previews unless `--apply` is passed;
+a confirmed run takes a recovery-point snapshot first and rewrites each
+shard atomically. `--expect N` asserts exactly N records will fold and
+aborts without writing on a mismatch; `--strict` refuses a confirmed
+compact that carries no count guard. Records in the protected classes
+never fold whatever their age - the `source_invalidation` audit trail
+and the two context-compaction kinds - and one `receipt_compaction` audit
+record closes a confirmed run. Compact is a local-reach surface (the
+`brain_receipts` tool refuses it by name below local reach, while scan
+stays readable at any reach); the CLI always runs at local reach. This
+verb owns storage-ledger compaction only: prompt-context receipts stay
+with `o2b brain context-receipts`, and the Hermes context-compaction
+kinds are never folded under a storage operation's name.
 
 ### Source distillation
 
