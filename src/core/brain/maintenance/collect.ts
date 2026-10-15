@@ -7,6 +7,14 @@
  * `digest.ts` (read-only summary) and the `brain_doctor` MCP tool
  * can share the same collection logic without depending on each
  * other.
+ *
+ * The collection is fail-soft per signal, and the failures it absorbs
+ * are NAMED: each failed scan is handed to the `onError` observer as a
+ * {@link MaintenanceCollectError} while the remaining signals still
+ * collect and the actions still return. A signal that fails
+ * contributes no actions either way - what the observer buys is the
+ * difference between a thin report because the vault is healthy and a
+ * thin report because a scan refused.
  */
 
 import { lintConsolidate } from "../lint-consolidate.ts";
@@ -14,39 +22,74 @@ import { findDuplicateCandidates } from "../page-dedup.ts";
 import { computeTokenFootprint } from "../token-footprint.ts";
 import { scoreActions, type ActionItem } from "./action-scorer.ts";
 
-export function collectMaintenanceActions(vault: string): ReadonlyArray<ActionItem> {
+/** The maintenance scans this module collects, named for the failure report. */
+export type MaintenanceCollectSignal = "dedup" | "lint" | "token-footprint";
+
+/** One signal's collection failure: the named scan and the error it raised. */
+export interface MaintenanceCollectError {
+  readonly signal: MaintenanceCollectSignal;
+  readonly message: string;
+}
+
+export interface CollectMaintenanceActionsOptions {
+  /**
+   * Observes each per-signal collection failure as it is absorbed. The scan
+   * stays fail-soft either way; the doctor, digest and health surfaces call
+   * without an observer and keep today's quiet contract, and a caller
+   * diagnosing a thin report passes one to hear what refused.
+   */
+  readonly onError?: (error: MaintenanceCollectError) => void;
+}
+
+/**
+ * Run one signal's scan, absorbing a failure as a named collected error
+ * instead of a bare swallow. `undefined` means the signal contributes
+ * nothing this run.
+ */
+function collectSignal<T>(
+  signal: MaintenanceCollectSignal,
+  onError: (error: MaintenanceCollectError) => void,
+  run: () => T,
+): T | undefined {
+  try {
+    return run();
+  } catch (err) {
+    onError({ signal, message: (err as Error)?.message ?? String(err) });
+    return undefined;
+  }
+}
+
+export function collectMaintenanceActions(
+  vault: string,
+  opts: CollectMaintenanceActionsOptions = {},
+): ReadonlyArray<ActionItem> {
+  const onError = opts.onError ?? (() => {});
   let dedupCandidates: Array<{ canonicalId: string; secondaryCount: number }> = [];
   let staleByLifecycle: Array<{ id: string; ageDays: number }> = [];
   let brokenLinks: Array<{ path: string; from: string }> = [];
   let tokenFootprint: { total: number; warnThreshold: number } | undefined;
 
-  try {
-    const dedup = findDuplicateCandidates(vault);
+  const dedup = collectSignal("dedup", onError, () => findDuplicateCandidates(vault));
+  if (dedup !== undefined) {
     dedupCandidates = dedup.candidates.map((c) => ({
       canonicalId: c.canonical.id,
       secondaryCount: c.secondaries.length,
     }));
-  } catch {
-    // Best-effort: a vault scan failure must not break the consumer.
   }
-  try {
-    const lint = lintConsolidate(vault, { apply: false });
+  const lint = collectSignal("lint", onError, () => lintConsolidate(vault, { apply: false }));
+  if (lint !== undefined) {
     staleByLifecycle = lint.demotions.map((d) => ({
       id: d.id,
       ageDays: d.ageDays,
     }));
     brokenLinks = lint.fixes.map((f) => ({ path: f.path, from: f.from }));
-  } catch {
-    // ignore
   }
-  try {
-    const footprint = computeTokenFootprint(vault);
+  const footprint = collectSignal("token-footprint", onError, () => computeTokenFootprint(vault));
+  if (footprint !== undefined) {
     tokenFootprint = {
       total: footprint.total,
       warnThreshold: footprint.warnThreshold,
     };
-  } catch {
-    // ignore
   }
 
   return scoreActions({

@@ -5,11 +5,64 @@
  * Default mode is read-only listing. `--apply` performs the merge
  * for every reported candidate: writes `merged_into:` on each
  * secondary and rewrites `[[<secondary>]]` references across the
- * vault to point at the canonical page.
+ * vault to point at the canonical page. A merge attempt that refuses
+ * (a MergeChainError) or cannot write its links is collected and
+ * reported per cluster; the remaining clusters still apply, and the
+ * run exits 1 when any failure was collected.
  */
 
+import type { DedupCandidate } from "../../../core/brain/page-dedup.ts";
 import { findDuplicateCandidates, mergePage } from "../../../core/brain/page-dedup.ts";
 import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
+
+/**
+ * One merge attempt that refused to land: the cluster's dedup key and the
+ * named error. The secondary the error names is left exactly as it was.
+ */
+export interface DedupApplyFailure {
+  readonly key: string;
+  readonly message: string;
+}
+
+/** What one apply pass over a set of candidates did. */
+export interface DedupApplyReport {
+  readonly merged: number;
+  readonly wikilinksUpdated: number;
+  /** Per-attempt failures, in cluster order; empty on a clean apply. */
+  readonly failures: ReadonlyArray<DedupApplyFailure>;
+}
+
+/**
+ * Merge every secondary into its canonical, collecting per-attempt failures
+ * instead of throwing: one cluster's MergeChainError (or one blocked wikilink
+ * write) leaves every later cluster still applied. The report carries the
+ * honest counts alongside the failures, so the caller can exit non-zero
+ * without re-deriving what landed.
+ */
+export function applyDedupCandidates(
+  vault: string,
+  candidates: ReadonlyArray<DedupCandidate>,
+): DedupApplyReport {
+  let mergedCount = 0;
+  let wikilinksTouched = 0;
+  const failures: DedupApplyFailure[] = [];
+  for (const c of candidates) {
+    for (const s of c.secondaries) {
+      try {
+        const res = mergePage(vault, s.id, c.canonical.id);
+        mergedCount++;
+        wikilinksTouched += res.wikilinksUpdated;
+      } catch (err) {
+        failures.push({ key: c.key, message: (err as Error)?.message ?? String(err) });
+      }
+    }
+  }
+  return {
+    merged: mergedCount,
+    wikilinksUpdated: wikilinksTouched,
+    failures: Object.freeze(failures),
+  };
+}
 
 export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -55,26 +108,25 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
     return 0;
   }
 
-  let mergedCount = 0;
-  let wikilinksTouched = 0;
-  for (const c of report.candidates) {
-    for (const s of c.secondaries) {
-      const res = mergePage(vault, s.id, c.canonical.id);
-      mergedCount++;
-      wikilinksTouched += res.wikilinksUpdated;
-    }
-  }
+  const applied = applyDedupCandidates(vault, report.candidates);
+  // Collected failures are an honest non-zero exit, not a crash: every
+  // merge that could land did land, and the failures name what did not.
+  const exitCode = applied.failures.length > 0 ? 1 : 0;
 
   if (flags["json"]) {
     okJson({
       scanned: report.scanned,
       clusters: report.candidates.length,
-      merged: mergedCount,
-      wikilinks_updated: wikilinksTouched,
+      merged: applied.merged,
+      wikilinks_updated: applied.wikilinksUpdated,
+      failures: applied.failures.map((f) => ({ key: f.key, message: f.message })),
     });
-    return 0;
+    return exitCode;
   }
-  process.stdout.write(`merged ${mergedCount} page(s) into canonicals.\n`);
-  process.stdout.write(`wikilinks updated: ${wikilinksTouched}\n`);
-  return 0;
+  process.stdout.write(`merged ${applied.merged} page(s) into canonicals.\n`);
+  process.stdout.write(`wikilinks updated: ${applied.wikilinksUpdated}\n`);
+  for (const f of applied.failures) {
+    process.stdout.write(`failed cluster ${f.key}: ${f.message}\n`);
+  }
+  return exitCode;
 }
