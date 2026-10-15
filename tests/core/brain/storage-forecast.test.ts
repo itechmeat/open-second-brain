@@ -212,6 +212,21 @@ describe("sampleStorageUsage", () => {
     expect(listMetrics(vault, { surface: STORAGE_USAGE_METRIC_SURFACE })).toHaveLength(2);
   });
 
+  test("a pre-measured census is recorded instead of walking the vault again", () => {
+    // The census a gate already took, before the vault grew: the sampler
+    // must record THESE bytes, not take a second census that would
+    // measure the growth.
+    const usage = measureStorageUsage(vault, { now: NOW });
+    mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "sources", "AA-grown.md"), "x".repeat(50_000), "utf8");
+    const result = sampleStorageUsage(vault, { runId: "run-1", now: NOW, usage });
+    expect(result.usage).toBe(usage);
+    expect(result.appended).toBe(true);
+    const records = listMetrics(vault, { surface: STORAGE_USAGE_METRIC_SURFACE });
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["total_bytes"]).toBe(usage.totalBytes);
+  });
+
   test("an append failure is reported by name, never thrown", () => {
     // Brain/metrics exists as a regular file, so creating the metrics
     // directory fails and the append cannot land.

@@ -295,6 +295,13 @@ export interface SampleStorageUsageOptions {
   readonly runId?: string;
   /** Wall clock for the record's `run_at`; defaults to the current time. */
   readonly now?: Date;
+  /**
+   * A census already taken this invocation, recorded instead of taking a
+   * second one. The capacity gate hands its fresh census here, so a
+   * skipped lane run walks the vault once for the decision and no more;
+   * absent, the sampler measures as it always did.
+   */
+  readonly usage?: StorageUsage;
 }
 
 export interface SampleStorageUsageResult {
@@ -316,6 +323,9 @@ function mintRunId(): string {
  * Take one usage census and append it to the `storage_usage` metrics
  * surface, one record per run id.
  *
+ * Hand `usage` in when this invocation has already measured the vault and
+ * the sample should record that census rather than a fresh one.
+ *
  * Fail-soft by contract: a vault whose metrics directory cannot be
  * written still gets its census back, with the failure named - the
  * caller decides whether a report without its sample is fatal. Nothing
@@ -326,7 +336,8 @@ export function sampleStorageUsage(
   opts: SampleStorageUsageOptions = {},
 ): SampleStorageUsageResult {
   const runId = opts.runId ?? mintRunId();
-  const usage = measureStorageUsage(vault, opts.now !== undefined ? { now: opts.now } : {});
+  const usage =
+    opts.usage ?? measureStorageUsage(vault, opts.now !== undefined ? { now: opts.now } : {});
   let alreadyRecorded = false;
   try {
     alreadyRecorded = listMetrics(vault, { surface: STORAGE_USAGE_METRIC_SURFACE }).some(

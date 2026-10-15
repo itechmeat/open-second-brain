@@ -517,10 +517,16 @@ export async function runMaintenance(
           : undefined;
       // Sample BEFORE the skip is recorded or returned: the forecast
       // series must keep accumulating exactly while producers are paused,
-      // so a skipped run still appends its sample. Fail-soft by contract;
-      // a sample that cannot be written never turns a skip into a crash.
+      // so a skipped run still appends its sample. The gate's own census
+      // is what is recorded - the decision already walked the vault, and
+      // sampling by re-measuring would tax every skipped run with a
+      // second full walk. Fail-soft by contract; a sample that cannot be
+      // written never turns a skip into a crash.
       if (decision.verdict === MAINTENANCE_VERDICT.skippedCapacity) {
-        sampleStorageUsage(vault, { now: opts.now });
+        sampleStorageUsage(vault, {
+          now: opts.now,
+          ...(decision.capacity?.census !== undefined ? { usage: decision.capacity.census } : {}),
+        });
       }
       appendJournal(vault, {
         ts: nowIso,

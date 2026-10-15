@@ -240,6 +240,44 @@ describe("the capacity gate through the lane", () => {
     expect(samples()).toBe(before + 1);
   });
 
+  test("the skip's sample records the gate's census, not a second walk", async () => {
+    configureCap(CRITICAL_CAP_BYTES);
+    // A decision whose census names a byte total the real vault cannot
+    // produce: if the lane sampled by re-measuring, the recorded sample
+    // would carry the vault's real size instead - a second full walk
+    // behind every skipped run.
+    const census: CapacityGateDecision = {
+      decision: "skip",
+      tier: STORAGE_FORECAST_TIER.critical,
+      reading: {
+        measuredBytes: 777,
+        capBytes: CRITICAL_CAP_BYTES,
+        percentUsed: (777 / CRITICAL_CAP_BYTES) * 100,
+        daysToCap: null,
+        slopeBytesPerDay: null,
+        measuredAt: NOW.toISOString(),
+      },
+      census: {
+        measuredAt: NOW.toISOString(),
+        complete: true,
+        surfaces: [],
+        bytesByTier: { derived: 0, "vault-content": 777 },
+        totalBytes: 777,
+        unmeasured: [],
+      },
+    };
+    const before = samples();
+    await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      readCapacity: () => census,
+      tasks: [{ name: "dream", run: async () => {} }],
+    });
+    const recorded = listMetrics(vault, { surface: STORAGE_USAGE_SURFACE });
+    expect(recorded).toHaveLength(before + 1);
+    expect(recorded[0]!.payload["total_bytes"]).toBe(777);
+  });
+
   test("a sub-critical vault runs and samples nothing", async () => {
     configureCap(ROOMY_CAP_BYTES);
     const before = samples();

@@ -23,7 +23,7 @@
 
 import type { StorageForecastTier } from "./forecast.ts";
 import { STORAGE_FORECAST_TIER, forecastStorageUsage } from "./forecast.ts";
-import { measureStorageUsage } from "./usage.ts";
+import { measureStorageUsage, type StorageUsage } from "./usage.ts";
 
 /** The closed decision vocabulary. */
 export const CAPACITY_GATE_DECISION = Object.freeze({
@@ -56,6 +56,13 @@ export interface CapacityGateDecision {
   readonly reason?: string;
   /** The fresh census behind the decision; absent for unbounded and unmeasurable. */
   readonly reading?: CapacityGateReading;
+  /**
+   * The fresh census itself, when one was taken - present for
+   * `unmeasurable` too, because a partial census is still a census.
+   * The usage sampler records it instead of re-walking the vault (see
+   * `sampleStorageUsage`), so a decision costs one walk and never two.
+   */
+  readonly census?: StorageUsage;
 }
 
 export interface EvaluateCapacityGateOptions {
@@ -92,6 +99,7 @@ export function evaluateCapacityGate(
       decision: CAPACITY_GATE_DECISION.run,
       tier: STORAGE_FORECAST_TIER.unmeasurable,
       reason: `unmeasured surfaces: ${fresh.unmeasured.map((u) => u.surface).join(", ")}`,
+      census: fresh,
     };
   }
 
@@ -118,6 +126,7 @@ export function evaluateCapacityGate(
       slopeBytesPerDay: forecast.slopeBytesPerDay,
       measuredAt: fresh.measuredAt,
     },
+    census: fresh,
   };
   return decision;
 }
