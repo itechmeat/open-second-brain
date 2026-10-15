@@ -26,7 +26,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendMetric, listMetrics } from "../../../src/core/brain/metrics.ts";
+import { appendMetric, listMetrics, metricsDir } from "../../../src/core/brain/metrics.ts";
 import {
   STORAGE_CRITICAL_DAYS_DEFAULT,
   STORAGE_CRITICAL_PERCENT_DEFAULT,
@@ -93,6 +93,42 @@ describe("forecastStorageUsage", () => {
     seedSample(-1, 950);
     // 95 percent used, and 5 days to the cap - critical on both counts.
     expect(forecastStorageUsage(vault, { capBytes: CAP }).tier).toBe("critical");
+  });
+
+  test("the percent boundaries are inclusive with no trend to decide instead", () => {
+    // The tier fixtures above sit inside the days bands too, so a
+    // comparison flipped exclusive would still answer warn/critical
+    // through the days path and the percent boundary would go unpinned.
+    // A FLAT history has slope 0 and no daysToCap, so the percent
+    // comparison alone decides: exactly 80 warns, exactly 95 is critical.
+    seedSample(1, 800);
+    seedSample(0, 800);
+    const warn = forecastStorageUsage(vault, { capBytes: CAP });
+    expect(warn.slopeBytesPerDay).toBe(0);
+    expect(warn.daysToCap).toBe(null);
+    expect(warn.percentUsed).toBe(80);
+    expect(warn.tier).toBe("warn");
+
+    rmSync(metricsDir(vault), { recursive: true, force: true });
+    seedSample(1, 950);
+    seedSample(0, 950);
+    const critical = forecastStorageUsage(vault, { capBytes: CAP });
+    expect(critical.daysToCap).toBe(null);
+    expect(critical.percentUsed).toBe(95);
+    expect(critical.tier).toBe("critical");
+  });
+
+  test("a percent-only warn never outranks a critical days horizon", () => {
+    // 280 of 350 bytes is exactly 80 percent (warn by percent), and a
+    // slope of 10 bytes per day puts the cap exactly 7 days out
+    // (critical by days). The critical comparison runs first, so the
+    // days horizon decides the tier.
+    seedSample(1, 270);
+    seedSample(0, 280);
+    const forecast = forecastStorageUsage(vault, { capBytes: 350 });
+    expect(forecast.percentUsed).toBe(80);
+    expect(forecast.daysToCap).toBe(7);
+    expect(forecast.tier).toBe("critical");
   });
 
   test("exactly the warn days to cap warns", () => {
