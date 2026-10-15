@@ -10,6 +10,12 @@
  * is byte-identical after a refusal. Reads and the read-only batch plan
  * are never gated - reclamation must stay possible while producers are
  * refused.
+ *
+ * Reach honesty: the refusal itself is a write gate, so it fires at every
+ * reach - but the whole-vault figures beside it are the same local-reach
+ * facts the `brain_storage` report refuses to take below local reach.
+ * A remote caller is told the wall exists and where the remedy lives,
+ * never handed the census that describes the vault.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -29,10 +35,13 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { STORAGE_ERROR_CODES } from "../../src/core/brain/storage/capacity-error.ts";
 import { STORAGE_USAGE_METRIC_SURFACE } from "../../src/core/brain/storage/forecast.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { isToolErrorCode } from "../../src/mcp/tool-error-codes.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { listMetrics } from "../../src/core/brain/metrics.ts";
 import { brainPageTexts } from "../helpers/brain-pages.ts";
 import { readRpcErrorCode } from "../helpers/tool-error-envelope.ts";
@@ -58,10 +67,11 @@ afterEach(() => {
 
 interface Fixture {
   readonly vault: string;
+  readonly configPath: string;
   readonly server: MCPServer;
 }
 
-function fixture(capBytes: number | undefined): Fixture {
+function fixture(capBytes: number | undefined, reach = TRANSPORT_REACH.local): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-ingest-cap-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -73,9 +83,21 @@ function fixture(capBytes: number | undefined): Fixture {
   if (capBytes !== undefined) {
     appendFileSync(brainConfigPath(vault), `\nstorage:\n  cap_bytes: ${capBytes}\n`);
   }
-  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
-  return { vault, server };
+  const server = new MCPServer({ vault, configPath }, { reach });
+  return { vault, configPath, server };
 }
+
+/** The ingest arguments every call in this suite sends. */
+function ingestArgs(): Record<string, unknown> {
+  return {
+    source_path: "notes/source.md",
+    summary: SUMMARY,
+    entities: [{ category: "concept", name: "Capacity widget" }],
+  };
+}
+
+/** The three data keys that carry whole-vault figures to a caller. */
+const FIGURE_KEYS = ["measured_bytes", "cap_bytes", "percent_used"] as const;
 
 interface RpcResponse {
   readonly error?: { code: number; message: string; data?: Record<string, unknown> };
@@ -163,6 +185,69 @@ describe("brain_ingest_source capacity admission", () => {
     // The unbounded vault ingested (the contract above), and the admission
     // check left no usage sample behind: with no cap in force the check
     // never measured.
+    expect(listMetrics(f.vault, { surface: STORAGE_USAGE_SURFACE })).toEqual([]);
+  });
+});
+
+describe("the admission refusal at the caller's reach", () => {
+  test("a local refusal carries the measured reading beside the code", async () => {
+    const f = fixture(CRITICAL_CAP_BYTES, TRANSPORT_REACH.local);
+    const res = await ingest(f);
+    expect(readRpcErrorCode(res)).toBe("capacity_exhausted");
+    const data = res.error?.data ?? {};
+    expect(data["tier"]).toBe("critical");
+    expect(typeof data["measured_bytes"]).toBe("number");
+    expect(data["cap_bytes"]).toBe(CRITICAL_CAP_BYTES);
+    expect(typeof data["percent_used"]).toBe("number");
+  });
+
+  test("a remote refusal names the wall and carries no vault figures", async () => {
+    const f = fixture(CRITICAL_CAP_BYTES, TRANSPORT_REACH.remote);
+    const before = vaultBytes(f.vault);
+    const res = await ingest(f);
+    // The gate is a write gate, not a secret: the refusal itself fires at
+    // every reach, by the same code.
+    expect(readRpcErrorCode(res)).toBe("capacity_exhausted");
+    const data = res.error?.data ?? {};
+    expect(data["tier"]).toBe("critical");
+    expect(data["remedy"]).toContain("cap_bytes");
+    // The local remedy is still in hand: the registered next step for a
+    // critical vault, not a figure a remote caller cannot act on.
+    expect(data["next_command"]).toBe("o2b brain storage");
+    // The census is a whole-vault figure (brain_storage's reach model):
+    // below local reach none of it rides.
+    for (const key of FIGURE_KEYS) {
+      expect(Object.hasOwn(data, key)).toBe(false);
+    }
+    // Still a validate-phase refusal: the vault did not move.
+    expect(vaultBytes(f.vault)).toBe(before);
+    expect(listMetrics(f.vault, { surface: STORAGE_USAGE_SURFACE })).toEqual([]);
+  });
+
+  test("a context that established nothing is refused without figures", async () => {
+    const f = fixture(CRITICAL_CAP_BYTES);
+    // No `reach` field on a hand-built context: nobody established who was
+    // asking, so the tool answers at the narrowest reach (fail closed).
+    const ctx: ServerContext = {
+      vault: f.vault,
+      configPath: f.configPath,
+      repoRoot: null,
+    };
+    const handler = INGEST_TOOLS.find((tool) => tool.name === "brain_ingest_source")!.handler;
+    let refused: MCPError | undefined;
+    try {
+      await handler(ctx, ingestArgs());
+    } catch (err) {
+      refused = err instanceof MCPError ? err : undefined;
+    }
+    expect(refused).toBeDefined();
+    expect(refused!.code).toBe(INVALID_PARAMS);
+    expect(String(refused!.message)).toContain("capacity_exhausted");
+    const data = refused!.data ?? {};
+    expect(data["code"]).toBe("capacity_exhausted");
+    for (const key of FIGURE_KEYS) {
+      expect(Object.hasOwn(data, key)).toBe(false);
+    }
     expect(listMetrics(f.vault, { surface: STORAGE_USAGE_SURFACE })).toEqual([]);
   });
 });

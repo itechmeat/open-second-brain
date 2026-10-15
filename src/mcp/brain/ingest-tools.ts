@@ -19,8 +19,15 @@ import { assertCheckpointId } from "../../core/brain/checkpoint-store.ts";
 import { STORAGE_CAPACITY_CRITICAL_CODE } from "../../core/brain/doctor/storage-capacity.ts";
 import { MAINTENANCE_CAPACITY_REMEDY } from "../../core/brain/maintenance/lane.ts";
 import { loadStorageConfigSafe } from "../../core/brain/policy/load.ts";
-import type { StorageErrorCode } from "../../core/brain/storage/capacity-error.ts";
-import { CAPACITY_GATE_DECISION, evaluateCapacityGate } from "../../core/brain/storage/gate.ts";
+import {
+  StorageCapacityError,
+  type StorageErrorCode,
+} from "../../core/brain/storage/capacity-error.ts";
+import {
+  CAPACITY_GATE_DECISION,
+  evaluateCapacityGate,
+  type CapacityGateDecision,
+} from "../../core/brain/storage/gate.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
 import type { PartsOutcome, TableOutcome } from "../../core/brain/ingest/extract-source.ts";
 import type { CodeEdgeSeed, PreExtractResult } from "../../core/brain/ingest/pre-extract.ts";
@@ -42,6 +49,7 @@ import {
 } from "../../core/brain/source-cleanup.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import { isPathOwnerVisible, type FrontmatterCache } from "../../core/search/result-filters.ts";
 import {
   coerceAgentScope,
@@ -52,7 +60,8 @@ import {
 } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { codeForError } from "../tool-error-codes.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
 import {
@@ -91,11 +100,17 @@ const ADMISSION_REFUSAL_CODE: StorageErrorCode = "capacity_exhausted";
  * configured cap is the documented default and means the check does not
  * exist: no gate, no byte walk, no cost.
  *
+ * The gate itself is a write gate, not a secret, so it fires at every
+ * reach - but the refusal throws the registered leaf carrying the
+ * envelope's fields, and {@link admissionDetails} gates the whole-vault
+ * figures by reach, for the same reason `brain_storage` refuses to take
+ * its census below local reach.
+ *
  * The remedy is the lane's own sentence, quoted rather than restated, so
  * the two walls an operator can hit - the paused lane and the refused
  * write - cannot disagree about what to do next.
  */
-function refuseWhenVaultExhausted(vault: string, now: Date): void {
+function refuseWhenVaultExhausted(vault: string, reach: TransportReach, now: Date): void {
   const storage = loadStorageConfigSafe(vault);
   if (storage.cap_bytes === null) return;
   const decision = evaluateCapacityGate(vault, {
@@ -107,24 +122,57 @@ function refuseWhenVaultExhausted(vault: string, now: Date): void {
     criticalDays: storage.critical_days,
   });
   if (decision.decision !== CAPACITY_GATE_DECISION.skip) return;
-  const reading = decision.reading;
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw new StorageCapacityError(
+    ADMISSION_REFUSAL_CODE,
     `${TOOL}: refused (${ADMISSION_REFUSAL_CODE}): the vault measured at the ` +
       `${decision.tier} storage tier. ${MAINTENANCE_CAPACITY_REMEDY}.`,
-    {
-      code: ADMISSION_REFUSAL_CODE,
-      tier: decision.tier,
-      measured_bytes: reading?.measuredBytes ?? null,
-      cap_bytes: reading?.capBytes ?? null,
-      percent_used: reading?.percentUsed ?? null,
-      remedy: MAINTENANCE_CAPACITY_REMEDY,
-      // The registered next step for a critical vault (the storage
-      // report), resolved from the diagnostics registry - a refusal whose
-      // value is the pointer never spells the command by hand.
-      ...nextCommandField(STORAGE_CAPACITY_CRITICAL_CODE),
-    },
+    admissionDetails(decision, reach),
   );
+}
+
+/**
+ * The structured fields beside the admission refusal's code. The tier and
+ * the remedy ride at every reach; the whole-vault figures do not - they
+ * are the same local-reach facts the storage report refuses to take below
+ * local reach (`buildStorageReport`), and handing them to a remote caller
+ * would answer the refusal with a census and a growth oracle in one
+ * payload. The `next_command` field stays: the local remedy is the one
+ * thing a refused caller still needs in hand.
+ */
+function admissionDetails(
+  decision: CapacityGateDecision,
+  reach: TransportReach,
+): Record<string, unknown> {
+  const reading = decision.reading;
+  return {
+    tier: decision.tier,
+    ...(reach === TRANSPORT_REACH.local
+      ? {
+          measured_bytes: reading?.measuredBytes ?? null,
+          cap_bytes: reading?.capBytes ?? null,
+          percent_used: reading?.percentUsed ?? null,
+        }
+      : {}),
+    remedy: MAINTENANCE_CAPACITY_REMEDY,
+    // The registered next step for a critical vault (the storage
+    // report), resolved from the diagnostics registry - a refusal whose
+    // value is the pointer never spells the command by hand.
+    ...nextCommandField(STORAGE_CAPACITY_CRITICAL_CODE),
+  };
+}
+
+/**
+ * The MCP envelope for an admission refusal, from the thrown leaf: the
+ * wire code is the code the registered `carried()` classification reads
+ * off this leaf (`codeForError`), never a restated literal, and the data
+ * fields are the leaf's own - so the envelope cannot drift from the
+ * vocabulary the wire registry knows.
+ */
+function capacityRefusalEnvelope(err: StorageCapacityError): MCPError {
+  return new MCPError(INVALID_PARAMS, err.message, {
+    code: codeForError(err),
+    ...err.details,
+  });
 }
 
 async function toolBrainIngestSource(
@@ -165,7 +213,15 @@ async function toolBrainIngestSource(
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
     // The admission wall, in the validate phase: past this call the write
     // path opens, and the commit phase ahead of it is never rolled back.
-    refuseWhenVaultExhausted(ctx.vault, new Date());
+    // The check throws the registered leaf; it is mapped onto its wire
+    // envelope here, before the generic wrapper could flatten it into an
+    // internal error.
+    try {
+      refuseWhenVaultExhausted(ctx.vault, contextReach(ctx), new Date());
+    } catch (err) {
+      if (err instanceof StorageCapacityError) throw capacityRefusalEnvelope(err);
+      throw err;
+    }
     let res: IngestSourceResult;
     try {
       res = ingestSource(

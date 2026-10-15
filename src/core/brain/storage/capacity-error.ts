@@ -24,9 +24,22 @@ export type StorageErrorCode = (typeof STORAGE_ERROR_CODES)[number];
 
 export class StorageCapacityError extends Error {
   readonly code: StorageErrorCode;
-  constructor(code: StorageErrorCode, message: string) {
+  /**
+   * The structured fields a refusal envelope carries beside the code,
+   * when the thrower has facts to add (the tier reading behind an
+   * admission refusal). Still a leaf: no imports, and the registered
+   * classification reads the code alone, so these ride only where a
+   * caller maps the leaf onto its envelope deliberately.
+   */
+  readonly details?: Readonly<Record<string, unknown>>;
+  constructor(
+    code: StorageErrorCode,
+    message: string,
+    details?: Readonly<Record<string, unknown>>,
+  ) {
     super(message);
     this.name = "StorageCapacityError";
     this.code = code;
+    this.details = details;
   }
 }
