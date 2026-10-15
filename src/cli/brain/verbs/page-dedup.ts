@@ -12,16 +12,31 @@
  */
 
 import type { DedupCandidate } from "../../../core/brain/page-dedup.ts";
-import { findDuplicateCandidates, mergePage } from "../../../core/brain/page-dedup.ts";
+import {
+  findDuplicateCandidates,
+  mergePage,
+  PatchWikilinksError,
+} from "../../../core/brain/page-dedup.ts";
 import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 /**
  * One merge attempt that refused to land: the cluster's dedup key and the
- * named error. The secondary the error names is left exactly as it was.
+ * named error. A chain refusal (MergeChainError) writes nothing, so the
+ * secondary is left exactly as it was. A link-pass refusal can arrive
+ * AFTER the `merged_into:` stamp has landed on the secondary - by then
+ * the merge is half-applied, and {@link DedupApplyFailure.wikilinksUpdated}
+ * carries how many files the rewrite repointed before the write that
+ * refused.
  */
 export interface DedupApplyFailure {
   readonly key: string;
   readonly message: string;
+  /**
+   * Files the link pass rewrote before the write that refused, present
+   * only when the failure came after the rewrite had already run. Absent
+   * means the secondary is untouched, not zero.
+   */
+  readonly wikilinksUpdated?: number;
 }
 
 /** What one apply pass over a set of candidates did. */
@@ -53,7 +68,17 @@ export function applyDedupCandidates(
         mergedCount++;
         wikilinksTouched += res.wikilinksUpdated;
       } catch (err) {
-        failures.push({ key: c.key, message: (err as Error)?.message ?? String(err) });
+        // A late failure (PatchWikilinksError) means the stamp landed and
+        // part of the rewrite did too: keep the partial count on the
+        // failure and fold it into the aggregate, which counts files the
+        // vault actually took, not only the ones behind a clean merge.
+        const partial = err instanceof PatchWikilinksError ? err.rewritten : undefined;
+        if (partial !== undefined) wikilinksTouched += partial;
+        failures.push({
+          key: c.key,
+          message: (err as Error)?.message ?? String(err),
+          ...(partial === undefined ? {} : { wikilinksUpdated: partial }),
+        });
       }
     }
   }
@@ -119,14 +144,20 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
       clusters: report.candidates.length,
       merged: applied.merged,
       wikilinks_updated: applied.wikilinksUpdated,
-      failures: applied.failures.map((f) => ({ key: f.key, message: f.message })),
+      failures: applied.failures.map((f) => ({
+        key: f.key,
+        message: f.message,
+        ...(f.wikilinksUpdated === undefined ? {} : { wikilinks_updated: f.wikilinksUpdated }),
+      })),
     });
     return exitCode;
   }
   process.stdout.write(`merged ${applied.merged} page(s) into canonicals.\n`);
   process.stdout.write(`wikilinks updated: ${applied.wikilinksUpdated}\n`);
   for (const f of applied.failures) {
-    process.stdout.write(`failed cluster ${f.key}: ${f.message}\n`);
+    const partial =
+      f.wikilinksUpdated === undefined ? "" : ` (wikilinks updated first: ${f.wikilinksUpdated})`;
+    process.stdout.write(`failed cluster ${f.key}: ${f.message}${partial}\n`);
   }
   return exitCode;
 }

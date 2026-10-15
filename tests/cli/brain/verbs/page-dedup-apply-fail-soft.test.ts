@@ -122,6 +122,38 @@ describe("applyDedupCandidates", () => {
     expect(applied.failures).toEqual([]);
     expect(applied.merged).toBe(1);
   });
+
+  test("a link-pass failure reports the partial count and the stamped secondary", () => {
+    if (CHMOD_CANNOT_DENY) return;
+    // pref-a cites pref-b (rewritable), and a second citing page sits in
+    // its own directory the test makes unwritable: the merge STAMP lands,
+    // the link pass rewrites what it can, then fails.
+    writePoolPage("preferences", "a", "topic-one", "the first rule", "see also [[pref-b]]");
+    writePoolPage("preferences", "b", "topic-one", "the first rule");
+    mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "notes", "note.md"), "see [[pref-b]] too\n", "utf8");
+
+    const report = findDuplicateCandidates(vault);
+    const notesDir = join(vault, "Brain", "notes");
+    chmodSync(notesDir, 0o555);
+    try {
+      const applied = applyDedupCandidates(vault, report.candidates);
+
+      expect(applied.failures).toHaveLength(1);
+      expect(applied.failures[0]!.key).toBe(report.candidates[0]!.key);
+      expect(applied.failures[0]!.message).toContain("could not write");
+      // The honest count: the link pass rewrote the citing page it could
+      // before it hit the one it could not.
+      expect(applied.failures[0]!.wikilinksUpdated).toBe(1);
+      // The merged half DID land before the failure - the failure report
+      // must not leave the reader assuming the secondary is untouched.
+      expect(readFileSync(join(vault, "Brain", "preferences", "pref-b.md"), "utf8")).toContain(
+        "merged_into: pref-a",
+      );
+    } finally {
+      chmodSync(notesDir, 0o755);
+    }
+  });
 });
 
 describe("cmdBrainPageDedup --apply with a failing cluster", () => {

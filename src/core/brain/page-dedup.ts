@@ -573,6 +573,27 @@ export function retargetWikilinks(
 }
 
 /**
+ * A wikilink rewrite that gave up partway: `rewritten` files were
+ * repointed before the write that refused.
+ *
+ * Carrying the count on the error is what lets the merge's fail-soft
+ * caller report how far the pass got - the rewrite half landed, so a
+ * bare message would leave the reader unable to tell how much of the
+ * repoint the vault actually took.
+ */
+export class PatchWikilinksError extends Error {
+  /** Files the pass rewrote before the one it could not. */
+  readonly rewritten: number;
+  constructor(rewritten: number, path: string, reason: string) {
+    super(
+      `patchWikilinks: rewrote ${rewritten} file(s), then could not write ` + `${path}: ${reason}`,
+    );
+    this.name = "PatchWikilinksError";
+    this.rewritten = rewritten;
+  }
+}
+
+/**
  * Rewrite every `[[<oldTarget>]]` reference inside `<vault>/Brain/`
  * to `[[<newTarget>]]`. Returns the number of files touched.
  *
@@ -582,10 +603,11 @@ export function retargetWikilinks(
  * basename spelling - and widening the merge's call site would have made
  * it answer questions it does not ask.
  *
- * Raises on a write failure rather than reporting it. The merge's caller
- * counts files and has nowhere to put the identity of one that did not
- * take, so for THIS spelling a failure has to be an error; the note-file
- * lifecycle, which does have somewhere to put it, reads `failed`.
+ * Raises a {@link PatchWikilinksError} on a write failure rather than
+ * reporting it. The merge's caller counts files and has nowhere to put
+ * the identity of one that did not take, so for THIS spelling a failure
+ * has to be an error; the note-file lifecycle, which does have somewhere
+ * to put it, reads `failed`.
  */
 export function patchWikilinks(vault: string, oldTarget: string, newTarget: string): number {
   if (oldTarget === newTarget) {
@@ -598,10 +620,7 @@ export function patchWikilinks(vault: string, oldTarget: string, newTarget: stri
   const report = retargetWikilinks(vault, [{ from: oldTarget, to: newTarget }]);
   const first = report.failed[0];
   if (first !== undefined) {
-    throw new Error(
-      `patchWikilinks: rewrote ${report.rewritten.length} file(s), then could not write ` +
-        `${first.path}: ${first.reason}`,
-    );
+    throw new PatchWikilinksError(report.rewritten.length, first.path, first.reason);
   }
   return report.rewritten.length;
 }
