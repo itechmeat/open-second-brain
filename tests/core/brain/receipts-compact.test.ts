@@ -1,0 +1,347 @@
+/**
+ * Receipt fold engine (storage-lifecycle, Lane 3 task 3.2).
+ *
+ * `compactReceiptLedgers` rewrites explicitly named receipt-ledger
+ * shards: records older than the age threshold fold into one aggregate
+ * line per (kind, month) preserving count, first/last timestamps and the
+ * folded records' byte total; protected records survive verbatim, in
+ * file order; unknown kinds fail closed to keep. The rewrite is atomic
+ * per shard (compare-and-swap through `atomicWriteFileSync`) inside a
+ * `withDestructiveSnapshot` span, and per-shard fail-soft: a poisoned
+ * shard is collected and the run still completes with an honest audit.
+ *
+ * The audit is the additive `receipt_compaction` continuity kind: one
+ * record per confirmed run, never on a dry run. A count-guard mismatch
+ * aborts before any write, including the snapshot.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  continuityLogDir,
+  listContinuityRecords,
+} from "../../../src/core/brain/continuity/store.ts";
+import { metricsDir } from "../../../src/core/brain/metrics.ts";
+import { compactReceiptLedgers } from "../../../src/core/brain/receipts/compact.ts";
+import {
+  RECEIPT_FOLD_SCHEMA,
+  RECEIPT_LEDGER_FAMILY,
+} from "../../../src/core/brain/receipts/types.ts";
+import { CountGuardError } from "../../../src/core/brain/count-guard.ts";
+import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.ts";
+import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { WriteRefusedError } from "../../../src/core/brain/write-disposition.ts";
+import { digestVaultTree } from "../../helpers/vault-digest.ts";
+
+const NOW = new Date("2026-09-25T00:00:00Z");
+
+let vault: string;
+let configHome: string;
+
+function continuityLine(
+  kind: string,
+  createdAt: string,
+  payload: Record<string, unknown> = {},
+): string {
+  const id = `ctn_${createdAt.replace(/[^0-9]/g, "").slice(0, 14)}_${kind}`;
+  return `${JSON.stringify({
+    schema: "o2b.continuity.v1",
+    id,
+    kind,
+    createdAt,
+    sourceRefs: [],
+    payload,
+    private: false,
+    redacted: false,
+  })}\n`;
+}
+
+function metricLine(surface: string, runAt: string, payload: Record<string, unknown> = {}): string {
+  return `${JSON.stringify({ schema: "o2b.metrics.v1", surface, run_at: runAt, payload })}\n`;
+}
+
+function writeShard(dir: string, name: string, lines: ReadonlyArray<string> | string): void {
+  const text = typeof lines === "string" ? lines : lines.join("");
+  writeFileSync(join(dir, name), text, "utf8");
+}
+
+function readShard(dir: string, name: string): string {
+  return readFileSync(join(dir, name), "utf8");
+}
+
+/** The continuity shard the happy-path tests fold: two old, one protected, one young. */
+const MIXED_SHARD = [
+  continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "first old" }),
+  continuityLine("source_invalidation", "2026-08-11T12:00:00Z", { reason: "audit trail" }),
+  continuityLine("recall_telemetry", "2026-08-20T12:00:00Z", { note: "second old" }),
+  continuityLine("gate_telemetry", "2026-09-15T12:00:00Z", { fresh: true }),
+].join("");
+
+beforeEach(() => {
+  resetVaultIdentityPins();
+  vault = mkdtempSync(join(tmpdir(), "o2b-receipts-compact-"));
+  configHome = mkdtempSync(join(tmpdir(), "o2b-receipts-compact-cfg-"));
+  const configPath = join(configHome, "config.yaml");
+  atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: test-agent\n`);
+  bootstrapBrain(vault, { configPath });
+  mkdirSync(continuityLogDir(vault), { recursive: true });
+  mkdirSync(metricsDir(vault), { recursive: true });
+});
+
+afterEach(() => {
+  resetVaultIdentityPins();
+  rmSync(vault, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  rmSync(configHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+describe("compactReceiptLedgers", () => {
+  test("folds old records into one aggregate line per (kind, month), preserving the totals", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+      expect: 2,
+    });
+    expect(result.dryRun).toBe(false);
+    expect(result.totals.folded).toBe(2);
+    const after = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    const lines = after.split("\n").filter((line) => line.trim() !== "");
+    // Two folded records became one aggregate line; protected and young kept.
+    expect(lines).toHaveLength(3);
+    const aggregate = JSON.parse(lines[0]!) as {
+      schema: string;
+      fold: Record<string, unknown>;
+    };
+    expect(aggregate.schema).toBe(RECEIPT_FOLD_SCHEMA);
+    expect(aggregate.fold).toMatchObject({
+      family: RECEIPT_LEDGER_FAMILY.continuity,
+      kind: "recall_telemetry",
+      month: "2026-08",
+      count: 2,
+      first_created_at: "2026-08-10T12:00:00Z",
+      last_created_at: "2026-08-20T12:00:00Z",
+    });
+    // The folded records' byte total is preserved as metadata (record
+    // lines, newline separators excluded).
+    const foldedBytes =
+      Buffer.byteLength(
+        continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "first old" }).trimEnd(),
+      ) +
+      Buffer.byteLength(
+        continuityLine("recall_telemetry", "2026-08-20T12:00:00Z", {
+          note: "second old",
+        }).trimEnd(),
+      );
+    expect(aggregate.fold.bytes).toBe(foldedBytes);
+    // Shrink verified: the rewrite is strictly smaller than the original.
+    expect(Buffer.byteLength(after)).toBeLessThan(Buffer.byteLength(MIXED_SHARD));
+    expect(result.totals.bytesBefore).toBe(Buffer.byteLength(MIXED_SHARD));
+    expect(result.totals.bytesAfter).toBe(Buffer.byteLength(after));
+  });
+
+  test("protected records survive verbatim, in file order, and unknown kinds fail closed to keep", () => {
+    const shard = [
+      continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"),
+      continuityLine("source_invalidation", "2026-08-11T12:00:00Z", { reason: "audit" }),
+      continuityLine("kind_from_the_future", "2026-08-12T12:00:00Z"),
+      continuityLine("gate_telemetry", "2026-08-13T12:00:00Z", { session_id: "sess-1" }),
+      continuityLine("recall_telemetry", "2026-08-14T12:00:00Z"),
+    ].join("");
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", shard);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.totals.folded).toBe(2);
+    expect(result.totals.kept).toBe(3);
+    const after = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    // Every kept line is byte-present, and their relative order holds.
+    const keptLines = [
+      continuityLine("source_invalidation", "2026-08-11T12:00:00Z", { reason: "audit" }),
+      continuityLine("kind_from_the_future", "2026-08-12T12:00:00Z"),
+      continuityLine("gate_telemetry", "2026-08-13T12:00:00Z", { session_id: "sess-1" }),
+    ];
+    let cursor = -1;
+    for (const line of keptLines) {
+      const at = after.indexOf(line.trim());
+      expect(at).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+  });
+
+  test("metrics shards fold per (surface, month)", () => {
+    writeShard(metricsDir(vault), "storage_usage.jsonl", [
+      metricLine("storage_usage", "2026-08-01T00:00:00Z", { bytes: 10 }),
+      metricLine("storage_usage", "2026-08-05T00:00:00Z", { bytes: 11 }),
+      metricLine("storage_usage", "2026-08-10T00:00:00Z", { bytes: 12 }),
+      metricLine("storage_usage", "2026-08-15T00:00:00Z", { bytes: 13 }),
+      metricLine("storage_usage", "2026-08-20T00:00:00Z", { bytes: 14 }),
+      metricLine("storage_usage", "2026-07-05T00:00:00Z", { bytes: 5 }),
+      metricLine("storage_usage", "2026-07-06T00:00:00Z", { bytes: 6 }),
+    ]);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+      now: NOW,
+      dryRun: false,
+      expect: 7,
+    });
+    expect(result.totals.folded).toBe(7);
+    const lines = readShard(metricsDir(vault), "storage_usage.jsonl")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    expect(lines).toHaveLength(2);
+    const folds = lines.map((line) => (JSON.parse(line) as { fold: Record<string, unknown> }).fold);
+    expect(folds.map((f) => f.month).toSorted()).toEqual(["2026-07", "2026-08"]);
+    const august = folds.find((f) => f.month === "2026-08")!;
+    expect(august).toMatchObject({
+      family: RECEIPT_LEDGER_FAMILY.metrics,
+      surface: "storage_usage",
+      count: 5,
+      first_run_at: "2026-08-01T00:00:00Z",
+      last_run_at: "2026-08-20T00:00:00Z",
+    });
+  });
+
+  test("a confirmed run takes one recovery point and appends the audit record exactly once", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.snapshotRunId).toBeDefined();
+    expect(result.auditRecordId).toBeDefined();
+    expect(result.recoverability).toBeDefined();
+    const snapshots = listSnapshots(vault).snapshots;
+    expect(snapshots.some((s) => s.run_id === result.snapshotRunId)).toBe(true);
+    const audits = listContinuityRecords(vault, { kind: "receipt_compaction" });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.id).toBe(result.auditRecordId);
+  });
+
+  test("a dry run writes nothing: no rewrite, no snapshot, no audit record", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const before = digestVaultTree(vault);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: true,
+    });
+    expect(result.dryRun).toBe(true);
+    expect(result.totals.folded).toBe(2);
+    expect(digestVaultTree(vault)).toBe(before);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
+  });
+
+  test("a count-guard mismatch aborts before any write, snapshot included", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const before = digestVaultTree(vault);
+    expect(() =>
+      compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+        now: NOW,
+        dryRun: false,
+        expect: 3,
+      }),
+    ).toThrow(CountGuardError);
+    expect(digestVaultTree(vault)).toBe(before);
+    expect(readdirSync(join(vault, "Brain", ".snapshots"))).toEqual([]);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
+  });
+
+  test("a re-run over a compacted ledger folds nothing and writes nothing", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    const after = digestVaultTree(vault);
+    const audits = listContinuityRecords(vault, { kind: "receipt_compaction" }).length;
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.totals.folded).toBe(0);
+    expect(digestVaultTree(vault)).toBe(after);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(audits);
+  });
+
+  test("a shard whose fold would not shrink is collected and the rest of the run completes", () => {
+    // One old record whose aggregate line would be LARGER than the
+    // record itself: the engine refuses the rewrite rather than grow a
+    // ledger, and the refusal is collected while the healthy shard
+    // beside it still folds and the run still completes.
+    writeShard(continuityLogDir(vault), "2026-07.jsonl", [
+      continuityLine("recall_telemetry", "2026-07-10T12:00:00Z"),
+    ]);
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const result = compactReceiptLedgers(vault, {
+      shards: [
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-07.jsonl" },
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" },
+      ],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.shards.map((s) => s.shard)).toEqual(["continuity:2026-08.jsonl"]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]!.shard).toBe("continuity:2026-07.jsonl");
+    expect(result.failures[0]!.message).toContain("shrink");
+    // The run still completed: the healthy shard folded, and the audit
+    // names the refusal honestly.
+    expect(result.totals.folded).toBe(2);
+    const audits = listContinuityRecords(vault, { kind: "receipt_compaction" });
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits[0]!.payload)).toContain("continuity:2026-07.jsonl");
+    // The refused shard is untouched on disk.
+    expect(readShard(continuityLogDir(vault), "2026-07.jsonl")).toContain("2026-07-10T12:00:00Z");
+  });
+
+  test("a shard ref that is not a valid shard name is refused before anything runs", () => {
+    expect(() =>
+      compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "../metrics/x.jsonl" }],
+        now: NOW,
+        dryRun: true,
+      }),
+    ).toThrow(/not a continuity shard/);
+  });
+
+  test("a permissions-document deny refuses the confirmed run before any write", () => {
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    atomicWriteFileSync(
+      join(vault, "Brain", "_permissions.yaml"),
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze\n    agent: test-agent\n" +
+        "    action: ingest\n    verdict: deny\n",
+    );
+    const before = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    expect(() =>
+      compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+        now: NOW,
+        dryRun: false,
+        subject: { agent: "test-agent", via: "config" },
+      }),
+    ).toThrow(WriteRefusedError);
+    // The ledger shard is untouched. (The refusal itself writes its
+    // decision-ledger row - that record is the point of the consult -
+    // so the assertion is on the shard the run would have rewritten.)
+    expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).toBe(before);
+    expect(readdirSync(join(vault, "Brain", ".snapshots"))).toEqual([]);
+  });
+
+  test("an empty shard selection is a named caller error, never a silent full scan", () => {
+    expect(() => compactReceiptLedgers(vault, { shards: [], now: NOW, dryRun: true })).toThrow(
+      /explicit shard ids/,
+    );
+  });
+});

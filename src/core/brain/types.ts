@@ -713,6 +713,14 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
    * payload files nothing in the vault references any more (t_35440e83).
    */
   payloadGc: "payload-gc",
+  /**
+   * Pre-rewrite point taken before a confirmed receipt compaction folds
+   * receipt-ledger shards in place (storage-lifecycle wave). Kebab-case
+   * like its siblings because the value doubles as the archive's
+   * filename prefix, and named for the receipts surface - not for the
+   * Hermes context compaction, which rewrites no ledger.
+   */
+  receiptCompaction: "receipt-compaction",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */
@@ -1615,6 +1623,36 @@ export interface ResolvedBrainMaintenanceConfig {
   /** `null` = the host-pressure gate is not configured. */
   readonly host_pressure_percent: number | null;
   readonly failure_streak_limit: number;
+}
+
+/**
+ * Optional `storage:` block (storage lifecycle). The operator's capacity
+ * policy: the byte cap the vault refuses writes past, and the percent /
+ * day thresholds the forecast warns and goes critical at. Every field
+ * optional; absent meaning "the resolver's default decides". Absent
+ * `cap_bytes` is unbounded - nothing pauses and nothing refuses.
+ */
+export interface BrainStorageConfig {
+  /** Positive integer bytes; absent (or explicit `null`) = unbounded. */
+  readonly cap_bytes?: number | null;
+  /** Integer percent of the cap where the forecast warns. */
+  readonly warn_percent?: number;
+  /** Integer percent of the cap where the forecast goes critical. */
+  readonly critical_percent?: number;
+  /** Days to the cap at trend where the forecast warns. */
+  readonly warn_days?: number;
+  /** Days to the cap at trend where the forecast goes critical. */
+  readonly critical_days?: number;
+}
+
+/** {@link BrainStorageConfig} with every field decided. */
+export interface ResolvedBrainStorageConfig {
+  /** `null` = no cap is configured; the vault is unbounded. */
+  readonly cap_bytes: number | null;
+  readonly warn_percent: number;
+  readonly critical_percent: number;
+  readonly warn_days: number;
+  readonly critical_days: number;
 }
 
 /**

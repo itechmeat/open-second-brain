@@ -371,6 +371,11 @@ const KIND_WRITERS: ReadonlyArray<{
     sessionScoped: false,
     writers: ["core/brain/link-graph/session-mining.ts"],
   },
+  {
+    kind: "receipt_compaction",
+    sessionScoped: false,
+    writers: ["core/brain/receipts/compact.ts"],
+  },
 ]);
 
 /**

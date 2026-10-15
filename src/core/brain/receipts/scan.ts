@@ -27,11 +27,16 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { relative } from "node:path";
+import { join, relative } from "node:path";
 
 import { continuityLogDir, isCanonicalUtcTimestamp } from "../continuity/store.ts";
 import { CLIP_PROTECTED_PAYLOAD_KEYS, isContinuityRecordKind } from "../continuity/types.ts";
-import { JSONL_LEDGER_EXT, listShardedFiles, type LedgerShardGrammar } from "../ledger-shards.ts";
+import {
+  JSONL_LEDGER_EXT,
+  listShardedFiles,
+  parseShardedName,
+  type LedgerShardGrammar,
+} from "../ledger-shards.ts";
 import { metricsDir } from "../metrics.ts";
 import { toPosix } from "../../path-safety.ts";
 import {
@@ -44,6 +49,7 @@ import {
   type ReceiptLedgerFamily,
   type ReceiptScanError,
   type ReceiptScanReport,
+  type ReceiptShardRef,
   type ReceiptShardScan,
 } from "./types.ts";
 
@@ -65,6 +71,9 @@ const METRICS_GRAMMAR: LedgerShardGrammar = Object.freeze({
 });
 
 const MS_PER_DAY = 86_400_000;
+
+/** ISO-8601 UTC timestamp shape, the one the metrics ledger writes. */
+const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
 /** How a ledger line classifies against the fold age and the protected classes. */
 export type ReceiptLineClass = "foldable" | "protected" | "young";
@@ -99,16 +108,15 @@ export function classifyContinuityRecord(
 /**
  * Classify one metrics record against the cutoff. The same protected-key
  * rule applies - a metrics payload can correlate to a session too - and
- * a `run_at` that cannot be parsed never folds.
+ * a `run_at` that is not an ISO-8601 UTC stamp never folds: its month
+ * cannot be derived for the aggregate, so it fails closed to keep.
  */
 export function classifyMetricRecord(
   record: { readonly run_at: unknown; readonly payload: unknown },
   cutoffMs: number,
 ): ReceiptLineClass {
   if (payloadCarriesProtectedKey(record.payload)) return "protected";
-  if (typeof record.run_at !== "string" || !Number.isFinite(Date.parse(record.run_at))) {
-    return "protected";
-  }
+  if (typeof record.run_at !== "string" || !ISO_UTC_RE.test(record.run_at)) return "protected";
   return Date.parse(record.run_at) >= cutoffMs ? "young" : "foldable";
 }
 
@@ -131,6 +139,27 @@ export function receiptLedgerDir(vault: string, family: ReceiptLedgerFamily): st
 /** The name grammar a family's shards follow. */
 function familyGrammar(family: ReceiptLedgerFamily): LedgerShardGrammar {
   return family === RECEIPT_LEDGER_FAMILY.continuity ? CONTINUITY_GRAMMAR : METRICS_GRAMMAR;
+}
+
+/**
+ * Resolve one shard ref to its file through the family's name grammar.
+ * A name the grammar does not recognise - a typo, a path traversal, a
+ * sync-conflict copy - is a named caller error before anything is read
+ * or written.
+ */
+export function resolveReceiptShardPath(
+  vault: string,
+  ref: ReceiptShardRef,
+): { readonly path: string; readonly base: string; readonly shardId: string } {
+  const parsed = parseShardedName(ref.name, familyGrammar(ref.family));
+  if (parsed === null) {
+    throw new Error(`'${ref.name}' is not a ${ref.family} shard name`);
+  }
+  return {
+    path: join(receiptLedgerDir(vault, ref.family), ref.name),
+    base: parsed.base,
+    shardId: parsed.shardId,
+  };
 }
 
 /** Canonical UTC second-precision stamp, the shape every ledger compares. */

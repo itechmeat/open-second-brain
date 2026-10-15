@@ -46,6 +46,14 @@ export function isReceiptLedgerFamily(value: unknown): value is ReceiptLedgerFam
 }
 
 /**
+ * The operation label every receipt-compaction surface reports. One
+ * spelling, shared by the CLI verb, the MCP tool and the continuity
+ * audit payload, so the storage operation names itself identically
+ * everywhere and never under a context-compaction name.
+ */
+export const RECEIPT_COMPACTION_OPERATION = "receipt compaction";
+
+/**
  * The schema stamp on a fold aggregate line. A line carrying this stamp
  * is not a record: it is the per-(kind, month) summary the fold engine
  * replaced a run of expired records with. Both ledger readers tolerate

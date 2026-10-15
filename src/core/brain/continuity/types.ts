@@ -96,7 +96,22 @@ export type ContinuityRecordKind =
    * externalization; turns carrying a private region are withheld whole.
    * Additive kind, no schema bump.
    */
-  | "session_entity_mention";
+  | "session_entity_mention"
+  /**
+   * One operator-applied receipt compaction run (storage-lifecycle
+   * wave): the per-run audit of a confirmed fold of the receipt ledgers,
+   * carrying the folded and kept counts, the shard outcomes and the
+   * recovery point that preceded the rewrite. Written once per confirmed
+   * run by the fold engine, never on a dry run.
+   *
+   * NAMING HAZARD, decided here: this is the STORAGE compaction audit.
+   * It is deliberately disjoint from the Hermes context-compaction kinds
+   * above (`pre_compact_extract`, `post_compact_audit`), which audit
+   * context-window compaction; the two vocabularies share no surface
+   * name, and a receipt_compaction record never describes a context
+   * operation.
+   */
+  | "receipt_compaction";
 
 /**
  * Every {@link ContinuityRecordKind} member as a runtime list, in union
@@ -133,6 +148,7 @@ export const CONTINUITY_RECORD_KINDS: ReadonlyArray<ContinuityRecordKind> = Obje
   "decision_model_call",
   "decision_model_extract_commit",
   "session_entity_mention",
+  "receipt_compaction",
 ]);
 
 /** Narrow an unvalidated record's `kind` to a {@link ContinuityRecordKind}. */

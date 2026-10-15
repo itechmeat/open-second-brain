@@ -107,6 +107,10 @@ const PINNED_CONTINUITY_KINDS: ReadonlyArray<string> = Object.freeze([
   "decision_model_call",
   "decision_model_extract_commit",
   "session_entity_mention",
+  // The storage-lifecycle wave's additive kind: the per-run audit of a
+  // confirmed receipt compaction. Disjoint from the Hermes
+  // context-compaction kinds above by name and by producer.
+  "receipt_compaction",
 ]);
 
 function truthModulePaths(): ReadonlyArray<string> {
