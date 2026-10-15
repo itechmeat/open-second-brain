@@ -18,7 +18,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +37,7 @@ import {
 } from "../../../src/core/brain/ingest/content-manifest.ts";
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { retireDocumentCopies } from "../../../src/core/brain/document-retire.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -255,5 +264,111 @@ describe("retireDocumentCopies", () => {
     expect(result.failed).toEqual([]);
     expect(result.snapshotRunId).toBeNull();
     expect(result.recoverability.state).toBe("nothing_at_risk");
+  });
+
+  test("a failure AFTER the removal reports the copy as removed, not on disk", () => {
+    if (CHMOD_CANNOT_DENY) return;
+    const { canonical, retired } = seedPair();
+    // The continuity append is the LAST step, after the page is gone:
+    // a read-only continuity directory fails exactly that step.
+    const continuityDir = join(vault, "Brain", "log", "continuity");
+    mkdirSync(continuityDir, { recursive: true });
+    chmodSync(continuityDir, 0o555);
+    try {
+      const result = retireDocumentCopies(vault, [{ path: retired, canonical }], {
+        agent: "tester",
+        now: NOW,
+      });
+
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.path).toBe(retired);
+      expect(result.failed[0]!.message).toContain("removed");
+      expect(result.failed[0]!.message).toContain(retired);
+      // The honest half of the old claim: the page is NOT on disk.
+      expect(existsSync(join(vault, retired))).toBe(false);
+      // The steps before the failure did land.
+      expect(readManifest(vault).entries["imports/b.md"]).toBeUndefined();
+      expect(listContinuityRecords(vault, { kind: "source_invalidation" })).toHaveLength(0);
+    } finally {
+      chmodSync(continuityDir, 0o755);
+    }
+  });
+
+  test("the per-copy reason words the manifest outcome from what actually happened", () => {
+    const { retired } = seedPair();
+    retireDocumentCopies(vault, [{ path: retired, canonical: "Brain/sources/src-a.md" }], {
+      agent: "tester",
+      now: NOW,
+    });
+    const reason = String(
+      (
+        listContinuityRecords(vault, { kind: "source_invalidation" }).at(-1)!.payload as Record<
+          string,
+          unknown
+        >
+      )["reason"],
+    );
+    expect(reason).toContain("dropped manifest key imports/b.md");
+  });
+
+  test("a shared source_path retires twice: the second drop is named already-absent", () => {
+    const { canonical } = seedPair();
+    // A second copy declaring the SAME source_path as the first copy's.
+    const second = writeSourcePage("b2", {
+      body: DUPLICATE_BODY,
+      sourcePath: "imports/b.md",
+      createdAt: "2026-02-02T00:00:00Z",
+    });
+    const result = retireDocumentCopies(
+      vault,
+      [
+        { path: second, canonical },
+        { path: "Brain/sources/src-b.md", canonical },
+      ],
+      { agent: "tester", now: NOW },
+    );
+    expect(result.failed).toEqual([]);
+    const reasons = listContinuityRecords(vault, { kind: "source_invalidation" }).map((r) =>
+      String((r.payload as Record<string, unknown>)["reason"]),
+    );
+    expect(reasons.some((r) => r.includes("dropped manifest key imports/b.md"))).toBe(true);
+    expect(reasons.some((r) => r.includes("manifest key imports/b.md already absent"))).toBe(true);
+  });
+
+  test("no manifest on disk is named, not claimed as a drop", () => {
+    const { canonical, retired } = seedPair();
+    rmSync(join(vault, ".open-second-brain", "ingest-manifest.json"));
+    retireDocumentCopies(vault, [{ path: retired, canonical }], { agent: "tester", now: NOW });
+    const reason = String(
+      (
+        listContinuityRecords(vault, { kind: "source_invalidation" }).at(-1)!.payload as Record<
+          string,
+          unknown
+        >
+      )["reason"],
+    );
+    expect(reason).toContain("manifest");
+    expect(reason).toContain("imports/b.md");
+    expect(reason).not.toContain("dropped manifest key");
+  });
+
+  test("a copy with no recorded source_path names the absence, not a drop", () => {
+    const { canonical } = seedPair();
+    const keyless = writeSourcePage("keyless", {
+      body: DUPLICATE_BODY,
+      sourcePath: "",
+      createdAt: "2026-02-03T00:00:00Z",
+    });
+    retireDocumentCopies(vault, [{ path: keyless, canonical }], { agent: "tester", now: NOW });
+    const reason = String(
+      (
+        listContinuityRecords(vault, { kind: "source_invalidation" }).at(-1)!.payload as Record<
+          string,
+          unknown
+        >
+      )["reason"],
+    );
+    expect(reason).toContain("no manifest key recorded");
+    expect(reason).not.toContain("dropped manifest key");
   });
 });

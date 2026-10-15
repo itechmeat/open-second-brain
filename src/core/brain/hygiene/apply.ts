@@ -165,9 +165,10 @@ async function executeFinding(
         now: opts.now,
         ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
       });
-      // Per-copy failures already left the copies that failed on disk;
-      // surfacing the first through the finding's error keeps the
-      // applied/errors split honest (the recompile executor's rule).
+      // A per-copy failure BEFORE the removal leaves the copy on disk;
+      // one after it reports the page as removed in its own message.
+      // Surfacing the first failure through the finding's error keeps
+      // the applied/errors split honest (the recompile executor's rule).
       if (result.failed.length > 0) {
         const first = result.failed[0]!;
         throw new Error(

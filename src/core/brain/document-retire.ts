@@ -33,10 +33,14 @@
  * names its digest so the provenance chain survives the page.
  *
  * Failure posture is per-copy fail-soft: one copy's failure is
- * collected as `{path, message}`, the failed copy stays on disk, and
- * the remaining copies still retire. Copy-level input mistakes (a path
- * equal to its own canonical) are caller bugs and refuse loudly before
- * any work.
+ * collected as `{path, message}`, and the remaining copies still
+ * retire. The message says WHERE the copy ended up: a failure BEFORE
+ * the page's own removal (the existence, frontmatter or canonical
+ * checks) leaves the copy on disk; a failure AFTER it - the manifest
+ * drop, the continuity record - reports the page as REMOVED, because it
+ * is, and names the step that lost it. Copy-level input mistakes (a
+ * path equal to its own canonical) are caller bugs and refuse loudly
+ * before any work.
  *
  * Dry runs never reach this module: the hygiene apply plan previews
  * retire findings without executing them, and the surfaces' count
@@ -122,7 +126,12 @@ export interface RetiredDocumentCopy {
 
 export interface RetireDocumentsResult {
   readonly retired: ReadonlyArray<RetiredDocumentCopy>;
-  /** Per-copy failures, collected; a failed copy stays on disk. */
+  /**
+   * Per-copy failures, collected. A failure BEFORE the page's own
+   * removal leaves the copy on disk; a failure after it says so in its
+   * message - the page is gone, and the message names the step that
+   * lost it.
+   */
   readonly failed: ReadonlyArray<SourceCleanupFailure>;
   readonly snapshotRunId: string | null;
   readonly snapshotPath: string | null;
@@ -272,43 +281,67 @@ function retireOneCopy(
     throw new Error(`retired copy vanished before removal: ${copy.path}`);
   }
 
-  // 3. Drop the manifest entry for the copy's source, round-tripping
-  // the read contract (t_586d5d8b): the surviving entries keep the
-  // fingerprint they were recorded under, so the owed one-time
-  // reprocess is never forfeited by a removal.
-  let manifestDropped = false;
-  if (facts.sourcePath !== null && existsSync(manifestPath(vault))) {
-    const manifest = readManifest(vault);
-    const entries = { ...manifest.entries };
-    if (entries[facts.sourcePath] !== undefined) {
-      delete entries[facts.sourcePath];
-      manifestDropped = writeManifestAtomic(vault, entries, manifest.contract);
+  // Everything below runs AFTER the page is gone. A failure here cannot
+  // leave the copy on disk, so it is rethrown AS that fact - the report
+  // must never send an operator looking for a page that is not there.
+  try {
+    // 3. Drop the manifest entry for the copy's source, round-tripping
+    // the read contract (t_586d5d8b): the surviving entries keep the
+    // fingerprint they were recorded under, so the owed one-time
+    // reprocess is never forfeited by a removal. The per-copy reason is
+    // worded from what actually happened - a drop, a refusal, an entry
+    // already absent, or nothing to drop at all - never from the key's
+    // existence alone.
+    let manifestDropped = false;
+    let manifestClause: string;
+    if (facts.sourcePath === null) {
+      manifestClause = "no manifest key recorded";
+    } else if (!existsSync(manifestPath(vault))) {
+      manifestClause = `manifest absent, nothing to drop for ${facts.sourcePath}`;
+    } else {
+      const manifest = readManifest(vault);
+      const entries = { ...manifest.entries };
+      if (entries[facts.sourcePath] === undefined) {
+        manifestClause = `manifest key ${facts.sourcePath} already absent`;
+      } else {
+        delete entries[facts.sourcePath];
+        manifestDropped = writeManifestAtomic(vault, entries, manifest.contract);
+        manifestClause = manifestDropped
+          ? `dropped manifest key ${facts.sourcePath}`
+          : `could not drop manifest key ${facts.sourcePath}`;
+      }
     }
+
+    // 4. The provenance record: one per copy, naming what survives, what
+    // went, what was dropped and what evidence is retained.
+    const agent = opts.agent?.trim() ? opts.agent.trim() : DEFAULT_AGENT;
+    const record = appendContinuitySourceInvalidation(vault, {
+      createdAt: isoSecond(opts.now ?? new Date()),
+      source: {
+        id: facts.sourcePath ?? copy.path,
+        ...(facts.sourcePath !== null ? { path: facts.sourcePath } : {}),
+        kind: "source",
+      },
+      reason:
+        `${agent}: retired near-duplicate copy ${linkTarget(copy.path)} into canonical ` +
+        `${linkTarget(copy.canonical)}; ${manifestClause}; ` +
+        `source archive ${facts.archiveHash ?? "none"} retained`,
+    });
+
+    return Object.freeze({
+      path: copy.path,
+      canonical: copy.canonical,
+      manifestKey: facts.sourcePath,
+      manifestDropped,
+      wikilinks,
+      sourceArchiveHash: facts.archiveHash,
+      auditRecordId: record.id,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `retirement removed ${copy.path}, then a post-removal step failed ` +
+        `(the copy is not on disk): ${detail}`,
+    );
   }
-
-  // 4. The provenance record: one per copy, naming what survives, what
-  // went, what was dropped and what evidence is retained.
-  const agent = opts.agent?.trim() ? opts.agent.trim() : DEFAULT_AGENT;
-  const record = appendContinuitySourceInvalidation(vault, {
-    createdAt: isoSecond(opts.now ?? new Date()),
-    source: {
-      id: facts.sourcePath ?? copy.path,
-      ...(facts.sourcePath !== null ? { path: facts.sourcePath } : {}),
-      kind: "source",
-    },
-    reason:
-      `${agent}: retired near-duplicate copy ${linkTarget(copy.path)} into canonical ` +
-      `${linkTarget(copy.canonical)}; dropped manifest key ${facts.sourcePath ?? "none"}; ` +
-      `source archive ${facts.archiveHash ?? "none"} retained`,
-  });
-
-  return Object.freeze({
-    path: copy.path,
-    canonical: copy.canonical,
-    manifestKey: facts.sourcePath,
-    manifestDropped,
-    wikilinks,
-    sourceArchiveHash: facts.archiveHash,
-    auditRecordId: record.id,
-  });
 }
