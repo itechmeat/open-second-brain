@@ -21,10 +21,25 @@
  *     partial write it is: the error names the items already on disk and
  *     the one that failed, rather than leaving the caller to discover
  *     them.
+ * 21. A session whose mining record matches its current turn material is
+ *     suppressed at plan time with a typed reason and the recorded
+ *     breakdown as evidence, and stays suppressed while unchanged.
+ * 22. A re-import that changes the turns re-opens the session with no
+ *     clearing step.
+ * 23. A corrupt mining ledger refuses the plan by name; it is never read
+ *     as an empty ledger.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +54,16 @@ import {
 } from "../../../src/core/brain/extract-signals.ts";
 import { listDeadLetters } from "../../../src/core/brain/dead-letter.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
+import {
+  EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
+  planExtractSignalsPrefiltered,
+} from "../../../src/core/brain/extract-signals-prefilter.ts";
+import {
+  minedTurnsHash,
+  recordSessionMiningOutcome,
+  SESSION_MINING_LEDGER_SCHEMA_VERSION,
+  sessionMiningLedgerPath,
+} from "../../../src/core/brain/session-mining-ledger.ts";
 import {
   ResponseCheckError,
   SEMANTIC_VIOLATION_CODES,
@@ -521,4 +546,76 @@ test("distinct topics pass the duplicate-topic rule", () => {
     { agent: "tester", now: NOW },
   );
   expect(res.written.map((w) => w.topic)).toEqual(["release-notes-style", "module-names"]);
+});
+
+// ----- The zero-yield mining tombstone at plan time (session-mining-economy)
+//
+// 21. A session whose mining record matches its current turn material is
+//     suppressed at plan time with a typed reason and the recorded
+//     breakdown as evidence - never an empty plan that reads as a clean
+//     run - and stays suppressed while the content is unchanged.
+// 22. A re-import that changes the turns re-opens the session with no
+//     clearing step.
+// 23. A corrupt mining ledger refuses the plan by name; it is never read
+//     as an empty ledger.
+
+/** Records a zero-yield tombstone over the session's current mined material. */
+function seedTombstone(): void {
+  const full = planExtractSignals(vault, SESSION, { now: NOW });
+  recordSessionMiningOutcome(
+    vault,
+    {
+      sessionId: SESSION,
+      minedContentHash: minedTurnsHash(full.turnsMined),
+      outcome: { written: 0, staged: 0, deduped: 2, durabilityRejected: 0 },
+    },
+    NOW,
+  );
+}
+
+test("a matching tombstone suppresses the plan with the recorded breakdown", async () => {
+  seedTombstone();
+  const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+    now: NOW,
+    decisionModel: null,
+  });
+  expect(plan.llmStep).toBeNull();
+  expect(plan.skipped).toEqual({
+    reason: EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
+    miningOutcome: { written: 0, staged: 0, deduped: 2, durabilityRejected: 0 },
+  });
+  expect(plan.turnsMined).toEqual([]);
+  // Unchanged content stays suppressed on every later scan.
+  const again = await planExtractSignalsPrefiltered(vault, SESSION, {
+    now: NOW,
+    decisionModel: null,
+  });
+  expect(again.skipped).toEqual(plan.skipped);
+});
+
+test("a re-import that changes the turns re-opens the session", async () => {
+  seedTombstone();
+  importTurns(SESSION, [turn("t9", "user", "A turn imported after the barren mine.")]);
+  const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+    now: NOW,
+    decisionModel: null,
+  });
+  expect(plan.skipped).toBeUndefined();
+  expect(plan.llmStep).not.toBeNull();
+  expect(plan.turnsMined.map((t) => t.turnId)).toEqual(["t1", "t3", "t9"]);
+});
+
+test("a corrupt mining ledger refuses the plan by name", async () => {
+  seedTombstone();
+  const path = sessionMiningLedgerPath(vault);
+  writeFileSync(path, "{ truncated");
+  try {
+    await planExtractSignalsPrefiltered(vault, SESSION, { now: NOW, decisionModel: null });
+    throw new Error("expected the plan to refuse");
+  } catch (err) {
+    expect((err as Error).message).toContain("session mining ledger is corrupted JSON");
+  }
+  // The ledger was never reset by the refused read.
+  expect(readFileSync(path, "utf8")).toBe("{ truncated");
+  expect(SESSION_MINING_LEDGER_SCHEMA_VERSION).toBe(1);
 });

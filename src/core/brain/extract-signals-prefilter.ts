@@ -25,6 +25,13 @@
  * reason in `decisionModel.degraded`. The decision only filters turns this
  * module's own code produced; it never writes to the vault.
  *
+ * Before any of that, the plan passes the mining ledger's zero-yield gate
+ * (session-mining-ledger.ts): a session whose current turn material was
+ * already mined and yielded nothing accepted is suppressed outright, on
+ * every configuration, before a single request is built - the tombstone's
+ * saving is the caller's whole mining round trip, which is more than the
+ * pre-filter could ever measure.
+ *
  * With the use not `off`, the envelope's schema hints also name the
  * optional `source_turn` item field, so the commit can say which turn an
  * item came from and `report` can measure regret (accepted items whose
@@ -72,6 +79,7 @@ import {
   type SignalExtractionPlan,
 } from "./extract-signals.ts";
 import type { NeedsLlmStep } from "./llm-step.ts";
+import { readMiningTombstone, type SessionMiningOutcome } from "./session-mining-ledger.ts";
 import { listSessionRawTurns } from "./session-recall.ts";
 import { estimateTokens as estimateTextTokens } from "./text/tokenizer.ts";
 import { emitTokenImpact, TOKEN_COUNT_METHOD } from "./token-impact.ts";
@@ -80,6 +88,14 @@ const USE = "extract_prefilter" as const;
 
 /** `skipped.reason` when every mined turn scored below the threshold. */
 export const EXTRACT_PREFILTER_SKIP_REASON = "decision_model_prefilter";
+
+/**
+ * `skipped.reason` when the session's current turn material is already
+ * tombstoned in the mining ledger: it was mined before and the commit
+ * yielded nothing accepted, so there is no envelope to answer and the
+ * recorded breakdown rides along as evidence.
+ */
+export const EXTRACT_MINING_TOMBSTONE_SKIP_REASON = "mining_tombstone";
 
 /** `token_impact.source` for this use's samples. */
 export const EXTRACT_PREFILTER_TOKEN_SOURCE = decisionTokenImpactSource("extract_prefilter");
@@ -90,10 +106,21 @@ export interface PrefilteredSignalExtractionPlan extends Omit<SignalExtractionPl
   readonly llmStep: NeedsLlmStep | null;
   /** Enforce only: ids of the turns left out of the envelope, in record order. */
   readonly turnsDropped?: ReadonlyArray<string>;
-  /** Enforce only: every mined turn was dropped, so there is nothing to mine. */
+  /**
+   * There is no envelope, and here is why - one channel for every
+   * suppression. With the pre-filter reason, every mined turn was dropped
+   * and `turnsDropped` counts them. With the tombstone reason, the
+   * session's current material was already mined and yielded nothing
+   * accepted; `miningOutcome` carries the recorded breakdown as evidence.
+   */
   readonly skipped?: {
-    readonly reason: typeof EXTRACT_PREFILTER_SKIP_REASON;
-    readonly turnsDropped: number;
+    readonly reason:
+      | typeof EXTRACT_PREFILTER_SKIP_REASON
+      | typeof EXTRACT_MINING_TOMBSTONE_SKIP_REASON;
+    /** Present with the pre-filter reason: how many turns were dropped. */
+    readonly turnsDropped?: number;
+    /** Present with the tombstone reason: the recorded zero-yield breakdown. */
+    readonly miningOutcome?: SessionMiningOutcome;
   };
   /** Present only when the use is not `off` and a request failed. */
   readonly decisionModel?: { readonly degraded: DecisionDegradeReason };
@@ -217,9 +244,43 @@ function questionsFor(count: number): Readonly<Record<string, DecisionQuestion>>
 // ----- the plan ------------------------------------------------------------------
 
 /**
+ * The tombstone gate, run on every plan this module returns and always
+ * before any decision-model work, so a barren session costs no requests
+ * here and none downstream either. A hit suppresses the whole plan: no
+ * envelope, no turns, the recorded breakdown as evidence - shaped exactly
+ * like the pre-filter's own skip, so there is one "no envelope, and why"
+ * channel. A session the ledger cannot verify (corrupt file, unknown
+ * schema) throws by the read's contract rather than passing as eligible.
+ *
+ * The plan's `turnsMined` is both the gate's hash input and what a pass
+ * leaves untouched; only a hit empties it. The token-impact ledger is not
+ * consulted here: the avoided spend is the caller's mining inference, not
+ * a decision-model one this module would otherwise have made.
+ */
+function miningTombstoneGate(
+  vault: string,
+  plan: SignalExtractionPlan,
+): PrefilteredSignalExtractionPlan {
+  const entry = readMiningTombstone(vault, plan.sessionId, plan.turnsMined);
+  if (entry === null) return plan;
+  return Object.freeze({
+    ...plan,
+    turnsMined: Object.freeze([]),
+    llmStep: null,
+    skipped: Object.freeze({
+      reason: EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
+      miningOutcome: Object.freeze({ ...entry.outcome }),
+    }),
+  });
+}
+
+/**
  * The plan phase with the optional pre-filter. With the use `off` this is
- * exactly {@link planExtractSignals}. Refusals ({@link ExtractSignalsError})
- * are thrown as there, before any request.
+ * exactly {@link planExtractSignals}, unless the session is tombstoned -
+ * the mining ledger's zero-yield gate runs on every configuration, before
+ * the pre-filter, because the spend it prevents is the caller's mining
+ * round trip and not only this module's requests. Refusals
+ * ({@link ExtractSignalsError}) are thrown as there, before the gate.
  */
 export async function planExtractSignalsPrefiltered(
   vault: string,
@@ -227,11 +288,21 @@ export async function planExtractSignalsPrefiltered(
   opts: PrefilteredPlanOptions,
 ): Promise<PrefilteredSignalExtractionPlan> {
   const cfg = opts.decisionModel;
-  if (!extractPrefilterActive(cfg)) return planExtractSignals(vault, sessionId, { now: opts.now });
+  if (!extractPrefilterActive(cfg)) {
+    return miningTombstoneGate(vault, planExtractSignals(vault, sessionId, { now: opts.now }));
+  }
   const provider = opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env, vault);
-  if (provider === null) return planExtractSignals(vault, sessionId, { now: opts.now });
+  if (provider === null) {
+    return miningTombstoneGate(vault, planExtractSignals(vault, sessionId, { now: opts.now }));
+  }
 
-  const full = planExtractSignals(vault, sessionId, { now: opts.now, sourceTurnHint: true });
+  const planned = planExtractSignals(vault, sessionId, { now: opts.now, sourceTurnHint: true });
+  const suppressed = miningTombstoneGate(vault, planned);
+  if (suppressed.skipped !== undefined) return suppressed;
+  // The gate passed the plan through unchanged, so `full` is the base
+  // plan and its envelope is the non-null one the rest of this function
+  // has always read.
+  const full = planned;
   const mined = full.turnsMined;
   const correlationId = randomUUID();
   const chunks = planPrefilterChunks(mined, cfg!.maxStateTokens);

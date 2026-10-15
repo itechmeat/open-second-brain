@@ -27,12 +27,20 @@ import { join } from "node:path";
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { planExtractSignals } from "../../../src/core/brain/extract-signals.ts";
 import {
+  EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
   EXTRACT_PREFILTER_SKIP_REASON,
   EXTRACT_PREFILTER_TOKEN_SOURCE,
   planExtractSignalsPrefiltered,
   resolveExtractPrefilterConfig,
 } from "../../../src/core/brain/extract-signals-prefilter.ts";
-import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
+import {
+  minedTurnsHash,
+  recordSessionMiningOutcome,
+} from "../../../src/core/brain/session-mining-ledger.ts";
+import {
+  importSessionRecall,
+  listSessionRawTurns,
+} from "../../../src/core/brain/session-recall.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
 import type { ResolvedDecisionModelConfig } from "../../../src/core/decision-model/config.ts";
 import type { DecisionDegradeReason } from "../../../src/core/decision-model/contract.ts";
@@ -414,4 +422,117 @@ test("private regions never reach the provider", async () => {
   expect(provider.requests).toHaveLength(1);
   expect(JSON.stringify(provider.requests[0]!.state)).not.toContain("secret-lane");
   expect(JSON.stringify(provider.requests[0]!.state)).toContain("Prefer tabs.");
+});
+
+// ----- The zero-yield mining tombstone gate (session-mining-economy) -------
+//
+//  8. A mining record whose hash matches the session's current turn
+//     material suppresses the plan with the tombstone reason and the
+//     recorded breakdown as evidence, before the pre-filter spends
+//     anything: no request, no record.
+//  9. Changed turn material re-opens the session and the pre-filter runs
+//     as before; the pre-filter's own skip reason is untouched.
+
+/** Records a zero-yield tombstone over the session's current turn material. */
+function seedTombstone(
+  sessionId: string,
+  outcome = { written: 0, staged: 0, deduped: 2, durabilityRejected: 1 },
+): void {
+  const full = planExtractSignals(vault, sessionId, { now: NOW });
+  recordSessionMiningOutcome(
+    vault,
+    { sessionId, minedContentHash: minedTurnsHash(full.turnsMined), outcome },
+    NOW,
+  );
+}
+
+describe("mining tombstone", () => {
+  test("a matching tombstone suppresses the plan before any pre-filter request", async () => {
+    seedTombstone(SESSION);
+    const provider = new FakeDecisionProvider({ answer: () => 0.9 });
+    const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+      now: NOW,
+      decisionModel: config("enforce"),
+      provider,
+    });
+    expect(plan.llmStep).toBeNull();
+    expect(plan.skipped).toEqual({
+      reason: EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
+      miningOutcome: { written: 0, staged: 0, deduped: 2, durabilityRejected: 1 },
+    });
+    expect(plan.turnsMined).toEqual([]);
+    expect(plan.turnsDropped).toBeUndefined();
+    expect(plan.decisionModel).toBeUndefined();
+    // The gate ran before the pre-filter: no request, no record, no spend.
+    expect(provider.requests).toHaveLength(0);
+    expect(listDecisionModelCalls(vault)).toHaveLength(0);
+  });
+
+  test("the tombstone suppresses in shadow mode and with the use off alike", async () => {
+    seedTombstone(SESSION);
+    const suppresses = async (decisionModel: ResolvedDecisionModelConfig | null): Promise<void> => {
+      const provider = new FakeDecisionProvider({ answer: () => 0.9 });
+      const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+        now: NOW,
+        decisionModel,
+        provider,
+      });
+      expect(plan.llmStep).toBeNull();
+      expect(plan.skipped?.reason).toBe(EXTRACT_MINING_TOMBSTONE_SKIP_REASON);
+      expect(provider.requests).toHaveLength(0);
+    };
+    await suppresses(config("shadow"));
+    await suppresses(null);
+  });
+
+  test("changed turn material re-opens the session and the pre-filter runs", async () => {
+    seedTombstone(SESSION);
+    importSessionRecall(vault, {
+      sessionId: SESSION,
+      turns: [turn("t9", "user", "A turn imported after the barren mine.")],
+      createdAt: NOW.toISOString(),
+    });
+    const provider = new FakeDecisionProvider({ answer: () => 0.9 });
+    const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+      now: NOW,
+      decisionModel: config("shadow"),
+      provider,
+    });
+    expect(plan.skipped).toBeUndefined();
+    expect(plan.llmStep).not.toBeNull();
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  test("the three plan refusals still throw, tombstone or not", async () => {
+    // A session whose turns are all non-user can carry a tombstone (it has
+    // turns, so the ledger keeps one), but the refusal fires before the
+    // gate is ever consulted. The entry is seeded over the raw turns,
+    // because the plan that would compute the hash refuses first.
+    importSessionRecall(vault, {
+      sessionId: "sess-quiet",
+      turns: [turn("q1", "assistant", "Only I spoke here.")],
+      createdAt: NOW.toISOString(),
+    });
+    const raw = listSessionRawTurns(vault, "sess-quiet");
+    recordSessionMiningOutcome(
+      vault,
+      {
+        sessionId: "sess-quiet",
+        minedContentHash: minedTurnsHash(
+          raw.map((t) => ({ turnId: t.turn_id, text: t.text.trim(), timestamp: t.timestamp })),
+        ),
+        outcome: { written: 0, staged: 0, deduped: 0, durabilityRejected: 0 },
+      },
+      NOW,
+    );
+    const provider = new FakeDecisionProvider({ answer: () => 0.9 });
+    await expect(
+      planExtractSignalsPrefiltered(vault, "sess-quiet", {
+        now: NOW,
+        decisionModel: config("enforce"),
+        provider,
+      }),
+    ).rejects.toThrow(/user/);
+    expect(provider.requests).toHaveLength(0);
+  });
 });
