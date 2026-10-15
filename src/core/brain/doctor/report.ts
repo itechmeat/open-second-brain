@@ -6,6 +6,7 @@
  * shapes without the other importing it back.
  */
 
+import type { TransportReach } from "../../graph/transport-reach.ts";
 import type { SemanticHealthReport } from "../health/reconcile.ts";
 import type { DoctorIssue, InstructionFileCeilingWarning, TrustVerdict } from "../types.ts";
 
@@ -44,6 +45,14 @@ export interface RunDoctorOptions {
    * (the operator's own shell).
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * How far the caller had to reach. Passed through to
+   * {@link DoctorCheckContext.reach}, so a check whose findings carry
+   * whole-vault figures answers below local reach in the uncertain
+   * stream, by name and without the figures. Omitted reads as local
+   * (the operator's own shell).
+   */
+  readonly reach?: TransportReach;
   /**
    * Optional precomputed dream summary (v0.10.16). When supplied,
    * the doctor runs the verification-delta helper and folds the

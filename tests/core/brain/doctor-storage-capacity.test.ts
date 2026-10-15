@@ -12,6 +12,11 @@
  *   3. The store is measured at `ctx.dbPath` when the pass carries one,
  *      fail-soft: the doctor's resolved store path is the one that gets
  *      measured, and an absent one falls back to the default resolution.
+ *   4. Below local reach the reading is not reported at all: the check
+ *      answers in the uncertain stream, by name, and neither the warn
+ *      nor the critical issue - either would carry the census in its
+ *      message - is emitted. Absent reach reads as local, so the shell
+ *      caller's report is unchanged.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -27,6 +32,7 @@ import {
 } from "../../../src/core/brain/doctor/storage-capacity.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../../src/core/brain/diagnostics.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
@@ -90,6 +96,31 @@ describe("storageCapacityCheck", () => {
     expect(errors).toHaveLength(1);
     // The measured fact travels in the message.
     expect(errors[0]!.message).toMatch(/\d+ bytes/);
+  });
+
+  test("below local reach the reading is not reported - the reach is named instead", () => {
+    configureCap(10_000);
+    writePage(20_000);
+    const result = runDoctor(vault, { reach: TRANSPORT_REACH.remote });
+    // Neither tier issue is emitted: each would carry the whole-vault
+    // census in its message prose.
+    expect(result.errors.filter((i) => i.code === STORAGE_CAPACITY_CRITICAL_CODE)).toEqual([]);
+    expect(result.warnings.filter((i) => i.code === STORAGE_CAPACITY_WARN_CODE)).toEqual([]);
+    const unmeasured = (result.uncertain ?? []).filter(
+      (e) => e.code === STORAGE_CAPACITY_UNMEASURED_CODE,
+    );
+    expect(unmeasured).toHaveLength(1);
+    expect(unmeasured[0]!.message).toContain("reach");
+    expect(unmeasured[0]!.message).not.toMatch(/\d/);
+  });
+
+  test("at local reach - named or absent - the reading is reported as before", () => {
+    configureCap(10_000);
+    writePage(20_000);
+    for (const reach of [TRANSPORT_REACH.local, undefined]) {
+      const result = runDoctor(vault, reach === undefined ? {} : { reach });
+      expect(result.errors.some((i) => i.code === STORAGE_CAPACITY_CRITICAL_CODE)).toBe(true);
+    }
   });
 
   test("both codes resolve to a registered next command", () => {

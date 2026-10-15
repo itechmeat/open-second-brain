@@ -123,6 +123,10 @@ async function toolBrainDoctor(
     // discovery would find.
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     ...(readable !== undefined ? { readable } : {}),
+    // The checks whose findings carry whole-vault figures answer below
+    // local reach in the uncertain stream, by name (`doctor/check.ts`).
+    // Resolved fail-closed: a context that proved nothing is remote.
+    reach: contextReach(ctx),
   });
 
   // Every issue names the artifact it is about - `path`, `target`, the

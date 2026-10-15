@@ -9,6 +9,7 @@
  * the pass by being added to the registry array in `doctor.ts`.
  */
 
+import type { TransportReach } from "../../graph/transport-reach.ts";
 import type { BrainConfig, DoctorIssue } from "../types.ts";
 import type { LogRecord, PreferenceRecord, UnreadableLogDay } from "./records.ts";
 import type { DoctorUncertainEntry } from "./report.ts";
@@ -48,6 +49,16 @@ export interface DoctorCheckContext {
    * no slot of a cap and moves no count. Absent means every page counts.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * How far the caller had to reach, for the checks whose findings carry
+   * whole-vault figures: those figures move when a page the caller may
+   * not read appears or goes, so below local reach such a check answers
+   * in the uncertain stream, by name and without the figures. Absent
+   * reads as local - the shell caller, which already holds the
+   * filesystem. A wire surface resolves its caller's reach and passes it
+   * here; it never leaves this absent.
+   */
+  readonly reach?: TransportReach;
   /** Every valid wikilink target inside `Brain/`, keyed by basename. */
   readonly knownBasenames: ReadonlySet<string>;
   /**

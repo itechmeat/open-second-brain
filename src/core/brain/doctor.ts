@@ -475,6 +475,7 @@ function resolveContext(
     dbPath: opts.dbPath,
     configPath: opts.configPath,
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    ...(opts.reach !== undefined ? { reach: opts.reach } : {}),
     knownBasenames: collectAllBasenames(vault, {
       site: CONTEXT_SITE,
       consequence:
