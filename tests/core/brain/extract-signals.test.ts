@@ -41,7 +41,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   AUTO_EXTRACT_CONFIDENCE_FLOOR,
@@ -60,9 +60,11 @@ import {
 } from "../../../src/core/brain/extract-signals-prefilter.ts";
 import {
   minedTurnsHash,
+  readSessionMiningLedger,
   recordSessionMiningOutcome,
   SESSION_MINING_LEDGER_SCHEMA_VERSION,
   sessionMiningLedgerPath,
+  type SessionMiningEntry,
 } from "../../../src/core/brain/session-mining-ledger.ts";
 import {
   ResponseCheckError,
@@ -618,4 +620,144 @@ test("a corrupt mining ledger refuses the plan by name", async () => {
   // The ledger was never reset by the refused read.
   expect(readFileSync(path, "utf8")).toBe("{ truncated");
   expect(SESSION_MINING_LEDGER_SCHEMA_VERSION).toBe(1);
+});
+
+// ----- Record-at-commit (session-mining-economy) ----------------------------
+//
+// 24. A successful commit with nothing written and nothing staged records
+//     the zero-yield tombstone with the outcome breakdown, whatever mix of
+//     empty answer, dedupes and durability refusals produced it.
+// 25. A commit with a yield (written or staged nonzero) records nothing, and
+//     neither does a commit that ends in a partial-write error - a failed
+//     run is not a barren one.
+// 26. The recorded hash is recomputed from the turns present AT COMMIT
+//     time, so an import landing between plan and commit tombstones the
+//     material the commit actually covered.
+// 27. When the commit itself succeeds but the ledger write fails, the
+//     result names the failure and nothing throws; the field is absent
+//     whenever the ledger was not attempted or succeeded.
+
+function ledgerEntry(): SessionMiningEntry | undefined {
+  return readSessionMiningLedger(vault).entries[SESSION];
+}
+
+test("an empty answer records the zero-yield tombstone over the planned material", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  expect(res.written).toEqual([]);
+  const entry = ledgerEntry();
+  expect(entry).toBeDefined();
+  expect(entry!.minedContentHash).toBe(minedTurnsHash(plan.turnsMined));
+  expect(entry!.outcome).toEqual({ written: 0, staged: 0, deduped: 0, durabilityRejected: 0 });
+  expect(entry!.recordedAt).toBe("2026-08-22T10:00:00Z");
+});
+
+test("a commit whose items all dedupe records the zero-yield breakdown", () => {
+  const payload = { items: [item()] };
+  commitExtractedSignals(vault, SESSION, payload, { agent: "tester", now: NOW });
+  const second = commitExtractedSignals(vault, SESSION, payload, { agent: "tester", now: NOW });
+  expect(second.written).toEqual([]);
+  expect(second.deduped).toBe(1);
+  expect(ledgerEntry()!.outcome).toEqual({
+    written: 0,
+    staged: 0,
+    deduped: 1,
+    durabilityRejected: 0,
+  });
+});
+
+test("a commit whose items all fail the durability gate records the refusals", () => {
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item({ topic: "noise", principle: "temporary scratch note" })] },
+    { agent: "tester", now: NOW, durabilityDenylist: [/scratch/] },
+  );
+  expect(res.written).toEqual([]);
+  expect(res.durabilityRejected).toBe(1);
+  expect(ledgerEntry()!.outcome).toEqual({
+    written: 0,
+    staged: 0,
+    deduped: 0,
+    durabilityRejected: 1,
+  });
+});
+
+test("a commit with a yield records nothing", () => {
+  commitExtractedSignals(vault, SESSION, { items: [item()] }, { agent: "tester", now: NOW });
+  expect(readSessionMiningLedger(vault).entries).toEqual({});
+});
+
+test("a staged yield records nothing either", () => {
+  commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item()] },
+    {
+      agent: "tester",
+      now: NOW,
+      writeApprovalEnabled: true,
+    },
+  );
+  expect(pendingFiles().length).toBe(1);
+  expect(readSessionMiningLedger(vault).entries).toEqual({});
+});
+
+test("a partial-write failure records nothing - a failed run is not a barren one", () => {
+  expect(() =>
+    commitExtractedSignals(
+      vault,
+      SESSION,
+      { items: [item({ topic: "module:names" })] },
+      { agent: "tester", now: NOW },
+    ),
+  ).toThrow(ExtractSignalsWriteError);
+  expect(inboxFiles()).toEqual([]);
+  expect(readSessionMiningLedger(vault).entries).toEqual({});
+});
+
+test("the commit recomputes the mined-content hash at commit time", () => {
+  const before = planExtractSignals(vault, SESSION, { now: NOW });
+  importTurns(SESSION, [turn("t9", "user", "Imported after the plan was built.")]);
+  commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  const after = planExtractSignals(vault, SESSION, { now: NOW });
+  const entry = ledgerEntry()!;
+  expect(entry.minedContentHash).toBe(minedTurnsHash(after.turnsMined));
+  expect(entry.minedContentHash).not.toBe(minedTurnsHash(before.turnsMined));
+});
+
+/** Plants a corrupt mining ledger so a read of it refuses by name. */
+function seedCorruptLedger(): void {
+  mkdirSync(dirname(sessionMiningLedgerPath(vault)), { recursive: true });
+  writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
+}
+
+test("a ledger write failure on a successful commit is named, never thrown", () => {
+  seedCorruptLedger();
+  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  expect(res.written).toEqual([]);
+  expect(res.miningLedgerFailure).toContain("session mining ledger is corrupted JSON");
+  // The vault was never touched by the failed record.
+  expect(inboxFiles()).toEqual([]);
+});
+
+test("a yield-bearing commit does not touch a corrupt ledger and names no failure", () => {
+  seedCorruptLedger();
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item()] },
+    {
+      agent: "tester",
+      now: NOW,
+    },
+  );
+  expect(res.written).toHaveLength(1);
+  expect("miningLedgerFailure" in res).toBe(false);
+});
+
+test("the ledger-failure field is absent when the record succeeded", () => {
+  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  expect(ledgerEntry()).toBeDefined();
+  expect("miningLedgerFailure" in res).toBe(false);
 });

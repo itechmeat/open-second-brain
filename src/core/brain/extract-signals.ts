@@ -30,6 +30,13 @@
  * forever - and the inbox trial lane plus the dream pass remains the only
  * route to a confirmed preference. Nothing here writes a preference.
  *
+ * The commit is also the mining ledger's write side (session-mining-ledger.ts):
+ * a commit that ends with nothing written and nothing staged records a
+ * zero-yield tombstone over the turn material it surveyed, and the plan
+ * gate reads that record to stop re-proposing a barren session on every
+ * re-scan. A yield - staged or written - never tombstones, and neither
+ * does a partial write.
+ *
  * Precision beats recall, as it does in `fact-extract.ts`: the cap and the
  * floor are refusals, not filters. A payload over either limit is rejected
  * whole and named, because an over-eager mine that silently kept its best
@@ -39,7 +46,11 @@
 import { posix } from "node:path";
 
 import { buildReconciliationReport, type ReconciliationReport } from "../reconciliation-report.ts";
-import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
+import {
+  buildCaptureBoundary,
+  type CaptureBoundary,
+  type SessionCaptureDecision,
+} from "./capture-boundary.ts";
 import { tryRecordDeadLetter, type DeadLetterLane, type DeadLetterOutcome } from "./dead-letter.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
@@ -59,7 +70,8 @@ import {
   EXTRACTED_SIGNALS_SURFACE,
   SHAPE_ROOT_PATH,
 } from "./response-shape.ts";
-import { listSessionRawTurns } from "./session-recall.ts";
+import { listSessionRawTurns, type ExpandedRawTurn } from "./session-recall.ts";
+import { minedTurnsHash, recordSessionMiningOutcome } from "./session-mining-ledger.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE, type BrainSignalSign } from "./types.ts";
@@ -266,6 +278,15 @@ export interface CommitExtractedSignalsResult {
    * lost would misreport the one number an operator reads first.
    */
   readonly reconciliation: ReconciliationReport;
+  /**
+   * Present only when the commit itself SUCCEEDED but recording the
+   * zero-yield mining tombstone failed (session-mining-ledger.ts). The
+   * signals this result reports are already on disk, so throwing would
+   * misreport a successful write as a failed one - and swallowing the
+   * failure would hide a ledger that is no longer trustworthy, so the
+   * error message rides here by name, and on both surface outputs.
+   */
+  readonly miningLedgerFailure?: string;
 }
 
 export interface PlanExtractSignalsOptions {
@@ -431,6 +452,30 @@ function readItems(payload: unknown): ReadonlyArray<unknown> | null {
 // ----- Phase one: what to mine ---------------------------------------------
 
 /**
+ * The user turns the prompt embeds, in record order: the import path's
+ * role rule, the message-level capture boundary, and blank text dropped.
+ * Shared by the plan (which offers them) and the commit (which hashes the
+ * turns present at commit time for the mining ledger), so the two can
+ * never disagree on what a run covered.
+ */
+function selectMinedTurns(
+  boundary: CaptureBoundary,
+  turns: ReadonlyArray<ExpandedRawTurn>,
+): MinedTurn[] {
+  const mined: MinedTurn[] = [];
+  for (const turn of turns) {
+    if (turn.role !== MINED_TURN_ROLE) continue;
+    // Message-level boundary, mirroring the import path: suppressed text
+    // never reaches extraction, so it never reaches the prompt either.
+    if (boundary.suppressMessage(turn.text)) continue;
+    const text = turn.text.trim();
+    if (text.length === 0) continue;
+    mined.push(Object.freeze({ turnId: turn.turn_id, text, timestamp: turn.timestamp }));
+  }
+  return mined;
+}
+
+/**
  * Assemble the mining plan for one imported session. Read-only; writes
  * nothing and calls no model.
  *
@@ -462,16 +507,7 @@ export function planExtractSignals(
       `session ${trimmed} has no imported turns; import it first with 'o2b brain import-session --recall'`,
     );
   }
-  const mined: MinedTurn[] = [];
-  for (const turn of turns) {
-    if (turn.role !== MINED_TURN_ROLE) continue;
-    // Message-level boundary, mirroring the import path: suppressed text
-    // never reaches extraction, so it never reaches the prompt either.
-    if (boundary.suppressMessage(turn.text)) continue;
-    const text = turn.text.trim();
-    if (text.length === 0) continue;
-    mined.push(Object.freeze({ turnId: turn.turn_id, text, timestamp: turn.timestamp }));
-  }
+  const mined = selectMinedTurns(boundary, turns);
   if (mined.length === 0) {
     throw new ExtractSignalsError(
       `session ${trimmed} has ${turns.length} imported turn(s) but none authored by the user; there is nothing to mine`,
@@ -585,7 +621,8 @@ export function commitExtractedSignals(
   if (trimmed.length === 0) {
     throw new ExtractSignalsError("extract-signals needs a session reference");
   }
-  const boundaryDecision = buildCaptureBoundary(vault).sessionDecision(trimmed);
+  const boundary = buildCaptureBoundary(vault);
+  const boundaryDecision = boundary.sessionDecision(trimmed);
   if (boundaryDecision !== "capture") {
     throw new ExtractSignalsError(
       `session ${trimmed} is classified '${boundaryDecision}' by the capture boundary; it may not produce signals`,
@@ -695,10 +732,43 @@ export function commitExtractedSignals(
     );
   }
 
+  // A barren commit is the ledger's write trigger: nothing written and
+  // nothing staged means the mine ran to completion and produced nothing
+  // accepted - an empty answer, every item deduped, every item refused by
+  // the durability gate, or any mix. A yield, staged or written, is never
+  // barren, and a thrown ExtractSignalsWriteError never reaches here: a
+  // run that FAILED did not end, so it tombstones nothing.
+  const staged = writeApprovalEnabled ? written.length : 0;
+  let miningLedgerFailure: string | undefined;
+  if (written.length === 0 && staged === 0) {
+    // The hash covers the turns present NOW, not the ones a plan once
+    // offered: an import landing between plan and commit makes this
+    // tombstone describe the material the commit actually surveyed, and a
+    // later scan of that material is the one it must suppress.
+    const mined = selectMinedTurns(boundary, listSessionRawTurns(vault, trimmed));
+    try {
+      recordSessionMiningOutcome(
+        vault,
+        {
+          sessionId: trimmed,
+          minedContentHash: minedTurnsHash(mined),
+          outcome: { written: 0, staged: 0, deduped, durabilityRejected: rejected.length },
+        },
+        opts.now,
+      );
+    } catch (err) {
+      // The accepted items (none here) and the signals already on disk are
+      // safe; throwing would misreport the commit as failed, and dropping
+      // the error would leave a ledger that silently stopped being
+      // written. Name it instead - the surfaces carry it verbatim.
+      miningLedgerFailure = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   return Object.freeze({
     sessionId: trimmed,
     written: Object.freeze(written),
-    staged: writeApprovalEnabled ? written.length : 0,
+    staged,
     deduped,
     durabilityRejected: rejected.length,
     rejected: Object.freeze(rejected),
@@ -707,6 +777,7 @@ export function commitExtractedSignals(
       found: written.length,
       missing: [],
     }),
+    ...(miningLedgerFailure !== undefined ? { miningLedgerFailure } : {}),
   });
 }
 
