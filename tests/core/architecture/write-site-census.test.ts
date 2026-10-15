@@ -1413,8 +1413,15 @@ const DIRECT_WRITE_ROWS = 82;
  * joins the population through its new `path-constants.ts` import (the
  * quote_check resolvers) carrying the config write it already made
  * through the same shared writer.
+ *
+ * 119 -> 120, from the storage-lifecycle wave and nothing else: the
+ * receipt fold engine (`src/core/brain/receipts/compact.ts`) rewrites
+ * each folded receipt-ledger shard through `atomicWriteFileSync` with
+ * the `expectBefore` compare-and-swap, under the shard's own lock - a
+ * machine JSONL rewrite that carries no note content, so it arrives in
+ * the shared class needing no exclusion.
  */
-const SHARED_HELPER_ROWS = 119;
+const SHARED_HELPER_ROWS = 120;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1527,9 +1534,12 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * through the shared atomic writer (evidence bytes; no origin stamp on an
  * archive put), and the config writer joins the population through its new
  * path-constants import carrying the config write it already made (module
- * state, not notes).
+ * state, not notes). 116 -> 117: the receipt fold engine
+ * (`src/core/brain/receipts/compact.ts`) rewrites its named shards through
+ * the shared atomic writer (machine JSONL ledger rows, not notes; no
+ * origin stamp on a fold rewrite).
  */
-const UNSTAMPED_SHARED_ROWS = 116;
+const UNSTAMPED_SHARED_ROWS = 117;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
