@@ -272,8 +272,8 @@ export interface RunMaintenanceOptions extends EvaluateGatesOptions {
   readonly holder: string;
   readonly tasks: ReadonlyArray<MaintenanceTask>;
   /**
-   * Bypass the window, busy and pressure gates and every streak refusal -
-   * never the lease.
+   * Bypass the window, busy, pressure and capacity gates and every streak
+   * refusal - never the lease.
    */
   readonly force?: boolean;
   /**
