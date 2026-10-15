@@ -90,7 +90,7 @@ export interface RetrievalDecisionTrace {
   readonly mode?: "shadow";
   /** Present only under shadow: total would-be refusals across lanes. */
   readonly refused?: number;
-  /** Present only under shadow: every would-be refusal, in pool order. */
+  /** Present only under shadow: every would-be refusal, pool lane then arm lane. */
   readonly refusals?: ReadonlyArray<RetrievalTrustRefusal>;
 }
 

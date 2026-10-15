@@ -1044,6 +1044,11 @@ export async function search(
       structured: shape.structured,
       frontmatterCache,
       nowMs,
+      // The arm's eligibility refusals (present only under an active gate
+      // mode) ride into the receipt build, so the shadow receipts report
+      // the arm lane end to end; under enforce the receipts keep the
+      // pre-mode shape and the field is not consulted.
+      ...(relational.refusals !== undefined ? { armRefusals: relational.refusals } : {}),
       ...(deadline !== null
         ? {
             signal: deadline.signal,

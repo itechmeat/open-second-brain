@@ -14,6 +14,8 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -221,6 +223,57 @@ describe("retrieval trust gate on the search path", () => {
     expect(assessment.refused).toBe(0);
     expect(assessment.refusals_by_lane).toEqual({ arm: 0, pool: 0 });
     expect(assessment.refused_reason_counts).toEqual({ arm: {}, pool: {} });
+  });
+
+  test("the arm lane's refusals ride the receipts end to end under shadow", async () => {
+    // The arm's only route to `neighbor.md` is the walk, and its refusal
+    // reason is one the page gate never reads - a closed validity window -
+    // so the measured arm lane cannot come from the pool's own pass.
+    writeMd(vault, "seed.md", '---\nrelated: "[[neighbor]]"\n---\n\nalpha topic seed document.');
+    writeMd(vault, "neighbor.md", '---\nvalid_until: "2020-01-01"\n---\n\nbeta divergent content.');
+    await indexVault(makeConfig({ vault, dbPath }));
+    const configPath = join(vault, "gate-mode.yaml");
+    writeFileSync(configPath, "search_trust_gate_mode: shadow\n");
+    const cfg = {
+      ...makeConfig({
+        vault,
+        dbPath,
+        fusionMode: "rrf",
+        relationalArmEnabled: true,
+        searchTrustGateMode: "shadow",
+      }),
+      configPath,
+    };
+
+    const out = await search(cfg, { query: "alpha [[seed]] related" });
+
+    // Shadow keeps the arm's contribution: the walked node still surfaces,
+    // carrying the arm's attribution.
+    const neighbor = out.results.find((r) => r.path === "neighbor.md");
+    expect(neighbor).toBeDefined();
+    expect(neighbor!.reasons.some((x) => x.startsWith("relational:"))).toBe(true);
+
+    const trace = out.retrievalDecisionTrace!;
+    expect(trace.mode).toBe("shadow");
+    expect(trace.excluded).toBe(0);
+    expect(trace.refused).toBe(1);
+    expect(trace.refusals).toEqual([
+      {
+        document_id: expect.any(Number),
+        chunk_id: expect.any(Number),
+        path: "neighbor.md",
+        reasons: ["relational_arm:closed_validity_window"],
+        lane: "arm",
+      },
+    ]);
+
+    const assessment = out.memoryTrustAssessment!;
+    expect(assessment.refused).toBe(1);
+    expect(assessment.refusals_by_lane).toEqual({ arm: 1, pool: 0 });
+    expect(assessment.refused_reason_counts).toEqual({
+      arm: { "relational_arm:closed_validity_window": 1 },
+      pool: {},
+    });
   });
 
   test("the explain envelope names the resolved mode under shadow and stays silent under enforce", async () => {

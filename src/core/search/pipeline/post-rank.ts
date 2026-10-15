@@ -89,6 +89,14 @@ export interface PostRankInput {
   readonly signal?: AbortSignal;
   /** The request's clock, for the rerank sunset decision. */
   readonly nowMs: number;
+  /**
+   * The relational arm's lane-tagged eligibility refusals (session-mining-
+   * economy, t_05a0eaa4), threaded from the arm outcome so the shadow
+   * receipts carry the arm lane end to end. Present only when the arm ran
+   * and its resolved gate mode was active; under `enforce` the receipts
+   * keep the pre-mode shape and this input is not consulted.
+   */
+  readonly armRefusals?: ReadonlyArray<RetrievalTrustRefusal>;
 }
 
 /** Start `work` under a budget; serve `fallback()` when the budget wins. */
@@ -611,7 +619,13 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   if (trustGateMode !== "off") {
     rankAdjusters.push(trustGateAdjuster(readGateFrontmatter, trustGateMode));
     if (trustGateMode === "shadow") {
-      shadowRefusals = collectTrustGateRefusals(pinnedReranked, readGateFrontmatter);
+      // The pool lane first, then the arm lane appended after it: the
+      // arm's own eligibility refusals arrive lane-tagged from the arm
+      // outcome and are reported beside the pool's, never folded into it.
+      shadowRefusals = [
+        ...collectTrustGateRefusals(pinnedReranked, readGateFrontmatter),
+        ...(input.armRefusals ?? []),
+      ];
     }
   }
   if (config.recall.supersedeFadeEnabled) {
