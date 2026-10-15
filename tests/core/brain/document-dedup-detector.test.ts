@@ -350,4 +350,48 @@ describe("detectSemanticDocumentDedup", () => {
     expect(result.method).toBe("lexical");
     expect(result.findings).toHaveLength(0);
   });
+
+  test("a page the caller cannot read is scored and named by no semantic pair", async () => {
+    writeSourcePage("emb-vis-1", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
+    writeSourcePage("emb-vis-2", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
+    const hidden = writeSourcePage("emb-hidden", {
+      body: NEAR_A,
+      createdAt: "2026-01-03T00:00:00Z",
+    });
+    const provider = fixedVectorProvider({
+      [NEAR_A]: [1, 0, 0],
+      [NEAR_B]: [0.999, 0.0447, 0],
+    });
+
+    const result = await detectSemanticDocumentDedup(vault, {
+      provider,
+      readable: (rel) => rel !== hidden,
+    });
+
+    expect(result.method).toBe("embedding");
+    expect(result.findings).toHaveLength(1);
+    expect(JSON.stringify(result.findings)).not.toContain(hidden);
+  });
+
+  test("records across different scope keys never pair, semantically either", async () => {
+    writeSourcePage("scope-alpha", {
+      body: NEAR_A,
+      createdAt: "2026-01-01T00:00:00Z",
+      project: "alpha",
+    });
+    writeSourcePage("scope-beta", {
+      body: NEAR_B,
+      createdAt: "2026-01-02T00:00:00Z",
+      project: "beta",
+    });
+    const provider = fixedVectorProvider({
+      [NEAR_A]: [1, 0, 0],
+      [NEAR_B]: [1, 0, 0],
+    });
+
+    const result = await detectSemanticDocumentDedup(vault, { provider });
+
+    expect(result.method).toBe("embedding");
+    expect(result.findings).toHaveLength(0);
+  });
 });

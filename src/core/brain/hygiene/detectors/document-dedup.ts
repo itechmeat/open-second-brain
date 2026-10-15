@@ -101,6 +101,12 @@ export interface SemanticDocumentDedupOptions {
   readonly provider?: EmbeddingProvider | null;
   readonly threshold?: number;
   readonly lexicalThreshold?: number;
+  /**
+   * The caller's reach predicate, the same admission filter the lexical
+   * layer applies: a page it refuses is absent - never embedded, never
+   * scored, never named. Absent means read-everything.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface SemanticDocumentDedupResult {
@@ -431,7 +437,10 @@ export async function detectSemanticDocumentDedup(
       method: "lexical" as const,
       findings: detectDocumentDedup(
         vault,
-        { now: new Date(0) },
+        {
+          now: new Date(0),
+          ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+        },
         opts.lexicalThreshold !== undefined ? { lexicalThreshold: opts.lexicalThreshold } : {},
       ),
     });
@@ -441,7 +450,7 @@ export async function detectSemanticDocumentDedup(
   // preference dedup detector applies.
   if (provider === null || !providerProducesVectors(provider)) return lexical();
 
-  const records = collectDocumentRecords(vault).filter(
+  const records = collectDocumentRecords(vault, opts.readable).filter(
     (r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS,
   );
   if (records.length < 2) return lexical();
