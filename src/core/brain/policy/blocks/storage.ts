@@ -170,7 +170,9 @@ function readCapBytes(
  * parse time, pair-wise over whichever of the two are present, each
  * against the default the other would resolve to - so `warn_percent: 95`
  * alone errors exactly as `critical_percent: 95` spelled beside an
- * 80-percent warn would.
+ * 80-percent warn would. The error names the key(s) actually at fault:
+ * the lone set key whose value broke the pair against the other's
+ * default, or the pair when both were spelled and either could yield.
  */
 function assertCriticalAboveWarn(
   warnPercent: number | undefined,
@@ -181,16 +183,30 @@ function assertCriticalAboveWarn(
   const critical = criticalPercent ?? BRAIN_STORAGE_DEFAULTS.critical_percent;
   if (criticalPercent !== undefined || warnPercent !== undefined) {
     if (critical <= warn) {
-      throw new BrainConfigError(
-        `must be greater than warn_percent (${warn}); got ${critical}`,
-        "storage.critical_percent",
-        ctx.source,
-      );
+      const [field, message] =
+        warnPercent !== undefined && criticalPercent !== undefined
+          ? [
+              "storage.warn_percent, storage.critical_percent",
+              `the critical band must begin above the warn band: critical_percent (${critical}) must be greater than warn_percent (${warn})`,
+            ]
+          : warnPercent !== undefined
+            ? [
+                "storage.warn_percent",
+                `must be smaller than critical_percent (${critical}); got ${warn}`,
+              ]
+            : [
+                "storage.critical_percent",
+                `must be greater than warn_percent (${warn}); got ${critical}`,
+              ];
+      throw new BrainConfigError(message, field, ctx.source);
     }
   }
 }
 
-/** The critical day horizon must be NEARER than the warn horizon, same rule. */
+/**
+ * The critical day horizon must be NEARER than the warn horizon, same
+ * rule, and the error names the key(s) actually at fault the same way.
+ */
 function assertCriticalNearerThanWarn(
   warnDays: number | undefined,
   criticalDays: number | undefined,
@@ -200,11 +216,19 @@ function assertCriticalNearerThanWarn(
   const critical = criticalDays ?? BRAIN_STORAGE_DEFAULTS.critical_days;
   if (criticalDays !== undefined || warnDays !== undefined) {
     if (critical >= warn) {
-      throw new BrainConfigError(
-        `must be smaller than warn_days (${warn}); got ${critical}`,
-        "storage.critical_days",
-        ctx.source,
-      );
+      const [field, message] =
+        warnDays !== undefined && criticalDays !== undefined
+          ? [
+              "storage.warn_days, storage.critical_days",
+              `the critical horizon must be nearer than the warn horizon: critical_days (${critical}) must be smaller than warn_days (${warn})`,
+            ]
+          : warnDays !== undefined
+            ? ["storage.warn_days", `must be greater than critical_days (${critical}); got ${warn}`]
+            : [
+                "storage.critical_days",
+                `must be smaller than warn_days (${warn}); got ${critical}`,
+              ];
+      throw new BrainConfigError(message, field, ctx.source);
     }
   }
 }

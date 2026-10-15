@@ -193,8 +193,10 @@ function addFile(path: string, add: (bytes: number) => void, refuse: () => void)
 
 /**
  * Walk one directory tree, accumulating regular-file bytes. A directory
- * that cannot be enumerated refuses once for its surface and reports
- * whatever was readable below the point of refusal.
+ * that cannot be enumerated refuses its surface once - and the bytes
+ * read below the point of refusal are discarded with it: the caller
+ * (`measureDirSurface`) records a refused surface in its refusal set
+ * only, so no caller can read a partial total as the surface's size.
  */
 function walkTree(
   root: string,

@@ -122,6 +122,38 @@ describe("resolveStorage", () => {
     expect(errored).toBe(true);
   });
 
+  test.each([["  warn_percent: 95"], ["  warn_percent: 100"]])(
+    "a warn band at or past the default critical band blames warn_percent: %s",
+    (warn) => {
+      let errored = false;
+      try {
+        resolveFromYaml(`schema_version: 1\n\nstorage:\n${warn}\n`);
+      } catch (err) {
+        errored = true;
+        expect(err).toBeInstanceOf(BrainConfigError);
+        // critical_percent is not in the file: the key the operator set is
+        // the key at fault, not the default it conflicts with.
+        expect((err as BrainConfigError).field).toBe("storage.warn_percent");
+      }
+      expect(errored).toBe(true);
+    },
+  );
+
+  test.each([["  warn_days: 7"], ["  warn_days: 1"]])(
+    "a warn horizon at or nearer the default critical horizon blames warn_days: %s",
+    (warn) => {
+      let errored = false;
+      try {
+        resolveFromYaml(`schema_version: 1\n\nstorage:\n${warn}\n`);
+      } catch (err) {
+        errored = true;
+        expect(err).toBeInstanceOf(BrainConfigError);
+        expect((err as BrainConfigError).field).toBe("storage.warn_days");
+      }
+      expect(errored).toBe(true);
+    },
+  );
+
   test.each([
     ["  warn_percent: 80", "  critical_percent: 80"],
     ["  warn_percent: 80", "  critical_percent: 70"],
@@ -132,7 +164,12 @@ describe("resolveStorage", () => {
     } catch (err) {
       errored = true;
       expect(err).toBeInstanceOf(BrainConfigError);
-      expect((err as BrainConfigError).field).toBe("storage.critical_percent");
+      // Both keys were spelled, so either could yield: the error names
+      // the pair, never one side of a conflict the operator can resolve
+      // from either direction.
+      expect((err as BrainConfigError).field).toBe(
+        "storage.warn_percent, storage.critical_percent",
+      );
     }
     expect(errored).toBe(true);
   });
@@ -147,7 +184,7 @@ describe("resolveStorage", () => {
     } catch (err) {
       errored = true;
       expect(err).toBeInstanceOf(BrainConfigError);
-      expect((err as BrainConfigError).field).toBe("storage.critical_days");
+      expect((err as BrainConfigError).field).toBe("storage.warn_days, storage.critical_days");
     }
     expect(errored).toBe(true);
   });

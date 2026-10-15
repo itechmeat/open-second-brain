@@ -209,4 +209,13 @@ describe("brain_storage", () => {
     expect(def.inputSchema["additionalProperties"]).toBe(false);
     expect(def.previewBudget).toBeDefined();
   });
+
+  test("the description states the sample side effect beside the read-only claim", () => {
+    const def = STORAGE_TOOLS.find((tool) => tool.name === "brain_storage")!;
+    // A bare "Read-only." would contradict the one append every local
+    // call makes: the description names both halves of the contract.
+    expect(def.description).toContain("Read-only over vault content");
+    expect(def.description).toContain("appends one usage sample");
+    expect(def.description.length).toBeLessThanOrEqual(300);
+  });
 });
