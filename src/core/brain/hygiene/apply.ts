@@ -11,7 +11,11 @@
  *   - `recompile` -> the targeted-recompile executor, scoped to the
  *                    finding's page;
  *   - `archive` / `forget` -> move the page into a dated
- *                    `Brain/.snapshots/` directory - never delete.
+ *                    `Brain/.snapshots/` directory - never delete;
+ *   - `retire`    -> the document retirement core: a near-duplicate
+ *                    copy is deleted, its manifest entry dropped and
+ *                    its removal audited (destructive by design, so
+ *                    the plan builder only selects it attended).
  *
  * Dry-run previews the routed actions with zero writes. Per-finding
  * fail-soft; one audit record per non-dry run.
@@ -21,6 +25,7 @@ import { join } from "node:path";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { HYGIENE_AUDIT_DIR } from "../audit-dirs.ts";
+import { retireDocumentCopies } from "../document-retire.ts";
 import { mergePreferences } from "../merge.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { archivePage, executeRecompile, planRecompile } from "../recompile.ts";
@@ -128,6 +133,43 @@ async function executeFinding(
         finding_id: finding.id,
         action: finding.proposed_action,
         detail: `archived to ${target}`,
+      });
+    }
+    case "retire": {
+      // The evidence contract is the document-dedup detector's: the
+      // canonical page lives in `evidence.canonical`, and every other
+      // target is a stale copy to retire into it. Re-derived here so a
+      // hand-built plan answers to the same shape a scan produced.
+      const canonical = finding.evidence["canonical"];
+      if (typeof canonical !== "string" || canonical.length === 0) {
+        throw new Error("retire finding lacks a canonical page in its evidence");
+      }
+      const copies = finding.targets
+        .filter((target) => target !== canonical)
+        .map((path) => ({ path, canonical }));
+      if (copies.length === 0) {
+        throw new Error("retire finding names no retired copy besides the canonical");
+      }
+      const result = retireDocumentCopies(vault, copies, {
+        agent: opts.agent,
+        now: opts.now,
+      });
+      // Per-copy failures already left the copies that failed on disk;
+      // surfacing the first through the finding's error keeps the
+      // applied/errors split honest (the recompile executor's rule).
+      if (result.failed.length > 0) {
+        const first = result.failed[0]!;
+        throw new Error(
+          `retired ${result.retired.length}, failed ${result.failed.length}: ` +
+            `${first.path}: ${first.message}`,
+        );
+      }
+      return Object.freeze({
+        finding_id: finding.id,
+        action: "retire",
+        detail: `retired ${result.retired.length} near-duplicate cop${
+          result.retired.length === 1 ? "y" : "ies"
+        } into ${canonical}`,
       });
     }
     default:
