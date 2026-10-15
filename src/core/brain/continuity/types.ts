@@ -98,6 +98,50 @@ export type ContinuityRecordKind =
    */
   | "session_entity_mention";
 
+/**
+ * Every {@link ContinuityRecordKind} member as a runtime list, in union
+ * declaration order. The union is compile-time only, but a reader that
+ * must distinguish "a kind this build knows" from "a kind a newer build
+ * minted" needs the members as values - the receipts scan classifies an
+ * unknown kind fail-closed as never-foldable, and a runtime guard is how
+ * it asks. Add a new union member and this list in the same edit; the
+ * membership guard below is derived from the list, so the two cannot
+ * disagree.
+ */
+export const CONTINUITY_RECORD_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
+  "context_receipt",
+  "recall_telemetry",
+  "gate_telemetry",
+  "pre_compact_extract",
+  "post_compact_audit",
+  "session_turn",
+  "recent_turn",
+  "session_summary_node",
+  "session_summary_digest",
+  "generation_report",
+  "ingest_dedup",
+  "mcp_route_latency",
+  "token_impact",
+  "token_impact_outcome",
+  "context_pack_outcome",
+  "context_pack_evidence",
+  "host_memory_write",
+  "recall_observed_use",
+  "skill_invoked",
+  "source_invalidation",
+  "negative_recall",
+  "decision_model_call",
+  "decision_model_extract_commit",
+  "session_entity_mention",
+]);
+
+/** Narrow an unvalidated record's `kind` to a {@link ContinuityRecordKind}. */
+export function isContinuityRecordKind(value: unknown): value is ContinuityRecordKind {
+  return (
+    typeof value === "string" && (CONTINUITY_RECORD_KINDS as ReadonlyArray<string>).includes(value)
+  );
+}
+
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 
 export interface ContinuitySourceRef {
