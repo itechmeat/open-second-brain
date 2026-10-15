@@ -319,6 +319,25 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "pass never managed to observe",
   },
   {
+    code: "receipt-ledger-unmeasured",
+    reason:
+      "the receipt ledgers are there and the scan over them was refused, so whether they grow " +
+      "unbounded is unknown rather than fine. What repairs that depends on why - a permission " +
+      "an operator has to decide to grant, or a regular file that replaced the ledger directory - " +
+      "and the ledgers themselves must never be removed to make a scan succeed, since they are " +
+      "the continuity history any fold would be rewriting",
+  },
+  {
+    code: "storage-capacity-unmeasured",
+    reason:
+      "the vault is capped and the census over its surfaces was refused, so fullness is unknown " +
+      "rather than fine. What repairs that depends on why - a permission an operator has to " +
+      "decide to grant, a surface owned by another user after a sync that preserved ownership, " +
+      "or storage that has started failing - and the surfaces themselves must never be removed " +
+      "to make a census succeed, since the reading they hold is the fact the cap is judged " +
+      "against",
+  },
+  {
     code: "preference-missing-field",
     reason:
       "a required frontmatter field is absent and its value is not recoverable from the rest of " +

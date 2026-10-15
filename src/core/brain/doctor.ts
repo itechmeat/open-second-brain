@@ -85,6 +85,7 @@ import { payloadRegistryCheck } from "./doctor/payload-checks.ts";
 import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
 import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
 import { storageCapacityCheck } from "./doctor/storage-capacity.ts";
+import { receiptLedgerCheck } from "./doctor/receipt-ledger.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
@@ -220,6 +221,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   recallChannelCoverageCheck,
   recoveryPointLivenessCheck,
   storageCapacityCheck,
+  receiptLedgerCheck,
   embeddingSunsetCheck,
   embeddingsHealthCheck,
   rerankHealthCheck,

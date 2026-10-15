@@ -200,6 +200,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "permissions-unreadable",
   "principle-corrupted",
   "recall-channel-silent",
+  "receipt-ledger-growth",
   "recovery-point-stale",
   "rerank-endpoint-unconfigured",
   "rerank-model-sunset-announced",

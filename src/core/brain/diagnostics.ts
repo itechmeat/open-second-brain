@@ -643,6 +643,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Receipt-ledger growth (storage-lifecycle): the append-only
+        // receipt ledgers crossed the foldable threshold. Unlike the
+        // storage cap the repair is mechanical, so the row points at the
+        // verb that previews the fold; the confirmed compact behind the
+        // same command is the rewrite.
+        code: "receipt-ledger-growth",
+        issueClass: "receipt ledgers holding more foldable records than the growth threshold",
+        nextCommand: "o2b brain receipts scan",
+        autoRepairable: false,
+      },
+      {
         // An announced decommission of the configured embedding model,
         // inside the warning window. The exit is the curated catalog for
         // the same reason `search-chunk-window-undeclared` points there:
