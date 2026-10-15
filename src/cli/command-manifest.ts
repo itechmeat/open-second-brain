@@ -516,6 +516,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("discover", "boolean"),
           flag("status", "boolean"),
           flag("all", "boolean"),
+          flag("propose-backlog", "boolean"),
           flag("progress", "boolean"),
           flag("json", "boolean"),
         ]),

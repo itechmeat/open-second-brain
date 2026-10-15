@@ -23,6 +23,13 @@
 
 import { statSync } from "node:fs";
 import { resolveAgentName, resolveSessionCaptureRoles } from "../../../core/config.ts";
+import { buildCaptureBoundary } from "../../../core/brain/capture-boundary.ts";
+import { loadDedupIndex, type DedupIndexEntry } from "../../../core/brain/dedup-hash.ts";
+import {
+  buildBacklogProposals,
+  type BacklogCandidate,
+} from "../../../core/brain/distill/backlog-proposals.ts";
+import { discoverMarkers, isFeedbackMarker } from "../../../core/brain/inline.ts";
 import {
   importSession,
   importSessionPath,
@@ -39,6 +46,7 @@ import {
 } from "../../../core/brain/sessions/discover.ts";
 import {
   buildMiningCensus,
+  minedTurnMaterial,
   type SessionMiningCensus,
 } from "../../../core/brain/sessions/mining-census.ts";
 import {
@@ -89,14 +97,16 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     discover: { type: "boolean" },
     status: { type: "boolean" },
     all: { type: "boolean" },
+    "propose-backlog": { type: "boolean" },
     progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const discover = flags["discover"] === true;
   const status = flags["status"] === true;
   const importAll = flags["all"] === true;
+  const proposeBacklog = flags["propose-backlog"] === true;
   const sessionPath = positional[0] ?? null;
-  assertOneMode(sessionPath, discover, status, importAll);
+  assertOneMode(sessionPath, discover, status, importAll, proposeBacklog);
   const { config, vault } = brainVerbContext(flags);
   const explicitAgent = normalizeFlagString(flags["agent"]);
   if (flags["agent"] !== undefined && explicitAgent === null) {
@@ -158,6 +168,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
   };
 
   if (sessionPath === null) {
+    if (proposeBacklog) return proposeBacklogEnvelope({ vault, config, asJson });
     return await sweep({
       vault,
       config,
@@ -256,6 +267,7 @@ function assertOneMode(
   discover: boolean,
   status: boolean,
   importAll: boolean,
+  proposeBacklog: boolean,
 ): void {
   if (discover && status) {
     throw new CliError(
@@ -270,14 +282,23 @@ function assertOneMode(
         "import of the gap it just listed. Pass --discover --all.",
     );
   }
-  if (sessionPath !== null && (discover || status)) {
+  if (proposeBacklog && (discover || status || importAll)) {
     throw new CliError(
-      `${sessionPath} and ${discover ? "--discover" : "--status"} cannot both be given: a path ` +
+      `--propose-backlog and ${discover ? "--discover" : status ? "--status" : "--all"} cannot ` +
+        "both be given: --propose-backlog batches the distill proposals the ALREADY IMPORTED " +
+        "backlog raises, while the sweep flags report on or import what is on disk. Pass one.",
+    );
+  }
+  if (sessionPath !== null && (discover || status || proposeBacklog)) {
+    throw new CliError(
+      `${sessionPath} and ${
+        discover ? "--discover" : status ? "--status" : "--propose-backlog"
+      } cannot both be given: a path ` +
         "imports exactly that path, and the sweep works over the session roots this build " +
         "declares. Drop one.",
     );
   }
-  if (sessionPath === null && !discover && !status) {
+  if (sessionPath === null && !discover && !status && !proposeBacklog) {
     throw new CliError(
       "brain import-session requires a <path> argument, or --discover / --status to sweep the " +
         "session stores this machine declares.",
@@ -380,6 +401,114 @@ async function sweep(req: SweepRequest): Promise<number> {
   emitImportReport({ files, warnings: [] }, { asJson: req.asJson, recall: req.recall, failures });
   if (ledgerError !== null) return reportLedgerFailure(ledgerError);
   return failures.length > 0 ? 1 : 0;
+}
+
+interface ProposeBacklogRequest {
+  readonly vault: string;
+  readonly config: string | null;
+  readonly asJson: boolean;
+}
+
+/**
+ * The ask-once half: `--propose-backlog`.
+ *
+ * Batches the distill proposals the ALREADY IMPORTED undistilled backlog
+ * raises into one envelope for the calling agent to present: candidates
+ * whose dedup hash already exists in the vault are dropped from the ask
+ * (each named), the rest collapse to one proposal per distinct hash across
+ * sessions. The kernel runs no interactive loop - it emits the batch, and
+ * the presenting agent asks. An empty backlog is an explicit empty
+ * envelope and exits 0; it is an answer, not a failure.
+ *
+ * The candidates are the feedback markers in the sessions' mined turn
+ * material (the same material the mining plan embeds) - the one candidate
+ * form the kernel can see without a model. The dedup index is the shared
+ * vault-wide one, so proposals cross-deduplicate against every capture
+ * path exactly as the write-time gate does.
+ */
+async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<number> {
+  let census: SessionMiningCensus;
+  try {
+    census = buildMiningCensus(req.vault, {
+      safeguard: createSafeguard({
+        operation: OPERATION.sessions,
+        timeoutMs: resolveSafeguardTimeoutMs(OPERATION.sessions, req.config ?? undefined),
+      }),
+    });
+  } catch (exc) {
+    return fail(`session mining census failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  const boundary = buildCaptureBoundary(req.vault);
+  const candidates: BacklogCandidate[] = [];
+  for (const row of census.byRuntime) {
+    for (const sessionId of row.undistilledSessionIds) {
+      const material = minedTurnMaterial(req.vault, sessionId, boundary);
+      // A census undistilled row is minable by construction; the null arm
+      // is the boundary changing between the two reads, and contributes
+      // no candidates rather than a guess.
+      if (material === null) continue;
+      for (const turn of material) {
+        for (const marker of discoverMarkers(turn.text)) {
+          if (!isFeedbackMarker(marker)) continue;
+          candidates.push({
+            sessionId,
+            topic: marker.topic,
+            signal: marker.signal,
+            principle: marker.principle,
+            ...(marker.scope !== undefined && marker.scope !== "" ? { scope: marker.scope } : {}),
+          });
+        }
+      }
+    }
+  }
+
+  let dedupIndex: Map<string, DedupIndexEntry>;
+  try {
+    dedupIndex = await loadDedupIndex(req.vault);
+  } catch (exc) {
+    return fail(`backlog proposal dedup index failed: ${(exc as Error).message ?? exc}`);
+  }
+
+  const envelope = buildBacklogProposals(candidates, dedupIndex);
+
+  if (req.asJson) {
+    okJson({
+      undistilled: census.undistilled,
+      proposals: envelope.proposals.map((p) => ({
+        dedup_hash: p.dedupHash,
+        topic: p.topic,
+        signal: p.signal,
+        principle: p.principle,
+        ...(p.scope !== undefined ? { scope: p.scope } : {}),
+        sessions: p.sessions,
+      })),
+      dropped: envelope.dropped.map((d) => ({
+        session_id: d.sessionId,
+        topic: d.topic,
+        dedup_hash: d.dedupHash,
+      })),
+      report_only_sessions: envelope.reportOnlySessions,
+    });
+    return 0;
+  }
+
+  ok(`undistilled: ${census.undistilled}`);
+  ok(`proposals: ${envelope.proposals.length}`);
+  let number = 1;
+  for (const proposal of envelope.proposals) {
+    ok(`proposal ${number}: ${proposal.topic}`);
+    ok(`  signal: ${proposal.signal}`);
+    ok(`  principle: ${proposal.principle}`);
+    if (proposal.scope !== undefined) ok(`  scope: ${proposal.scope}`);
+    ok(`  sessions: ${proposal.sessions.join(", ")}`);
+    number += 1;
+  }
+  ok(`dropped as already known: ${envelope.dropped.length}`);
+  for (const drop of envelope.dropped) info(`  ${drop.sessionId}: ${drop.topic}`);
+  ok(`sessions with nothing new: ${envelope.reportOnlySessions.length}`);
+  for (const sessionId of envelope.reportOnlySessions) info(`  ${sessionId}`);
+  return 0;
 }
 
 /** `path -> the runtime whose declared root contains it`, recorded in the ledger. */

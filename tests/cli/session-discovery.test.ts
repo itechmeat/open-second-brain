@@ -81,6 +81,26 @@ interface DiscoveryJson {
   readonly files?: ReadonlyArray<{ readonly file: string }>;
 }
 
+interface ProposalJson {
+  readonly dedup_hash: string;
+  readonly topic: string;
+  readonly signal: string;
+  readonly principle: string;
+  readonly scope?: string;
+  readonly sessions: ReadonlyArray<string>;
+}
+
+interface ProposeBacklogJson {
+  readonly undistilled: number;
+  readonly proposals: ReadonlyArray<ProposalJson>;
+  readonly dropped: ReadonlyArray<{
+    readonly session_id: string;
+    readonly topic: string;
+    readonly dedup_hash: string;
+  }>;
+  readonly report_only_sessions: ReadonlyArray<string>;
+}
+
 /**
  * A credential in the shape the redactor's `key: value` pass catches, so
  * the byte-identity claim below is about a fixture that actually carries
@@ -156,6 +176,35 @@ function claudeLog(name: string, topic: string): string {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, claudeLine(topic, `u-${topic}`));
+  return path;
+}
+
+/**
+ * A log whose marker carries no credential-shaped value. The parity
+ * fixture above deliberately carries one, but a redacted value mangles
+ * the quoted principle - `token: "***REDACTED***"` - and a marker that no
+ * longer re-parses from the imported turns raises no backlog candidate,
+ * so the batching tests below use clean markers.
+ */
+function claudeMarkerLog(name: string, topic: string): string {
+  const dir = join(home, ".claude", "projects", "-srv-projects-example");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      parentUuid: null,
+      sessionId: "s",
+      entrypoint: "sdk-cli",
+      type: "user",
+      message: {
+        role: "user",
+        content: `@osb feedback positive topic=${topic} principle="Declare the roots exactly once."`,
+      },
+      uuid: `u-${topic}`,
+      timestamp: "2026-08-16T09:00:00.000Z",
+    }) + "\n",
+  );
   return path;
 }
 
@@ -368,6 +417,95 @@ describe("the mining census rides the coverage report", () => {
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("mining: 0 distilled, 0 known-nothing-new, 1 undistilled");
     expect(res.stdout).toContain("  undistilled: 1");
+  });
+});
+
+describe("--propose-backlog batches the distill proposals ask-once", () => {
+  test("material the vault no longer holds is proposed, naming its session", async () => {
+    claudeMarkerLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+    // The marker's signal is removed from the vault, so its dedup hash
+    // leaves the index: the backlog raises material the vault holds
+    // nowhere - exactly what the ask-once layer re-proposes.
+    rmSync(join(brainDirs(vault).inbox, `sig-${todayUtc()}-alpha.md`));
+
+    const res = await run(["--propose-backlog", "--json"]);
+    expect(res.returncode).toBe(0);
+    const body = JSON.parse(res.stdout) as ProposeBacklogJson;
+    expect(body.undistilled).toBe(1);
+    expect(body.proposals.length).toBe(1);
+    expect(body.proposals[0]?.topic).toBe("alpha");
+    expect(body.proposals[0]?.signal).toBe("positive");
+    expect(body.proposals[0]?.sessions).toEqual(["one.jsonl"]);
+    expect(body.dropped).toEqual([]);
+    expect(body.report_only_sessions).toEqual([]);
+  });
+
+  test("material the vault already holds is dropped from the ask and named", async () => {
+    // Two sessions raise the SAME marker; the first import writes it and
+    // the second is deduped at write time - but without the batching layer
+    // the ask would still have raised the same material twice, once per
+    // session. Ask-once: zero proposals, two named drops, both sessions
+    // reported as already known.
+    claudeMarkerLog("one.jsonl", "alpha");
+    claudeMarkerLog("two.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+
+    const res = await run(["--propose-backlog", "--json"]);
+    expect(res.returncode).toBe(0);
+    const body = JSON.parse(res.stdout) as ProposeBacklogJson;
+    expect(body.proposals).toEqual([]);
+    expect(body.dropped.length).toBe(2);
+    expect(body.dropped.map((d) => d.session_id).toSorted()).toEqual(["one.jsonl", "two.jsonl"]);
+    expect(body.dropped[0]?.dedup_hash).toBe(body.dropped[1]?.dedup_hash);
+    expect(body.report_only_sessions).toEqual(["one.jsonl", "two.jsonl"]);
+  });
+
+  test("an empty backlog is an explicit empty envelope, not a failure", async () => {
+    const res = await run(["--propose-backlog", "--json"]);
+    expect(res.returncode).toBe(0);
+    const body = JSON.parse(res.stdout) as ProposeBacklogJson;
+    expect(body.undistilled).toBe(0);
+    expect(body.proposals).toEqual([]);
+    expect(body.dropped).toEqual([]);
+    expect(body.report_only_sessions).toEqual([]);
+  });
+
+  test("the human rendering numbers the proposals and names the drops", async () => {
+    claudeMarkerLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+    rmSync(join(brainDirs(vault).inbox, `sig-${todayUtc()}-alpha.md`));
+
+    const res = await run(["--propose-backlog"]);
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("undistilled: 1");
+    expect(res.stdout).toContain("proposals: 1");
+    expect(res.stdout).toContain("proposal 1: alpha");
+    expect(res.stdout).toContain("  signal: positive");
+    expect(res.stdout).toContain("  sessions: one.jsonl");
+    expect(res.stdout).toContain("dropped as already known: 0");
+  });
+
+  test("mode conflicts are refused, naming both halves", async () => {
+    const path = claudeMarkerLog("one.jsonl", "alpha");
+
+    const withStatus = await run(["--propose-backlog", "--status"]);
+    expect(withStatus.returncode).toBe(1);
+    expect(withStatus.stderr).toContain("--propose-backlog");
+    expect(withStatus.stderr).toContain("--status");
+
+    const withDiscover = await run(["--propose-backlog", "--discover"]);
+    expect(withDiscover.returncode).toBe(1);
+    expect(withDiscover.stderr).toContain("--discover");
+
+    const withAll = await run(["--propose-backlog", "--all"]);
+    expect(withAll.returncode).toBe(1);
+    expect(withAll.stderr).toContain("--all");
+
+    const withPath = await run([path, "--propose-backlog"]);
+    expect(withPath.returncode).toBe(1);
+    expect(withPath.stderr).toContain(path);
+    expect(withPath.stderr).toContain("--propose-backlog");
   });
 });
 
@@ -643,6 +781,7 @@ describe("the surface is advertised where an operator looks", () => {
         "json",
         "preserve-event-time",
         "progress",
+        "propose-backlog",
         "recall",
         "recall-session-id",
         "recall-summary-group-size",

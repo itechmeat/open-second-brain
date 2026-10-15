@@ -38,10 +38,11 @@
 
 import { basename } from "node:path";
 
-import { buildCaptureBoundary } from "../capture-boundary.ts";
+import { buildCaptureBoundary, type CaptureBoundary } from "../capture-boundary.ts";
 import {
   minedTurnsHash,
   readSessionMiningLedger,
+  type MinedTurnMaterial,
   type SessionMiningEntry,
 } from "../session-mining-ledger.ts";
 import type { Safeguard } from "../safeguard.ts";
@@ -186,23 +187,23 @@ export function buildMiningCensus(
 }
 
 /**
- * Classify one session identity: the plan's own refusal order (boundary
- * decision, zero imported turns, zero user turns), then the mining join.
- * The mined-material derivation mirrors `planExtractSignals` field for
+ * The mined turn material the plan would embed for one session, or `null`
+ * when the session is one the plan refuses (boundary, zero imported turns,
+ * zero user turns). The derivation mirrors `planExtractSignals` field for
  * field - user role, unsuppressed text, trimmed and non-empty, the turn's
- * stored timestamp verbatim - because a hash over different material than
- * the plan embeds would misclassify every session at once.
+ * stored timestamp verbatim - so every consumer hashes exactly what the
+ * plan would mine. `boundary` is injectable so a caller walking many
+ * sessions builds it once.
  */
-function classifySession(
+export function minedTurnMaterial(
   vault: string,
-  boundary: ReturnType<typeof buildCaptureBoundary>,
-  miningEntries: Readonly<Record<string, SessionMiningEntry>>,
-  identity: string,
-): SessionDistillationState | "refused" {
-  if (boundary.sessionDecision(identity) !== "capture") return "refused";
-  const turns = listSessionRawTurns(vault, identity);
-  if (turns.length === 0) return "refused";
-  const mined: Array<{ turnId: string; text: string; timestamp: string }> = [];
+  sessionId: string,
+  boundary: CaptureBoundary = buildCaptureBoundary(vault),
+): ReadonlyArray<MinedTurnMaterial> | null {
+  if (boundary.sessionDecision(sessionId) !== "capture") return null;
+  const turns = listSessionRawTurns(vault, sessionId);
+  if (turns.length === 0) return null;
+  const mined: MinedTurnMaterial[] = [];
   for (const turn of turns) {
     if (turn.role !== MINED_TURN_ROLE) continue;
     if (boundary.suppressMessage(turn.text)) continue;
@@ -210,9 +211,23 @@ function classifySession(
     if (text.length === 0) continue;
     mined.push({ turnId: turn.turn_id, text, timestamp: turn.timestamp });
   }
-  if (mined.length === 0) return "refused";
+  return mined.length === 0 ? null : mined;
+}
+
+/**
+ * Classify one session identity: the plan's own refusal order (boundary
+ * decision, zero imported turns, zero user turns), then the mining join.
+ */
+function classifySession(
+  vault: string,
+  boundary: ReturnType<typeof buildCaptureBoundary>,
+  miningEntries: Readonly<Record<string, SessionMiningEntry>>,
+  identity: string,
+): SessionDistillationState | "refused" {
+  const material = minedTurnMaterial(vault, identity, boundary);
+  if (material === null) return "refused";
   const entry = miningEntries[identity];
-  if (entry === undefined || entry.minedContentHash !== minedTurnsHash(mined)) {
+  if (entry === undefined || entry.minedContentHash !== minedTurnsHash(material)) {
     return "undistilled";
   }
   return entry.outcome.written + entry.outcome.staged > 0 ? "distilled" : "known-nothing-new";
