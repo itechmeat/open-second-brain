@@ -5,7 +5,9 @@
  * receipt-ledger shards, replacing the records older than the age
  * threshold with one aggregate line per (kind, month) and keeping
  * everything else - protected classes, young records, aggregates and
- * torn lines - byte-verbatim, in file order.
+ * torn lines - byte-verbatim, in file order. Blank lines are the one
+ * exception: the rewrite reads and writes non-blank lines, so a blank
+ * line in the shard is dropped rather than preserved.
  *
  * The gates, in order, before anything is written:
  *

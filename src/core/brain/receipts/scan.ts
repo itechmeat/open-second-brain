@@ -278,7 +278,6 @@ function scanShard(
         continue;
       }
       records += 1;
-      // The month a continuity aggregate carries is the shard's own base.
       const classification = classifyContinuityRecord(record, cutoffMs);
       if (classification === "foldable") foldable += 1;
       else if (classification === "protected") protectedRecords += 1;
