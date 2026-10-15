@@ -34,6 +34,7 @@ import {
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import { PRE_EXTRACT_MAX_SOURCE_BYTES } from "../../../../src/core/brain/ingest/source-read.ts";
 
 let tmp: string;
 let vault: string;
@@ -168,5 +169,27 @@ describe("the CLI extract preview reports the appended slice", () => {
     expect(res.returncode).toBe(0);
     const payload = JSON.parse(res.stdout) as { appended?: unknown };
     expect(payload.appended).toBeUndefined();
+  });
+
+  test("an append between the two caps answers without a section, like the pipeline", async () => {
+    // The appended tail sits past the ingest delta cap (1 MiB) but under
+    // the HTML whole-source cap (8 MiB): reprocess-scale for a delta,
+    // ordinary for a whole read.
+    writeSource("one\ntwo\n");
+    ingestSource(vault, INPUT, OPTS);
+    appendFileSync(
+      join(vault, SOURCE),
+      `${"x".repeat(PRE_EXTRACT_MAX_SOURCE_BYTES)}\nmore tail\n`,
+      "utf8",
+    );
+
+    const res = await runCli(["brain", "extract", join(vault, SOURCE), "--json", "--vault", vault]);
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as { appended?: unknown };
+    // The preview refuses exactly what the pipeline refuses: it must
+    // never report a slice the delta pass would not accept.
+    expect(payload.appended).toBeUndefined();
+    const second = ingestSource(vault, INPUT, OPTS);
+    expect(second.extractionDelta).toBeUndefined();
   });
 });

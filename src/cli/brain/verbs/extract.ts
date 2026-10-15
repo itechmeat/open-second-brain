@@ -30,7 +30,11 @@ import {
 } from "../../../core/brain/ingest/extract-html.ts";
 import { extractedBytesOf, readManifest } from "../../../core/brain/ingest/content-manifest.ts";
 import { extractSource, type SourceExtraction } from "../../../core/brain/ingest/extract-source.ts";
-import { readSourceBounded, type SourceUnread } from "../../../core/brain/ingest/ingest.ts";
+import {
+  EXTRACTION_DELTA_MAX_BYTES,
+  readSourceBounded,
+  type SourceUnread,
+} from "../../../core/brain/ingest/ingest.ts";
 import { readTail } from "../../../core/brain/ingest/tail-read.ts";
 import { canonicalNotePath } from "../../../core/path-safety.ts";
 import {
@@ -110,8 +114,10 @@ function resolveOptionalVault(
  * The appended slice `file` grew by since its recorded extraction watermark,
  * when the file sits inside `vault` and the manifest records one. Everything
  * else - a file outside the vault, no watermark, a rewritten source, a tail
- * with no complete line yet - answers undefined: the section is additive
- * data for an incremental pass, never a second verdict on the extraction.
+ * with no complete line yet, or a tail past the pipeline's own delta cap -
+ * answers undefined: the section is additive data for an incremental pass,
+ * never a second verdict on the extraction, and never a slice the delta
+ * pass itself would refuse.
  */
 function appendedSlice(vault: string | null, file: string): AppendedSlice | undefined {
   if (vault === null) return undefined;
@@ -122,7 +128,7 @@ function appendedSlice(vault: string | null, file: string): AppendedSlice | unde
   const entry = readManifest(vault).entries[canonicalNotePath(rel.split(sep).join("/"))];
   const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
   if (watermark <= 0 || !existsSync(file)) return undefined;
-  const tail = readTail(file, watermark, { maxBytes: HTML_EXTRACT_MAX_SOURCE_BYTES });
+  const tail = readTail(file, watermark, { maxBytes: EXTRACTION_DELTA_MAX_BYTES });
   if (tail.kind !== "appended" || tail.toByte <= watermark) return undefined;
   return { fromByte: tail.fromByte, toByte: tail.toByte };
 }

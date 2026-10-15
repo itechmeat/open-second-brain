@@ -620,7 +620,15 @@ function captureTrustedSourceArchive(
   }
 }
 
-const EXTRACTION_DELTA_MAX_BYTES = PRE_EXTRACT_MAX_SOURCE_BYTES;
+/**
+ * The largest appended tail the extraction-delta pass reads ({@link ./tail-read.ts}):
+ * a tail past this is a reprocess-scale change, not a delta. Starts from
+ * {@link PRE_EXTRACT_MAX_SOURCE_BYTES} - the same scale rule the
+ * whole-source pre-extract read applies. Exported so the CLI extract
+ * preview draws its appended section under exactly this cap and never
+ * reports a slice the pipeline itself would refuse.
+ */
+export const EXTRACTION_DELTA_MAX_BYTES = PRE_EXTRACT_MAX_SOURCE_BYTES;
 
 /** Bytes hashed per positioned read while verifying an append's prefix. */
 const PREFIX_HASH_CHUNK_BYTES = 65_536;
