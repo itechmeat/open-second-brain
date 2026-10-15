@@ -296,8 +296,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 102;
-export const PROBE_RECIPE_COUNT = 237;
+export const PROBE_ENTRY_COUNT = 103;
+export const PROBE_RECIPE_COUNT = 238;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -1011,6 +1011,13 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
   { name: "brain_sources", calls: one({}, REASON.signalAuthorship) },
   { name: "brain_stale_scan", calls: one({}, REASON.ownerFiltered) },
   { name: "brain_status", calls: one({}, REASON.aggregateOnly) },
+  {
+    // The storage report is an aggregate like brain_status beside it:
+    // per-surface byte counts and a forecast tier over the whole vault,
+    // nothing an owner field could filter and nothing the probe wrote.
+    name: "brain_storage",
+    calls: one({}, REASON.aggregateOnly),
+  },
   { name: "brain_switch_vault", calls: one({ name: "probe-profile" }, REASON.writerEcho) },
   {
     name: "brain_tension",
