@@ -107,10 +107,14 @@ export interface ExplainRequest {
   /** True when this outcome came from a cross-vault union. */
   readonly crossVault: boolean;
   /**
-   * The resolved `recall.retrievalTrustGateEnabled`. Neither this nor
-   * `crossVault` is derivable from a receipt-less outcome, and naming the
-   * wrong one of the two sends the operator to an exit that produces
-   * nothing - so the caller, which knows both, states both.
+   * True when the retrieval trust gate is engaged in the caller's own
+   * resolved config: its resolved mode is not off. The legacy boolean
+   * alone cannot answer that - an explicit `search_trust_gate_mode` runs
+   * the gate with the boolean left false - so the caller derives this
+   * from the resolved mode's presence. Neither this nor `crossVault` is
+   * derivable from a receipt-less outcome, and naming the wrong one of
+   * the two sends the operator to an exit that produces nothing - so the
+   * caller, which knows both, states both.
    */
   readonly trustGateEnabled: boolean;
 }

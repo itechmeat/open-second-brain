@@ -229,4 +229,34 @@ describe("o2b search --explain end to end", () => {
       rmSync(configHome, { recursive: true, force: true });
     }
   });
+
+  test("a cross-vault union under an explicit mode does not claim the gate is off", async () => {
+    // The mode alone runs the gate - the legacy boolean stays unset - so
+    // the union's unavailable reason must diagnose ONLY the union: the
+    // gate-off half of the combined reason would be a false diagnosis
+    // here, and its enablement advice a dead end.
+    const vault = mkdtempSync(join(tmpdir(), "o2b-cli-trace-mode-vault-"));
+    const configHome = mkdtempSync(join(tmpdir(), "o2b-cli-trace-mode-cfg-"));
+    try {
+      mkdirSync(join(vault, "notes"), { recursive: true });
+      writeFileSync(
+        join(vault, "notes", "clean.md"),
+        "---\ntitle: Clean\n---\n\n# Clean\n\nThe widget calibration routine runs daily.\n",
+      );
+      const configPath = join(configHome, "config.yaml");
+      atomicWriteFileSync(configPath, `vault: ${vault}\nsearch_trust_gate_mode: enforce\n`);
+      const env = { OPEN_SECOND_BRAIN_CONFIG: configPath };
+
+      const indexed = await runCli(["search", "index"], { env });
+      expect(indexed.returncode).toBe(0);
+
+      const explained = await runCli(["search", QUERY, "--json", "--global", "--explain"], { env });
+      expect(explained.returncode).toBe(0);
+      const payload = JSON.parse(explained.stdout) as { retrieval_trace_unavailable?: string };
+      expect(payload.retrieval_trace_unavailable).toBe(RETRIEVAL_TRACE_NOT_MERGED);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(configHome, { recursive: true, force: true });
+    }
+  });
 });

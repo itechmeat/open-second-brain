@@ -1323,7 +1323,10 @@ async function toolBrainSearch(
     ...explainEnvelope(outcome, {
       explain,
       crossVault: globalSearch,
-      trustGateEnabled: config.recall.retrievalTrustGateEnabled,
+      // Engaged means the resolved mode is not off - the legacy boolean
+      // alone cannot answer that (an explicit search_trust_gate_mode runs
+      // the gate with the boolean left false).
+      trustGateEnabled: config.recall.searchTrustGateMode !== undefined,
     }),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
     // Iterative round-trip marker: the plan phase carries the decider

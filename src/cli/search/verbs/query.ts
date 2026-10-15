@@ -194,7 +194,10 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   const explainOptions = {
     explain: flagBoolean(flags, "explain"),
     crossVault: isGlobal,
-    trustGateEnabled: cfg.recall.retrievalTrustGateEnabled,
+    // Engaged means the resolved mode is not off - the legacy boolean
+    // alone cannot answer that (an explicit search_trust_gate_mode runs
+    // the gate with the boolean left false).
+    trustGateEnabled: cfg.recall.searchTrustGateMode !== undefined,
   };
 
   if (flagBoolean(flags, "json")) {
