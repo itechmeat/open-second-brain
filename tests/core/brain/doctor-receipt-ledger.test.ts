@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { continuityLogDir } from "../../../src/core/brain/continuity/store.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
 import {
   RECEIPT_LEDGER_GROWTH_CODE,
@@ -139,43 +140,46 @@ describe("receiptLedgerCheck", () => {
     expect(entry!.message).not.toContain(vault);
   });
 
-  test("every unreadable shard is reported, each under its own path", () => {
-    // The stream merges entries on (code, path): without the shard
-    // identity on the entry, two unreadable shards collapsed into one
-    // anonymous line and the operator could not tell which ledger to
-    // look at, let alone how many shards were dark.
-    const continuity = join(continuityLogDir(vault), "2026-08.jsonl");
-    const metrics = join(metricsDir(vault), "storage_usage.jsonl");
-    writeFileSync(continuity, continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"));
-    writeFileSync(
-      metrics,
-      `${JSON.stringify({
-        schema: "o2b.metrics.v1",
-        surface: "storage_usage",
-        run_at: "2026-08-01T00:00:00Z",
-        payload: {},
-      })}\n`,
-    );
-    chmodSync(continuity, 0o000);
-    chmodSync(metrics, 0o000);
-    try {
-      const doctor = runDoctor(vault, { now: NOW });
-      const unmeasured = (doctor.uncertain ?? []).filter(
-        (entry) => entry.code === RECEIPT_LEDGER_UNMEASURED_CODE,
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "every unreadable shard is reported, each under its own path",
+    () => {
+      // The stream merges entries on (code, path): without the shard
+      // identity on the entry, two unreadable shards collapsed into one
+      // anonymous line and the operator could not tell which ledger to
+      // look at, let alone how many shards were dark.
+      const continuity = join(continuityLogDir(vault), "2026-08.jsonl");
+      const metrics = join(metricsDir(vault), "storage_usage.jsonl");
+      writeFileSync(continuity, continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"));
+      writeFileSync(
+        metrics,
+        `${JSON.stringify({
+          schema: "o2b.metrics.v1",
+          surface: "storage_usage",
+          run_at: "2026-08-01T00:00:00Z",
+          payload: {},
+        })}\n`,
       );
-      expect(unmeasured).toHaveLength(2);
-      expect(unmeasured.map((entry) => entry.path).toSorted()).toEqual([
-        "Brain/log/continuity/2026-08.jsonl",
-        "Brain/metrics/storage_usage.jsonl",
-      ]);
-      for (const entry of unmeasured) {
-        expect(entry.message).toContain("foldable count is unknown");
+      chmodSync(continuity, 0o000);
+      chmodSync(metrics, 0o000);
+      try {
+        const doctor = runDoctor(vault, { now: NOW });
+        const unmeasured = (doctor.uncertain ?? []).filter(
+          (entry) => entry.code === RECEIPT_LEDGER_UNMEASURED_CODE,
+        );
+        expect(unmeasured).toHaveLength(2);
+        expect(unmeasured.map((entry) => entry.path).toSorted()).toEqual([
+          "Brain/log/continuity/2026-08.jsonl",
+          "Brain/metrics/storage_usage.jsonl",
+        ]);
+        for (const entry of unmeasured) {
+          expect(entry.message).toContain("foldable count is unknown");
+        }
+      } finally {
+        chmodSync(continuity, 0o644);
+        chmodSync(metrics, 0o644);
       }
-    } finally {
-      chmodSync(continuity, 0o644);
-      chmodSync(metrics, 0o644);
-    }
-  });
+    },
+  );
 
   test("both codes are classified: growth registered, unmeasured excused with a reason", async () => {
     const { DIAGNOSTIC_SIGNALS } = await import("../../../src/core/brain/diagnostics.ts");

@@ -45,6 +45,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { WriteRefusedError } from "../../../src/core/brain/write-disposition.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
 
 const NOW = new Date("2026-09-25T00:00:00Z");
@@ -443,31 +444,34 @@ describe("compactReceiptLedgers", () => {
     expect(result.totals.folded).toBe(2);
   });
 
-  test("an unreadable shard fails by name, never with the raw filesystem error", () => {
-    // The failure rows ride the compact view to remote callers verbatim:
-    // the raw Node error text would hand them an absolute host path and
-    // an absent-versus-denied oracle. The boundary names the shard and
-    // the one class the operator can act on: unreadable.
-    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
-    const shardPath = join(continuityLogDir(vault), "2026-08.jsonl");
-    chmodSync(shardPath, 0o000);
-    try {
-      const result = compactReceiptLedgers(vault, {
-        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
-        now: NOW,
-        dryRun: true,
-      });
-      expect(result.failures).toHaveLength(1);
-      expect(result.failures[0]!.shard).toBe("continuity:2026-08.jsonl");
-      expect(result.failures[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
-      const rendered = JSON.stringify(result.failures);
-      expect(rendered).not.toContain("ENOENT");
-      expect(rendered).not.toContain("EACCES");
-      expect(rendered).not.toContain(vault);
-    } finally {
-      chmodSync(shardPath, 0o644);
-    }
-  });
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable shard fails by name, never with the raw filesystem error",
+    () => {
+      // The failure rows ride the compact view to remote callers verbatim:
+      // the raw Node error text would hand them an absolute host path and
+      // an absent-versus-denied oracle. The boundary names the shard and
+      // the one class the operator can act on: unreadable.
+      writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+      const shardPath = join(continuityLogDir(vault), "2026-08.jsonl");
+      chmodSync(shardPath, 0o000);
+      try {
+        const result = compactReceiptLedgers(vault, {
+          shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+          now: NOW,
+          dryRun: true,
+        });
+        expect(result.failures).toHaveLength(1);
+        expect(result.failures[0]!.shard).toBe("continuity:2026-08.jsonl");
+        expect(result.failures[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
+        const rendered = JSON.stringify(result.failures);
+        expect(rendered).not.toContain("ENOENT");
+        expect(rendered).not.toContain("EACCES");
+        expect(rendered).not.toContain(vault);
+      } finally {
+        chmodSync(shardPath, 0o644);
+      }
+    },
+  );
 
   test("a shard ref that is not a valid shard name is refused before anything runs", () => {
     expect(() =>

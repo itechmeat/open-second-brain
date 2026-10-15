@@ -26,6 +26,7 @@ import {
 } from "../../src/core/brain/receipts/types.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { RECEIPT_COMPACT_REACH_REASON, RECEIPT_TOOLS } from "../../src/mcp/brain/receipt-tools.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { digestVaultTree } from "../helpers/vault-digest.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
@@ -207,27 +208,30 @@ describe("brain_receipts", () => {
     expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
   });
 
-  test("a shard the scan cannot read surfaces as unreadable, never as a filesystem error", async () => {
-    // The scan view rides to remote callers verbatim, so the error rows
-    // must carry the shard's name and the sanitized verdict only - the
-    // raw Node text would hand over an absolute host path and a
-    // missing-versus-denied oracle.
-    seedLedger();
-    const shard = join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`);
-    chmodSync(shard, 0o000);
-    try {
-      const server = new MCPServer({ vault });
-      await init(server);
-      const response = await call(server, {});
-      const view = response.result.structuredContent;
-      expect(view.errors).toHaveLength(1);
-      expect(view.errors[0]!.shard).toBe(`continuity:${LEDGER_MONTH}.jsonl`);
-      expect(view.errors[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
-      expect(JSON.stringify(view)).not.toContain(vault);
-    } finally {
-      chmodSync(shard, 0o644);
-    }
-  });
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a shard the scan cannot read surfaces as unreadable, never as a filesystem error",
+    async () => {
+      // The scan view rides to remote callers verbatim, so the error rows
+      // must carry the shard's name and the sanitized verdict only - the
+      // raw Node text would hand over an absolute host path and a
+      // missing-versus-denied oracle.
+      seedLedger();
+      const shard = join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`);
+      chmodSync(shard, 0o000);
+      try {
+        const server = new MCPServer({ vault });
+        await init(server);
+        const response = await call(server, {});
+        const view = response.result.structuredContent;
+        expect(view.errors).toHaveLength(1);
+        expect(view.errors[0]!.shard).toBe(`continuity:${LEDGER_MONTH}.jsonl`);
+        expect(view.errors[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
+        expect(JSON.stringify(view)).not.toContain(vault);
+      } finally {
+        chmodSync(shard, 0o644);
+      }
+    },
+  );
 
   test("the surface vocabulary derives from the shared modes tuple", () => {
     const tool = RECEIPT_TOOLS[0]!;
