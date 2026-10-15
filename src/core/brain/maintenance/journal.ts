@@ -98,6 +98,15 @@ export interface MaintenanceJournalEntry {
   readonly pressure_reason?: HostPressureUnmeasurableReason;
   /** Storage tier the capacity gate read, on a `skipped:capacity` row. */
   readonly capacity_tier?: StorageForecastTier;
+  /**
+   * The reading behind that tier, on a `skipped:capacity` row, riding the
+   * way `pressure_percent` does: the percent of the configured cap, and
+   * the measured bytes and cap it is a percent of. Written together,
+   * only when the gate decision carried a reading.
+   */
+  readonly capacity_percent?: number;
+  readonly capacity_measured_bytes?: number;
+  readonly capacity_cap_bytes?: number;
   /** Why the capacity gate could not read a tier, on a `capacity:unmeasurable` row. */
   readonly capacity_reason?: string;
   /** Consecutive journaled failures behind a `refused:streak` row. */

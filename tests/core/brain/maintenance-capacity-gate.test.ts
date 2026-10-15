@@ -221,6 +221,11 @@ describe("the capacity gate through the lane", () => {
     const row = journalRows(MAINTENANCE_VERDICT.skippedCapacity)[0];
     expect(row?.holder).toBe("worker-a");
     expect(row?.capacity_tier).toBe(STORAGE_FORECAST_TIER.critical);
+    // The reading rides the row the way the pressure percent does: the
+    // measured bytes, the configured cap, and the percent between them.
+    expect(row?.capacity_cap_bytes).toBe(CRITICAL_CAP_BYTES);
+    expect(row?.capacity_measured_bytes).toBeGreaterThan(0);
+    expect(row?.capacity_percent).toBe((row!.capacity_measured_bytes! / CRITICAL_CAP_BYTES) * 100);
   });
 
   test("the sample is taken before the skip returns", async () => {
@@ -309,6 +314,15 @@ describe("the capacity gate through the lane", () => {
   });
 });
 
+/** The capacity block both lane front doors attach to a skipped run. */
+interface CapacityReportJson {
+  readonly tier: string;
+  readonly remedy: string;
+  readonly capacity_percent: number | null;
+  readonly measured_bytes: number | null;
+  readonly cap_bytes: number | null;
+}
+
 describe("lane surfaces carry the capacity verdict", () => {
   function seedSkipRow(): void {
     appendJournal(vault, {
@@ -336,11 +350,17 @@ describe("lane surfaces carry the capacity verdict", () => {
     expect(cli.returncode).toBe(0);
     const payload = JSON.parse(cli.stdout) as {
       verdict: string;
-      capacity?: { tier: string; remedy: string };
+      capacity?: CapacityReportJson;
     };
     expect(payload.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
     expect(payload.capacity?.tier).toBe(STORAGE_FORECAST_TIER.critical);
     expect(payload.capacity?.remedy.length).toBeGreaterThan(0);
+    // The gate's full reading rides the report, not the tier alone.
+    expect(payload.capacity?.cap_bytes).toBe(CRITICAL_CAP_BYTES);
+    expect(payload.capacity?.measured_bytes).toBeGreaterThan(0);
+    expect(payload.capacity?.capacity_percent).toBe(
+      (payload.capacity!.measured_bytes! / CRITICAL_CAP_BYTES) * 100,
+    );
   });
 
   test("a skipped-capacity run reports the tier and the remedy over MCP", async () => {
@@ -363,10 +383,15 @@ describe("lane surfaces carry the capacity verdict", () => {
     })) as { result?: { structuredContent?: Record<string, unknown> } };
     const payload = (res.result?.structuredContent ?? {}) as {
       verdict?: string;
-      capacity?: { tier: string; remedy: string };
+      capacity?: CapacityReportJson;
     };
     expect(payload.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
     expect(payload.capacity?.tier).toBe(STORAGE_FORECAST_TIER.critical);
     expect(payload.capacity?.remedy.length).toBeGreaterThan(0);
+    expect(payload.capacity?.cap_bytes).toBe(CRITICAL_CAP_BYTES);
+    expect(payload.capacity?.measured_bytes).toBeGreaterThan(0);
+    expect(payload.capacity?.capacity_percent).toBe(
+      (payload.capacity!.measured_bytes! / CRITICAL_CAP_BYTES) * 100,
+    );
   });
 });

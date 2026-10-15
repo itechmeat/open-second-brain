@@ -305,9 +305,10 @@ export interface RunMaintenanceResult {
   readonly tasks: ReadonlyArray<MaintenanceTaskResult>;
   /**
    * The capacity report, when the run was skipped for storage capacity:
-   * the tier the gate measured and the remedy an operator (or an agent
-   * relaying to one) can act on. Both front doors attach it verbatim, so
-   * the two surfaces cannot disagree about what a skip says.
+   * the tier the gate measured, the reading behind it, and the remedy an
+   * operator (or an agent relaying to one) can act on. Both front doors
+   * attach it verbatim, so the two surfaces cannot disagree about what a
+   * skip says.
    */
   readonly capacity?: MaintenanceCapacityReport;
 }
@@ -325,11 +326,29 @@ export const MAINTENANCE_CAPACITY_REMEDY =
 export interface MaintenanceCapacityReport {
   readonly tier: StorageForecastTier;
   readonly remedy: string;
+  /**
+   * The reading behind the tier, mirroring the pressure reading's ride
+   * through the journal: the percent of the cap the gate measured, and
+   * the measured bytes and configured cap it is a percent of. Null when
+   * the gate decision carried no reading - a skip is always a measured
+   * one in production, so null names a decision supplied from outside
+   * the gate, never a tier the gate guessed at.
+   */
+  readonly capacity_percent: number | null;
+  readonly measured_bytes: number | null;
+  readonly cap_bytes: number | null;
 }
 
 /** The report for the gate decision that skipped a run. */
 export function capacityReport(decision: CapacityGateDecision): MaintenanceCapacityReport {
-  return { tier: decision.tier, remedy: MAINTENANCE_CAPACITY_REMEDY };
+  const reading = decision.reading;
+  return {
+    tier: decision.tier,
+    remedy: MAINTENANCE_CAPACITY_REMEDY,
+    capacity_percent: reading?.percentUsed ?? null,
+    measured_bytes: reading?.measuredBytes ?? null,
+    cap_bytes: reading?.capBytes ?? null,
+  };
 }
 
 /** True when `now` falls inside the local-time window (wrap-aware). */
@@ -489,6 +508,13 @@ export async function runMaintenance(
       });
     }
     if (decision.verdict !== MAINTENANCE_VERDICT.run) {
+      // One report serves every skip surface below: the journal row and
+      // both front doors read the same numbers, so they cannot disagree
+      // about what a skip measured.
+      const capacity =
+        decision.verdict === MAINTENANCE_VERDICT.skippedCapacity && decision.capacity !== undefined
+          ? capacityReport(decision.capacity)
+          : undefined;
       // Sample BEFORE the skip is recorded or returned: the forecast
       // series must keep accumulating exactly while producers are paused,
       // so a skipped run still appends its sample. Fail-soft by contract;
@@ -503,18 +529,25 @@ export async function runMaintenance(
         ...(decision.pressure?.state === HOST_PRESSURE.measured
           ? { pressure_percent: decision.pressure.percent }
           : {}),
-        ...(decision.capacity !== undefined &&
-        decision.verdict === MAINTENANCE_VERDICT.skippedCapacity
-          ? { capacity_tier: decision.capacity.tier }
+        ...(capacity !== undefined
+          ? {
+              capacity_tier: capacity.tier,
+              // The reading rides the row the way the pressure percent
+              // does - written together, only when the gate took one.
+              ...(capacity.measured_bytes !== null
+                ? {
+                    capacity_percent: capacity.capacity_percent,
+                    capacity_measured_bytes: capacity.measured_bytes,
+                    capacity_cap_bytes: capacity.cap_bytes,
+                  }
+                : {}),
+            }
           : {}),
       });
       return {
         verdict: decision.verdict,
         tasks: [],
-        ...(decision.capacity !== undefined &&
-        decision.verdict === MAINTENANCE_VERDICT.skippedCapacity
-          ? { capacity: capacityReport(decision.capacity) }
-          : {}),
+        ...(capacity !== undefined ? { capacity } : {}),
       };
     }
   }
