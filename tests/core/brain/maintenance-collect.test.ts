@@ -56,7 +56,8 @@ describe("collectMaintenanceActions", () => {
 
     const dedup = errors.find((e) => e.signal === "dedup");
     expect(dedup).toBeDefined();
-    expect(dedup!.message).toContain("Brain/preferences");
+    // Windows error text carries the path with the platform separator.
+    expect(dedup!.message.replace(/\\/g, "/")).toContain("Brain/preferences");
     // The run completes and still answers with the actions array.
     expect(Array.isArray(actions)).toBe(true);
   });
