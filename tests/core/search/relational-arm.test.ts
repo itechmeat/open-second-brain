@@ -118,11 +118,10 @@ test("a non-relational query is byte-identical between arm on and off (rrf)", as
 
 // ─── entity bridges and arm runtime options (truth-correctable-time-aware) ───
 
-import { Database } from "bun:sqlite";
-
 import {
   ENTITY_BRIDGES_CONFIG,
   ENTITY_BRIDGES_ENV,
+  RELATIONAL_ARM_REFUSAL_REASON,
   resolveEntityBridgesEnabled,
   runRelationalArm,
 } from "../../../src/core/search/pipeline/relational-arm.ts";
@@ -470,4 +469,308 @@ test("the arm's knobs resolve from the caller's config path, not the default fil
   } finally {
     await store.close();
   }
+});
+
+// ─── edge-level eligibility adjuster (session-mining-economy, t_05a0eaa4) ───
+//
+// Each walked node and its arriving edge are classified from the same
+// controlled-vocabulary frontmatter signals the page gate reads, plus the
+// validity window at query time and the relation-polarity vocabulary.
+// Under enforce an ineligible edge is removed from the arm's contribution
+// set; under shadow it is counted only. Refusals carry named structural
+// reason tokens and are reported per lane into the receipts' refusal
+// record - distinct from `excluded` and from the arm's identical-to-absent
+// provenance convention: a refusal is counted, a provenance omission is
+// not reported.
+
+import { ENTITY_CONTAMINATION_FRONTMATTER_KEY } from "../../../src/core/brain/truth/contamination.ts";
+import { RETRIEVAL_TRUST_REFUSAL_LANE } from "../../../src/core/brain/trust/retrieval-receipts.ts";
+import type { RelationalArmOutcome } from "../../../src/core/search/pipeline/relational-arm.ts";
+
+/** A config file naming the gate mode, at a path the arm can be handed. */
+function modeConfigPath(mode: "shadow" | "enforce"): string {
+  const path = join(vault, `arm-mode-${mode}.yaml`);
+  writeFileSync(path, `search_trust_gate_mode: ${mode}\n`);
+  return path;
+}
+
+function refusalPaths(outcome: RelationalArmOutcome): string[] {
+  return (outcome.refusals ?? []).map((r) => r.path);
+}
+
+test("enforce removes an ineligible walked node from the arm's contribution set", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[dirty]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "dirty.md",
+    `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta contaminated content.`,
+  );
+  const store = armFixtureStore({ docs: { seed: 1, dirty: 2 }, typed: [[1, "related", 2]] });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related", {
+    configPath: modeConfigPath("enforce"),
+  });
+  // Removed from the contribution set: no chunk, no provenance.
+  expect(outcome.rankedChunkIds).toEqual([]);
+  expect(outcome.reachByChunk.size).toBe(0);
+  // And counted, with the named structural reason, on the arm's lane.
+  expect(outcome.refusals).toEqual([
+    {
+      document_id: 2,
+      chunk_id: 2,
+      path: "dirty.md",
+      reasons: [`relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.entityContamination}`],
+      lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+    },
+  ]);
+});
+
+test("shadow counts the same refusal but keeps the contribution", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[dirty]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "dirty.md",
+    `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta contaminated content.`,
+  );
+  const store = armFixtureStore({ docs: { seed: 1, dirty: 2 }, typed: [[1, "related", 2]] });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related", {
+    configPath: modeConfigPath("shadow"),
+  });
+  expect(outcome.rankedChunkIds).toEqual([2]);
+  expect(outcome.reachByChunk.get(2)?.via).toEqual(["related"]);
+  expect(outcome.refusals).toEqual([
+    {
+      document_id: 2,
+      chunk_id: 2,
+      path: "dirty.md",
+      reasons: [`relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.entityContamination}`],
+      lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+    },
+  ]);
+});
+
+test("mode off leaves the outcome shape byte-identical and reports nothing", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[dirty]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "dirty.md",
+    `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta contaminated content.`,
+  );
+  const store = armFixtureStore({ docs: { seed: 1, dirty: 2 }, typed: [[1, "related", 2]] });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related", {});
+  expect(outcome.rankedChunkIds).toEqual([2]);
+  // No refusals key at all - not an empty placeholder - so the serialized
+  // outcome is byte-identical to the pre-adjuster one.
+  expect("refusals" in outcome).toBe(false);
+  expect(JSON.stringify(outcome)).not.toContain("refusals");
+});
+
+test("a validity window not covering query time is refused with its own token", () => {
+  writeMd(
+    vault,
+    "seed.md",
+    '---\nrelated: "[[closed]]"\nextends: "[[pending]]"\n---\n\nalpha seed.',
+  );
+  writeMd(vault, "closed.md", '---\nvalid_until: "2000-01-01"\n---\n\nbeta closed-window content.');
+  writeMd(
+    vault,
+    "pending.md",
+    '---\nvalid_from: "2999-01-01"\n---\n\ngamma pending-window content.',
+  );
+  const store = armFixtureStore({
+    docs: { seed: 1, closed: 2, pending: 3 },
+    typed: [
+      [1, "related", 2],
+      [1, "extends", 3],
+    ],
+  });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("enforce"),
+  });
+  expect(outcome.rankedChunkIds).toEqual([]);
+  expect(refusalPaths(outcome).toSorted()).toEqual(["closed.md", "pending.md"]);
+  const byPath = new Map((outcome.refusals ?? []).map((r) => [r.path, r]));
+  expect(byPath.get("closed.md")?.reasons).toEqual([
+    `relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.closedValidityWindow}`,
+  ]);
+  expect(byPath.get("pending.md")?.reasons).toEqual([
+    `relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.pendingValidityWindow}`,
+  ]);
+});
+
+test("an unparseable declared window is refused where a current one passes", () => {
+  const configPath = modeConfigPath("enforce");
+  // A window whose inclusive end is still ahead covers query time: pass.
+  writeMd(vault, "seed.md", '---\nrelated: "[[open]]"\n---\n\nalpha seed.');
+  writeMd(vault, "open.md", '---\nvalid_until: "2999-01-01"\n---\n\nbeta still valid.');
+  const openStore = armFixtureStore({ docs: { seed: 1, open: 2 }, typed: [[1, "related", 2]] });
+  const current = runRelationalArm(openStore, vault, "[[seed]] related", { configPath });
+  expect(current.rankedChunkIds).toEqual([2]);
+  expect(current.refusals).toEqual([]);
+
+  // A DECLARED value that cannot be parsed is a structural refusal, never
+  // a silent pass: the window cannot be honored.
+  writeMd(vault, "seed2.md", '---\nrelated: "[[garbled]]"\n---\n\nalpha seed two.');
+  writeMd(vault, "garbled.md", "---\nvalid_until: not-a-date\n---\n\ngamma garbled window.");
+  const garbledStore = armFixtureStore({
+    docs: { seed2: 3, garbled: 4 },
+    typed: [[3, "related", 4]],
+  });
+  const garbled = runRelationalArm(garbledStore, vault, "[[seed2]] related", { configPath });
+  expect(refusalPaths(garbled)).toEqual(["garbled.md"]);
+  expect(garbled.refusals?.[0]?.reasons).toEqual([
+    `relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.invalidValidityWindow}`,
+  ]);
+});
+
+test("an edge whose polarity is a counted exclusion is refused", () => {
+  writeMd(vault, "seed.md", '---\ncontradicts: "[[rival]]"\n---\n\nalpha seed.');
+  writeMd(vault, "rival.md", "# Rival\n\nbeta contradictory content.");
+  const store = armFixtureStore({ docs: { seed: 1, rival: 2 }, typed: [[1, "contradicts", 2]] });
+  const outcome = runRelationalArm(store, vault, "[[seed]] contradicts", {
+    configPath: modeConfigPath("enforce"),
+  });
+  expect(outcome.rankedChunkIds).toEqual([]);
+  expect(outcome.refusals).toEqual([
+    {
+      document_id: 2,
+      chunk_id: 2,
+      path: "rival.md",
+      reasons: [`relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.contradictsPolarity}`],
+      lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+    },
+  ]);
+});
+
+test("a chain through an ineligible node refuses the downstream arrival too", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[mid]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nstatus: quarantine\nextends: "[[far]]"\n---\n\nbeta quarantined mid.',
+  );
+  writeMd(vault, "far.md", "# Far\n\ngamma downstream content.");
+  const store = armFixtureStore({
+    docs: { seed: 1, mid: 2, far: 3 },
+    typed: [
+      [1, "related", 2],
+      [2, "extends", 3],
+    ],
+  });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("enforce"),
+  });
+  expect(outcome.rankedChunkIds).toEqual([]);
+  expect(refusalPaths(outcome).toSorted()).toEqual(["far.md", "mid.md"]);
+  // The far node's own frontmatter is clean: its refusal is the arrived
+  // edge's source endpoint failing the same signals.
+  const far = (outcome.refusals ?? []).find((r) => r.path === "far.md");
+  expect(far?.reasons).toEqual(["relational_arm:self_approval_quarantine"]);
+});
+
+test("shadow counts a whole ineligible chain while the contributions stand", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[mid]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nstatus: quarantine\nextends: "[[far]]"\n---\n\nbeta quarantined mid.',
+  );
+  writeMd(vault, "far.md", "# Far\n\ngamma downstream content.");
+  const store = armFixtureStore({
+    docs: { seed: 1, mid: 2, far: 3 },
+    typed: [
+      [1, "related", 2],
+      [2, "extends", 3],
+    ],
+  });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("shadow"),
+  });
+  expect(outcome.rankedChunkIds.toSorted()).toEqual([2, 3]);
+  expect(refusalPaths(outcome).toSorted()).toEqual(["far.md", "mid.md"]);
+});
+
+test("a provenance omission is not a refusal: reach gating stays identical-to-absent", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[mid]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nvisibility: ["private"]\nextends: "[[far]]"\n---\n\nbeta private-but-clean mid.',
+  );
+  writeMd(vault, "far.md", "# Far\n\ngamma downstream content.");
+  const store = armFixtureStore({
+    docs: { seed: 1, mid: 2, far: 3 },
+    typed: [
+      [1, "related", 2],
+      [2, "extends", 3],
+    ],
+  });
+  const outcome = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("enforce"),
+    reach: TRANSPORT_REACH.remote,
+  });
+  // The walk still reaches both nodes - visibility gates the ordered
+  // provenance path only - and the withheld step reports nothing.
+  expect(outcome.rankedChunkIds.toSorted()).toEqual([2, 3]);
+  expect(outcome.refusals).toEqual([]);
+  const farReach = outcome.reachByChunk.get(3);
+  expect(farReach).toBeDefined();
+  // The far node's provenance path omits the unreadable-at-reach mid hop
+  // without naming or counting it.
+  expect(farReach!.path.some((step) => step.documentId === 2)).toBe(false);
+});
+
+test("a malformed mode value fails only the relational query the gate governs", () => {
+  writeMd(vault, "seed.md", '---\nrelated: "[[near]]"\n---\n\nalpha topic seed document.');
+  writeMd(vault, "near.md", "# Near\n\nbeta content.");
+  const store = armFixtureStore({ docs: { seed: 1, near: 2 }, typed: [[1, "related", 2]] });
+  const configPath = join(vault, "arm-mode-bad.yaml");
+  writeFileSync(configPath, "search_trust_gate_mode: measure\n");
+  expect(() => runRelationalArm(store, vault, "alpha topic", { configPath })).not.toThrow();
+  let message = "";
+  try {
+    runRelationalArm(store, vault, "[[seed]] related", { configPath });
+  } catch (e) {
+    message = (e as Error).message;
+  }
+  expect(message).toContain("search_trust_gate_mode");
+});
+
+test("the eligibility gate does not run when the arm does not walk", () => {
+  // Non-relational query: no walk, no knob resolution, no refusals.
+  writeMd(vault, "seed.md", "# Seed\n\nalpha topic.");
+  const store = armFixtureStore({ docs: { seed: 1 }, typed: [] });
+  const outcome = runRelationalArm(store, vault, "alpha topic", {
+    configPath: modeConfigPath("enforce"),
+  });
+  expect(outcome.rankedChunkIds).toEqual([]);
+  expect("refusals" in outcome).toBe(false);
+});
+
+test("the resolved trust-gate mode reaches the arm through the caller's config path", async () => {
+  // The arm's only route to `dirty.md` is the walk: its body shares no
+  // keyword terms with the query. Enforce withholds it from the pack;
+  // shadow surfaces it with the arm's attribution, refusal counted.
+  writeMd(vault, "seed.md", '---\nrelated: "[[dirty]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "dirty.md",
+    `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta divergent content.`,
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+  const configPath = join(vault, "arm-gate.yaml");
+  const cfgFor = (mode: "shadow" | "enforce") => {
+    writeFileSync(configPath, `search_trust_gate_mode: ${mode}\n`);
+    return {
+      ...makeConfig({ vault, dbPath, fusionMode: "rrf", relationalArmEnabled: true }),
+      configPath,
+    };
+  };
+
+  const enforced = await search(cfgFor("enforce"), { query: "alpha [[seed]] related" });
+  expect(enforced.results.some((r) => r.path === "dirty.md")).toBe(false);
+
+  const shadowed = await search(cfgFor("shadow"), { query: "alpha [[seed]] related" });
+  const dirty = shadowed.results.find((r) => r.path === "dirty.md");
+  expect(dirty).toBeDefined();
+  expect(dirty!.reasons.some((x) => x.startsWith("relational:"))).toBe(true);
 });
