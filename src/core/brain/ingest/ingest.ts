@@ -490,11 +490,16 @@ export function ingestSource(
     // append verifiable - the recorded digest describes exactly the leading
     // extracted_bytes, so a later read either proves a pure append (delta
     // above) or classifies modified and reprocesses fully.
+    // One stat, taken BEFORE the digest: the stamp must describe one
+    // snapshot of the source, so the byte count it claims is the file it
+    // hashed, not a size re-read after the hashing walked a possibly
+    // grown file.
+    const sourceSize = statSync(sourceAbs).size;
     updateManifest(vault, [canonicalSource], {
       [canonicalSource]: {
         sha256: hashPath(sourceAbs),
         fingerprint: computeExtractionContractFingerprint(vault),
-        extracted_bytes: statSync(sourceAbs).size,
+        extracted_bytes: sourceSize,
         extracted_at: isoSecond(opts.now),
       },
     });

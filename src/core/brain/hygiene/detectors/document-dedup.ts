@@ -407,11 +407,17 @@ function resolveConfiguredProvider(vault: string): EmbeddingProvider | null {
   }
 }
 
+/**
+ * Cosine of two EQUAL-dimension vectors - the caller guarantees the
+ * dimension check above, because truncating a shorter vector into a
+ * longer space scores a similarity over incomparable coordinates.
+ */
 function cosine(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
+  if (a.length !== b.length) return 0;
   let dot = 0;
   let normA = 0;
   let normB = 0;
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+  for (let i = 0; i < a.length; i++) {
     dot += a[i]! * b[i]!;
     normA += a[i]! * a[i]!;
     normB += b[i]! * b[i]!;
@@ -463,6 +469,12 @@ export async function detectSemanticDocumentDedup(
     return lexical();
   }
   if (vectors.length !== records.length) return lexical();
+  // A ragged batch - vectors of differing dimensions - is the same
+  // broken-provider shape as a count mismatch: the cosine below would
+  // silently truncate to the shorter vector and fabricate a similarity
+  // out of incomparable spaces, so the whole run answers lexical, labeled.
+  const dimension = vectors[0]!.length;
+  if (vectors.some((v) => v.length !== dimension)) return lexical();
 
   const pairs: PairScore[] = [];
   for (let i = 0; i < records.length; i++) {

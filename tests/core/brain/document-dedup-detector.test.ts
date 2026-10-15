@@ -394,4 +394,27 @@ describe("detectSemanticDocumentDedup", () => {
     expect(result.method).toBe("embedding");
     expect(result.findings).toHaveLength(0);
   });
+
+  test("a provider returning inconsistent vector dimensions falls back, labeled", async () => {
+    writeSourcePage("rag-a", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
+    writeSourcePage("rag-b", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
+    // Dimension mismatch inside one embed call: the vectors-length check
+    // models this for a count mismatch; a shape mismatch is the same
+    // broken-provider answer.
+    const ragged: EmbeddingProvider = {
+      name: "ragged",
+      model: "ragged",
+      dimension: 3,
+      embed: (texts) => Promise.resolve(texts.map((_, i) => (i === 0 ? [1, 0] : [1, 0, 0]))),
+      ping: () => Promise.resolve({ ok: true as const, dimension: 3 }),
+    };
+
+    const result = await detectSemanticDocumentDedup(vault, { provider: ragged });
+
+    expect(result.method).toBe("lexical");
+    // The fallback still finds the lexical pair - it just never calls
+    // the fabricated cosine score semantic.
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.evidence["method"]).toBe("lexical");
+  });
 });
