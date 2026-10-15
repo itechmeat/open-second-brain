@@ -30,10 +30,14 @@ import { join } from "node:path";
 
 import {
   continuityLogDir,
+  continuityLogPath,
   listContinuityRecords,
 } from "../../../src/core/brain/continuity/store.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
-import { compactReceiptLedgers } from "../../../src/core/brain/receipts/compact.ts";
+import {
+  compactReceiptLedgers,
+  RECEIPT_AUDIT_APPEND_FAILED,
+} from "../../../src/core/brain/receipts/compact.ts";
 import { RECEIPT_SHARD_UNREADABLE } from "../../../src/core/brain/receipts/scan.ts";
 import {
   RECEIPT_FOLD_SCHEMA,
@@ -372,6 +376,37 @@ describe("compactReceiptLedgers", () => {
     expect(JSON.stringify(audits[0]!.payload)).toContain("continuity:2026-07.jsonl");
     // The refused shard is untouched on disk.
     expect(readShard(continuityLogDir(vault), "2026-07.jsonl")).toContain("2026-07-10T12:00:00Z");
+  });
+
+  test("a lost audit record is a named outcome, never a throw that discards the run", () => {
+    // The audit record lands in the continuity ledger under the run
+    // clock's month, beside the shards being folded. A directory parked
+    // at that exact path makes the append fail while the metrics shard
+    // selected here folds untouched - the window where every shard is
+    // already durable and a post-write throw would discard every
+    // outcome, failure and recovery point with it.
+    writeShard(
+      metricsDir(vault),
+      "storage_usage.jsonl",
+      [
+        metricLine("brain", "2026-06-01T00:00:00Z", { n: 1 }),
+        metricLine("brain", "2026-06-02T00:00:00Z", { n: 2 }),
+        metricLine("brain", "2026-06-03T00:00:00Z", { n: 3 }),
+        metricLine("brain", "2026-06-04T00:00:00Z", { n: 4 }),
+      ].join(""),
+    );
+    mkdirSync(continuityLogPath(vault, "2026-09"), { recursive: true });
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.totals.folded).toBe(4);
+    expect(result.auditRecordId).toBeUndefined();
+    expect(result.auditError).toBe(RECEIPT_AUDIT_APPEND_FAILED);
+    // The fold itself landed: the shard on disk holds the aggregate.
+    expect(readShard(metricsDir(vault), "storage_usage.jsonl")).toContain(RECEIPT_FOLD_SCHEMA);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
   });
 
   test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {

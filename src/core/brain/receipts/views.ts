@@ -86,5 +86,6 @@ export function compactView(result: ReceiptCompactResult): Record<string, unknow
     ...(result.snapshotRunId !== undefined ? { snapshot_run_id: result.snapshotRunId } : {}),
     ...(result.recoverability !== undefined ? { recoverability: result.recoverability } : {}),
     ...(result.auditRecordId !== undefined ? { audit_record_id: result.auditRecordId } : {}),
+    ...(result.auditError !== undefined ? { audit_error: result.auditError } : {}),
   };
 }

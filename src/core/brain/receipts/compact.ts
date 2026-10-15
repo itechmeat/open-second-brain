@@ -34,7 +34,11 @@
  * foldable, and writes nothing - no rewrite, no snapshot, no audit
  * record. The audit is the additive `receipt_compaction` continuity
  * kind (one record per confirmed run that folded, never on a dry run),
- * carrying the honest per-shard outcomes including failures.
+ * carrying the honest per-shard outcomes including failures. An audit
+ * record that cannot be appended after the shards are durable is a
+ * named outcome on the result (`auditError`), never a post-write throw:
+ * the run's work is done by then, and discarding it would leave the
+ * caller unable to tell what landed.
  *
  * Aggregate lines are stamped `o2b.receipt-fold.v1` and carry no record
  * fields: the continuity read model drops a row without
@@ -74,6 +78,15 @@ import {
 } from "./types.ts";
 
 const MS_PER_DAY = 86_400_000;
+
+/**
+ * The closed sentence a confirmed fold carries when its audit record
+ * could not be appended: the shards are folded and durable, the ledger
+ * holds no `receipt_compaction` record for the run, and the result says
+ * so instead of a throw that would discard everything the run did.
+ */
+export const RECEIPT_AUDIT_APPEND_FAILED =
+  "the receipt_compaction audit record could not be appended; the shards above are folded as reported";
 
 /** One confirmed shard rewrite, or what stopped it. */
 export interface ReceiptFoldShardOutcome {
@@ -142,6 +155,14 @@ export interface ReceiptCompactResult {
   readonly recoverability?: RecoverabilityVerdict;
   /** Present on a confirmed run that appended its audit record. */
   readonly auditRecordId?: string;
+  /**
+   * Present on a confirmed run whose audit record could not be appended:
+   * the shards above are folded and the recovery point exists, but the
+   * ledger carries no `receipt_compaction` record for this run. A closed
+   * sentence - the raw condition names absolute host paths no payload
+   * carries; its detail goes to the operator's stderr only.
+   */
+  readonly auditError?: string;
 }
 
 export interface ReceiptCompactInput {
@@ -467,24 +488,40 @@ export function compactReceiptLedgers(
 
   // One audit record per confirmed run that folded something, with the
   // honest outcomes - failures included - so the ledger says what the
-  // run did even when a shard refused.
-  const audit = appendContinuityRecord(vault, {
-    kind: "receipt_compaction",
-    createdAt: canonicalSecond(nowMs),
-    payload: {
-      operation: RECEIPT_COMPACTION_OPERATION,
-      snapshot_run_id: gated.result.runId,
-      older_than_days: olderThanDays,
-      cutoff,
-      shards: plans.map((plan) => plan.display),
-      folded: sumOutcomes(outcomes, (o) => o.folded),
-      kept: sumOutcomes(outcomes, (o) => o.kept),
-      aggregates: sumOutcomes(outcomes, (o) => o.aggregates),
-      bytes_before: sumOutcomes(outcomes, (o) => o.bytesBefore),
-      bytes_after: sumOutcomes(outcomes, (o) => o.bytesAfter),
-      failures: failures.map((failure) => ({ ...failure })),
-    },
-  });
+  // run did even when a shard refused. A record that cannot be appended
+  // is a NAMED outcome on the result, never a post-write throw: the
+  // shards above are already folded and durable, and a throw here would
+  // discard every outcome, failure and the recovery point with them.
+  // The wire carries the closed sentence (the raw condition names
+  // absolute host paths no payload repeats); the detail goes to the
+  // operator's stderr only.
+  let auditRecordId: string | undefined;
+  let auditError: string | undefined;
+  try {
+    auditRecordId = appendContinuityRecord(vault, {
+      kind: "receipt_compaction",
+      createdAt: canonicalSecond(nowMs),
+      payload: {
+        operation: RECEIPT_COMPACTION_OPERATION,
+        snapshot_run_id: gated.result.runId,
+        older_than_days: olderThanDays,
+        cutoff,
+        shards: plans.map((plan) => plan.display),
+        folded: sumOutcomes(outcomes, (o) => o.folded),
+        kept: sumOutcomes(outcomes, (o) => o.kept),
+        aggregates: sumOutcomes(outcomes, (o) => o.aggregates),
+        bytes_before: sumOutcomes(outcomes, (o) => o.bytesBefore),
+        bytes_after: sumOutcomes(outcomes, (o) => o.bytesAfter),
+        failures: failures.map((failure) => ({ ...failure })),
+      },
+    }).id;
+  } catch (err) {
+    auditError = RECEIPT_AUDIT_APPEND_FAILED;
+    process.stderr.write(
+      `receipt compaction: ${RECEIPT_AUDIT_APPEND_FAILED} ` +
+        `(${err instanceof Error ? err.message : String(err)})\n`,
+    );
+  }
 
   return Object.freeze({
     ...base,
@@ -499,7 +536,8 @@ export function compactReceiptLedgers(
     totals: totalsOf(outcomes, failures),
     snapshotRunId: gated.result.runId,
     recoverability: gated.recoverability,
-    auditRecordId: audit.id,
+    ...(auditRecordId !== undefined ? { auditRecordId } : {}),
+    ...(auditError !== undefined ? { auditError } : {}),
   });
 }
 
