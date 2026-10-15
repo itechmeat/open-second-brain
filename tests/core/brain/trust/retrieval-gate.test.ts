@@ -114,7 +114,7 @@ describe("trustGateAdjuster", () => {
 
   test("under shadow the classification runs but every candidate is kept", () => {
     const saw: string[] = [];
-    const adjuster = trustGateAdjuster((path) => {
+    const adjuster = trustGateAdjuster((path): FrontmatterMap => {
       saw.push(path);
       return path === "bad.md" ? { status: "quarantine" } : {};
     }, "shadow");
