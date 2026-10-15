@@ -4,8 +4,10 @@
  * Scan is the default and writes nothing. Compact requires explicit
  * `family:name` shards, previews without `apply`, and enforces the count
  * guard before mutating - a mismatched `expect` is an INVALID_PARAMS
- * envelope naming the count, and the vault is untouched. The audit
- * receipt_compaction record lands once per confirmed run.
+ * envelope naming the count, and the vault is untouched. Compact is the
+ * destructive half and answers at local reach only: below it the tool
+ * refuses by name. The audit receipt_compaction record lands once per
+ * confirmed run.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -22,7 +24,8 @@ import {
   RECEIPT_COMPACTION_OPERATION,
   RECEIPT_MODES,
 } from "../../src/core/brain/receipts/types.ts";
-import { RECEIPT_TOOLS } from "../../src/mcp/brain/receipt-tools.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { RECEIPT_COMPACT_REACH_REASON, RECEIPT_TOOLS } from "../../src/mcp/brain/receipt-tools.ts";
 import { digestVaultTree } from "../helpers/vault-digest.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
@@ -115,7 +118,9 @@ describe("brain_receipts", () => {
   });
 
   test("compact without shard ids is an INVALID_PARAMS envelope", async () => {
-    const server = new MCPServer({ vault });
+    // Local reach: the reach refusal for the destructive mode is its own
+    // test (`receipts-reach.test.ts`); this is the argument contract.
+    const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
     await init(server);
     const response = await call(server, { mode: "compact" });
     expect(response.error.code).toBe(-32602);
@@ -124,7 +129,7 @@ describe("brain_receipts", () => {
 
   test("compact previews without apply and writes nothing", async () => {
     seedLedger();
-    const server = new MCPServer({ vault });
+    const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
     await init(server);
     const before = digestVaultTree(vault);
     const response = await call(server, {
@@ -140,7 +145,7 @@ describe("brain_receipts", () => {
 
   test("a mismatched expect aborts the confirmed compact without writing", async () => {
     seedLedger();
-    const server = new MCPServer({ vault });
+    const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
     await init(server);
     const before = readFileSync(join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`), "utf8");
     const response = await call(server, {
@@ -159,7 +164,7 @@ describe("brain_receipts", () => {
 
   test("a confirmed compact folds, appends one audit record, and reports the recovery point", async () => {
     seedLedger();
-    const server = new MCPServer({ vault });
+    const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
     await init(server);
     const response = await call(server, {
       mode: "compact",
@@ -178,6 +183,28 @@ describe("brain_receipts", () => {
     expect(audits[0]!.id).toBe(view.audit_record_id);
     const after = readFileSync(join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`), "utf8");
     expect(after).toContain(RECEIPT_LEDGER_MONTH_AGGREGATE_MARKER);
+  });
+
+  test("compact below local reach is refused by name, never planned", async () => {
+    // A server whose transport minted no reach resolves to the
+    // narrowest, so the destructive mode answers the named refusal: no
+    // shard plan, no byte totals, and the vault untouched.
+    seedLedger();
+    const server = new MCPServer({ vault });
+    await init(server);
+    const before = digestVaultTree(vault);
+    const response = await call(server, {
+      mode: "compact",
+      shards: [`continuity:${LEDGER_MONTH}.jsonl`],
+      apply: true,
+    });
+    const view = response.result.structuredContent;
+    expect(view.measured).toBe(false);
+    expect(view.reason).toBe(RECEIPT_COMPACT_REACH_REASON);
+    expect(view.shards).toBeUndefined();
+    expect(view.totals).toBeUndefined();
+    expect(digestVaultTree(vault)).toBe(before);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
   });
 
   test("a shard the scan cannot read surfaces as unreadable, never as a filesystem error", async () => {

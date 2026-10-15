@@ -28,6 +28,7 @@ import { compactView, scanView } from "../../core/brain/receipts/views.ts";
 import {
   isReceiptMode,
   parseReceiptShardRef,
+  RECEIPT_COMPACTION_OPERATION,
   RECEIPT_FOLD_DEFAULT_AGE_DAYS,
   RECEIPT_MODE,
   RECEIPT_MODES,
@@ -35,11 +36,12 @@ import {
 } from "../../core/brain/receipts/types.ts";
 import { CountGuardError } from "../../core/brain/count-guard.ts";
 import { WriteRefusedError } from "../../core/brain/write-disposition.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { coerceBool } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { COUNT_GUARD_WIRE_CODE } from "../tool-error-codes.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { readCountGuardArgs } from "./shared.ts";
 
 /** Read and bound the age-threshold argument. */
@@ -51,6 +53,25 @@ function readOlderThanDays(args: Record<string, unknown>): number {
     throw new MCPError(INVALID_PARAMS, "'older_than_days' must be a positive integer");
   }
   return days;
+}
+
+/**
+ * The reason a compact below local reach names, beside the reasons the
+ * core itself refuses: the fold was not planned at all because of who
+ * was asking, not because a shard refused.
+ */
+export const RECEIPT_COMPACT_REACH_REASON = "reach" as const;
+
+/** Every reason a compact can name for answering without a plan. */
+export type ReceiptCompactRefusalReason = typeof RECEIPT_COMPACT_REACH_REASON;
+
+/** The response a caller below local reach receives: no plan, a named refusal. */
+export interface ReceiptCompactRefusal {
+  readonly operation: typeof RECEIPT_COMPACTION_OPERATION;
+  readonly measured: false;
+  readonly reason: ReceiptCompactRefusalReason;
+  /** Why the compact is local-reach-only, stated for the caller. */
+  readonly detail: string;
 }
 
 /** Parse the explicit `family:name` shard list compact requires. */
@@ -83,6 +104,24 @@ async function toolBrainReceipts(
 
   if (mode === RECEIPT_MODE.scan) {
     return scanView(scanReceiptLedgers(ctx.vault, { olderThanDays, now: new Date() }));
+  }
+
+  // The destructive half, gated like the storage report gates its
+  // whole-vault census (`./storage-tools.ts`): compact rewrites named
+  // ledger shards in place and reports whole-ledger byte totals, and a
+  // caller below local reach gets the named refusal instead of a plan -
+  // no shard list, no figures, no write lane entered. The scan above
+  // stays readable at any reach: it writes nothing.
+  if (contextReach(ctx) !== TRANSPORT_REACH.local) {
+    const refusal: ReceiptCompactRefusal = {
+      operation: RECEIPT_COMPACTION_OPERATION,
+      measured: false,
+      reason: RECEIPT_COMPACT_REACH_REASON satisfies ReceiptCompactRefusalReason,
+      detail:
+        "receipt compaction folds records in named ledger shards and reports " +
+        "whole-ledger byte totals; it answers at local reach only",
+    };
+    return refusal;
   }
 
   const shards = readShards(args);
@@ -134,8 +173,10 @@ export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     description:
       "Receipt compaction over the receipt ledgers. `scan` (default) inventories both ledgers " +
       "read-only; `compact` folds expired records into per-kind, per-month aggregates in named " +
-      "shards, preview-bound without `apply`. Never touches decision-change receipts, the " +
-      "source archive, or context compaction.",
+      "shards, preview-bound without `apply`. Compact rewrites ledgers in place and reports " +
+      "whole-ledger byte totals, so it answers at local reach only: below it the tool refuses " +
+      "by name (measured: false, reason reach) and scan stays readable. Never touches " +
+      "decision-change receipts, the source archive, or context compaction.",
     inputSchema: {
       type: "object",
       properties: {
