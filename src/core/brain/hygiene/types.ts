@@ -12,6 +12,7 @@
 export const HYGIENE_DETECTOR_IDS = [
   "conflicts",
   "dedup",
+  "document-dedup",
   "freshness",
   "usefulness",
   "slug-collisions",
@@ -34,7 +35,10 @@ export type HygieneDetectorId = (typeof HYGIENE_DETECTOR_IDS)[number];
  * vaults that hold malformed entries), and further noisy detectors
  * register as opt-in by staying out of this list. `capture-scope` is
  * default-on: it fires only on retrievable knowledge whose every
- * source is url-only.
+ * source is url-only. `document-dedup` is opt-in: its remediation is
+ * the destructive-class `retire` action, so a vault asks for it
+ * explicitly rather than finding retirement candidates in every
+ * uninvited sweep.
  *
  * Members are compile-checked against the registered tuple; a registered
  * id missing here is simply default-off, never an error.
@@ -64,6 +68,7 @@ export const HYGIENE_PROPOSED_ACTIONS = [
   "archive",
   "recompile",
   "forget",
+  "retire",
   "review",
 ] as const;
 

@@ -70,6 +70,7 @@ test("the detector tuple and its input-schema enum stay in lockstep", () => {
   expect(HYGIENE_DETECTOR_IDS).toEqual([
     "conflicts",
     "dedup",
+    "document-dedup",
     "freshness",
     "usefulness",
     "slug-collisions",

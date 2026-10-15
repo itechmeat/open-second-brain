@@ -231,6 +231,12 @@ const ENTRIES: ReadonlyArray<RepairCapability> = [
     fixer: "hygiene/apply.executeFinding -> archivePage",
   },
   {
+    code: "retire",
+    surface: REPAIR_SURFACE.hygieneApply,
+    verdict: REPAIR_VERDICT.mechanical,
+    fixer: "hygiene/apply.executeFinding -> retireDocumentCopies",
+  },
+  {
     code: "review",
     surface: REPAIR_SURFACE.hygieneApply,
     verdict: REPAIR_VERDICT.refused,

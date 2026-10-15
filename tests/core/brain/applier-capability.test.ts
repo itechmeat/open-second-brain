@@ -35,7 +35,10 @@ import {
 } from "../../../src/core/brain/diagnostics.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
 import { applyHygienePlan } from "../../../src/core/brain/hygiene/apply.ts";
-import { buildHygienePlan } from "../../../src/core/brain/hygiene/plan.ts";
+import {
+  UNATTENDED_EXCLUDED_ACTIONS,
+  buildHygienePlan,
+} from "../../../src/core/brain/hygiene/plan.ts";
 import {
   HYGIENE_PROPOSED_ACTIONS,
   type HygieneFinding,
@@ -137,18 +140,34 @@ describe("applier capability table - cannot disagree with the fixers", () => {
 
   test("the hygiene plan executes exactly the actions the table calls mechanical", () => {
     const mechanical: string[] = [];
+    const heldForAttendance: string[] = [];
     const refused: string[] = [];
     for (const action of HYGIENE_PROPOSED_ACTIONS) {
-      const plan = buildHygienePlan(reportWithAction(action));
-      if (plan.selected.length === 1) mechanical.push(action);
-      else if (plan.excluded_review.length === 1) refused.push(action);
-      else throw new Error(`hygiene action '${action}' was neither selected nor excluded`);
+      const unattended = buildHygienePlan(reportWithAction(action));
+      if (unattended.selected.length === 1) {
+        mechanical.push(action);
+        continue;
+      }
+      if (unattended.excluded_review.length !== 1) {
+        throw new Error(`hygiene action '${action}' was neither selected nor excluded`);
+      }
+      if (requireRepairCapability(action).verdict === REPAIR_VERDICT.refused) {
+        refused.push(action);
+        continue;
+      }
+      // A mechanical action the unattended default holds back is the
+      // destructive class: it must still select when the caller names it
+      // by id - that is the whole attended path.
+      const attended = buildHygienePlan(reportWithAction(action), { ids: [`probe:${action}`] });
+      expect(attended.selected.map((finding) => finding.id)).toEqual([`probe:${action}`]);
+      heldForAttendance.push(action);
     }
     expect(mechanical.toSorted()).toEqual(
-      codesForSurface(REPAIR_SURFACE.hygieneApply).filter(
-        (code) => APPLIER_CAPABILITY.get(code)!.verdict === REPAIR_VERDICT.mechanical,
-      ),
+      codesForSurface(REPAIR_SURFACE.hygieneApply)
+        .filter((code) => APPLIER_CAPABILITY.get(code)!.verdict === REPAIR_VERDICT.mechanical)
+        .filter((code) => !UNATTENDED_EXCLUDED_ACTIONS.has(code as HygieneProposedAction)),
     );
+    expect(heldForAttendance).toEqual(["retire"]);
     expect(refused).toEqual(["review"]);
   });
 

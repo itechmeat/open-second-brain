@@ -13,6 +13,7 @@
 import { detectCaptureScope } from "./detectors/capture-scope.ts";
 import { detectConflicts } from "./detectors/conflicts.ts";
 import { detectDedup } from "./detectors/dedup.ts";
+import { detectDocumentDedup } from "./detectors/document-dedup.ts";
 import { detectFreshness } from "./detectors/freshness.ts";
 import { detectFrontmatterTags } from "./detectors/frontmatter-tags.ts";
 import { detectSlugCollisions } from "./detectors/slug-collisions.ts";
@@ -31,6 +32,7 @@ import {
 const DETECTORS: Readonly<Record<HygieneDetectorId, HygieneDetector>> = Object.freeze({
   conflicts: (vault) => detectConflicts(vault),
   dedup: (vault, ctx) => detectDedup(vault, ctx),
+  "document-dedup": (vault, ctx) => detectDocumentDedup(vault, ctx),
   freshness: (vault) => detectFreshness(vault),
   usefulness: (vault, ctx) => detectUsefulness(vault, ctx),
   "slug-collisions": (vault) => detectSlugCollisions(vault),
