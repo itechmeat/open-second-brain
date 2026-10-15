@@ -192,6 +192,30 @@ describe("scanReceiptLedgers", () => {
     }
   });
 
+  test("a parsed line outside the metrics record shape is unparseable, never foldable", () => {
+    // The same shape gate the fold engine's classifier carries: a line
+    // the scan counts unparseable must never be foldable in a confirmed
+    // run, or the preview and the rewrite would disagree.
+    vault = mintVault();
+    try {
+      writeShard(metricsDir(vault), "storage_usage.jsonl", [
+        metricLine("storage_usage", "2026-08-01T00:00:00Z"),
+        `${JSON.stringify({ run_at: "2026-08-02T00:00:00Z" })}\n`,
+        `${JSON.stringify({ schema: METRICS_SCHEMA, surface: "storage_usage" })}\n`,
+        `${JSON.stringify({ schema: METRICS_SCHEMA, surface: "storage_usage", payload: [] })}\n`,
+      ]);
+      const report = scanReceiptLedgers(vault, { now: NOW });
+      const shard = shardOf(report, RECEIPT_LEDGER_FAMILY.metrics, "storage_usage.jsonl");
+      expect(shard.records).toBe(1);
+      expect(shard.unparseable).toBe(3);
+      expect(shard.foldable).toBe(1);
+      expect(shard.protectedRecords).toBe(0);
+      expect(report.totals.foldable).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("byte sizes and vault-relative paths are reported per shard", () => {
     vault = mintVault();
     try {

@@ -209,6 +209,38 @@ describe("compactReceiptLedgers", () => {
     });
   });
 
+  test("a metrics line outside the record shape is kept, never folded into a surface-less aggregate", () => {
+    // The scan counts a parsed line without the full metrics record shape
+    // (schema, surface and run_at strings, plain-object payload) as
+    // unparseable. The fold engine must classify it the same way: gated
+    // only on run_at, a line carrying nothing but an old stamp would fold
+    // with an undefined surface, and JSON.stringify would drop that
+    // surface from the aggregate - an aggregate no reader can attribute.
+    const malformed = JSON.stringify({ run_at: "2026-07-01T00:00:00Z" });
+    writeShard(metricsDir(vault), "storage_usage.jsonl", [
+      metricLine("storage_usage", "2026-08-01T00:00:00Z", { bytes: 10 }),
+      metricLine("storage_usage", "2026-08-05T00:00:00Z", { bytes: 11 }),
+      metricLine("storage_usage", "2026-08-10T00:00:00Z", { bytes: 12 }),
+      `${malformed}\n`,
+    ]);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+      now: NOW,
+      dryRun: false,
+      expect: 3,
+    });
+    expect(result.totals.folded).toBe(3);
+    expect(result.totals.kept).toBe(1);
+    expect(result.totals.aggregates).toBe(1);
+    const after = readShard(metricsDir(vault), "storage_usage.jsonl");
+    // The malformed line is still there, byte-verbatim.
+    expect(after).toContain(malformed);
+    for (const line of after.split("\n").filter((entry) => entry.trim() !== "")) {
+      const fold = (JSON.parse(line) as { fold?: { surface?: unknown } }).fold;
+      if (fold !== undefined) expect(typeof fold.surface).toBe("string");
+    }
+  });
+
   test("a confirmed run takes one recovery point and appends the audit record exactly once", () => {
     writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
     const result = compactReceiptLedgers(vault, {

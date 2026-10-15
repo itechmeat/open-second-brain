@@ -107,17 +107,56 @@ export function classifyContinuityRecord(
 }
 
 /**
- * Classify one metrics record against the cutoff. The same protected-key
- * rule applies - a metrics payload can correlate to a session too - and
- * a `run_at` that is not an ISO-8601 UTC stamp never folds: its month
- * cannot be derived for the aggregate, so it fails closed to keep.
+ * The record shape the metrics classification folds: the schema and
+ * surface stamps as strings, a `run_at` string to derive the aggregate's
+ * month from, and a payload that is a plain object. One predicate serves
+ * both classifiers - the scan counts a parsed line outside this shape as
+ * unparseable, and {@link classifyMetricRecord} fails closed to keep on
+ * it - so the preview and the fold engine can never disagree about which
+ * lines a confirmed fold would touch.
+ */
+export function metricRecordShaped(record: {
+  readonly schema?: unknown;
+  readonly surface?: unknown;
+  readonly run_at?: unknown;
+  readonly payload?: unknown;
+}): record is {
+  readonly schema: string;
+  readonly surface: string;
+  readonly run_at: string;
+  readonly payload: Record<string, unknown>;
+} {
+  return (
+    typeof record.schema === "string" &&
+    typeof record.surface === "string" &&
+    typeof record.run_at === "string" &&
+    record.payload !== null &&
+    typeof record.payload === "object" &&
+    !Array.isArray(record.payload)
+  );
+}
+
+/**
+ * Classify one metrics record against the cutoff. A line outside the
+ * {@link metricRecordShaped} record shape never folds - its aggregate
+ * would carry no surface - and fails closed to keep, the same verdict the
+ * scan reports it under. The same protected-key rule applies - a metrics
+ * payload can correlate to a session too - and a `run_at` that is not an
+ * ISO-8601 UTC stamp never folds: its month cannot be derived for the
+ * aggregate, so it fails closed to keep.
  */
 export function classifyMetricRecord(
-  record: { readonly run_at?: unknown; readonly payload?: unknown },
+  record: {
+    readonly schema?: unknown;
+    readonly surface?: unknown;
+    readonly run_at?: unknown;
+    readonly payload?: unknown;
+  },
   cutoffMs: number,
 ): ReceiptLineClass {
+  if (!metricRecordShaped(record)) return "protected";
   if (payloadCarriesProtectedKey(record.payload)) return "protected";
-  if (typeof record.run_at !== "string" || !ISO_UTC_RE.test(record.run_at)) return "protected";
+  if (!ISO_UTC_RE.test(record.run_at)) return "protected";
   return Date.parse(record.run_at) >= cutoffMs ? "young" : "foldable";
 }
 
@@ -236,14 +275,7 @@ function scanShard(
       readonly run_at?: unknown;
       readonly payload?: unknown;
     };
-    if (
-      typeof record.schema !== "string" ||
-      typeof record.surface !== "string" ||
-      typeof record.run_at !== "string" ||
-      record.payload === null ||
-      typeof record.payload !== "object" ||
-      Array.isArray(record.payload)
-    ) {
+    if (!metricRecordShaped(record)) {
       unparseable += 1;
       continue;
     }
