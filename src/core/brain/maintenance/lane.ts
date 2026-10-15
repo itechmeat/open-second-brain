@@ -1,7 +1,7 @@
 /**
  * Quiet-window maintenance lane (write-time-integrity-governance,
  * t_166d1226; host pressure and the failure streak, t_992f0c33). Heavy
- * passes (dream, reindex) run through four gates:
+ * passes (dream, reindex) run through five gates:
  *
  *   1. window   - a configured local-time hour window (tz-aware,
  *                 midnight wrap supported); unconfigured = always open.
@@ -14,7 +14,14 @@
  *                 stays open and journals WHY, on its own line, so a
  *                 platform that cannot measure pressure never looks
  *                 like a quiet one.
- *   4. lease    - the expiring SQLite lease; never bypassable, even
+ *   4. capacity - the vault's own storage forecast, from
+ *                 `storage.cap_bytes`; unconfigured (the default) =
+ *                 always open and never measured. A measured critical
+ *                 tier skips the whole lane; where the census is
+ *                 degenerate the gate stays open and journals WHY, on
+ *                 its own line, for the same reason the pressure gate
+ *                 does.
+ *   5. lease    - the expiring SQLite lease; never bypassable, even
  *                 with --force, because two concurrent heavy passes on
  *                 one vault is the exact failure this lane exists to
  *                 prevent.
@@ -33,8 +40,8 @@
  * to be a way to attempt the refused task again.
  *
  * `force` is the wide one: it bypasses the soft gates (window, busy,
- * pressure) and every streak refusal, for an operator who wants the pass
- * NOW. Making it the only way out was the defect: an operator whose
+ * pressure, capacity) and every streak refusal, for an operator who wants
+ * the pass NOW. Making it the only way out was the defect: an operator whose
  * reindex is deterministically broken had to run the whole heavy lane
  * with their own window, busy and host-pressure protection switched off
  * in order to retry one task.
@@ -54,7 +61,18 @@
 
 import { listRecallTelemetry } from "../recall-telemetry.ts";
 import { capOutput, OPERATION, SafeguardTimeoutError } from "../safeguard.ts";
-import { loadMaintenanceConfigSafe } from "../policy/load.ts";
+import { loadMaintenanceConfigSafe, loadStorageConfigSafe } from "../policy/load.ts";
+import type { ResolvedBrainStorageConfig } from "../types.ts";
+import {
+  STORAGE_FORECAST_TIER,
+  sampleStorageUsage,
+  type StorageForecastTier,
+} from "../storage/forecast.ts";
+import {
+  CAPACITY_GATE_DECISION,
+  evaluateCapacityGate,
+  type CapacityGateDecision,
+} from "../storage/gate.ts";
 import { acquireLease, MAINTENANCE_LEASE_NAME, releaseLease } from "./lease.ts";
 import {
   appendJournal,
@@ -113,6 +131,14 @@ export interface HostPressureGate {
   readonly percent: number;
 }
 
+/**
+ * The storage block the capacity gate decides from. The whole resolved
+ * block rather than a narrow slice because the gate is the forecast's
+ * tiers: the cap decides WHETHER the gate exists, and the four thresholds
+ * decide where warn and critical sit.
+ */
+export type CapacityGate = ResolvedBrainStorageConfig;
+
 export interface EvaluateGatesOptions {
   readonly now: Date;
   /** Absent = the window gate is always open (neutral default). */
@@ -126,22 +152,38 @@ export interface EvaluateGatesOptions {
   readonly pressure?: HostPressureGate;
   /** Injectable measurement; defaults to reading this host. */
   readonly readPressure?: () => HostPressureReading;
+  /**
+   * Absent = the capacity gate is not configured: it never fires and
+   * never measures. {@link runMaintenance} fills it from the vault's
+   * `storage:` block when the caller does not name one, and only when
+   * that block configures `cap_bytes` - an unbounded vault has no gate.
+   */
+  readonly capacity?: CapacityGate;
+  /** Injectable gate decision; defaults to a fresh on-disk census. */
+  readonly readCapacity?: (
+    vault: string,
+    capacity: CapacityGate,
+    now: Date,
+  ) => CapacityGateDecision;
 }
 
 /**
- * What the soft gates decided, and what the pressure gate saw while
- * deciding it.
+ * What the soft gates decided, and what the pressure and capacity gates
+ * saw while deciding it.
  *
- * The reading is returned alongside the verdict rather than folded into
+ * A reading is returned alongside the verdict rather than folded into
  * it because "the host was too loaded" and "this host cannot say how
  * loaded it is" are different facts that the caller must journal on
  * different lines: one is a decision not to run, the other is a gate
- * that did not evaluate while the lane ran anyway.
+ * that did not evaluate while the lane ran anyway. The capacity decision
+ * rides the same way - the tier it read, or that it could not read one.
  */
 export interface MaintenanceGateDecision {
   readonly verdict: MaintenanceVerdict;
   /** Absent unless the host-pressure gate was reached and configured. */
   readonly pressure?: HostPressureReading;
+  /** Absent unless the capacity gate was reached and configured. */
+  readonly capacity?: CapacityGateDecision;
 }
 
 /** Cap for persisted per-task error strings (journal + results). */
@@ -261,6 +303,33 @@ export interface MaintenanceTaskResult {
 export interface RunMaintenanceResult {
   readonly verdict: MaintenanceVerdict;
   readonly tasks: ReadonlyArray<MaintenanceTaskResult>;
+  /**
+   * The capacity report, when the run was skipped for storage capacity:
+   * the tier the gate measured and the remedy an operator (or an agent
+   * relaying to one) can act on. Both front doors attach it verbatim, so
+   * the two surfaces cannot disagree about what a skip says.
+   */
+  readonly capacity?: MaintenanceCapacityReport;
+}
+
+/**
+ * What an operator does about a lane the capacity gate skipped. The
+ * reclamation verbs are the remedy, then a re-run; raising the cap is
+ * the operator's own decision and names the file only they should edit.
+ */
+export const MAINTENANCE_CAPACITY_REMEDY =
+  "free space by running receipt compaction or retiring near-duplicate copies, " +
+  "or raise storage.cap_bytes in Brain/_brain.yaml, then re-run";
+
+/** The capacity block both lane front doors attach to a skipped run. */
+export interface MaintenanceCapacityReport {
+  readonly tier: StorageForecastTier;
+  readonly remedy: string;
+}
+
+/** The report for the gate decision that skipped a run. */
+export function capacityReport(decision: CapacityGateDecision): MaintenanceCapacityReport {
+  return { tier: decision.tier, remedy: MAINTENANCE_CAPACITY_REMEDY };
 }
 
 /** True when `now` falls inside the local-time window (wrap-aware). */
@@ -285,9 +354,11 @@ export function dailyWindowContains(now: Date, window: DailyWindow): boolean {
  *
  * The gates are ordered cheapest-first and, more importantly,
  * least-surprising-first: window and busy decide exactly as they did
- * before this gate existed, and the host is only probed once both have
- * let the pass through. A closed earlier gate therefore leaves no
- * pressure reading, which is honest — nothing was measured.
+ * before the pressure gate existed, the host is only probed once both
+ * have let the pass through, and the capacity gate - the most expensive,
+ * a byte walk over the whole vault - is probed last. A closed earlier
+ * gate therefore leaves no pressure reading and no capacity decision,
+ * which is honest - nothing was measured.
  */
 export function evaluateGates(vault: string, opts: EvaluateGatesOptions): MaintenanceGateDecision {
   if (opts.window !== undefined && !dailyWindowContains(opts.now, opts.window)) {
@@ -301,17 +372,61 @@ export function evaluateGates(vault: string, opts: EvaluateGatesOptions): Mainte
   const recent = listRecallTelemetry(vault, { since });
   if (recent.length >= busy.threshold) return { verdict: MAINTENANCE_VERDICT.skippedBusy };
 
-  if (opts.pressure === undefined) return { verdict: MAINTENANCE_VERDICT.run };
-  const pressure = (opts.readPressure ?? measureHostPressure)();
-  // Unmeasurable leaves the gate OPEN. Closing it would stop this vault
-  // being maintained at all wherever the metric is degenerate, and
-  // treating the degenerate reading as a number would report a loaded
-  // host as an idle one - which is the failure the reading exists to
-  // make impossible. The caller journals the reason.
-  if (pressure.state === HOST_PRESSURE.measured && pressure.percent >= opts.pressure.percent) {
-    return { verdict: MAINTENANCE_VERDICT.skippedPressure, pressure };
+  let pressure: HostPressureReading | undefined;
+  if (opts.pressure !== undefined) {
+    pressure = (opts.readPressure ?? measureHostPressure)();
+    // Unmeasurable leaves the gate OPEN. Closing it would stop this vault
+    // being maintained at all wherever the metric is degenerate, and
+    // treating the degenerate reading as a number would report a loaded
+    // host as an idle one - which is the failure the reading exists to
+    // make impossible. The caller journals the reason.
+    if (pressure.state === HOST_PRESSURE.measured && pressure.percent >= opts.pressure.percent) {
+      return { verdict: MAINTENANCE_VERDICT.skippedPressure, pressure };
+    }
   }
-  return { verdict: MAINTENANCE_VERDICT.run, pressure };
+
+  const capacity = readCapacityDecision(vault, opts);
+  if (capacity?.decision === CAPACITY_GATE_DECISION.skip) {
+    return {
+      verdict: MAINTENANCE_VERDICT.skippedCapacity,
+      ...(pressure !== undefined ? { pressure } : {}),
+      capacity,
+    };
+  }
+  return {
+    verdict: MAINTENANCE_VERDICT.run,
+    ...(pressure !== undefined ? { pressure } : {}),
+    ...(capacity !== undefined ? { capacity } : {}),
+  };
+}
+
+/**
+ * The capacity gate's decision, or `undefined` when the gate is not
+ * configured: an unconfigured gate never measures, exactly like an
+ * unconfigured pressure gate.
+ */
+function readCapacityDecision(
+  vault: string,
+  opts: EvaluateGatesOptions,
+): CapacityGateDecision | undefined {
+  if (opts.capacity === undefined) return undefined;
+  return (opts.readCapacity ?? evaluateStorageCapacityGate)(vault, opts.capacity, opts.now);
+}
+
+/** The gate decision from a fresh on-disk census, never the stored aggregate. */
+function evaluateStorageCapacityGate(
+  vault: string,
+  capacity: CapacityGate,
+  now: Date,
+): CapacityGateDecision {
+  return evaluateCapacityGate(vault, {
+    now,
+    capBytes: capacity.cap_bytes,
+    warnPercent: capacity.warn_percent,
+    criticalPercent: capacity.critical_percent,
+    warnDays: capacity.warn_days,
+    criticalDays: capacity.critical_days,
+  });
 }
 
 /**
@@ -325,18 +440,23 @@ export async function runMaintenance(
   opts: RunMaintenanceOptions,
 ): Promise<RunMaintenanceResult> {
   const nowIso = opts.now.toISOString();
-  // Vault-side policy: the pressure threshold the caller did not name,
-  // and the streak limit. An unreadable `_brain.yaml` raises here rather
-  // than resolving to defaults - both knobs decide whether heavy work
-  // starts, so a silent revert would run a pass the operator had gated.
+  // Vault-side policy: the pressure threshold the caller did not name, the
+  // storage block the capacity gate decides from, and the streak limit. An
+  // unreadable `_brain.yaml` raises here rather than resolving to defaults
+  // - every one of these knobs decides whether heavy work starts or a
+  // write is refused, so a silent revert would run a pass the operator had
+  // gated.
   const policy = loadMaintenanceConfigSafe(vault);
+  const storage = loadStorageConfigSafe(vault);
   if (opts.force !== true) {
     const gate: EvaluateGatesOptions = {
       now: opts.now,
       ...(opts.window !== undefined ? { window: opts.window } : {}),
       ...(opts.busy !== undefined ? { busy: opts.busy } : {}),
       ...(opts.readPressure !== undefined ? { readPressure: opts.readPressure } : {}),
+      ...(opts.readCapacity !== undefined ? { readCapacity: opts.readCapacity } : {}),
       ...resolvePressureGate(opts.pressure, policy.host_pressure_percent),
+      ...resolveCapacityGate(opts.capacity, storage),
     };
     const decision = evaluateGates(vault, gate);
     // Two lines, never one: a gate that could not evaluate is its own
@@ -351,7 +471,31 @@ export async function runMaintenance(
         pressure_reason: decision.pressure.reason,
       });
     }
+    // The capacity gate's own notice line, for the same reason: an
+    // unmeasurable store ran, and the journal has to say its gate was
+    // open because nothing could be read - not because the vault is
+    // healthy.
+    if (
+      decision.capacity !== undefined &&
+      decision.capacity.tier === STORAGE_FORECAST_TIER.unmeasurable
+    ) {
+      appendJournal(vault, {
+        ts: nowIso,
+        holder: opts.holder,
+        verdict: MAINTENANCE_VERDICT.capacityUnmeasurable,
+        ...(decision.capacity.reason !== undefined
+          ? { capacity_reason: decision.capacity.reason }
+          : {}),
+      });
+    }
     if (decision.verdict !== MAINTENANCE_VERDICT.run) {
+      // Sample BEFORE the skip is recorded or returned: the forecast
+      // series must keep accumulating exactly while producers are paused,
+      // so a skipped run still appends its sample. Fail-soft by contract;
+      // a sample that cannot be written never turns a skip into a crash.
+      if (decision.verdict === MAINTENANCE_VERDICT.skippedCapacity) {
+        sampleStorageUsage(vault, { now: opts.now });
+      }
       appendJournal(vault, {
         ts: nowIso,
         holder: opts.holder,
@@ -359,8 +503,19 @@ export async function runMaintenance(
         ...(decision.pressure?.state === HOST_PRESSURE.measured
           ? { pressure_percent: decision.pressure.percent }
           : {}),
+        ...(decision.capacity !== undefined &&
+        decision.verdict === MAINTENANCE_VERDICT.skippedCapacity
+          ? { capacity_tier: decision.capacity.tier }
+          : {}),
       });
-      return { verdict: decision.verdict, tasks: [] };
+      return {
+        verdict: decision.verdict,
+        tasks: [],
+        ...(decision.capacity !== undefined &&
+        decision.verdict === MAINTENANCE_VERDICT.skippedCapacity
+          ? { capacity: capacityReport(decision.capacity) }
+          : {}),
+      };
     }
   }
 
@@ -451,6 +606,22 @@ function resolvePressureGate(
 ): { pressure?: HostPressureGate } {
   if (named !== undefined) return { pressure: named };
   if (configured !== null) return { pressure: { percent: configured } };
+  return {};
+}
+
+/**
+ * The capacity gate to evaluate: the caller's, else the vault's, and the
+ * vault's only when its storage block configures `cap_bytes`. No cap is
+ * the documented default and means unbounded: no gate, no byte walk, no
+ * refusal - an operator who never asked for a capacity gate never gets
+ * one, on any tier.
+ */
+function resolveCapacityGate(
+  named: CapacityGate | undefined,
+  configured: ResolvedBrainStorageConfig,
+): { capacity?: CapacityGate } {
+  if (named !== undefined) return { capacity: named };
+  if (configured.cap_bytes !== null) return { capacity: configured };
   return {};
 }
 
