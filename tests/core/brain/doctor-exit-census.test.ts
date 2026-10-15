@@ -206,6 +206,8 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "schema-version-unknown",
   "stale-claim",
   "stale-dependency",
+  "storage-capacity-critical",
+  "storage-capacity-warn",
   "sync-conflict-log",
   "tier-drift",
   "topic-key-collision",

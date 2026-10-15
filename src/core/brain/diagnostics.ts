@@ -627,6 +627,22 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Storage capacity, for a vault whose operator configured a cap.
+        // Both severities point at the report surface, which carries the
+        // per-surface census and the trend; the repair - reclaiming space
+        // or raising the cap - is an operator decision no verb performs.
+        code: "storage-capacity-warn",
+        issueClass: "storage usage past the warn band of the configured cap",
+        nextCommand: "o2b brain storage",
+        autoRepairable: false,
+      },
+      {
+        code: "storage-capacity-critical",
+        issueClass: "storage usage past the critical band: capacity-gated writes are refused",
+        nextCommand: "o2b brain storage",
+        autoRepairable: false,
+      },
+      {
         // An announced decommission of the configured embedding model,
         // inside the warning window. The exit is the curated catalog for
         // the same reason `search-chunk-window-undeclared` points there:
