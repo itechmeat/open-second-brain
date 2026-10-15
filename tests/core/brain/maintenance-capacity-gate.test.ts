@@ -29,6 +29,7 @@ import {
   type CapacityGateDecision,
 } from "../../../src/core/brain/maintenance/lane.ts";
 import {
+  appendJournal,
   listJournal,
   MAINTENANCE_VERDICT,
   type MaintenanceJournalEntry,
@@ -47,6 +48,10 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { emitRecallTelemetry, RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../../src/mcp/index.ts";
+import { homeEnv } from "../../helpers/platform.ts";
+import { runCli } from "../../helpers/run-cli.ts";
 
 const NOW = new Date("2026-06-05T03:30:00Z");
 /** The metrics surface Lane 1's `sampleStorageUsage` appends one record per call under. */
@@ -309,5 +314,64 @@ describe("the capacity gate through the lane", () => {
   });
 });
 
-// The lane surfaces (CLI verb and brain_maintenance) carry the verdict in
-// task 2.2's commit; the surface tests land there.
+describe("lane surfaces carry the capacity verdict", () => {
+  function seedSkipRow(): void {
+    appendJournal(vault, {
+      ts: NOW.toISOString(),
+      holder: "worker-a",
+      verdict: MAINTENANCE_VERDICT.skippedCapacity,
+      capacity_tier: STORAGE_FORECAST_TIER.critical,
+    });
+  }
+
+  test("status parses and renders a skipped:capacity row on both surfaces", async () => {
+    seedSkipRow();
+    const cli = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: join(configHome, "config.yaml"), ...homeEnv(configHome) },
+    });
+    expect(cli.returncode).toBe(0);
+    expect(cli.stdout).toContain(MAINTENANCE_VERDICT.skippedCapacity);
+  });
+
+  test("a skipped-capacity run reports the tier and the remedy on the CLI", async () => {
+    configureCap(CRITICAL_CAP_BYTES);
+    const cli = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: join(configHome, "config.yaml"), ...homeEnv(configHome) },
+    });
+    expect(cli.returncode).toBe(0);
+    const payload = JSON.parse(cli.stdout) as {
+      verdict: string;
+      capacity?: { tier: string; remedy: string };
+    };
+    expect(payload.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
+    expect(payload.capacity?.tier).toBe(STORAGE_FORECAST_TIER.critical);
+    expect(payload.capacity?.remedy.length).toBeGreaterThan(0);
+  });
+
+  test("a skipped-capacity run reports the tier and the remedy over MCP", async () => {
+    configureCap(CRITICAL_CAP_BYTES);
+    const server = new MCPServer(
+      { vault, configPath: join(configHome, "config.yaml") },
+      { reach: TRANSPORT_REACH.local },
+    );
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: PROTOCOL_VERSION },
+    });
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "tools/call",
+      params: { name: "brain_maintenance", arguments: { operation: "run" } },
+    })) as { result?: { structuredContent?: Record<string, unknown> } };
+    const payload = (res.result?.structuredContent ?? {}) as {
+      verdict?: string;
+      capacity?: { tier: string; remedy: string };
+    };
+    expect(payload.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
+    expect(payload.capacity?.tier).toBe(STORAGE_FORECAST_TIER.critical);
+    expect(payload.capacity?.remedy.length).toBeGreaterThan(0);
+  });
+});

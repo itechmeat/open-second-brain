@@ -2,7 +2,8 @@
  * `o2b brain maintenance <run|status>` (t_166d1226): the quiet-window
  * lane for heavy passes. `run` gates on the local-time window
  * (--window H-H, unset = always open), recent interactive query-rate,
- * and the expiring SQLite lease, then executes dream, reindex,
+ * host pressure, the vault's storage-capacity forecast, and the
+ * expiring SQLite lease, then executes dream, reindex,
  * bridges, and clusters stale-first; --force bypasses the soft gates
  * and every streak refusal but never the lease, while --retry <task>
  * (repeatable) bypasses the streak refusal for that task alone and
@@ -419,10 +420,17 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         okJson({
           verdict: result.verdict,
           tasks: result.tasks,
+          // The capacity gate's report on a skipped:capacity run: the
+          // same block the MCP tool attaches, from the same lane result,
+          // so the two surfaces cannot disagree about what a skip says.
+          ...(result.capacity !== undefined ? { capacity: result.capacity } : {}),
           ...(spend !== undefined ? { spend } : {}),
         });
       } else {
         ok(`maintenance: ${result.verdict}`);
+        if (result.capacity !== undefined) {
+          ok(`  capacity: ${result.capacity.tier} - ${result.capacity.remedy}`);
+        }
         for (const t of result.tasks) ok(`  ${renderTaskLine(t)}`);
       }
       // A stopped lane is reported as stopped, not as four failures. The

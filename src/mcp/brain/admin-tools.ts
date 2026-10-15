@@ -495,6 +495,10 @@ async function toolBrainMaintenance(
   return {
     verdict: result.verdict,
     tasks: result.tasks,
+    // The capacity gate's report on a skipped:capacity run: the tier and
+    // the remedy, attached verbatim from the lane so the two front doors
+    // cannot disagree about what a skip says.
+    ...(result.capacity !== undefined ? { capacity: result.capacity } : {}),
     ...(spend !== undefined ? { spend } : {}),
     // Named, never dropped: a refused declaration journals nothing, and
     // the valid tasks still ran.
@@ -580,7 +584,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters and declared custom:<name> tasks behind window, busy, pressure and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
+      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters and declared custom:<name> tasks behind window, busy, pressure, capacity and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
     inputSchema: {
       type: "object",
       properties: {
@@ -592,7 +596,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           // A caller reaching for the widest escape has to be told what
           // it actually switches off.
           description:
-            "Bypass the window, busy and host-pressure gates and every streak refusal - never the lease (run). retry_tasks passes one task's streak with the gates kept.",
+            "Bypass the window, busy, host-pressure and storage-capacity gates and every streak refusal - never the lease (run). retry_tasks passes one task's streak with the gates kept.",
         },
         retry_tasks: {
           type: "array",
