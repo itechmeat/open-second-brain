@@ -23,11 +23,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  evaluateGates,
-  runMaintenance,
-  type CapacityGateDecision,
-} from "../../../src/core/brain/maintenance/lane.ts";
+import { evaluateGates, runMaintenance } from "../../../src/core/brain/maintenance/lane.ts";
 import {
   appendJournal,
   listJournal,
@@ -35,14 +31,13 @@ import {
   type MaintenanceJournalEntry,
 } from "../../../src/core/brain/maintenance/journal.ts";
 import { acquireLease, currentLease } from "../../../src/core/brain/maintenance/lease.ts";
-import {
-  BRAIN_STORAGE_DEFAULTS,
-  type ResolvedBrainStorageConfig,
-} from "../../../src/core/brain/policy/blocks/storage.ts";
+import { BRAIN_STORAGE_DEFAULTS } from "../../../src/core/brain/policy/blocks/storage.ts";
 import {
   STORAGE_FORECAST_TIER,
   STORAGE_USAGE_METRIC_SURFACE,
 } from "../../../src/core/brain/storage/forecast.ts";
+import type { CapacityGateDecision } from "../../../src/core/brain/storage/gate.ts";
+import type { ResolvedBrainStorageConfig } from "../../../src/core/brain/types.ts";
 import { listMetrics } from "../../../src/core/brain/metrics.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";

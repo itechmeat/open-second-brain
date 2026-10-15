@@ -79,7 +79,10 @@ function fixture(capBytes: number | undefined): Fixture {
 
 interface RpcResponse {
   readonly error?: { code: number; message: string; data?: Record<string, unknown> };
-  readonly result?: { structuredContent?: Record<string, unknown> };
+  readonly result?: {
+    structuredContent?: Record<string, unknown>;
+    content?: ReadonlyArray<{ text?: string }>;
+  };
 }
 
 async function ingest(f: Fixture): Promise<RpcResponse> {
@@ -103,9 +106,7 @@ async function ingest(f: Fixture): Promise<RpcResponse> {
 function payload(res: RpcResponse): Record<string, unknown> {
   const structured = res.result?.structuredContent;
   if (structured !== undefined) return structured;
-  return JSON.parse(
-    (res.result?.content as ReadonlyArray<{ text?: string }> | undefined)?.[0]?.text ?? "{}",
-  ) as Record<string, unknown>;
+  return JSON.parse(res.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
 }
 
 /** Total bytes of every file under `root`, recursively - a write changes this. */
