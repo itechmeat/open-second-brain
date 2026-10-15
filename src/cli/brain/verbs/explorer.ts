@@ -58,7 +58,7 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
     export: { type: "string" },
     force: { type: "boolean" },
   });
-  const { vault } = brainVerbContext(flags);
+  const { config, vault } = brainVerbContext(flags);
   const exportPath = flags["export"] as string | undefined;
   const force = flags["force"] === true;
 
@@ -96,7 +96,7 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
 
   let server: LiveServerHandle;
   try {
-    server = buildLiveServer(vault, port);
+    server = buildLiveServer(vault, port, { configPath: config });
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
     if (/EADDRINUSE|address already in use/i.test(msg))
@@ -105,6 +105,7 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
   }
 
   ok(`Live explorer at ${server.url}`);
+  info("Counts and operator status are served at /counts.json and /status.json.");
   info("Press Ctrl+C to stop.");
   await new Promise<void>((resolveStop) => {
     // `.catch(() => undefined).finally(...)` so the shutdown promise

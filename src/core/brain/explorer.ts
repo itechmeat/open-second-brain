@@ -36,6 +36,8 @@ import {
   type BrainPreference,
   type BrainRetired,
 } from "./types.ts";
+import { collectExplorerConsole } from "./explorer-console.ts";
+import { buildOperatorSnapshot } from "./operator-snapshot.ts";
 
 export const EXPLORER_SCHEMA_VERSION = 1 as const;
 
@@ -342,20 +344,45 @@ export interface LiveServerHandle {
 }
 
 /**
- * Boot a loopback-only HTTP server that serves the explorer template
- * and a JSON endpoint. Each GET re-reads the vault — no caches, no
- * watchers, no write endpoints. Binding to `127.0.0.1` is non-optional;
- * the explorer is single-user observability and should not be
- * reachable across the network.
+ * Additive options for the live server. `configPath` reaches the
+ * operator snapshot's search-index and profile lookups; a caller that
+ * passes nothing behaves exactly as before.
+ */
+export interface LiveServerOptions {
+  readonly configPath?: string;
+}
+
+/**
+ * Boot a loopback-only HTTP server that serves the explorer template,
+ * the graph JSON, the console counts (`/counts.json`, from
+ * {@link collectExplorerConsole}) and the operator snapshot
+ * (`/status.json`, from `buildOperatorSnapshot`). Each GET re-reads the
+ * vault — no caches, no watchers, no write endpoints. That includes the
+ * snapshot route: every GET re-runs the dry-run dream inside
+ * `buildOperatorSnapshot`, the most expensive read it composes, and
+ * that bounded read-only cost is accepted rather than papered over with
+ * a cache that would go stale silently. Binding to `127.0.0.1` is
+ * non-optional; the explorer is single-user observability and should
+ * not be reachable across the network.
+ *
+ * The new JSON routes surface a failed read by name: a 500 whose body
+ * carries the error message, never an empty payload that could read as
+ * "no records".
  *
  * Throws when the port is unavailable; the CLI catches `EADDRINUSE`
  * and turns it into a friendly exit message.
  */
-export function buildLiveServer(vault: string, port: number): LiveServerHandle {
+export function buildLiveServer(
+  vault: string,
+  port: number,
+  options: LiveServerOptions = {},
+): LiveServerHandle {
+  const configPath = options.configPath;
+  const snapshotOptions = configPath === undefined ? {} : { configPath };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port,
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/" || url.pathname === "/index.html") {
         const graph = collectExplorerData(vault);
@@ -369,6 +396,22 @@ export function buildLiveServer(vault: string, port: number): LiveServerHandle {
         return new Response(JSON.stringify(graph), {
           headers: { "content-type": "application/json; charset=utf-8" },
         });
+      }
+      if (url.pathname === "/counts.json") {
+        try {
+          const counts = collectExplorerConsole(vault, snapshotOptions);
+          return jsonResponse(JSON.stringify(counts));
+        } catch (err) {
+          return errorResponse("/counts.json", err);
+        }
+      }
+      if (url.pathname === "/status.json") {
+        try {
+          const snapshot = await buildOperatorSnapshot(vault, snapshotOptions);
+          return jsonResponse(JSON.stringify(snapshot));
+        } catch (err) {
+          return errorResponse("/status.json", err);
+        }
       }
       return new Response("not found", { status: 404 });
     },
@@ -392,6 +435,23 @@ export function buildLiveServer(vault: string, port: number): LiveServerHandle {
 }
 
 // ---- Helpers ------------------------------------------------------------
+
+function jsonResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+/**
+ * A route's failure surfaces by name: the failing route and the error
+ * message travel in the body, so a broken section can never read as a
+ * healthy one that simply has no records.
+ */
+function errorResponse(route: string, err: unknown): Response {
+  const message = err instanceof Error ? err.message : String(err);
+  return jsonResponse(JSON.stringify({ error: `${route}: ${message}` }), 500);
+}
 
 function deriveEdges(index: BacklinkIndex, knownIds: ReadonlySet<string>): ExplorerEdge[] {
   const edges: ExplorerEdge[] = [];

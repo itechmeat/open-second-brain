@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
@@ -265,6 +265,40 @@ describe("o2b brain explorer (live)", () => {
         expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
         const parsed = JSON.parse(dataBody);
         expect(parsed.nodes.length).toBe(1);
+        // The live-counts console routes (session-mining-economy): both
+        // are loopback JSON re-read from the vault per GET.
+        const countsRes = await fetch(`http://127.0.0.1:${port}/counts.json`);
+        expect(countsRes.ok).toBe(true);
+        const counts = JSON.parse(await countsRes.text()) as {
+          schema_version: number;
+          telemetry: { total: number };
+          written_per_day: ReadonlyArray<unknown>;
+          report_snapshots: unknown;
+        };
+        expect(counts.schema_version).toBe(1);
+        expect(counts.telemetry.total).toBe(0);
+        expect(counts.written_per_day.length).toBe(30);
+        expect(counts.report_snapshots).toEqual({ status: "disabled" });
+        const statusRes = await fetch(`http://127.0.0.1:${port}/status.json`);
+        expect(statusRes.ok).toBe(true);
+        const status = JSON.parse(await statusRes.text()) as {
+          healthy: boolean;
+          counts: { preferences: number };
+          activeProfile: string | null;
+        };
+        expect(typeof status.healthy).toBe("boolean");
+        expect(status.counts.preferences).toBe(1);
+        // The verb threads its resolved config path into the server, so
+        // the operator snapshot sees this run's profile registry.
+        writeFileSync(
+          join(dirname(config), "profiles.json"),
+          JSON.stringify({ active: "test", profiles: { test: { vault } } }),
+        );
+        const profiled = await fetch(`http://127.0.0.1:${port}/status.json`);
+        const profileStatus = JSON.parse(await profiled.text()) as {
+          activeProfile: string | null;
+        };
+        expect(profileStatus.activeProfile).toBe("test");
       } finally {
         // Always tear the spawned CLI down so a failing assertion does
         // not leak the port into the next test on the same worker.
