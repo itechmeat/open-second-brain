@@ -55,7 +55,7 @@ import { isoSecond } from "./time.ts";
 import { readManifest, writeManifestAtomic, manifestPath } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { removeFile } from "./source-cleanup.ts";
-import { retargetWikilinks } from "./page-dedup.ts";
+import { basenameCollides, retargetWikilinks } from "./page-dedup.ts";
 import type { WikilinkRetargetReport } from "./page-dedup.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
@@ -79,6 +79,18 @@ function linkTarget(pagePath: string): string {
   const base = pagePath.split("/").at(-1) ?? pagePath;
   return base.replace(/\.md$/, "");
 }
+
+/**
+ * Why a copy's inbound-link pass did not run: another page in the vault
+ * carries the retired copy's basename, so the bare `[[basename]]`
+ * spelling resolves to more than one page and a retarget keyed on the
+ * spelling alone would repoint links that meant the OTHER page - edits
+ * to pages outside the detector's near-duplicate scope, made on a guess.
+ * The copy still retires; the skipped pass leaves a stale link, which a
+ * reader can discover, where a mis-pointed link misleads silently.
+ */
+export const RETIRE_LINKS_SKIPPED_BASENAME_COLLISION =
+  "another page carries the same basename; the bare-basename link spelling is ambiguous";
 
 /** Frontmatter key carrying the digest of the archived source bytes. */
 const SOURCE_ARCHIVE_HASH_KEY = "source_archive_hash";
@@ -116,8 +128,15 @@ export interface RetiredDocumentCopy {
   readonly manifestKey: string | null;
   /** True when the manifest was rewritten without the entry. */
   readonly manifestDropped: boolean;
-  /** The full retarget report for this copy's inbound wikilinks. */
-  readonly wikilinks: WikilinkRetargetReport;
+  /**
+   * The full retarget report for this copy's inbound wikilinks, `null`
+   * when the pass was SKIPPED - {@link RetiredDocumentCopy.wikilinksSkipped}
+   * names why. `null` is never a silent zero: a skipped pass left every
+   * inbound link exactly as it was.
+   */
+  readonly wikilinks: WikilinkRetargetReport | null;
+  /** Why the link pass did not run, `null` when it ran. */
+  readonly wikilinksSkipped: string | null;
   /** Digest named in the audit; from the page's frontmatter, or `null`. */
   readonly sourceArchiveHash: string | null;
   /** The continuity record id, `null` only when nothing changed. */
@@ -269,10 +288,15 @@ function retireOneCopy(
   // 1. Links first, so no reader between steps ever sees a stranded
   // `[[stale-copy]]`. Failure to write a file is collected in the
   // report, not thrown - the pass has already rewritten the files
-  // before it (the retargetWikilinks argument, verbatim).
-  const wikilinks = retargetWikilinks(vault, [
-    { from: linkTarget(copy.path), to: linkTarget(copy.canonical) },
-  ]);
+  // before it (the retargetWikilinks argument, verbatim). The pass
+  // keys on the bare basename, so when another page carries the same
+  // basename the spelling is ambiguous: rewriting it would repoint
+  // links that meant the other page. The copy then retires without its
+  // link pass and the report names why - a stale link is discoverable,
+  // a mis-pointed one misleads silently.
+  const wikilinks = basenameCollides(vault, linkTarget(copy.path), copy.path)
+    ? null
+    : retargetWikilinks(vault, [{ from: linkTarget(copy.path), to: linkTarget(copy.canonical) }]);
 
   // 2. Remove the stale page. `false` here means the page vanished
   // between the existence check and the unlink - that is a failure to
@@ -334,6 +358,7 @@ function retireOneCopy(
       manifestKey: facts.sourcePath,
       manifestDropped,
       wikilinks,
+      wikilinksSkipped: wikilinks === null ? RETIRE_LINKS_SKIPPED_BASENAME_COLLISION : null,
       sourceArchiveHash: facts.archiveHash,
       auditRecordId: record.id,
     });

@@ -573,6 +573,38 @@ export function retargetWikilinks(
 }
 
 /**
+ * True when a page OTHER than `excludeRel` carries `basename` under the
+ * retarget root: the bare-basename link spelling `[[basename]]` then
+ * resolves to more than one page, and a retarget keyed on the spelling
+ * alone would repoint links that meant the other page - silent
+ * mis-linking of pages the caller never considered.
+ *
+ * The population is the retarget's own - same default root, same scope
+ * rules - so a page whose links the pass would never touch cannot
+ * manufacture a collision, and a page whose links it WOULD touch cannot
+ * hide from one. A caller's `readable` predicate is deliberately not
+ * applied: a withheld page still exists on disk, and existence is what
+ * makes the spelling ambiguous.
+ */
+export function basenameCollides(
+  vault: string,
+  basename: string,
+  excludeRel: string,
+  opts: Pick<RetargetWikilinksOptions, "root"> = {},
+): boolean {
+  const root = opts.root === undefined ? BRAIN_ROOT_REL : opts.root;
+  const abs = root === "" ? vault : join(vault, root);
+  if (!existsSync(abs)) return false;
+  const rules = resolveVaultScope(vault).rules;
+  for (const file of markdownFilesUnder(vault, abs, rules)) {
+    if (file.rel === excludeRel) continue;
+    const name = file.rel.split("/").at(-1) ?? "";
+    if (name.replace(/\.md$/, "") === basename) return true;
+  }
+  return false;
+}
+
+/**
  * A wikilink rewrite that gave up partway: `rewritten` files were
  * repointed before the write that refused.
  *
