@@ -338,6 +338,76 @@ describe("compactReceiptLedgers", () => {
     expect(readShard(continuityLogDir(vault), "2026-07.jsonl")).toContain("2026-07-10T12:00:00Z");
   });
 
+  test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {
+    // The re-run contract: a compacted shard folds nothing and writes
+    // nothing. A MIXED selection never reaches the run-level
+    // nothing-foldable shortcut - the compacted shard arrives at the
+    // rewriter with foldable 0, its rebuild is byte-identical, and the
+    // strict-shrink guard then failed exactly the shard the contract
+    // calls a no-op.
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    const compacted = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    writeShard(continuityLogDir(vault), "2026-07.jsonl", [
+      continuityLine("recall_telemetry", "2026-07-10T12:00:00Z"),
+      continuityLine("recall_telemetry", "2026-07-20T12:00:00Z"),
+    ]);
+    const result = compactReceiptLedgers(vault, {
+      shards: [
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-07.jsonl" },
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" },
+      ],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.shards.map((shard) => shard.shard).toSorted()).toEqual([
+      "continuity:2026-07.jsonl",
+      "continuity:2026-08.jsonl",
+    ]);
+    const untouched = result.shards.find((shard) => shard.shard === "continuity:2026-08.jsonl");
+    expect(untouched).toBeDefined();
+    expect(untouched!.folded).toBe(0);
+    expect(untouched!.bytesAfter).toBe(untouched!.bytesBefore);
+    // The compacted shard is byte-identical on disk.
+    expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).toBe(compacted);
+    // The run still folded the shard that had foldable records.
+    expect(result.totals.folded).toBe(2);
+    expect(result.auditRecordId).toBeDefined();
+  });
+
+  test("a zero-foldable shard is never rewritten, so its bytes never grow", () => {
+    // The rebuild joins the kept lines and appends one newline, so a
+    // shard whose file lacks a trailing newline rebuilds one byte LONGER
+    // than it stands. With nothing foldable there is nothing to write:
+    // the file must come out byte-identical, not grown, not failed.
+    writeShard(
+      continuityLogDir(vault),
+      "2026-08.jsonl",
+      continuityLine("gate_telemetry", "2026-09-15T12:00:00Z").replace(/\n$/, ""),
+    );
+    writeShard(continuityLogDir(vault), "2026-07.jsonl", [
+      continuityLine("recall_telemetry", "2026-07-10T12:00:00Z"),
+      continuityLine("recall_telemetry", "2026-07-20T12:00:00Z"),
+    ]);
+    const before = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    const result = compactReceiptLedgers(vault, {
+      shards: [
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-07.jsonl" },
+        { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" },
+      ],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.failures).toEqual([]);
+    expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).toBe(before);
+    expect(result.totals.folded).toBe(2);
+  });
+
   test("a shard ref that is not a valid shard name is refused before anything runs", () => {
     expect(() =>
       compactReceiptLedgers(vault, {

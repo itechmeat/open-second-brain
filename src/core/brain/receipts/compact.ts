@@ -507,8 +507,16 @@ function rewriteShards(
  * strictly shrinks the file, and swap atomically on the recount's bytes.
  * A drifted shard, a non-shrinking fold and an unwritable target are
  * throws the caller collects - never partial writes.
+ *
+ * A shard the recount found nothing foldable in is answered without
+ * touching the file: its rebuild is byte-identical at best - and one
+ * byte longer when the file lacks a trailing newline - so the
+ * strict-shrink guard would fail exactly the no-op the re-run contract
+ * promises a mixed selection's already-compacted shards. Nothing-to-do
+ * is an outcome, not a failure.
  */
 function rewriteShard(plan: ShardPlan): ReceiptFoldShardOutcome {
+  if (plan.foldable === 0) return outcomeFromPlan(plan);
   const handle = acquireLockSync(plan.path);
   try {
     const rebuilt = rebuildContent(plan);
@@ -547,7 +555,7 @@ function outcomeFromPlan(plan: ShardPlan): ReceiptFoldShardOutcome {
     kept: plan.kept,
     aggregates: plan.groupEntries.length,
     bytesBefore: plan.bytesBefore,
-    bytesAfter: plan.bytesBefore, // a dry run writes nothing
+    bytesAfter: plan.bytesBefore, // nothing was written
   });
 }
 
