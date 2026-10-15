@@ -420,6 +420,25 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
+        command(
+          "receipts",
+          "Receipt compaction surfaces: scan the continuity and metrics ledgers, fold expired records on compact",
+          [
+            flag("vault", "string"),
+            flag("agent", "string"),
+            flag("shard", "string-array"),
+            flag("older-than-days", "string"),
+            flag("apply", "boolean"),
+            flag("expect", "string"),
+            flag("strict", "boolean"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command(
+          "storage",
+          "Render the vault storage report: usage per surface and the forecast tier against the cap",
+          [flag("vault", "string"), flag("json", "boolean")],
+        ),
         command("audit", "Render mutation audit trail"),
         command(
           "generation-reports",
