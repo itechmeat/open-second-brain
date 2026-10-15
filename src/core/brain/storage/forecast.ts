@@ -84,6 +84,16 @@ export const STORAGE_MEASURED_TIERS: ReadonlyArray<StorageForecastTier> = Object
   STORAGE_FORECAST_TIER.critical,
 ]);
 
+/** Every tier, in declaration order - the measured half plus its refusals. */
+export const STORAGE_FORECAST_TIERS: ReadonlyArray<StorageForecastTier> = Object.freeze([
+  STORAGE_FORECAST_TIER.ok,
+  STORAGE_FORECAST_TIER.warn,
+  STORAGE_FORECAST_TIER.critical,
+  STORAGE_FORECAST_TIER.unbounded,
+  STORAGE_FORECAST_TIER.unmeasurable,
+  STORAGE_FORECAST_TIER.noForecast,
+]);
+
 export function isStorageForecastTier(value: unknown): value is StorageForecastTier {
   return typeof value === "string" && Object.values(STORAGE_FORECAST_TIER).includes(value as never);
 }

@@ -520,6 +520,19 @@ import {
   SURFACING_TIERS,
   isSurfacingTier,
 } from "../../../src/core/search/surfacing-key.ts";
+import {
+  isStorageForecastTier,
+  STORAGE_FORECAST_TIER,
+  STORAGE_FORECAST_TIERS,
+} from "../../../src/core/brain/storage/forecast.ts";
+import {
+  isReceiptLedgerFamily,
+  isReceiptMode,
+  RECEIPT_LEDGER_FAMILY,
+  RECEIPT_LEDGER_FAMILIES,
+  RECEIPT_MODE,
+  RECEIPT_MODES,
+} from "../../../src/core/brain/receipts/types.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1616,6 +1629,45 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: SURFACING_TIERS,
     guard: isSurfacingTier,
   },
+  {
+    // The storage-lifecycle wave. How full a capped vault will be, and
+    // what the gate does about it. The three measured tiers order by
+    // severity, and the three refusals are separate members because they
+    // answer different questions a reader branches on: `unbounded` is a
+    // fact about the vault's configuration, `unmeasurable` a fact about
+    // the census that missed a surface, and `no_forecast` the named
+    // two-truths state of too few stored samples - collapsing any pair
+    // would turn "the vault has no cap" into "the sampler is broken".
+    // The values ride the storage gate's verdict and the doctor's
+    // capacity check, both rendered surfaces an operator reads.
+    name: "STORAGE_FORECAST_TIER",
+    values: STORAGE_FORECAST_TIER,
+    members: STORAGE_FORECAST_TIERS,
+    guard: isStorageForecastTier,
+  },
+  {
+    // The storage-lifecycle wave. Which receipt ledger one compaction
+    // surface addresses. Two members because there are exactly two
+    // families and the fold rewrites one shard at a time under its own
+    // lock; a free string would let a caller name a ledger this build
+    // does not scan and read the run back as a clean no-op.
+    name: "RECEIPT_LEDGER_FAMILY",
+    values: RECEIPT_LEDGER_FAMILY,
+    members: RECEIPT_LEDGER_FAMILIES,
+    guard: isReceiptLedgerFamily,
+  },
+  {
+    // The storage-lifecycle wave. What one receipt-compaction invocation
+    // was asked to do. `scan` inventories and writes nothing, `compact`
+    // rewrites under a snapshot; the pair is the whole input schema the
+    // CLI verb and the MCP tool share, and one guard over both the flag
+    // and the wire argument is what keeps the two surfaces unable to
+    // disagree about what the second one does.
+    name: "RECEIPT_MODE",
+    values: RECEIPT_MODE,
+    members: RECEIPT_MODES,
+    guard: isReceiptMode,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1883,7 +1935,10 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 99: Lane C's REPLAY_EXPECTATION (replay corpus) and SURFACING_TIER
 // (graded surfacing) join the scanned population, the same append Lane
 // C's ARCHIVE_VERIFICATION made.
-const VOCABULARY_POPULATION = 99;
+// 102: the storage-lifecycle wave's three - STORAGE_FORECAST_TIER (the
+// capacity gate's tiers), RECEIPT_LEDGER_FAMILY and RECEIPT_MODE (the
+// receipt-compaction surfaces' shared input vocabulary).
+const VOCABULARY_POPULATION = 102;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
