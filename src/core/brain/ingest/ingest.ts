@@ -255,6 +255,15 @@ export interface IngestSourceResult {
    * no delta and reprocesses fully. The range is reporting, not state - the
    * stamp below always records the whole current source, because this
    * pipeline's contract is a whole-source extraction per run.
+   *
+   * The whole-source stamp is also what bounds a delta series: the tail
+   * cut ends at the LAST COMPLETE newline, so an append with no complete
+   * line yet reports an EMPTY delta (`toByte === fromByte`) while the
+   * stamp still advances to the file's full size - the unterminated
+   * fragment is extracted (extraction is whole-source) but announced by
+   * no delta, and the next append's delta starts PAST it rather than
+   * stitching it in. A fragment only enters a reported delta when the
+   * append that carries it ends with a newline before this run reads.
    */
   readonly extractionDelta?: { readonly fromByte: number; readonly toByte: number };
 }

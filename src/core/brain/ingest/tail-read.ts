@@ -15,9 +15,19 @@
  *   - `fromByte`/`toByte` are the exact byte range the returned text was
  *     decoded from. A watermark stamped at `toByte` therefore never
  *     overlaps the next delta and never claims bytes the text does not
- *     carry; when no complete line exists in the appended range, the delta
- *     covers nothing (`toByte === fromByte`) and the watermark does not
- *     move.
+ *     carry. When no complete line exists in the appended range, the
+ *     delta covers nothing (`toByte === fromByte`) - and what happens to
+ *     the watermark then is the CALLER's decision, not this module's.
+ *     The production caller ({@link ./ingest.ts}) stamps the extraction
+ *     watermark at the file's FULL size on every trusted run, so an
+ *     empty delta still advances it past the unterminated fragment:
+ *     that fragment is announced by no delta, and the next append's
+ *     delta starts PAST it rather than stitching it in. Only a caller
+ *     that leaves the watermark at `fromByte` gets the
+ *     stitch-the-fragment-later behavior this boundary cut was shaped
+ *     for. The ingest lane accepts the trade because extraction itself
+ *     stays whole-source - the fragment is extracted, just never
+ *     announced as a delta.
  *   - A file that SHRANK below the offset (rotated, truncated, rewritten)
  *     falls back to the full current content with the shrink NAMED - the
  *     full-reprocess direction, never a bogus negative slice.
