@@ -569,8 +569,10 @@ function captureTrustedSourceArchive(
   }
 }
 
-/** Why a source read yields no text, apart from a thrown error. */
-const SOURCE_UNREAD = Object.freeze({
+/** Why a source read yields no text, apart from a thrown error. Exported as
+ * the shared bounded-read refusal vocabulary; `tail-read.ts` refuses with the
+ * same names. */
+export const SOURCE_UNREAD = Object.freeze({
   notAFile: "not a regular file",
   tooLarge: "larger than the read limit",
 } as const);
