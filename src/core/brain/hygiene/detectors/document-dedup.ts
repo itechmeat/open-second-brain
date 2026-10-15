@@ -31,6 +31,13 @@
  * moves the mtime it falls back to), so such a group is reported for
  * review with the reason in evidence, never for retirement.
  *
+ * Union-find components can be CHAINS (A~B, B~C, A!~C): one group, but
+ * not one similarity. A member therefore retires only on its OWN
+ * above-threshold pair against the chosen canonical; a member the
+ * grouping reached only transitively is split into a review finding
+ * with the reason in evidence, so keep-newest can never retire a page
+ * no score tied to the survivor.
+ *
  * Pages a merge already resolved leave the pool through the one shared
  * predicate every duplicate detector in the project asks
  * ({@link isMergeResolved}). The detector never mutates anything.
@@ -68,6 +75,18 @@ export const DOCUMENT_DEDUP_CANDIDATE_CAP = 200;
  */
 export const DOCUMENT_DEDUP_INELIGIBLE_REASON =
   "a group member has no created_at; the mtime fallback is merge-unstable (GitHub #180)";
+
+/**
+ * Why a grouped member is held out of a retirement finding: the
+ * union-find component it sits in can be CHAINED (A~B, B~C, A!~C), so
+ * membership alone proves nothing about the member the canonical was
+ * picked to be. Retirement acts only on a member with its OWN
+ * above-threshold pair against the chosen canonical; everyone else is
+ * reported for review with this reason. Stated once so the finding
+ * evidence and the docs cannot drift apart.
+ */
+export const DOCUMENT_DEDUP_TRANSITIVE_REASON =
+  "a grouped member has no direct above-threshold similarity to the canonical; retirement never acts on transitive similarity";
 
 export interface DocumentDedupOptions {
   readonly lexicalThreshold?: number;
@@ -247,6 +266,72 @@ function findingsFromGroups(
       if (diff !== 0) return diff;
       return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
     })[0]!;
+    // The transitive-similarity gate. The component the union-find built
+    // can be a chain (A~B, B~C, A!~C): keep-newest then picks a canonical
+    // that one END of the chain is not similar to at all, and retiring
+    // that end would delete a page no score ever tied to the survivor.
+    // So a member retires only on its OWN recorded pair against the
+    // canonical; the rest fall to review with the reason named.
+    const directToCanonical = new Set<string>([canonical.path]);
+    for (const pair of pairs) {
+      const [x, y] = pair.pair;
+      if (pair.similarity < meta.threshold) continue;
+      if (x === canonical.path && byPath.has(y)) directToCanonical.add(y);
+      if (y === canonical.path && byPath.has(x)) directToCanonical.add(x);
+    }
+    const heldForReview = members.filter((m) => !directToCanonical.has(m.path));
+    if (heldForReview.length > 0) {
+      const retiring = members.filter((m) => directToCanonical.has(m.path));
+      const reviewTargets = [...heldForReview.map((m) => m.path), canonical.path].toSorted();
+      findings.push(
+        Object.freeze({
+          id: hygieneFindingId(
+            "document-dedup",
+            members.map((m) => m.path),
+          ),
+          detector: "document-dedup" as const,
+          severity: "warning" as const,
+          title: `Near-duplicate documents ${reviewTargets.join(", ")} (not retirement-eligible)`,
+          targets: Object.freeze(reviewTargets),
+          proposed_action: "review" as const,
+          evidence: Object.freeze({
+            ...shared,
+            canonical: canonical.path,
+            ineligible: true,
+            reason: DOCUMENT_DEDUP_TRANSITIVE_REASON,
+            members_without_direct_pair: Object.freeze(heldForReview.map((m) => m.path).toSorted()),
+          }),
+        }),
+      );
+      // The similar subgroup still retires; its evidence narrows to the
+      // pairs inside it, so the finding never cites a similarity the
+      // canonical itself does not answer for.
+      const retiringPaths = new Set(retiring.map((m) => m.path));
+      const createdAt: Record<string, string> = {};
+      for (const member of retiring) createdAt[member.path] = member.createdAtIso!;
+      findings.push(
+        Object.freeze({
+          id: hygieneFindingId(
+            "document-dedup",
+            retiring.map((m) => m.path),
+          ),
+          detector: "document-dedup" as const,
+          severity: "warning" as const,
+          title: `Near-duplicate documents ${retiring.map((m) => m.path).join(", ")}`,
+          targets: Object.freeze(retiring.map((m) => m.path)),
+          proposed_action: "retire" as const,
+          evidence: Object.freeze({
+            ...shared,
+            similarities: groupPairs.filter(
+              (p) => retiringPaths.has(p.pair[0]) && retiringPaths.has(p.pair[1]),
+            ),
+            canonical: canonical.path,
+            created_at: createdAt,
+          }),
+        }),
+      );
+      continue;
+    }
     const createdAt: Record<string, string> = {};
     for (const member of members) createdAt[member.path] = member.createdAtIso!;
     findings.push(

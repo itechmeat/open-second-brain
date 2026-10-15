@@ -17,12 +17,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 import { DEFAULT_SCAN_IDS, HYGIENE_DETECTOR_IDS } from "../../../src/core/brain/hygiene/types.ts";
+import { applyHygienePlan } from "../../../src/core/brain/hygiene/apply.ts";
+import { buildHygienePlan } from "../../../src/core/brain/hygiene/plan.ts";
 import { runHygieneScan } from "../../../src/core/brain/hygiene/scan.ts";
 import {
   DOCUMENT_DEDUP_LEXICAL_THRESHOLD,
@@ -204,6 +206,73 @@ describe("detectDocumentDedup", () => {
     const second = detect().map((f) => f.id);
     expect(first).toEqual(second);
     expect(first).toHaveLength(2);
+  });
+
+  // Token sets of ten with a one-word slide: A~B and B~C clear the
+  // lexical threshold while A~C (two slides apart) sits under it.
+  const CHAIN_A = Array.from({ length: 10 }, (_, i) => `kw${String(i + 1).padStart(2, "0")}`).join(
+    " ",
+  );
+  const CHAIN_B = Array.from({ length: 10 }, (_, i) => `kw${String(i + 2).padStart(2, "0")}`).join(
+    " ",
+  );
+  const CHAIN_C = Array.from({ length: 10 }, (_, i) => `kw${String(i + 3).padStart(2, "0")}`).join(
+    " ",
+  );
+
+  /**
+   * The A-B-C chain: (A,B) and (B,C) pair above the threshold, (A,C)
+   * does not, so the union-find still forms ONE component. Keep-newest
+   * picks C - which is NOT directly similar to A - and the transitive
+   * gate decides what may retire.
+   */
+  function seedChain(): { a: string; b: string; c: string } {
+    const a = writeSourcePage("chain-a", { body: CHAIN_A, createdAt: "2026-01-01T00:00:00Z" });
+    const b = writeSourcePage("chain-b", { body: CHAIN_B, createdAt: "2026-01-02T00:00:00Z" });
+    const c = writeSourcePage("chain-c", { body: CHAIN_C, createdAt: "2026-01-03T00:00:00Z" });
+    return { a, b, c };
+  }
+
+  test("a member with no direct pair to the canonical is never a retire target", () => {
+    seedChain();
+
+    const findings = detect();
+    expect(findings).toHaveLength(2);
+    const retire = findings.find((f) => f.proposed_action === "retire")!;
+    const review = findings.find((f) => f.proposed_action === "review")!;
+
+    // Only the copy DIRECTLY similar to the canonical C is retirable.
+    const { b, c } = { b: "Brain/sources/src-chain-b.md", c: "Brain/sources/src-chain-c.md" };
+    expect(retire.targets).toEqual([b, c].toSorted());
+    expect(retire.evidence["canonical"]).toBe(c);
+    // The transitive member lands in review with the reason in evidence.
+    expect(review.targets).toEqual(["Brain/sources/src-chain-a.md", c].toSorted());
+    expect(review.evidence["ineligible"]).toBe(true);
+    expect(String(review.evidence["reason"])).toContain("transitive");
+    expect(review.evidence["members_without_direct_pair"]).toEqual([
+      "Brain/sources/src-chain-a.md",
+    ]);
+  });
+
+  test("every member with a direct pair still retires through the pipeline", () => {
+    const { a, b } = seedChain();
+    const report = runHygieneScan(vault, { detectors: ["document-dedup"], now: new Date(0) });
+    const retire = report.findings.find((f) => f.proposed_action === "retire")!;
+    const plan = buildHygienePlan(report, { ids: [retire.id] });
+    expect(plan.selected).toHaveLength(1);
+    expect(plan.excluded_review).toEqual([]);
+
+    // The finding is derelived by the applier from the same evidence
+    // shape a scan produced: applying it must remove ONLY the copy
+    // directly similar to the canonical (B) and leave the transitive
+    // member (A) on disk.
+    return applyHygienePlan(vault, plan, { agent: "tester", now: new Date(0) }).then((result) => {
+      expect(result.errors).toEqual([]);
+      expect(result.applied).toHaveLength(1);
+      expect(result.applied[0]!.detail).toContain("retired 1 near-duplicate cop");
+      expect(existsSync(join(vault, a))).toBe(true);
+      expect(existsSync(join(vault, b))).toBe(false);
+    });
   });
 });
 
