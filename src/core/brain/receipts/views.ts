@@ -43,7 +43,7 @@ export function scanView(report: ReceiptScanReport): Record<string, unknown> {
       aggregates: report.totals.aggregates,
       unparseable: report.totals.unparseable,
     },
-    errors: report.errors,
+    errors: report.errors.map(({ shard, path, message }) => ({ shard, path, message })),
   };
 }
 
@@ -71,7 +71,10 @@ export function compactView(result: ReceiptCompactResult): Record<string, unknow
       last: group.last,
       bytes: group.bytes,
     })),
-    failures: result.failures,
+    // Both rows are rendered field-by-field rather than passed through:
+    // the wire holds the shard's identity and the sanitized verdict, and
+    // a field the core later grows cannot ride along unreviewed.
+    failures: result.failures.map(({ shard, message }) => ({ shard, message })),
     totals: {
       shards: result.totals.shards,
       folded: result.totals.folded,

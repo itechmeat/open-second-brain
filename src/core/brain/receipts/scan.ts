@@ -72,6 +72,17 @@ const METRICS_GRAMMAR: LedgerShardGrammar = Object.freeze({
 
 const MS_PER_DAY = 86_400_000;
 
+/**
+ * The message a shard read failure carries to every surface, whatever
+ * `errno` the read failed with. The raw Node error text names absolute
+ * host paths and distinguishes a missing shard from a denied one - a
+ * map home and an absent/withheld oracle no caller should hold - so the
+ * boundary reports the one class an operator can act on: the shard is
+ * unreadable, and its identity travels beside the verdict, never the
+ * filesystem's account of why.
+ */
+export const RECEIPT_SHARD_UNREADABLE = "unreadable";
+
 /** ISO-8601 UTC timestamp shape, the one the metrics ledger writes. */
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -230,12 +241,12 @@ function scanShard(
   try {
     text = readShardText(shard.path);
     bytes = statSync(shard.path).size;
-  } catch (err) {
+  } catch {
     return {
       error: {
         shard: ref,
         path: toPosix(relative(vault, shard.path)),
-        message: err instanceof Error ? err.message : String(err),
+        message: RECEIPT_SHARD_UNREADABLE,
       },
     };
   }

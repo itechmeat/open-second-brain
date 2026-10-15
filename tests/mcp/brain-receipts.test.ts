@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import { continuityLogDir, listContinuityRecords } from "../../src/core/brain/co
 import { metricsDir } from "../../src/core/brain/metrics.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
+import { RECEIPT_SHARD_UNREADABLE } from "../../src/core/brain/receipts/scan.ts";
 import {
   RECEIPT_COMPACTION_OPERATION,
   RECEIPT_MODES,
@@ -177,6 +178,28 @@ describe("brain_receipts", () => {
     expect(audits[0]!.id).toBe(view.audit_record_id);
     const after = readFileSync(join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`), "utf8");
     expect(after).toContain(RECEIPT_LEDGER_MONTH_AGGREGATE_MARKER);
+  });
+
+  test("a shard the scan cannot read surfaces as unreadable, never as a filesystem error", async () => {
+    // The scan view rides to remote callers verbatim, so the error rows
+    // must carry the shard's name and the sanitized verdict only - the
+    // raw Node text would hand over an absolute host path and a
+    // missing-versus-denied oracle.
+    seedLedger();
+    const shard = join(continuityLogDir(vault), `${LEDGER_MONTH}.jsonl`);
+    chmodSync(shard, 0o000);
+    try {
+      const server = new MCPServer({ vault });
+      await init(server);
+      const response = await call(server, {});
+      const view = response.result.structuredContent;
+      expect(view.errors).toHaveLength(1);
+      expect(view.errors[0]!.shard).toBe(`continuity:${LEDGER_MONTH}.jsonl`);
+      expect(view.errors[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
+      expect(JSON.stringify(view)).not.toContain(vault);
+    } finally {
+      chmodSync(shard, 0o644);
+    }
   });
 
   test("the surface vocabulary derives from the shared modes tuple", () => {

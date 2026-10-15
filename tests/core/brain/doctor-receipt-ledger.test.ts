@@ -130,7 +130,13 @@ describe("receiptLedgerCheck", () => {
     writeFileSync(continuityLogDir(vault), "not a directory\n", "utf8");
     const doctor = runDoctor(vault, { now: NOW });
     const uncertain = doctor.uncertain ?? [];
-    expect(uncertain.some((entry) => entry.code === RECEIPT_LEDGER_UNMEASURED_CODE)).toBe(true);
+    const entry = uncertain.find((e) => e.code === RECEIPT_LEDGER_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    // The scan's refusal is surfaced named, not as the raw filesystem
+    // error: no errno verb, no absolute host path on the doctor payload.
+    expect(entry!.message).toContain("could not be scanned");
+    expect(entry!.message).not.toContain("ENOTDIR");
+    expect(entry!.message).not.toContain(vault);
   });
 
   test("every unreadable shard is reported, each under its own path", () => {

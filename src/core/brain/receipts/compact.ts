@@ -58,6 +58,7 @@ import {
   classifyContinuityRecord,
   classifyMetricRecord,
   isFoldAggregateLine,
+  RECEIPT_SHARD_UNREADABLE,
   resolveReceiptShardPath,
 } from "./scan.ts";
 import {
@@ -225,8 +226,11 @@ function verdictFor(
 
 /**
  * Recount one named shard against the disk. A shard that cannot be read
- * yields a failure instead of a plan; every other condition classifies
- * into the plan.
+ * yields a failure instead of a plan - named unreadable, with its
+ * `family:name` identity and no filesystem detail, since the raw error
+ * text would carry an absolute host path and a missing-versus-denied
+ * oracle onto every surface the failure payload reaches. Every other
+ * condition classifies into the plan.
  */
 function planShard(
   vault: string,
@@ -238,10 +242,8 @@ function planShard(
   let text: string;
   try {
     text = readFileSync(resolved.path, "utf8");
-  } catch (err) {
-    return {
-      failure: { shard: display, message: err instanceof Error ? err.message : String(err) },
-    };
+  } catch {
+    return { failure: { shard: display, message: RECEIPT_SHARD_UNREADABLE } };
   }
   const lines = text.split("\n").filter((line) => line.trim() !== "");
   const byKey = new Map<string, GroupEntry>();
@@ -506,7 +508,10 @@ function rewriteShards(
  * Rewrite one shard: rebuild under the shard's lock, verify the fold
  * strictly shrinks the file, and swap atomically on the recount's bytes.
  * A drifted shard, a non-shrinking fold and an unwritable target are
- * throws the caller collects - never partial writes.
+ * throws the caller collects - never partial writes. Every throw names
+ * the shard and the condition: the lock and compare-and-swap failures
+ * are re-stated rather than forwarded, because the raw filesystem text
+ * under them carries absolute host paths no surface should repeat.
  *
  * A shard the recount found nothing foldable in is answered without
  * touching the file: its rebuild is byte-identical at best - and one
@@ -517,7 +522,12 @@ function rewriteShards(
  */
 function rewriteShard(plan: ShardPlan): ReceiptFoldShardOutcome {
   if (plan.foldable === 0) return outcomeFromPlan(plan);
-  const handle = acquireLockSync(plan.path);
+  let handle: ReturnType<typeof acquireLockSync>;
+  try {
+    handle = acquireLockSync(plan.path);
+  } catch {
+    throw new Error(`${plan.display} could not be locked for the rewrite`);
+  }
   try {
     const rebuilt = rebuildContent(plan);
     const bytesAfter = Buffer.byteLength(rebuilt, "utf8");
@@ -527,7 +537,14 @@ function rewriteShard(plan: ShardPlan): ReceiptFoldShardOutcome {
           `(${plan.bytesBefore} -> ${bytesAfter} bytes); refusing to rewrite without a size win`,
       );
     }
-    atomicWriteFileSync(plan.path, rebuilt, { expectBefore: plan.text });
+    try {
+      atomicWriteFileSync(plan.path, rebuilt, { expectBefore: plan.text });
+    } catch (err) {
+      if (isFileDrift(err)) {
+        throw new Error(`${plan.display} changed since it was recounted; re-scan and retry`);
+      }
+      throw new Error(`${plan.display} could not be rewritten`);
+    }
     return Object.freeze({
       shard: plan.display,
       folded: plan.foldable,
@@ -536,13 +553,6 @@ function rewriteShard(plan: ShardPlan): ReceiptFoldShardOutcome {
       bytesBefore: plan.bytesBefore,
       bytesAfter,
     });
-  } catch (err) {
-    if (isFileDrift(err)) {
-      throw new Error(
-        `${plan.display} changed since it was recounted; re-scan and retry (${(err as Error).message})`,
-      );
-    }
-    throw err;
   } finally {
     handle.release();
   }

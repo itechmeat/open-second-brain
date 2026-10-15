@@ -50,22 +50,21 @@ export const RECEIPT_LEDGER_GROWTH_MIN_FOLDABLE = 1_000;
  */
 export const RECEIPTS_NEXT_COMMAND = "o2b brain receipts scan";
 
-function describe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 export const receiptLedgerCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
     let report;
     try {
       report = scanReceiptLedgers(ctx.vault, { now: ctx.now });
-    } catch (err) {
+    } catch {
+      // The scan's own refusal, named: what the enumeration stumbled on
+      // carries absolute host paths no doctor surface should repeat, and
+      // the repair is the operator's to choose whatever the cause was.
       pushUncertain(out.uncertain, {
         code: RECEIPT_LEDGER_UNMEASURED_CODE,
         path: continuityLogDir(ctx.vault),
         message:
-          `the receipt ledgers could not be scanned (${describe(err)}), so whether they are ` +
+          "the receipt ledgers could not be scanned, so whether they are " +
           "growing unbounded is unknown",
       });
       return;
@@ -78,7 +77,7 @@ export const receiptLedgerCheck: DoctorCheck = {
         // anonymous entry and every shard after the first goes unreported.
         path: error.path,
         message:
-          `the receipt shard ${error.shard} could not be read (${error.message}), so its ` +
+          `the receipt shard ${error.shard} is ${error.message}, so its ` +
           "foldable count is unknown",
       });
     }

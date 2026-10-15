@@ -16,7 +16,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +34,7 @@ import {
 } from "../../../src/core/brain/continuity/store.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
 import { compactReceiptLedgers } from "../../../src/core/brain/receipts/compact.ts";
+import { RECEIPT_SHARD_UNREADABLE } from "../../../src/core/brain/receipts/scan.ts";
 import {
   RECEIPT_FOLD_SCHEMA,
   RECEIPT_LEDGER_FAMILY,
@@ -406,6 +415,32 @@ describe("compactReceiptLedgers", () => {
     expect(result.failures).toEqual([]);
     expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).toBe(before);
     expect(result.totals.folded).toBe(2);
+  });
+
+  test("an unreadable shard fails by name, never with the raw filesystem error", () => {
+    // The failure rows ride the compact view to remote callers verbatim:
+    // the raw Node error text would hand them an absolute host path and
+    // an absent-versus-denied oracle. The boundary names the shard and
+    // the one class the operator can act on: unreadable.
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const shardPath = join(continuityLogDir(vault), "2026-08.jsonl");
+    chmodSync(shardPath, 0o000);
+    try {
+      const result = compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+        now: NOW,
+        dryRun: true,
+      });
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]!.shard).toBe("continuity:2026-08.jsonl");
+      expect(result.failures[0]!.message).toBe(RECEIPT_SHARD_UNREADABLE);
+      const rendered = JSON.stringify(result.failures);
+      expect(rendered).not.toContain("ENOENT");
+      expect(rendered).not.toContain("EACCES");
+      expect(rendered).not.toContain(vault);
+    } finally {
+      chmodSync(shardPath, 0o644);
+    }
   });
 
   test("a shard ref that is not a valid shard name is refused before anything runs", () => {

@@ -17,13 +17,16 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { continuityLogDir } from "../../../src/core/brain/continuity/store.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
-import { scanReceiptLedgers } from "../../../src/core/brain/receipts/scan.ts";
+import {
+  RECEIPT_SHARD_UNREADABLE,
+  scanReceiptLedgers,
+} from "../../../src/core/brain/receipts/scan.ts";
 import {
   RECEIPT_FOLD_DEFAULT_AGE_DAYS,
   RECEIPT_LEDGER_FAMILY,
@@ -262,6 +265,38 @@ describe("scanReceiptLedgers", () => {
       expect(shard.records).toBe(1);
       expect(shard.unparseable).toBe(1);
       expect(report.totals.unparseable).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a shard that cannot be read is reported unreadable by name, never with filesystem detail", () => {
+    // The error rows ride the scan view to remote callers verbatim: the
+    // raw Node error text would hand them an absolute host path and an
+    // absent-versus-denied oracle. The boundary reports the shard
+    // unreadable, with its vault-relative name, and nothing else.
+    vault = mintVault();
+    try {
+      const shardPath = join(continuityLogDir(vault), "2026-08.jsonl");
+      writeShard(continuityLogDir(vault), "2026-08.jsonl", [
+        continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"),
+      ]);
+      chmodSync(shardPath, 0o000);
+      try {
+        const report = scanReceiptLedgers(vault, { now: NOW });
+        expect(report.shards).toEqual([]);
+        expect(report.errors).toHaveLength(1);
+        const error = report.errors[0]!;
+        expect(error.shard).toBe("continuity:2026-08.jsonl");
+        expect(error.path).toBe("Brain/log/continuity/2026-08.jsonl");
+        expect(error.message).toBe(RECEIPT_SHARD_UNREADABLE);
+        const rendered = JSON.stringify(report.errors);
+        expect(rendered).not.toContain("ENOENT");
+        expect(rendered).not.toContain("EACCES");
+        expect(rendered).not.toContain(vault);
+      } finally {
+        chmodSync(shardPath, 0o644);
+      }
     } finally {
       cleanup();
     }
