@@ -174,12 +174,10 @@ export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_receipts",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Receipt compaction over the receipt ledgers. `scan` (default) inventories both ledgers " +
-      "read-only; `compact` folds expired records into per-kind, per-month aggregates in named " +
-      "shards, preview-bound without `apply`. Compact rewrites ledgers in place and reports " +
-      "whole-ledger byte totals, so it answers at local reach only: below it the tool refuses " +
-      "by name (measured: false, reason reach) and scan stays readable. Never touches " +
-      "decision-change receipts, the source archive, or context compaction.",
+      "Receipt compaction. `scan` (default) inventories both ledgers read-only; `compact` folds " +
+      "expired records into per-kind, per-month aggregates in named shards, preview-bound without " +
+      "`apply`, local reach only. Never touches decision-change receipts, the source archive, or " +
+      "context compaction.",
     inputSchema: {
       type: "object",
       properties: {
