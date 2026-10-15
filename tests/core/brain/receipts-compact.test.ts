@@ -223,7 +223,7 @@ describe("compactReceiptLedgers", () => {
     expect(snapshots.some((s) => s.run_id === result.snapshotRunId)).toBe(true);
     const audits = listContinuityRecords(vault, { kind: "receipt_compaction" });
     expect(audits).toHaveLength(1);
-    expect(audits[0]!.id).toBe(result.auditRecordId);
+    expect(audits[0]!.id).toBe(result.auditRecordId!);
   });
 
   test("a dry run writes nothing: no rewrite, no snapshot, no audit record", () => {

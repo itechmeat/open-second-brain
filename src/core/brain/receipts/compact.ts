@@ -106,7 +106,8 @@ export interface ReceiptFoldGroup {
 interface GroupEntry {
   /** Index into the shard's lines of the group's first folded record. */
   readonly firstIndex: number;
-  readonly group: ReceiptFoldGroup;
+  /** The fold group, replaced in place as later records join it. */
+  group: ReceiptFoldGroup;
 }
 
 /** One shard the confirmed run could not rewrite, with the reason. */
@@ -406,7 +407,7 @@ export function compactReceiptLedgers(
     matchList: plans.map((plan) => plan.display),
   });
 
-  const base = {
+  const base: Pick<ReceiptCompactResult, "operation" | "olderThanDays" | "cutoff"> = {
     operation: RECEIPT_COMPACTION_OPERATION,
     olderThanDays,
     cutoff,

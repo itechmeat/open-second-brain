@@ -88,10 +88,11 @@ export function payloadCarriesProtectedKey(payload: unknown): boolean {
  * Classify one continuity record against the cutoff. Unknown kinds,
  * protected kinds, protected-key carriers and uncompared timestamps are
  * protected (fail closed); canonical timestamps at or after the cutoff
- * are young; everything else is foldable.
+ * are young; everything else is foldable. Every field is optional: a
+ * line missing one classifies through the same guards and fails closed.
  */
 export function classifyContinuityRecord(
-  record: { readonly kind: unknown; readonly createdAt: unknown; readonly payload: unknown },
+  record: { readonly kind?: unknown; readonly createdAt?: unknown; readonly payload?: unknown },
   cutoffMs: number,
 ): ReceiptLineClass {
   if (!isContinuityRecordKind(record.kind)) return "protected";
@@ -112,7 +113,7 @@ export function classifyContinuityRecord(
  * cannot be derived for the aggregate, so it fails closed to keep.
  */
 export function classifyMetricRecord(
-  record: { readonly run_at: unknown; readonly payload: unknown },
+  record: { readonly run_at?: unknown; readonly payload?: unknown },
   cutoffMs: number,
 ): ReceiptLineClass {
   if (payloadCarriesProtectedKey(record.payload)) return "protected";
