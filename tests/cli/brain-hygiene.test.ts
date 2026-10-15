@@ -143,7 +143,7 @@ describe("o2b brain hygiene scan", () => {
       { env: env() },
     );
     expect(out.returncode).not.toBe(0);
-    expect(out.stderr).toContain("conflicts, dedup, freshness, usefulness");
+    expect(out.stderr).toContain("conflicts, dedup, document-dedup, freshness, usefulness");
   });
 });
 
