@@ -58,6 +58,12 @@
           },
           {
             "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" backlog-nudge; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook backlog-nudge; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: injecting undistilled backlog count (opt-in)"
+          },
+          {
+            "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session start"

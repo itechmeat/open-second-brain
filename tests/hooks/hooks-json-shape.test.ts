@@ -231,3 +231,37 @@ describe("hooks.json subagent-inject entry", () => {
     expect(carriers[0]!.type).toBe("command");
   });
 });
+
+describe("hooks.json SessionStart backlog-nudge entry", () => {
+  const sessionStartGroups =
+    (
+      JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+        hooks: Record<
+          string,
+          Array<{ matcher?: string; hooks: Array<HookEntry & { timeout?: number }> }>
+        >;
+      }
+    ).hooks["SessionStart"] ?? [];
+
+  test("the single SessionStart group carries exactly one backlog-nudge entry, after gap-agenda", () => {
+    expect(sessionStartGroups.length).toBe(1);
+    const hooks = sessionStartGroups[0]!.hooks;
+    const agenda = hooks.findIndex((h) => h.command.includes("o2b-hook gap-agenda"));
+    expect(agenda).toBeGreaterThanOrEqual(0);
+    const nudgeIndices = hooks
+      .map((h, i) => (h.command.includes("o2b-hook backlog-nudge") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(nudgeIndices).toEqual([agenda + 1]);
+  });
+
+  test("the backlog-nudge entry declares the sibling timeout and the opt-in status line", () => {
+    const hooks = sessionStartGroups[0]!.hooks;
+    const entry = hooks.find((h) => h.command.includes("o2b-hook backlog-nudge"))!;
+    expect(entry.type).toBe("command");
+    expect(entry.timeout).toBe(10);
+    expect(entry.statusMessage).toBe("OSB: injecting undistilled backlog count (opt-in)");
+    // The dispatch target resolves to an existing hook file, so the
+    // registered name can never silently no-op.
+    expect(existsSync(join(REPO, "hooks", "backlog-nudge.ts"))).toBe(true);
+  });
+});
