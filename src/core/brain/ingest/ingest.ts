@@ -483,26 +483,48 @@ export function ingestSource(
     existsSync(join(vault, canonicalSource))
   ) {
     const sourceAbs = join(vault, canonicalSource);
-    extractionDelta = appendedExtractionDelta(vault, sourceAbs, canonicalSource);
+    // The source can still vanish (ENOENT) or change kind (a directory where
+    // the classified file stood) between the existsSync above and these
+    // reads - after the summary pages were written, where a throw would lose
+    // this run's result. The old updateManifest path answered both shapes by
+    // degrading (a vanished source dropped its entry), so both reads here
+    // degrade the same fail-safe way: a source that cannot be read reports
+    // no delta, and a stamp that cannot describe it is skipped - the source
+    // simply reprocesses fully next time. The ENOENT window and the EISDIR
+    // window are the same catch.
+    try {
+      extractionDelta = appendedExtractionDelta(vault, sourceAbs, canonicalSource);
+    } catch {
+      // No provable append can be reported for a source that cannot be read.
+    }
     // Record the source's state under the live contract, WITH the extraction
     // watermark: this run's contract is a whole-source extraction, so the
     // stamp covers the full current file. That is what makes the NEXT
     // append verifiable - the recorded digest describes exactly the leading
     // extracted_bytes, so a later read either proves a pure append (delta
     // above) or classifies modified and reprocesses fully.
-    // One stat, taken BEFORE the digest: the stamp must describe one
-    // snapshot of the source, so the byte count it claims is the file it
-    // hashed, not a size re-read after the hashing walked a possibly
-    // grown file.
-    const sourceSize = statSync(sourceAbs).size;
-    updateManifest(vault, [canonicalSource], {
-      [canonicalSource]: {
-        sha256: hashPath(sourceAbs),
-        fingerprint: computeExtractionContractFingerprint(vault),
-        extracted_bytes: sourceSize,
-        extracted_at: isoSecond(opts.now),
-      },
-    });
+    let sourceSize: number | undefined;
+    let sourceDigest: string | undefined;
+    try {
+      // One stat, taken BEFORE the digest: the stamp must describe one
+      // snapshot of the source, so the byte count it claims is the file it
+      // hashed, not a size re-read after the hashing walked a possibly
+      // grown file.
+      sourceSize = statSync(sourceAbs).size;
+      sourceDigest = hashPath(sourceAbs);
+    } catch {
+      // Vanished or changed kind mid-flight: skip the stamp, reprocess fully.
+    }
+    if (sourceDigest !== undefined && sourceSize !== undefined) {
+      updateManifest(vault, [canonicalSource], {
+        [canonicalSource]: {
+          sha256: sourceDigest,
+          fingerprint: computeExtractionContractFingerprint(vault),
+          extracted_bytes: sourceSize,
+          extracted_at: isoSecond(opts.now),
+        },
+      });
+    }
     // Record plan-scoped progress so an interrupted batch resumes at the item
     // boundary (t_ba1fa5f6). Only for real vault files - a URL/identity-only
     // source has no place in a folder plan's checkpoint. Best-effort: a

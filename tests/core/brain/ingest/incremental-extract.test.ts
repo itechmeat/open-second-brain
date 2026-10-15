@@ -30,6 +30,7 @@ import { EXTRACT_CONTRACT_VERSION } from "../../../../src/core/brain/ingest/cont
 import {
   classifyPaths,
   hashFile,
+  hashPath,
   readManifest,
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
@@ -206,5 +207,56 @@ describe("the CLI extract preview reports the appended slice", () => {
     expect(payload.appended).toBeUndefined();
     const second = ingestSource(vault, INPUT, OPTS);
     expect(second.extractionDelta).toBeUndefined();
+  });
+});
+
+describe("a source that changes kind mid-run degrades fail-safe", () => {
+  test("a source swapped for a directory after classification reprocesses with no crash", () => {
+    writeSource("one\ntwo\n");
+    const first = ingestSource(vault, INPUT, OPTS);
+
+    // The caller's reach predicate is asked about the summary page only
+    // after the intake has already classified the source trusted (its stat
+    // saw a regular file) and just before the manifest stamp, so swapping
+    // the source for a directory inside the callback lands the change in
+    // the window between the classification stat and the pre-stamp reads.
+    // The stamp block then stats a directory whose size sits past the
+    // recorded watermark, and the append-proof read used to die on EISDIR -
+    // after the summary pages were written, losing the run's result. The
+    // sibling ENOENT window (the source deleted inside the same span,
+    // between the block's existsSync and the stat/hash reads) is answered
+    // by the same fail-safe catch; it has no deterministic public-API hook.
+    let swapped = false;
+    const second = ingestSource(vault, INPUT, {
+      ...OPTS,
+      readable: (rel) => {
+        if (rel === first.summaryPath && !swapped) {
+          swapped = true;
+          rmSync(join(vault, SOURCE));
+          mkdirSync(join(vault, SOURCE));
+        }
+        return true;
+      },
+    });
+
+    expect(swapped).toBe(true);
+    // No crash: the run answers, and a source that cannot be read as a file
+    // reports no append.
+    expect(second.summaryPath).toBe(first.summaryPath);
+    expect(second.extractionDelta).toBeUndefined();
+    // The stamp that landed describes the directory as it now is, so the
+    // next classification sees a changed source and reprocesses fully
+    // rather than trusting a stale file digest.
+    const entry = readManifest(vault).entries[SOURCE]!;
+    expect(entry.sha256).toBe(hashPath(join(vault, SOURCE)));
+    expect(entry.extracted_bytes).toBeGreaterThan(0);
+
+    // The restored file is not an append against that stamp: the source
+    // reprocesses fully, and the stamp lands on the real file again.
+    rmSync(join(vault, SOURCE), { recursive: true });
+    writeSource("one\ntwo\n");
+    const third = ingestSource(vault, INPUT, OPTS);
+    expect(third.extractionDelta).toBeUndefined();
+    expect(readManifest(vault).entries[SOURCE]!.extracted_bytes).toBe(8);
   });
 });
