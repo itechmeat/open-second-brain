@@ -136,7 +136,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Without `items` returns the turns plus one needs-llm-step envelope. A session already mined at its current content that yielded nothing accepted returns no envelope: the plan carries skipped.reason 'mining_tombstone' and the recorded outcome breakdown instead, and `force: true` bypasses that tombstone for this one call (for example after you removed the downstream preference and want the session re-proposed). With `items` writes them to Brain/inbox/ as speculative `source_type: auto_extract` signals. Refuses over-cap, under-floor or repeated-topic payloads.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan. With `items` writes `source_type: auto_extract` signals to Brain/inbox/. Barren sessions skip with reason 'mining_tombstone'; `force` re-mines once. Refuses over-cap, under-floor, repeated-topic.",
     inputSchema: {
       type: "object",
       properties: {
@@ -187,9 +187,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         force: {
           type: "boolean",
           description:
-            "Plan phase only: bypass the zero-yield mining tombstone for this one call. " +
-            "Use it when a session was tombstoned and you want it re-proposed anyway - " +
-            "for example after removing the downstream preference it kept quiet about.",
+            "Plan phase only: bypass the zero-yield mining tombstone for this one call and re-propose the session.",
         },
       },
       required: ["session"],
