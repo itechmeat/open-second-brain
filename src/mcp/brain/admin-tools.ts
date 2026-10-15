@@ -32,7 +32,11 @@ import type { ProgressSink } from "../../core/brain/progress.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
+import {
+  journalEntryWithoutCapacityReading,
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+} from "../../core/brain/maintenance/journal.ts";
 import {
   CUSTOM_TASK_MAX,
   customTasksOffNotice,
@@ -374,11 +378,18 @@ async function toolBrainMaintenance(
     // The journal depth is the caller's, as it is on the CLI. It was
     // hardcoded at ten here, so an agent reading a lane that had refused
     // a task days ago could not see far enough back to find the failures
-    // behind the streak - the one thing the journal is kept for.
+    // behind the streak - the one thing the journal is kept for. Below
+    // local reach the rows lose their capacity reading: the whole-vault
+    // byte figures are the same local-reach facts `brain_storage` gates
+    // (`journalEntryWithoutCapacityReading`), and status - unlike run -
+    // answers at every reach.
+    const local = contextReach(ctx) === TRANSPORT_REACH.local;
     const notice = customTasksOffNotice(resolveCustomTasks(ctx.configPath ?? undefined));
     return {
       lease: currentLease(ctx.vault, { now }),
-      journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)),
+      journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)).map(
+        (entry) => (local ? entry : journalEntryWithoutCapacityReading(entry)),
+      ),
       ...(notice !== null ? { notice } : {}),
     };
   }

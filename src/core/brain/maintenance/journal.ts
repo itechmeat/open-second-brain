@@ -165,6 +165,30 @@ export function recordedPriceSource(
 }
 
 /**
+ * The row a surface below local reach may render. A `skipped:capacity`
+ * row carries the reading behind the skip - the whole-vault measured
+ * bytes, the configured cap and the percent of one against the other -
+ * and those are the same local-reach facts the storage report refuses to
+ * take below local reach: totals that move when a page the caller may
+ * not read appears or goes. The journal itself keeps them (the
+ * operator's own record); this drops exactly the three reading fields
+ * and keeps the tier word and the unmeasurable reason, which name a
+ * verdict, never a size. A surface at local reach renders the row
+ * unchanged.
+ */
+export function journalEntryWithoutCapacityReading(
+  entry: MaintenanceJournalEntry,
+): MaintenanceJournalEntry {
+  const {
+    capacity_percent: _percent,
+    capacity_measured_bytes: _measured,
+    capacity_cap_bytes: _cap,
+    ...rest
+  } = entry;
+  return rest;
+}
+
+/**
  * The metrics surface a completed reindex pass's spend receipt is
  * recorded under. Both lane front doors (`o2b brain maintenance` and
  * `brain_maintenance`) append here, so one surface name covers a run's
