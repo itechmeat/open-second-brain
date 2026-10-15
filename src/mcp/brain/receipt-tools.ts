@@ -132,10 +132,10 @@ export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_receipts",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Fold a receipt ledger's expired records into per-kind, per-month aggregates. `scan` " +
-      "(default) inventories both ledgers read-only; `compact` rewrites explicitly named " +
+      "Receipt compaction over the receipt ledgers. `scan` (default) inventories both ledgers " +
+      "read-only; `compact` folds expired records into per-kind, per-month aggregates in named " +
       "shards, preview-bound without `apply`. Never touches decision-change receipts, the " +
-      "source archive, or context-compaction records.",
+      "source archive, or context compaction.",
     inputSchema: {
       type: "object",
       properties: {
