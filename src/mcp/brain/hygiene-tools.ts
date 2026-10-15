@@ -61,11 +61,28 @@ import {
   type LinkRatchetUnmeasurableReason,
 } from "../../core/search/link-ratchet.ts";
 import { coerceBool, coerceStr } from "../coerce.ts";
+import { redactErrorForCaller } from "../error-redaction.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+
+/**
+ * The prose of one error row in a scan, refresh or apply payload, stated
+ * for the caller's reach. These rows ride the SUCCESS channel, which the
+ * server's redactor never sees - it wraps thrown errors only - and a
+ * detector or executor failure forwards Node's fs text, which names
+ * absolute host paths, verbatim. Below local reach the same substitution
+ * a throw gets at this reach is applied here, so one class of text
+ * cannot be redacted on one channel and ride raw on the other; at local
+ * reach the row is unchanged, as a throw's is.
+ */
+function errorRowForCaller<E extends { readonly message: string }>(ctx: ServerContext, row: E): E {
+  const reach = contextReach(ctx);
+  if (reach === TRANSPORT_REACH.local) return row;
+  return { ...row, message: redactErrorForCaller(row.message, ctx.vault, reach) };
+}
 
 function coerceStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
   const raw = args[key];
@@ -312,7 +329,7 @@ async function toolBrainHygiene(
       rederived: result.rederived.map((page) => vaultRelativeSafe(ctx.vault, page)),
       archived: result.archived.map((page) => vaultRelativeSafe(ctx.vault, page)),
       manual: result.manual.map((page) => vaultRelativeSafe(ctx.vault, page)),
-      errors: result.errors,
+      errors: result.errors.map((row) => errorRowForCaller(ctx, row)),
     };
   }
 
@@ -379,7 +396,7 @@ async function toolBrainHygiene(
         annotated === null
           ? findings.map((finding) => findingView(ctx.vault, finding))
           : annotated.map((a) => ({ ...findingView(ctx.vault, a.item), ...verdictFields(a) })),
-      errors: report.errors,
+      errors: report.errors.map((row) => errorRowForCaller(ctx, row)),
       link_integrity: await linkIntegrityView(ctx),
     };
   }
@@ -420,7 +437,7 @@ async function toolBrainHygiene(
     // Honest matched-vs-changed: findings selected vs. findings actually applied.
     matched: plan.selected.length,
     changed: result.applied.length,
-    errors: result.errors,
+    errors: result.errors.map((row) => errorRowForCaller(ctx, row)),
   };
 }
 
