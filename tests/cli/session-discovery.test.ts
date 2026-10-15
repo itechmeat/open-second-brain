@@ -54,11 +54,29 @@ interface CoverageRow {
   readonly roots: ReadonlyArray<{ readonly path: string; readonly present: boolean }>;
 }
 
+interface MiningRowJson {
+  readonly runtime: string;
+  readonly distilled: number;
+  readonly known_nothing_new: number;
+  readonly undistilled: number;
+  readonly refused: number;
+}
+
+interface MiningCensusJson {
+  readonly imported: number;
+  readonly distilled: number;
+  readonly known_nothing_new: number;
+  readonly undistilled: number;
+  readonly refused: number;
+  readonly by_runtime: ReadonlyArray<MiningRowJson>;
+}
+
 interface DiscoveryJson {
   readonly found: number;
   readonly imported: number;
   readonly gap: number;
   readonly by_runtime: ReadonlyArray<CoverageRow>;
+  readonly mining?: MiningCensusJson;
   readonly would_import?: ReadonlyArray<string>;
   readonly files?: ReadonlyArray<{ readonly file: string }>;
 }
@@ -309,6 +327,47 @@ describe("--status reports coverage without touching anything", () => {
     }
     expect(res.stdout).toContain("found: 1");
     expect(res.stdout).toContain("gap: 1");
+  });
+});
+
+describe("the mining census rides the coverage report", () => {
+  test("a recall import with nothing mined yet is undistilled backlog", async () => {
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+
+    const status = JSON.parse((await run(["--status", "--json"])).stdout) as DiscoveryJson;
+    const mining = status.mining;
+    expect(mining).toBeDefined();
+    expect(mining?.imported).toBe(1);
+    expect(mining?.undistilled).toBe(1);
+    expect(mining?.distilled).toBe(0);
+    expect(mining?.known_nothing_new).toBe(0);
+    expect(mining?.refused).toBe(0);
+    const claude = mining?.by_runtime.find((r) => r.runtime === "claude-code");
+    expect(claude?.undistilled).toBe(1);
+  });
+
+  test("an import without recall never reaches the backlog, because the plan would refuse it", async () => {
+    // Turns reach continuity only through --recall; without them the mining
+    // plan refuses the session (zero imported turns), and the census
+    // excludes what the plan refuses - it can never be distilled.
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--json"])).returncode).toBe(0);
+
+    const status = JSON.parse((await run(["--status", "--json"])).stdout) as DiscoveryJson;
+    expect(status.mining?.imported).toBe(1);
+    expect(status.mining?.refused).toBe(1);
+    expect(status.mining?.undistilled).toBe(0);
+  });
+
+  test("the human rendering carries the mining lines per runtime", async () => {
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall"])).returncode).toBe(0);
+
+    const res = await run(["--status"]);
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("mining: 0 distilled, 0 known-nothing-new, 1 undistilled");
+    expect(res.stdout).toContain("  undistilled: 1");
   });
 });
 

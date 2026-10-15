@@ -38,6 +38,10 @@ import {
   type SessionImportRecord,
 } from "../../../core/brain/sessions/discover.ts";
 import {
+  buildMiningCensus,
+  type SessionMiningCensus,
+} from "../../../core/brain/sessions/mining-census.ts";
+import {
   SESSION_RESUME_DISCARD,
   type SessionResumeDiscard,
 } from "../../../core/brain/sessions/checkpoint.ts";
@@ -318,7 +322,22 @@ async function sweep(req: SweepRequest): Promise<number> {
   }
 
   if (!req.importAll) {
-    emitCoverage(discovery, { asJson: req.asJson, listGap: req.discover });
+    // The distillation census is vault-side (the two ledgers plus the
+    // continuity turns the mining lane itself reads), so it rides the
+    // coverage report without re-hashing a single source log. Its own
+    // deadline is fresh: discovery's safeguard was spent on the sweep.
+    let mining: SessionMiningCensus;
+    try {
+      mining = buildMiningCensus(req.vault, {
+        safeguard: createSafeguard({
+          operation: OPERATION.sessions,
+          timeoutMs: resolveSafeguardTimeoutMs(OPERATION.sessions, req.config ?? undefined),
+        }),
+      });
+    } catch (exc) {
+      return fail(`session mining census failed: ${(exc as Error).message ?? exc}`);
+    }
+    emitCoverage(discovery, mining, { asJson: req.asJson, listGap: req.discover });
     return 0;
   }
 
@@ -421,9 +440,33 @@ function coverageJson(row: RuntimeCoverage): Record<string, unknown> {
   };
 }
 
+/** One mining row, as the JSON surface serialises it. */
+function miningRowJson(row: SessionMiningCensus["byRuntime"][number]): Record<string, unknown> {
+  return {
+    runtime: row.runtime,
+    distilled: row.distilled,
+    known_nothing_new: row.knownNothingNew,
+    undistilled: row.undistilled,
+    refused: row.refused,
+  };
+}
+
+/** The distillation census, as the JSON surface serialises it. */
+function miningJson(census: SessionMiningCensus): Record<string, unknown> {
+  return {
+    imported: census.imported,
+    distilled: census.distilled,
+    known_nothing_new: census.knownNothingNew,
+    undistilled: census.undistilled,
+    refused: census.refused,
+    by_runtime: census.byRuntime.map(miningRowJson),
+  };
+}
+
 /** Report what the sweep found, without importing anything. */
 function emitCoverage(
   discovery: SessionDiscovery,
+  mining: SessionMiningCensus,
   opts: { asJson: boolean; listGap: boolean },
 ): void {
   if (opts.asJson) {
@@ -434,6 +477,7 @@ function emitCoverage(
       unparsable: discovery.unparsable,
       unreadable: discovery.unreadable,
       by_runtime: discovery.byRuntime.map(coverageJson),
+      mining: miningJson(mining),
       ...(opts.listGap
         ? { would_import: discovery.byRuntime.flatMap((row) => [...row.gapPaths]) }
         : {}),
@@ -444,12 +488,25 @@ function emitCoverage(
   ok(`imported: ${discovery.imported}`);
   ok(`gap: ${discovery.gap}`);
   if (discovery.unparsable > 0) ok(`unparsable: ${discovery.unparsable}`);
+  if (mining.imported > 0) {
+    ok(
+      `mining: ${mining.distilled} distilled, ${mining.knownNothingNew} known-nothing-new, ` +
+        `${mining.undistilled} undistilled`,
+    );
+  }
   for (const row of discovery.byRuntime) {
     ok(`runtime: ${row.runtime}`);
     ok(`  found: ${row.found}`);
     ok(`  imported: ${row.imported}`);
     ok(`  gap: ${row.gap}`);
     if (row.unparsable > 0) ok(`  unparsable: ${row.unparsable}`);
+    const minedRow = mining.byRuntime.find((m) => m.runtime === row.runtime);
+    if (minedRow !== undefined) {
+      ok(`  distilled: ${minedRow.distilled}`);
+      ok(`  known-nothing-new: ${minedRow.knownNothingNew}`);
+      ok(`  undistilled: ${minedRow.undistilled}`);
+      if (minedRow.refused > 0) ok(`  refused: ${minedRow.refused}`);
+    }
     // Where it looked. "found: 0" without the root it looked under is an
     // answer an operator cannot act on or disbelieve.
     for (const root of row.roots) {

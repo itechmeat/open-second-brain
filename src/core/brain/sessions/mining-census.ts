@@ -1,0 +1,219 @@
+/**
+ * The distilled and undistilled census over imported sessions
+ * (session-mining-economy, t_0358af42).
+ *
+ * The import ledger (`sessions/discover.ts`) knows what was imported; the
+ * mining ledger (`session-mining-ledger.ts`) knows what was mined and with
+ * what yield. This module joins the two and classifies every imported
+ * session, so "how much of my imported backlog was never distilled" is one
+ * read, not a re-scan of every transcript on the machine:
+ *
+ *   - `distilled` - mined with accepted yield (written or staged > 0) on
+ *     the session's CURRENT turn material;
+ *   - `known-nothing-new` - mined barren on the current material (the
+ *     tombstone: every item deduped or durability-rejected). This is a
+ *     different state from backlog - the session is known, it just had
+ *     nothing new to say;
+ *   - `undistilled` - never mined, or mined on material that has since
+ *     changed (a re-import changed the turns, which changes the mined
+ *     content hash and re-opens the session with no clearing step);
+ *   - `refused` - sessions the plan would refuse (capture boundary, zero
+ *     imported turns, zero user turns). They can never be distilled, so
+ *     they are excluded from the backlog: counting them would nag forever
+ *     about unparsable material.
+ *
+ * ## The join is the portable identity, and the reads are vault-side
+ *
+ * The import ledger's keys are absolute machine paths; the mining ledger is
+ * keyed by the portable `sessionRefIdentity` basename, which is what the
+ * mining lane and every written signal's `session_ref` already carry. The
+ * census joins on that basename, so a session whose log moved to another
+ * absolute path (a rotated store, another machine's layout) still joins.
+ * No source log is opened or re-hashed here: the mined-material hash runs
+ * over the continuity turns the mining lane itself reads, which is what
+ * makes the census answerable inside a SessionStart hook's budget. The
+ * census reads only - neither ledger is rewritten, and a report that
+ * quietly rewrote the state it reports on would not be a report.
+ */
+
+import { basename } from "node:path";
+
+import { buildCaptureBoundary } from "../capture-boundary.ts";
+import {
+  minedTurnsHash,
+  readSessionMiningLedger,
+  type SessionMiningEntry,
+} from "../session-mining-ledger.ts";
+import type { Safeguard } from "../safeguard.ts";
+import { listSessionRawTurns } from "../session-recall.ts";
+import { readSessionLedger } from "./discover.ts";
+import type { SessionRuntimeId } from "../../runtime/host-facts.ts";
+
+/**
+ * The only turn role the mining plan embeds. Mirrors the private
+ * `MINED_TURN_ROLE` of `extract-signals.ts` - the plan is the source of
+ * truth for what counts as minable material, and this census must hash
+ * exactly what the plan would mine.
+ */
+const MINED_TURN_ROLE = "user";
+
+/** Where an imported session stands with respect to distillation. */
+export type SessionDistillationState = "distilled" | "known-nothing-new" | "undistilled";
+
+/** One runtime's backlog: how much of what it imported is still undistilled. */
+export interface RuntimeMiningCensus {
+  readonly runtime: SessionRuntimeId;
+  /** Every session the import ledger records under this runtime. */
+  readonly imported: number;
+  readonly distilled: number;
+  readonly knownNothingNew: number;
+  readonly undistilled: number;
+  /**
+   * Sessions the mining plan would refuse (boundary, zero imported turns,
+   * zero user turns). Excluded from the backlog by construction;
+   * `imported = distilled + knownNothingNew + undistilled + refused`.
+   */
+  readonly refused: number;
+  /** The undistilled sessions' portable ids, sorted. */
+  readonly undistilledSessionIds: ReadonlyArray<string>;
+}
+
+/** The vault-wide distilled and undistilled census. */
+export interface SessionMiningCensus {
+  readonly imported: number;
+  readonly distilled: number;
+  readonly knownNothingNew: number;
+  readonly undistilled: number;
+  readonly refused: number;
+  /** One row per runtime the import ledger records, sorted by runtime id. */
+  readonly byRuntime: ReadonlyArray<RuntimeMiningCensus>;
+}
+
+export interface BuildMiningCensusOptions {
+  /**
+   * Cooperative deadline, checked once per imported session. The census is
+   * vault-side and never hashes a source log, but a vault with tens of
+   * thousands of imported sessions still spends one turn listing per
+   * session; a caller with a host deadline (the SessionStart hook) passes
+   * its ceiling here so the read stops in time.
+   */
+  readonly safeguard?: Safeguard;
+}
+
+/**
+ * Build the census. A corrupt or unknown-schema IMPORT ledger or MINING
+ * record refuses by name (each read's own contract): a census that could
+ * not verify one of its two sources must not report a clean backlog as if
+ * the state were empty.
+ */
+export function buildMiningCensus(
+  vault: string,
+  opts: BuildMiningCensusOptions = {},
+): SessionMiningCensus {
+  const importedEntries = readSessionLedger(vault).entries;
+  const miningEntries = readSessionMiningLedger(vault).entries;
+  const boundary = buildCaptureBoundary(vault);
+
+  // One identity can sit under several absolute paths (the same basename
+  // imported from two machines' layouts); its state is a fact about the
+  // identity, so it is classified once and applied to every path entry.
+  const stateByIdentity = new Map<string, SessionDistillationState | "refused">();
+  const stateOf = (identity: string): SessionDistillationState | "refused" => {
+    const cached = stateByIdentity.get(identity);
+    if (cached !== undefined) return cached;
+    const state = classifySession(vault, boundary, miningEntries, identity);
+    stateByIdentity.set(identity, state);
+    return state;
+  };
+
+  interface Row {
+    imported: number;
+    refused: number;
+    states: Record<SessionDistillationState, number>;
+    ids: Set<string>;
+  }
+  const rows = new Map<SessionRuntimeId, Row>();
+  const rowOf = (runtime: SessionRuntimeId): Row => {
+    const existing = rows.get(runtime);
+    if (existing !== undefined) return existing;
+    const fresh: Row = {
+      imported: 0,
+      refused: 0,
+      states: { distilled: 0, "known-nothing-new": 0, undistilled: 0 },
+      ids: new Set(),
+    };
+    rows.set(runtime, fresh);
+    return fresh;
+  };
+
+  for (const [path, entry] of Object.entries(importedEntries)) {
+    opts.safeguard?.checkpoint();
+    const identity = basename(path);
+    const state = stateOf(identity);
+    const row = rowOf(entry.runtime);
+    row.imported += 1;
+    if (state === "refused") {
+      row.refused += 1;
+      continue;
+    }
+    row.states[state] += 1;
+    if (state === "undistilled") row.ids.add(identity);
+  }
+
+  const byRuntime: RuntimeMiningCensus[] = [...rows.keys()].toSorted().map((runtime) => {
+    const row = rows.get(runtime)!;
+    return {
+      runtime,
+      imported: row.imported,
+      distilled: row.states.distilled,
+      knownNothingNew: row.states["known-nothing-new"],
+      undistilled: row.states.undistilled,
+      refused: row.refused,
+      undistilledSessionIds: [...row.ids].toSorted(),
+    };
+  });
+  const total = (pick: (row: RuntimeMiningCensus) => number): number =>
+    byRuntime.reduce((sum, row) => sum + pick(row), 0);
+
+  return {
+    imported: total((row) => row.imported),
+    distilled: total((row) => row.distilled),
+    knownNothingNew: total((row) => row.knownNothingNew),
+    undistilled: total((row) => row.undistilled),
+    refused: total((row) => row.refused),
+    byRuntime,
+  };
+}
+
+/**
+ * Classify one session identity: the plan's own refusal order (boundary
+ * decision, zero imported turns, zero user turns), then the mining join.
+ * The mined-material derivation mirrors `planExtractSignals` field for
+ * field - user role, unsuppressed text, trimmed and non-empty, the turn's
+ * stored timestamp verbatim - because a hash over different material than
+ * the plan embeds would misclassify every session at once.
+ */
+function classifySession(
+  vault: string,
+  boundary: ReturnType<typeof buildCaptureBoundary>,
+  miningEntries: Readonly<Record<string, SessionMiningEntry>>,
+  identity: string,
+): SessionDistillationState | "refused" {
+  if (boundary.sessionDecision(identity) !== "capture") return "refused";
+  const turns = listSessionRawTurns(vault, identity);
+  if (turns.length === 0) return "refused";
+  const mined: Array<{ turnId: string; text: string; timestamp: string }> = [];
+  for (const turn of turns) {
+    if (turn.role !== MINED_TURN_ROLE) continue;
+    if (boundary.suppressMessage(turn.text)) continue;
+    const text = turn.text.trim();
+    if (text.length === 0) continue;
+    mined.push({ turnId: turn.turn_id, text, timestamp: turn.timestamp });
+  }
+  if (mined.length === 0) return "refused";
+  const entry = miningEntries[identity];
+  if (entry === undefined || entry.minedContentHash !== minedTurnsHash(mined)) {
+    return "undistilled";
+  }
+  return entry.outcome.written + entry.outcome.staged > 0 ? "distilled" : "known-nothing-new";
+}
