@@ -183,6 +183,9 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         recentApplied: [],
         recentViolated: [],
         ...(np.scope ? { scope: np.scope } : {}),
+        // The scope is read back from stored signals: a legacy value
+        // must not abort the pass (see `lenientScopeTags`).
+        lenientScopeTags: true,
         ...(np.supersedes ? { supersedes: np.supersedes } : {}),
         // F5: bi-temporal validity extracted from the source signal.
         ...(np.valid_from ? { valid_from: np.valid_from } : {}),
@@ -229,6 +232,7 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
           ? { freshness_trend: update.freshness_trend }
           : {}),
         ...(update.scope ? { scope: update.scope } : {}),
+        lenientScopeTags: true,
       },
       [],
       { overwrite: true },

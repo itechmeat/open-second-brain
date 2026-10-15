@@ -9,8 +9,9 @@
  *
  * The contract pinned here: a comma-separated scope is a list - one
  * `brain/scope/<segment>` tag per segment, the `scope` field verbatim -
- * and a stored segment that still fails the rule is refused with the
- * record named, so an operator knows which file to fix.
+ * and a stored segment that still fails the rule (a legacy value such as
+ * `front end`, written before v1.78.0) is slugified rather than aborting
+ * the pass, for a stored preference and for stored signals alike.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -21,7 +22,7 @@ import { join } from "node:path";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
-import { TagSyntaxError } from "../../../src/core/brain/tag-syntax.ts";
+import { parseSignal, writeSignal } from "../../../src/core/brain/signal.ts";
 
 let vault: string;
 
@@ -54,6 +55,10 @@ function storedPreference(scope: string, scopeTag: string): string {
       .replace("scope: alpha", `scope: ${scope}`)
       .replace("brain/scope/alpha", scopeTag),
   );
+  // Guard against a writer format change turning the edit into a no-op.
+  const edited = readFileSync(path, "utf8");
+  expect(edited).toContain(`scope: ${scope}`);
+  expect(edited).toContain(scopeTag);
   return path;
 }
 
@@ -76,17 +81,44 @@ test.each([
   expect(parsePreference(path).scope).toBe("alpha, beta,alpha");
 });
 
-test("a stored scope segment that fails the tag rule is refused naming the record", () => {
-  storedPreference("alpha,two words", "brain/scope/alpha");
+test("a stored scope segment that fails the tag rule is slugified, not refused", () => {
+  const path = storedPreference("alpha,two words", "brain/scope/alpha");
 
-  let thrown: unknown;
-  try {
-    refresh();
-  } catch (err) {
-    thrown = err;
+  refresh();
+
+  const raw = readFileSync(path, "utf8");
+  expect(raw).toContain(
+    "tags: [brain, brain/preference, brain/topic/example-rule, brain/scope/alpha, brain/scope/two-words]",
+  );
+  expect(parsePreference(path).scope).toBe("alpha,two words");
+});
+
+test("stored signals with a legacy scope promote into a preference", () => {
+  // Three same-sign signals on one topic is the promotion threshold; each
+  // is written with a valid scope and then hand-set to the legacy value.
+  for (const slug of ["a", "b", "c"]) {
+    const { path } = writeSignal(vault, {
+      topic: "tabs-rule",
+      signal: "positive",
+      agent: "csv-agent",
+      principle: "Indent source with tabs, not spaces",
+      created_at: "2026-10-01T09:00:00Z",
+      date: "2026-10-01",
+      slug,
+      scope: "frontend",
+    });
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8")
+        .replace("scope: frontend", "scope: front end")
+        .replace("brain/scope/frontend", '"brain/scope/front end"'),
+    );
+    expect(parseSignal(path).scope).toBe("front end");
   }
-  expect(thrown).toBeInstanceOf(TagSyntaxError);
-  expect((thrown as TagSyntaxError).field).toBe("scope");
-  expect((thrown as TagSyntaxError).token).toBe("two words");
-  expect((thrown as Error).message).toContain("pref-example-rule");
+
+  refresh();
+
+  const prefPath = join(vault, "Brain", "preferences", "pref-tabs-rule.md");
+  expect(parsePreference(prefPath).scope).toBe("front end");
+  expect(readFileSync(prefPath, "utf8")).toContain("brain/scope/front-end");
 });

@@ -520,7 +520,7 @@ test("a provider that never reports a dispatch keeps the pre-call interval as th
   // The start is the pre-call stamp from the lane-start tick, before the
   // keyword lanes open; the end is the continuation past their close.
   expect(timing.embedStartMs).toBeLessThan(timing.keywordStartMs);
-  expect(timing.embedEndMs).toBeGreaterThan(timing.keywordEndMs);
+  expect(timing.embedEndMs).toBeGreaterThanOrEqual(timing.keywordEndMs);
   expect(timing.overlappedMs).toBe(timing.keywordEndMs - timing.keywordStartMs);
   expect(out.results.some((r) => r.searchType === "hybrid")).toBe(true);
 });

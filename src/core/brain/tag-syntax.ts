@@ -12,6 +12,7 @@
  */
 
 import { isObsidianTagValue } from "../tags.ts";
+import { slugify } from "../vault.ts";
 
 export { isObsidianTagValue };
 
@@ -49,31 +50,50 @@ export function requireObsidianTagValue(value: string, field: string): string {
   return value;
 }
 
+/** How {@link scopeTagValues} treats a segment that fails the tag rule. */
+export interface ScopeTagOptions {
+  /** Record id named in the strict refusal so an operator can find it. */
+  readonly record?: string;
+  /**
+   * `true` for a rewrite of an already persisted record (the dream pass):
+   * a failing segment is slugified like a topic, and dropped when even
+   * the slug fails the rule, instead of aborting the write. New caller
+   * input stays strict (the default).
+   */
+  readonly lenient?: boolean;
+}
+
 /**
  * The `brain/scope/<value>` tag values a stored `scope` field composes
  * to. A comma-separated scope (`alpha,beta`, the shape records written
  * before v1.78.0 can carry and the reader has always accepted) is a list:
  * each trimmed, non-empty segment becomes its own tag, duplicates
- * collapse, and the `scope` field itself stays verbatim. Every segment
- * must satisfy the shared tag rule; a segment that does not is refused
- * unrewritten with the field named and, when `record` is given, the
- * record named too so an operator can find and fix it.
+ * collapse, and the `scope` field itself stays verbatim. In strict mode a
+ * segment that fails the shared tag rule is refused unrewritten with the
+ * field named and, when `record` is given, the record named too; in
+ * lenient mode it is slugified, or composes no tag when the slug still
+ * fails (see {@link ScopeTagOptions}).
  */
-export function scopeTagValues(scope: string, record?: string): string[] {
+export function scopeTagValues(scope: string, options: ScopeTagOptions = {}): string[] {
   const out: string[] = [];
   for (const raw of scope.split(",")) {
-    const segment = raw.trim();
-    if (segment === "" || out.includes(segment)) continue;
+    let segment = raw.trim();
+    if (segment === "") continue;
     if (!isObsidianTagValue(segment)) {
-      throw new TagSyntaxError(
-        "scope",
-        segment,
-        record === undefined
-          ? TAG_VALUE_RULE_TEXT
-          : `${TAG_VALUE_RULE_TEXT}; fix the scope field of ${record}`,
-      );
+      if (options.lenient === true) {
+        segment = slugify(segment);
+        if (!isObsidianTagValue(segment)) continue;
+      } else {
+        throw new TagSyntaxError(
+          "scope",
+          segment,
+          options.record === undefined
+            ? TAG_VALUE_RULE_TEXT
+            : `${TAG_VALUE_RULE_TEXT}; fix the scope field of ${options.record}`,
+        );
+      }
     }
-    out.push(segment);
+    if (!out.includes(segment)) out.push(segment);
   }
   return out;
 }

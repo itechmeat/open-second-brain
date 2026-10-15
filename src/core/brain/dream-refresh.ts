@@ -382,6 +382,8 @@ export function planRefresh(
       if (
         !wouldRewritePreference(vault, {
           ...prospective,
+          // Same lenient scope tags the write loop renders with.
+          lenientScopeTags: true,
           recentApplied: ev2.applied,
           recentViolated: ev2.violated,
           // v0.12.0 Brain Integrity Suite: feed the existing

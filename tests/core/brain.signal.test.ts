@@ -482,6 +482,26 @@ describe("writeSignal — tag syntax (t_11ee559f)", () => {
     expect(() => writeSignal(tmp, baseInput({ scope: "two words" }))).toThrow(TagSyntaxError);
   });
 
+  test("a comma-separated scope composes one tag per segment; the field stays verbatim", () => {
+    const r = writeSignal(tmp, baseInput({ scope: "alpha, beta" }));
+    expect(parseSignal(r.path).scope).toBe("alpha, beta");
+    expect(readFileSync(r.path, "utf8")).toContain(
+      "tags: [brain, brain/signal, brain/topic/no-internal-abbrev, brain/scope/alpha, brain/scope/beta]",
+    );
+  });
+
+  test("a failing segment of a comma-separated scope is refused, naming that segment", () => {
+    let thrown: unknown;
+    try {
+      writeSignal(tmp, baseInput({ scope: "alpha,two words" }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("scope");
+    expect((thrown as TagSyntaxError).token).toBe("two words");
+  });
+
   test("clean inputs keep the incumbent tags line byte-for-byte", () => {
     const r = writeSignal(tmp, baseInput());
     const raw = readFileSync(r.path, "utf8");

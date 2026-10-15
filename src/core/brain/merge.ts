@@ -226,6 +226,9 @@ export function mergePreferences(
       confidence_value: keep.confidence_value,
       pinned: keep.pinned,
       ...(keep.scope ? { scope: keep.scope } : {}),
+      // Rewrites the persisted keep record: a legacy scope must not
+      // block the merge (see `lenientScopeTags`).
+      lenientScopeTags: true,
       ...(keep.supersedes ? { supersedes: keep.supersedes } : {}),
       ...(keep.aliases ? { aliases: keep.aliases } : {}),
     },

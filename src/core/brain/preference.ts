@@ -152,6 +152,16 @@ export interface WritePreferenceInput {
   readonly confirmed_at?: string | null;
   readonly scope?: string;
   /**
+   * Compose the `brain/scope/...` tags leniently: a scope segment that
+   * fails the shared tag rule is slugified (or dropped when the slug
+   * fails too) instead of refusing the write. Set only when the scope is
+   * re-read from a persisted record - the dream pass rewriting a stored
+   * preference or promoting stored signals - so a legacy value written
+   * before v1.78.0 cannot abort it. The `scope` field stays verbatim
+   * either way; new caller input leaves this unset and stays strict.
+   */
+  readonly lenientScopeTags?: boolean;
+  /**
    * Optional owner token (Knowledge Provenance suite, v1.7). When set, the
    * fact is owner-private: owner-scoped recall returns it only to its owner,
    * while ownerless facts stay shared. Stored verbatim; normalized for
@@ -932,11 +942,15 @@ function composePreferenceTags(input: WritePreferenceInput): string[] {
   // topic segment is slugified then validated; scope segments and
   // `extraTags` entries are caller-controlled input, refused unrewritten
   // with the field named. A comma-separated scope composes one tag per
-  // segment (`scopeTagValues`).
+  // segment (`scopeTagValues`); `lenientScopeTags` relaxes the scope
+  // refusal for rewrites of persisted records.
   push("brain");
   push("brain/preference");
   push(`brain/topic/${requireObsidianTagValue(slugify(input.topic.trim()), "topic")}`);
-  for (const scope of scopeTagValues(input.scope ?? "", `pref-${input.slug}`)) {
+  for (const scope of scopeTagValues(input.scope ?? "", {
+    record: `pref-${input.slug}`,
+    lenient: input.lenientScopeTags === true,
+  })) {
     push(`brain/scope/${scope}`);
   }
   for (const t of input.extraTags ?? []) {
