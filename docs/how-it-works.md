@@ -216,6 +216,8 @@ trail, and `move` retires the chain into `Brain/intentions/history/`.
 
 All four paths share a normalised payload hash so the same rule captured twice from different surfaces dedups automatically. Pinned preferences are exempt from automatic retire (`stale-no-evidence`, `expired-unconfirmed`, `rebutted`); only `o2b brain reject` can retire them.
 
+Session mining has a memory of its own (since v1.86.0). When `o2b brain extract-signals` (or the `brain_extract_signals` tool) commits a mine that ends with nothing written and nothing staged - an empty answer, every item already deduped, every item refused by the durability gate, or any mix - it records a zero-yield tombstone for the session in a mining ledger beside the import ledger, keyed on a SHA-256 of the mined turn material (turn id, text, timestamp). The next plan over that session returns the recorded breakdown instead of an envelope, so an unchanged transcript is never re-offered to the model; a re-import that changes the turns changes the hash and re-opens the session with no clearing step. Because removing a downstream preference does not change a session's turns, the tombstone never lifts on its own: `--force` (MCP `force`) bypasses the gate for exactly one plan call when the session should be re-proposed. A commit that succeeds but cannot record its tombstone still succeeds and names the failure, so a ledger that stopped being written is never a silent fact.
+
 `o2b brain watchdog` is the recovery surface for this layout. It checks the
 Brain config, required directories, and rebuildable search index, emits
 exponential backoff metadata for schedulers, and writes an audit record. By

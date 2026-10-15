@@ -51,6 +51,10 @@ async function toolBrainExtractSignals(
         decisionModel,
         tokenImpactEnabled:
           decisionModel !== null && resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined),
+        // The re-mine escape: bypass the zero-yield tombstone for this one
+        // plan call, for "I removed the downstream item and want it
+        // re-proposed".
+        force: args["force"] === true,
       });
       return {
         phase: "plan",
@@ -67,13 +71,26 @@ async function toolBrainExtractSignals(
         confidence_floor: plan.confidenceFloor,
         llm_step: plan.llmStep,
         // Optional fields, present only while the decision-model turn
-        // pre-filter is on (never with the use `off`).
+        // pre-filter is on (never with the use `off`) or when the session
+        // carries a zero-yield mining tombstone.
         ...(plan.turnsDropped !== undefined ? { turns_dropped: plan.turnsDropped } : {}),
         ...(plan.skipped !== undefined
           ? {
               skipped: {
                 reason: plan.skipped.reason,
-                turns_dropped: plan.skipped.turnsDropped,
+                ...(plan.skipped.turnsDropped !== undefined
+                  ? { turns_dropped: plan.skipped.turnsDropped }
+                  : {}),
+                ...(plan.skipped.miningOutcome !== undefined
+                  ? {
+                      mining_outcome: {
+                        written: plan.skipped.miningOutcome.written,
+                        staged: plan.skipped.miningOutcome.staged,
+                        deduped: plan.skipped.miningOutcome.deduped,
+                        durability_rejected: plan.skipped.miningOutcome.durabilityRejected,
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),
@@ -106,6 +123,11 @@ async function toolBrainExtractSignals(
       deduped: res.deduped,
       durability_rejected: res.durabilityRejected,
       rejected: res.rejected.map((r) => ({ topic: r.topic, reason: r.reason })),
+      // Present only when the commit succeeded but the zero-yield mining
+      // tombstone could not be recorded - named, never thrown.
+      ...(res.miningLedgerFailure !== undefined
+        ? { mining_ledger_failure: res.miningLedgerFailure }
+        : {}),
     };
   });
 }
@@ -114,7 +136,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Without `items` returns the turns plus one needs-llm-step envelope. With `items` writes them to Brain/inbox/ as speculative `source_type: auto_extract` signals. Refuses over-cap, under-floor or repeated-topic payloads.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Without `items` returns the turns plus one needs-llm-step envelope. A session already mined at its current content that yielded nothing accepted returns no envelope: the plan carries skipped.reason 'mining_tombstone' and the recorded outcome breakdown instead, and `force: true` bypasses that tombstone for this one call (for example after you removed the downstream preference and want the session re-proposed). With `items` writes them to Brain/inbox/ as speculative `source_type: auto_extract` signals. Refuses over-cap, under-floor or repeated-topic payloads.",
     inputSchema: {
       type: "object",
       properties: {
@@ -161,6 +183,13 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",
+        },
+        force: {
+          type: "boolean",
+          description:
+            "Plan phase only: bypass the zero-yield mining tombstone for this one call. " +
+            "Use it when a session was tombstoned and you want it re-proposed anyway - " +
+            "for example after removing the downstream preference it kept quiet about.",
         },
       },
       required: ["session"],

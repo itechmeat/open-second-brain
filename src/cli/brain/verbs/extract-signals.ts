@@ -8,6 +8,13 @@
  * that answer and writes the accepted items as speculative inbox signals.
  * OSB runs no model on either path.
  *
+ * A session already mined at its current content that yielded nothing
+ * accepted carries a tombstone in the session mining ledger; its plan phase
+ * returns the recorded breakdown instead of an envelope (reason
+ * `mining_tombstone`), and `--force` bypasses that gate for the one plan
+ * call it is given to. A commit that succeeds but cannot record its
+ * zero-yield tombstone still succeeds, and names the ledger failure.
+ *
  * Exit codes: 0 on success, 1 on an operational failure or a refused
  * payload, 2 on usage errors.
  */
@@ -20,6 +27,7 @@ import {
   ExtractSignalsError,
 } from "../../../core/brain/extract-signals.ts";
 import {
+  EXTRACT_MINING_TOMBSTONE_SKIP_REASON,
   planExtractSignalsPrefiltered,
   recordExtractPrefilterCommit,
   resolveExtractPrefilterConfig,
@@ -45,7 +53,7 @@ import {
 
 const USAGE =
   "usage: o2b brain extract-signals <session-ref> [--payload <json> | --payload-file <path>] " +
-  "[--agent <name>] [--vault <path>] [--json]";
+  "[--force] [--agent <name>] [--vault <path>] [--json]";
 
 /** Refusals the operator caused, reported without a stack. */
 const NAMED_REFUSALS = [ExtractSignalsError, ResponseShapeError, ResponseCheckError] as const;
@@ -60,6 +68,7 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
     agent: { type: "string" },
     payload: { type: "string" },
     "payload-file": { type: "string" },
+    force: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sessionRef = positional[0];
@@ -81,6 +90,9 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
         now: new Date(),
         decisionModel,
         tokenImpactEnabled: decisionModel !== null && resolveTokenImpactLedgerEnabled(config),
+        // The re-mine escape: bypass the zero-yield tombstone for this one
+        // plan call (no payload here, so this IS the plan call).
+        force: flags["force"] === true,
       });
       if (asJson) {
         okJson({
@@ -103,7 +115,19 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
             ? {
                 skipped: {
                   reason: plan.skipped.reason,
-                  turns_dropped: plan.skipped.turnsDropped,
+                  ...(plan.skipped.turnsDropped !== undefined
+                    ? { turns_dropped: plan.skipped.turnsDropped }
+                    : {}),
+                  ...(plan.skipped.miningOutcome !== undefined
+                    ? {
+                        mining_outcome: {
+                          written: plan.skipped.miningOutcome.written,
+                          staged: plan.skipped.miningOutcome.staged,
+                          deduped: plan.skipped.miningOutcome.deduped,
+                          durability_rejected: plan.skipped.miningOutcome.durabilityRejected,
+                        },
+                      }
+                    : {}),
                 },
               }
             : {}),
@@ -115,6 +139,16 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       }
       ok(`session: ${plan.sessionId} (${plan.turnsScanned} imported turn(s))`);
       if (plan.skipped !== undefined) {
+        if (plan.skipped.reason === EXTRACT_MINING_TOMBSTONE_SKIP_REASON) {
+          const outcome = plan.skipped.miningOutcome!;
+          ok(
+            `nothing to mine: this session was already mined at its current content and ` +
+              `yielded nothing (written 0, staged 0, deduped ${outcome.deduped}, ` +
+              `durability-rejected ${outcome.durabilityRejected}); ` +
+              `re-run with --force to re-mine it`,
+          );
+          return 0;
+        }
         ok(
           `nothing to mine: the decision-model pre-filter dropped all ` +
             `${plan.skipped.turnsDropped} user turn(s)`,
@@ -168,6 +202,11 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
         deduped: res.deduped,
         durability_rejected: res.durabilityRejected,
         rejected: res.rejected.map((r) => ({ topic: r.topic, reason: r.reason })),
+        // Present only when the commit succeeded but the zero-yield
+        // tombstone could not be recorded.
+        ...(res.miningLedgerFailure !== undefined
+          ? { mining_ledger_failure: res.miningLedgerFailure }
+          : {}),
         // Present only when a leading <think> block was stripped (t_dac8bf7e).
         ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
       });
@@ -178,6 +217,9 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
         (res.staged > 0 ? ` (staged for approval)` : "") +
         `, deduped ${res.deduped}, durability-rejected ${res.durabilityRejected}`,
     );
+    if (res.miningLedgerFailure !== undefined) {
+      ok(`mining ledger not updated: ${res.miningLedgerFailure}`);
+    }
     if (strip !== undefined) ok(payloadStripNote(strip));
     for (const r of res.rejected) ok(`rejected: ${r.topic} (${r.reason})`);
     return 0;

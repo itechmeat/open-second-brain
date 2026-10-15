@@ -9,14 +9,20 @@
  *     `ok: false` - never a stack trace and never a zero exit.
  *  4. A missing session reference is a usage error (exit 2).
  *  5. The verb has its own `--help`, not a dump of the whole brain help.
+ *  6. A commit that lands nothing tombstones the session, and the next
+ *     plan names it with the recorded breakdown; --force bypasses the
+ *     tombstone for exactly one plan call.
+ *  7. A ledger write failure on a successful commit exits 0 and names the
+ *     failure, in --json and in text.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { AUTO_EXTRACT_PER_SESSION_CAP } from "../../src/core/brain/extract-signals.ts";
+import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -185,5 +191,93 @@ describe("think-block strip (t_dac8bf7e)", () => {
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as Record<string, unknown>;
     expect("note" in payload).toBe(false);
+  });
+});
+
+// ----- The zero-yield mining tombstone on the surface ------------------------
+//
+//  6. A commit that lands nothing tombstones the session, and the next
+//     plan says so by name with the recorded breakdown - in --json and in
+//     text - instead of re-offering the same turns.
+//  7. --force bypasses the tombstone for exactly one plan call: the forced
+//     plan carries the envelope, and the plan after it is suppressed again.
+//  8. A ledger write failure on a successful commit exits 0 and names the
+//     failure in --json and in text - never a throw, never a silent drop.
+
+function corruptMiningLedger(): void {
+  mkdirSync(dirname(sessionMiningLedgerPath(vault)), { recursive: true });
+  writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
+}
+
+describe("mining tombstone", () => {
+  test("a barren commit tombstones the session and the next plan names it", async () => {
+    const mine = await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    expect(mine.returncode).toBe(0);
+    const r = await run([SESSION, "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      llm_step: unknown;
+      turns_mined: unknown[];
+      skipped?: {
+        reason: string;
+        mining_outcome?: {
+          written: number;
+          staged: number;
+          deduped: number;
+          durability_rejected: number;
+        };
+      };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.skipped?.reason).toBe("mining_tombstone");
+    expect(payload.skipped?.mining_outcome).toEqual({
+      written: 0,
+      staged: 0,
+      deduped: 0,
+      durability_rejected: 0,
+    });
+    expect(payload.llm_step).toBeNull();
+    expect(payload.turns_mined).toEqual([]);
+  });
+
+  test("text mode names the tombstone and the force escape", async () => {
+    await run([SESSION, "--payload", JSON.stringify({ items: [] })]);
+    const r = await run([SESSION]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("already mined");
+    expect(r.stdout).toContain("--force");
+    // The evidence rides the line too, not just the verdict.
+    expect(r.stdout).toMatch(/deduped 0/);
+  });
+
+  test("--force bypasses the tombstone for exactly one plan call", async () => {
+    await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    const forced = await run([SESSION, "--force", "--json"]);
+    expect(forced.returncode).toBe(0);
+    const forcedPayload = JSON.parse(forced.stdout) as {
+      llm_step: { status: string } | null;
+      skipped?: unknown;
+    };
+    expect(forcedPayload.skipped).toBeUndefined();
+    expect(forcedPayload.llm_step?.status).toBe("needs-llm-step");
+    // The bypass is per call: the next unforced plan is suppressed again.
+    const after = await run([SESSION, "--json"]);
+    const afterPayload = JSON.parse(after.stdout) as { skipped?: { reason: string } };
+    expect(afterPayload.skipped?.reason).toBe("mining_tombstone");
+  });
+
+  test("a ledger write failure on a successful commit exits 0 and names the failure", async () => {
+    corruptMiningLedger();
+    const mine = await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    expect(mine.returncode).toBe(0);
+    const payload = JSON.parse(mine.stdout) as { ok: boolean; mining_ledger_failure?: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.mining_ledger_failure).toContain("session mining ledger is corrupted JSON");
+
+    // Text mode names it too, on the same exit code.
+    const text = await run([SESSION, "--payload", JSON.stringify({ items: [] })]);
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("mining ledger");
   });
 });

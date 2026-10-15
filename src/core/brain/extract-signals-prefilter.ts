@@ -134,6 +134,15 @@ export interface PrefilteredPlanOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The operator's `token_impact` ledger opt-in. */
   readonly tokenImpactEnabled?: boolean;
+  /**
+   * Bypass the mining tombstone gate for this ONE plan call - the re-mine
+   * escape for "I removed the downstream item and want it re-proposed",
+   * since removing a preference does not change a session's turns and so
+   * never lifts its tombstone on its own. The ledger is still read and
+   * still fails closed: force ignores a matching entry, never a corrupt
+   * file, and it changes nothing else about the plan.
+   */
+  readonly force?: boolean;
 }
 
 /** Whether this configuration runs the pre-filter at all. */
@@ -250,7 +259,9 @@ function questionsFor(count: number): Readonly<Record<string, DecisionQuestion>>
  * envelope, no turns, the recorded breakdown as evidence - shaped exactly
  * like the pre-filter's own skip, so there is one "no envelope, and why"
  * channel. A session the ledger cannot verify (corrupt file, unknown
- * schema) throws by the read's contract rather than passing as eligible.
+ * schema) throws by the read's contract rather than passing as eligible -
+ * `force` bypasses the HIT, never the read, so the refusal still names a
+ * broken ledger to an operator who asked for a re-mine.
  *
  * The plan's `turnsMined` is both the gate's hash input and what a pass
  * leaves untouched; only a hit empties it. The token-impact ledger is not
@@ -260,9 +271,10 @@ function questionsFor(count: number): Readonly<Record<string, DecisionQuestion>>
 function miningTombstoneGate(
   vault: string,
   plan: SignalExtractionPlan,
+  force: boolean,
 ): PrefilteredSignalExtractionPlan {
   const entry = readMiningTombstone(vault, plan.sessionId, plan.turnsMined);
-  if (entry === null) return plan;
+  if (entry === null || force) return plan;
   return Object.freeze({
     ...plan,
     turnsMined: Object.freeze([]),
@@ -281,6 +293,7 @@ function miningTombstoneGate(
  * the pre-filter, because the spend it prevents is the caller's mining
  * round trip and not only this module's requests. Refusals
  * ({@link ExtractSignalsError}) are thrown as there, before the gate.
+ * `opts.force` lifts the gate for this one call.
  */
 export async function planExtractSignalsPrefiltered(
   vault: string,
@@ -288,16 +301,25 @@ export async function planExtractSignalsPrefiltered(
   opts: PrefilteredPlanOptions,
 ): Promise<PrefilteredSignalExtractionPlan> {
   const cfg = opts.decisionModel;
+  const force = opts.force === true;
   if (!extractPrefilterActive(cfg)) {
-    return miningTombstoneGate(vault, planExtractSignals(vault, sessionId, { now: opts.now }));
+    return miningTombstoneGate(
+      vault,
+      planExtractSignals(vault, sessionId, { now: opts.now }),
+      force,
+    );
   }
   const provider = opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env, vault);
   if (provider === null) {
-    return miningTombstoneGate(vault, planExtractSignals(vault, sessionId, { now: opts.now }));
+    return miningTombstoneGate(
+      vault,
+      planExtractSignals(vault, sessionId, { now: opts.now }),
+      force,
+    );
   }
 
   const planned = planExtractSignals(vault, sessionId, { now: opts.now, sourceTurnHint: true });
-  const suppressed = miningTombstoneGate(vault, planned);
+  const suppressed = miningTombstoneGate(vault, planned, force);
   if (suppressed.skipped !== undefined) return suppressed;
   // The gate passed the plan through unchanged, so `full` is the base
   // plan and its envelope is the non-null one the rest of this function
