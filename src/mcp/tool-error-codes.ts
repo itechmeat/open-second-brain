@@ -58,6 +58,8 @@ import { BrainConfigError } from "../core/brain/policy/errors.ts";
 import { ResponseCheckError, SEMANTIC_VIOLATION_CODES } from "../core/brain/response-checks.ts";
 import { ResponseShapeError, SHAPE_VIOLATION_CODES } from "../core/brain/response-shape.ts";
 import { SafeguardAbortError, SafeguardTimeoutError } from "../core/brain/safeguard.ts";
+import type { StorageErrorCode } from "../core/brain/storage/capacity-error.ts";
+import { StorageCapacityError } from "../core/brain/storage/capacity-error.ts";
 import type { WriteBatchErrorCode } from "../core/brain/write-batch.ts";
 import { WriteBatchError } from "../core/brain/write-batch.ts";
 import { ConfigReadError } from "../core/config.ts";
@@ -253,6 +255,25 @@ const HOST_MEMORY_WRITE_CODES = exhaustiveMembers<HostMemoryWriteErrorCode>()([
 ]);
 
 /**
+ * The storage-capacity vocabulary. The leaf owns the canonical member
+ * list as `STORAGE_ERROR_CODES`; the literals are spelled out here so
+ * `exhaustiveMembers` fails `tsc` the moment the leaf grows a code this
+ * table has not answered for - the same two-direction check every other
+ * imported union gets.
+ */
+const STORAGE_CAPACITY_CODES = exhaustiveMembers<StorageErrorCode>()([
+  "capacity_unmeasurable",
+  "capacity_exhausted",
+]);
+
+/**
+ * The leaf vocabulary, re-exported under the one name consumers of the
+ * wire vocabulary already import from here. The canonical home stays in
+ * the leaf; this only spares callers a second import path.
+ */
+export { STORAGE_ERROR_CODES } from "../core/brain/storage/capacity-error.ts";
+
+/**
  * The token a count-guard refusal is reported under on the wire. The core
  * `CountGuardError` carries `COUNT_GUARD`; `brain_note_lifecycle` has
  * always answered it as this lower-case token, and this registry keeps the
@@ -291,6 +312,7 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...PINNED_BATCH_CODES,
     ...EXACT_STATE_CODES,
     ...HOST_MEMORY_WRITE_CODES,
+    ...STORAGE_CAPACITY_CODES,
     COUNT_GUARD_WIRE_CODE,
     ...EXPIRATION_REFUSAL_CODES,
   ] as const),
@@ -365,6 +387,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   carried(PinnedBatchError),
   carried(ExactStateError),
   carried(HostMemoryWriteError),
+  carried(StorageCapacityError),
   carried(SearchError),
   carried(ResponseShapeError),
   carried(ResponseCheckError),

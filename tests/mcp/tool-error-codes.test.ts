@@ -32,6 +32,7 @@ import { BrainConfigError } from "../../src/core/brain/policy/errors.ts";
 import { SHAPE_VIOLATION_CODES } from "../../src/core/brain/response-shape.ts";
 import { SEMANTIC_VIOLATION_CODES } from "../../src/core/brain/response-checks.ts";
 import { SafeguardAbortError, SafeguardTimeoutError } from "../../src/core/brain/safeguard.ts";
+import { STORAGE_ERROR_CODES } from "../../src/core/brain/storage/capacity-error.ts";
 import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
 import { ConfigReadError } from "../../src/core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../../src/core/search/search-error.ts";
@@ -178,6 +179,7 @@ describe("TOOL_ERROR_CODES", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
       ...SEARCH_ERROR_CODES,
+      ...STORAGE_ERROR_CODES,
       ...Object.values(SHAPE_VIOLATION_CODES),
       ...Object.values(SEMANTIC_VIOLATION_CODES),
       VAULT_FROZEN_REFUSAL,
