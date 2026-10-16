@@ -8,11 +8,11 @@
  *      silently clamped cap would be indistinguishable from no cap, and
  *      for a gate that is the worst possible failure.
  *   2. `critical_percent` must exceed `warn_percent`, `critical_days`
- *      must be smaller than `warn_days`, and `pause_percent` must sit at
- *      or below `critical_percent` - the same coherence class: a
+ *      must be smaller than `warn_days`, and `pause_percent` must sit
+ *      strictly below `critical_percent` - the same coherence class: a
  *      critical band that fires before the warn band inverts the tiers,
- *      and a pause line past the refuse line could never pause before
- *      the refusal fired.
+ *      and a pause line at or past the refuse line could never pause
+ *      before the refusal fired.
  *   3. An absent block resolves to the documented defaults with the cap
  *      absent (unbounded), both through the validator and through
  *      `loadStorageConfigSafe` on a vault with no `_brain.yaml`. An
