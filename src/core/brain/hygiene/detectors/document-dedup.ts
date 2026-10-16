@@ -165,6 +165,15 @@ interface PairScore {
  */
 interface CollectedDocuments {
   readonly records: DocumentRecord[];
+  /**
+   * The count the cap bounds: how many pages were collected BEFORE the
+   * merge-resolved filter thinned them, i.e. the size of the read set.
+   * The coverage notice gates on THIS count - gating on
+   * {@link records}.length would let a merge-resolved page inside the
+   * capped read set read as an under-cap scan and silence the notice
+   * while pages past the cap were never opened (review M9).
+   */
+  readonly read: number;
   /** Every `.md` entry listed under the reach, read or not, sorted order. */
   readonly listed: number;
 }
@@ -174,7 +183,7 @@ function collectDocumentRecords(
   readable?: (rel: string) => boolean,
 ): CollectedDocuments {
   const dir = join(vault, BRAIN_SOURCES_REL);
-  if (!existsSync(dir)) return { records: [], listed: 0 };
+  if (!existsSync(dir)) return { records: [], read: 0, listed: 0 };
   const out: DocumentRecord[] = [];
   let listed = 0;
   for (const name of readdirSync(dir).toSorted()) {
@@ -206,7 +215,11 @@ function collectDocumentRecords(
     });
   }
   const pointerOf = mergePointerLookup(out.map((r) => [r.path, r.mergedInto] as const));
-  return { records: out.filter((r) => !isMergeResolved(r.path, pointerOf)), listed };
+  return {
+    records: out.filter((r) => !isMergeResolved(r.path, pointerOf)),
+    read: out.length,
+    listed,
+  };
 }
 
 /**
@@ -217,7 +230,9 @@ function collectDocumentRecords(
  * review-only - it never retires anything - and it fires only when the
  * cap actually bound the read set (`read` at the cap with pages left
  * listed), so a small vault with a few non-summary `.md` files never
- * sees it. Returned findings stay in the deterministic target order.
+ * sees it. `read` is the pre-filter collected count: the merge-resolved
+ * pages a read set loses AFTERWARD cannot shrink what the cap bound.
+ * Returned findings stay in the deterministic target order.
  */
 function withCandidateCapNotice(
   listed: number,
@@ -451,12 +466,12 @@ export function detectDocumentDedup(
   opts: DocumentDedupOptions = {},
 ): ReadonlyArray<HygieneFinding> {
   const threshold = opts.lexicalThreshold ?? DOCUMENT_DEDUP_LEXICAL_THRESHOLD;
-  const { records, listed } = collectDocumentRecords(vault, ctx.readable);
+  const { records, read, listed } = collectDocumentRecords(vault, ctx.readable);
   const compared = records.filter((r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS);
-  if (compared.length < 2) return withCandidateCapNotice(listed, records.length, []);
+  if (compared.length < 2) return withCandidateCapNotice(listed, read, []);
   return withCandidateCapNotice(
     listed,
-    records.length,
+    read,
     findingsFromGroups(compared, lexicalPairs(compared, threshold), {
       method: "lexical",
       threshold,
@@ -522,14 +537,14 @@ export async function detectSemanticDocumentDedup(
   // preference dedup detector applies.
   if (provider === null || !providerProducesVectors(provider)) return lexical();
 
-  const { records, listed } = collectDocumentRecords(vault, opts.readable);
+  const { records, read, listed } = collectDocumentRecords(vault, opts.readable);
   const compared = records.filter((r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS);
   // The same coverage notice the lexical layer owes (review M9), wrapped
   // around whichever result this run answers.
   const withCap = (result: SemanticDocumentDedupResult): SemanticDocumentDedupResult =>
     Object.freeze({
       ...result,
-      findings: Object.freeze(withCandidateCapNotice(listed, records.length, [...result.findings])),
+      findings: Object.freeze(withCandidateCapNotice(listed, read, [...result.findings])),
     });
   if (compared.length < 2) return withCap(lexical());
   const threshold = opts.threshold ?? DOCUMENT_DEDUP_EMBEDDING_THRESHOLD;

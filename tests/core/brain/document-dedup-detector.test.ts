@@ -213,6 +213,43 @@ describe("detectDocumentDedup", () => {
     expect(evidence["cap"]).toBe(200);
   });
 
+  test("a merge-resolved page inside the capped read set does not hide the truncation", () => {
+    // The M9 corner: the cap bounds what was COLLECTED, and the
+    // merge-resolved filter thins the kept set afterwards. One
+    // merged_into stamp among exactly the capped 200 leaves 199 records,
+    // and a notice gated on the post-filter count reads 199 < cap and
+    // goes quiet - while pages 201+ were never read. A truncated scan
+    // must never answer clean, so the guard asks the pre-filter count.
+    for (let i = 0; i < 200; i++) {
+      const tag = `p${String(i).padStart(4, "0")}`;
+      writeSourcePage(`filler-${String(i).padStart(4, "0")}`, {
+        body: `${UNRELATED}\n${tag}a ${tag}b ${tag}c ${tag}d ${tag}e ${tag}f ${tag}g ${tag}h`,
+        createdAt: "2026-01-01T00:00:00Z",
+        // Exactly one page the read set collected was already resolved
+        // by a page merge - ordinary in a vault that uses the merge lane.
+        ...(i === 100 ? { mergedInto: "pref-elsewhere" } : {}),
+      });
+    }
+    writeSourcePage("zz-dup-a", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
+    writeSourcePage("zz-dup-b", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
+
+    const findings = detect();
+
+    // The pair behind the cap was never read, so no retirement is
+    // claimed for it - and the truncation is named even though the
+    // merge-resolved filter thinned the kept set below the cap.
+    expect(findings.some((f) => f.proposed_action === "retire")).toBe(false);
+    const notice = findings.find(
+      (f) => (f.evidence as Record<string, unknown>)["candidate_cap_reached"] === true,
+    );
+    expect(notice).toBeDefined();
+    const evidence = notice!.evidence as Record<string, unknown>;
+    // `scanned` counts what the cap admitted - the pre-filter read set -
+    // not the thinner kept set the merge filter left behind.
+    expect(evidence["scanned"]).toBe(200);
+    expect(evidence["total"]).toBe(202);
+  });
+
   test("no coverage notice while the cap does not bind", () => {
     writeSourcePage("a", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
     writeSourcePage("b", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
