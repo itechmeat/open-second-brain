@@ -118,6 +118,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   writeDeadLetters: "write_dead_letters",
   sessionImportLedger: "session_import_ledger",
   sessionMiningLedger: "session_mining_ledger",
+  sessionMiningSurveys: "session_mining_surveys",
   installManifest: "install_manifest",
   protectManifest: "protect_manifest",
   bootstrapReceipt: "bootstrap_receipt",
@@ -286,6 +287,7 @@ const SESSION_CHECKPOINT_DIR = "session-import-checkpoints";
 const DEAD_LETTER_DIR = "dead-letters";
 const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const SESSION_MINING_LEDGER_FILE = "session-mining-ledger.json";
+const SESSION_MINING_SURVEYS_FILE = "session-mining-surveys.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
 const BOOTSTRAP_RECEIPT_FILE = "bootstrap.lock.json";
@@ -518,6 +520,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "Deleting it reports no gap and loses nothing the vault holds; it only re-opens every " +
       "barren session, paying the full model spend again on the next scan.",
     sources: ["src/core/brain/session-mining-ledger.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.sessionMiningSurveys,
+    label: "session mining surveys",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(SESSION_MINING_SURVEYS_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "The surveyed-turns hash of every mining plan that handed out an envelope and has not been " +
+      "answered yet, so a barren commit that relays no hash tombstones only the turns a model was " +
+      "shown. Deleting it loses nothing the vault holds; the next barren commit of a pending " +
+      "session records no tombstone until the session is planned again.",
+    sources: ["src/core/brain/session-mining-surveys.ts"],
   },
   {
     id: STATE_SURFACE_ID.installManifest,

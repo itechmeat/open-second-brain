@@ -84,14 +84,17 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // 25 -> 26: the storage usage meter joins, excused (storage lifecycle
 // external review, M3): it joins the directory to MEASURE the store and the
 // state beside it as census surfaces, and writes nothing.
-const SWEPT_POPULATION_SIZE = 26;
+// 26 -> 27: the pending mining surveys join the population with their row
+// (v1.86.1 review fixes), the same join the session mining ledger made.
+const SWEPT_POPULATION_SIZE = 27;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,
 // the same join the decisions ledger and the bootstrap receipt made.
 // 50 -> 51: the session mining ledger joins the population with its row
 // (session-mining-economy), the same join the session import ledger made.
-const DECLARED_SURFACE_COUNT = 51;
+// 51 -> 52: the pending mining surveys row (v1.86.1 review fixes).
+const DECLARED_SURFACE_COUNT = 52;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;
