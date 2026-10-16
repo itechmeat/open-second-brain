@@ -28,13 +28,12 @@
  * drifted since the recount, or would not strictly shrink is collected
  * into `failures` and the run still completes. Writes are atomic per
  * shard - `atomicWriteFileSync` with `expectBefore` compare-and-swap -
- * under the shard's own lock. The real guarantee is narrower than "the
- * append paths hold this lock": it excludes the continuity appenders
- * only. A metrics shard is guarded by the compare-and-swap alone - the
- * metrics append path writes bare `appendFileSync` - so a concurrent
- * metrics append landing inside the rewrite window is lost without
- * error, not refused as drift. Those are advisory samples, and the
- * forecast series that reads them tolerates the gap.
+ * under the shard's own lock. Both append paths hold that same lock (the
+ * continuity appender always has, the metrics appender since its samples
+ * stopped being losable), so an append landing inside a rewrite window
+ * serializes behind it or fails loudly - the compare-and-swap then
+ * reports drift against the recount instead of the rename swallowing the
+ * appended line.
  *
  * Idempotency: a re-run recounts a compacted shard, finds nothing
  * foldable, and writes nothing - no rewrite, no snapshot, no audit

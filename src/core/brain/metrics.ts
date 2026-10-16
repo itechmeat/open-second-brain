@@ -11,10 +11,11 @@
  *   {"schema":"o2b.metrics.v1","surface":"...","run_at":"...","payload":{...}}
  *
  * Records are RUN-LEVEL (one per index run, discovery pass, benchmark
- * or tuning run) - per-query events stay in recall telemetry. Writes
- * use O_APPEND single lines (the maintenance-journal pattern) so
- * concurrent writers interleave instead of racing a rewrite; reads
- * are fail-soft (missing dir/file -> empty, torn lines skipped).
+ * or tuning run) - per-query events stay in recall telemetry. Writes are
+ * single-line O_APPEND appends under the shard's own per-file lock (the
+ * same primitive the continuity appender holds), so concurrent appends
+ * interleave and a rewrite cannot move the file out from under one;
+ * reads are fail-soft (missing dir/file -> empty, torn lines skipped).
  *
  * Evolution rule mirrors continuity records: additive optional fields
  * do NOT bump the version; renames, removals, or semantic changes
@@ -31,6 +32,7 @@ import {
   shardedFileName,
   type LedgerShardGrammar,
 } from "./ledger-shards.ts";
+import { acquireLockSync } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** On-disk schema version stamped on every metric record. */
@@ -141,7 +143,19 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
   };
   const path = surfacePath(vault, input.surface);
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify(record) + "\n");
+  // The same per-file lock the continuity appender holds: a bare O_APPEND
+  // write interleaves with other APPENDS, but a shard REWRITE (the receipt
+  // fold's compare-and-swap) moves the file out from under a concurrent
+  // append and the sample is silently lost. Under the lock the rewrite
+  // either waits for this append to land (and then reports drift against
+  // its recount) or fails its own lock acquisition - either way the sample
+  // is a named outcome, never a silent overwrite.
+  const handle = acquireLockSync(path);
+  try {
+    appendFileSync(path, JSON.stringify(record) + "\n");
+  } finally {
+    handle.release();
+  }
 }
 
 /**

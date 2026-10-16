@@ -33,7 +33,7 @@ import {
   continuityLogPath,
   listContinuityRecords,
 } from "../../../src/core/brain/continuity/store.ts";
-import { metricsDir } from "../../../src/core/brain/metrics.ts";
+import { metricsDir, appendMetric } from "../../../src/core/brain/metrics.ts";
 import {
   compactReceiptLedgers,
   RECEIPT_AUDIT_APPEND_FAILED,
@@ -540,6 +540,51 @@ describe("compactReceiptLedgers", () => {
     expect(fold.count).toBe(3);
     expect(fold.first_run_at).toBe("2026-08-01T00:00:00Z");
     expect(fold.last_run_at).toBe("2026-08-05T00:00:00Z");
+  });
+
+  test("appendMetric holds the shard's lock, so a rewrite window cannot swallow a sample", () => {
+    // M12: the metrics append path wrote bare `appendFileSync` with no
+    // lock, so a sample landing between the fold engine's compare-and-swap
+    // re-read and its rename was overwritten without error - exactly the
+    // loss the CAS was built to turn into reported drift. The append now
+    // takes the same per-file lock the continuity appender takes, in both
+    // directions: a contended append is a loud failure, never a silent
+    // overwrite, and a compact that meets a held lock is a collected
+    // failure, never a rewrite that wins the race.
+    mkdirSync(metricsDir(vault), { recursive: true });
+    const shardPath = join(metricsDir(vault), "storage_usage.jsonl");
+    writeFileSync(
+      shardPath,
+      [
+        metricLine("storage_usage", "2026-08-01T00:00:00Z", { bytes: 10 }),
+        metricLine("storage_usage", "2026-08-02T00:00:00Z", { bytes: 11 }),
+      ].join(""),
+      "utf8",
+    );
+    writeFileSync(`${shardPath}.lock`, "held by another writer", "utf8");
+    try {
+      expect(() =>
+        appendMetric(vault, {
+          surface: "storage_usage",
+          runAt: "2026-09-02T00:00:00Z",
+          payload: { bytes: 12 },
+        }),
+      ).toThrow(/lock busy/);
+      // Nothing landed while the lock was held.
+      expect(readFileSync(shardPath, "utf8")).not.toContain("2026-09-02");
+      // And the fold engine reports the contention instead of rewriting.
+      const result = compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+        now: NOW,
+        dryRun: false,
+      });
+      expect(result.shards).toEqual([]);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]!.shard).toBe("metrics:storage_usage.jsonl");
+      expect(result.failures[0]!.message).toContain("locked");
+    } finally {
+      rmSync(`${shardPath}.lock`, { force: true });
+    }
   });
 
   test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {
