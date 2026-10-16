@@ -297,6 +297,38 @@ describe("retireDocumentCopies", () => {
     expect(listContinuityRecords(vault, { kind: "source_invalidation" })).toHaveLength(0);
   });
 
+  test("a failed inbound-link rewrite keeps the copy in place", () => {
+    if (CHMOD_CANNOT_DENY) return;
+    // One citing page sits in a directory this run cannot write: the
+    // retarget report collects the write failure without throwing, and
+    // retiring the copy over it would strand exactly the link the pass
+    // could not repoint. The refusal comes BEFORE the removal, so the
+    // copy stays on disk (review M7).
+    const { canonical, retired } = seedPair();
+    rmSync(join(vault, "Brain", "note.md"));
+    mkdirSync(join(vault, "Brain", "links"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "links", "note.md"), "See [[src-b]] here.\n", "utf8");
+    const linksDir = join(vault, "Brain", "links");
+    chmodSync(linksDir, 0o555);
+    try {
+      const result = retireDocumentCopies(vault, [{ path: retired, canonical }], {
+        agent: "tester",
+        now: NOW,
+      });
+
+      expect(result.retired).toEqual([]);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.path).toBe(retired);
+      // The failure names the file whose rewrite did not land.
+      expect(result.failed[0]!.message).toContain("links/note.md");
+      // The copy is still on disk; nothing was claimed as retired.
+      expect(existsSync(join(vault, retired))).toBe(true);
+      expect(listContinuityRecords(vault, { kind: "source_invalidation" })).toHaveLength(0);
+    } finally {
+      chmodSync(linksDir, 0o755);
+    }
+  });
+
   test("a copy whose canonical page is missing is refused per copy", () => {
     const { retired } = seedPair();
     const result = retireDocumentCopies(

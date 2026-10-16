@@ -152,6 +152,9 @@ describe("applyHygienePlan dispatches retire to the retirement core", () => {
     expect(result.applied[0]!.action).toBe("retire");
     expect(result.applied[0]!.finding_id).toBe(finding.id);
     expect(result.applied[0]!.detail).toContain(canonical);
+    // The per-copy link counts ride the detail (review M7): the executor
+    // used to report only "retired N", dropping what the link pass did.
+    expect(result.applied[0]!.detail).toMatch(/links: \d+ rewritten, \d+ failed/);
 
     expect(existsSync(join(vault, retired))).toBe(false);
     expect(existsSync(join(vault, canonical))).toBe(true);

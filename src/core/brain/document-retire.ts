@@ -8,6 +8,9 @@
  *
  *   1. retarget every inbound `[[stale-copy]]` wikilink to the
  *      canonical spelling (the report is carried, never swallowed);
+ *      a write that could not land refuses the copy before the
+ *      removal, so no retired page strands the link it could not
+ *      repoint (review M7);
  *   2. remove the stale page (per-file removal via the shared
  *      `removeFile`, so a failure is one copy's failure);
  *   3. MARK the copy's source manifest entry `retired_into` the
@@ -319,6 +322,20 @@ function retireOneCopy(
   const wikilinks = retargetWikilinks(vault, [
     { from: linkTarget(copy.path), to: linkTarget(copy.canonical) },
   ]);
+  // A retarget write that failed refuses the copy (review M7): retiring
+  // the page over an unreplicable link would strand exactly the inbound
+  // reference the pass could not repoint - the design's "a copy whose
+  // retarget fails stays in place". The refusal is BEFORE the removal, so
+  // the copy stays on disk as one collected per-copy failure; the files
+  // the pass DID rewrite now point at the canonical, which exists, so no
+  // link is stranded by the partial rewrite either.
+  if (wikilinks.failed.length > 0) {
+    throw new Error(
+      `inbound wikilink retarget left ${wikilinks.failed.length} file(s) unwritten; ` +
+        `the copy stays in place: ` +
+        wikilinks.failed.map((f) => `${f.path} (${f.reason})`).join("; "),
+    );
+  }
 
   // 2. Remove the stale page. `false` here means the page vanished
   // between the existence check and the unlink - that is a failure to
