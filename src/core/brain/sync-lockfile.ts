@@ -72,7 +72,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "./path-constants.ts";
 
@@ -300,11 +300,19 @@ function sameLockFile(a: BigIntStats, b: BigIntStats): boolean {
  * identity (`<lock>.takeover-<inode>-<mtime ns>`): every contender that judged
  * the same file races for the same claim name, and exclusive create is a
  * compare-and-swap on Linux, macOS and Windows alike, so exactly one of them
- * goes on. The claim is never removed here - it is the tombstone that turns
+ * goes on. A fresh claim is never removed - it is the tombstone that turns
  * away a late contender still acting on its judgement of that same file
- * after the winner has re-acquired under the same name. It is a zero-byte
- * file per takeover; a store with a sweep (the hook-state prune) removes old
- * claims.
+ * after the winner has re-acquired under the same name. A claim older than
+ * {@link TAKEOVER_CLAIM_STALE_MS} turns nobody away any more: it is the
+ * residue of a winner that died between the claim and the unlink, or of an
+ * earlier takeover whose inode and mtime a new abandoned lock happens to
+ * reuse. Such a claim does not block the takeover - contenders move on to
+ * the next claim generation (`<lock>.takeover-<inode>-<mtime ns>-<n>`), again
+ * one exclusive create every contender races for, so no claim is ever
+ * deleted on the contended path. After a successful removal the winner
+ * sweeps this lock's claims older than the threshold, so stores without a
+ * sweep of their own (the session-capture worker lock in `tmpdir()`, the
+ * lineage gap lock) do not accumulate them.
  *
  * The winner then re-reads the name and removes it only while it still
  * holds the judged file, so a lock that was replaced by a fresh one in the
@@ -324,18 +332,73 @@ export function removeStaleLockSync(
   } catch {
     return false;
   }
-  try {
-    closeSync(openSync(`${lockPath}.takeover-${seen.ino}-${seen.mtimeNs}`, "wx", 0o600));
-  } catch {
-    // Claimed by another contender (or uncreatable): not ours to remove.
-    return false;
-  }
+  if (!claimTakeover(`${lockPath}.takeover-${seen.ino}-${seen.mtimeNs}`)) return false;
   try {
     if (!sameLockFile(lstatSync(lockPath, { bigint: true }), seen)) return false;
     unlinkSync(lockPath);
-    return true;
   } catch {
     return false;
+  }
+  sweepTakeoverClaims(lockPath);
+  return true;
+}
+
+/**
+ * Age past which a takeover claim no longer turns a contender away. A winner
+ * goes from its claim to the unlink in microseconds, and a contender acts on
+ * its judgement within one acquire attempt, so a minute-old claim belongs to
+ * nobody still running.
+ */
+export const TAKEOVER_CLAIM_STALE_MS = 60_000;
+
+/** How many claim generations one judged lock file may need (see {@link removeStaleLockSync}). */
+const TAKEOVER_CLAIM_GENERATIONS = 4;
+
+function claimIsStale(path: string): boolean {
+  try {
+    return Date.now() - lstatSync(path).mtimeMs > TAKEOVER_CLAIM_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Exclusive-create the first free claim generation for one judged lock file.
+ * An existing fresh claim means another contender won; an existing stale
+ * claim sends every contender to the next generation.
+ */
+function claimTakeover(base: string): boolean {
+  for (let gen = 0; gen < TAKEOVER_CLAIM_GENERATIONS; gen++) {
+    const claim = gen === 0 ? base : `${base}-${gen}`;
+    try {
+      closeSync(openSync(claim, "wx", 0o600));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+      if (!claimIsStale(claim)) return false;
+    }
+  }
+  return false;
+}
+
+/** Remove this lock's takeover claims older than {@link TAKEOVER_CLAIM_STALE_MS}. Never throws. */
+function sweepTakeoverClaims(lockPath: string): void {
+  const prefix = `${basename(lockPath)}.takeover-`;
+  let names: string[];
+  try {
+    names = readdirSync(dirname(lockPath));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const claim = join(dirname(lockPath), name);
+    if (!claimIsStale(claim)) continue;
+    try {
+      unlinkSync(claim);
+    } catch {
+      // already gone
+    }
   }
 }
 

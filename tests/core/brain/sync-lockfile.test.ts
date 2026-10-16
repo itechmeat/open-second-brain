@@ -8,12 +8,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +29,9 @@ import {
   LOCK_WAIT_BUDGET_MS,
   LOCK_WAIT_INTERACTIVE_MS,
   lockScanRoots,
+  removeStaleLockSync,
   scanStaleLocks,
+  TAKEOVER_CLAIM_STALE_MS,
 } from "../../../src/core/brain/sync-lockfile.ts";
 
 let tmpRoot: string;
@@ -406,5 +410,50 @@ describe("acquireLockSyncWithRetry — what the caller gives up while it waits",
     // An interactive pass with a progress stream and a Ctrl-C behind it
     // must not park the terminal for the fan-out's budget.
     expect(generate).toContain("acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS)");
+  });
+});
+
+describe("removeStaleLockSync takeover claims", () => {
+  const abandoned = () => true;
+
+  function plantLock(name: string): { lock: string; claim: string } {
+    const lock = join(tmpRoot, `${name}.lock`);
+    writeFileSync(lock, "left behind by a killed holder\n");
+    const st = lstatSync(lock, { bigint: true });
+    return { lock, claim: `${lock}.takeover-${st.ino}-${st.mtimeNs}` };
+  }
+
+  function age(path: string, ms: number): void {
+    const at = (Date.now() - ms) / 1000;
+    utimesSync(path, at, at);
+  }
+
+  test("a fresh claim on the same lock file turns a late contender away", () => {
+    const { lock, claim } = plantLock("fresh-claim");
+    writeFileSync(claim, "");
+    expect(removeStaleLockSync(lock, abandoned)).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+  });
+
+  test("a stale claim left by a dead winner does not make the lock unbreakable", () => {
+    const { lock, claim } = plantLock("dead-winner");
+    writeFileSync(claim, "");
+    age(claim, TAKEOVER_CLAIM_STALE_MS + 5_000);
+    expect(removeStaleLockSync(lock, abandoned)).toBe(true);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("a successful takeover sweeps this lock's stale claims and keeps fresh ones", () => {
+    const { lock } = plantLock("sweep");
+    const oldClaim = `${lock}.takeover-1-2`;
+    const freshClaim = `${lock}.takeover-3-4`;
+    const otherLockClaim = join(tmpRoot, "other.lock.takeover-5-6");
+    for (const path of [oldClaim, freshClaim, otherLockClaim]) writeFileSync(path, "");
+    age(oldClaim, TAKEOVER_CLAIM_STALE_MS + 5_000);
+    age(otherLockClaim, TAKEOVER_CLAIM_STALE_MS + 5_000);
+    expect(removeStaleLockSync(lock, abandoned)).toBe(true);
+    expect(existsSync(oldClaim)).toBe(false);
+    expect(existsSync(freshClaim)).toBe(true);
+    expect(existsSync(otherLockClaim)).toBe(true);
   });
 });

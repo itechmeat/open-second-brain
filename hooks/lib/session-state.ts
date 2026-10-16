@@ -51,13 +51,13 @@ const SCOPE_LOCK_RE = new RegExp(`^[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.js
 /**
  * Residue a killed hook can leave beside a scope file: an atomic-write temp
  * file (`.<slug>.json.<pid>.<ms>.<rand>.tmp`), an abandoned scope lockfile
- * (`<slug>.json.lock`), a takeover claim (`<slug>.json.lock.takeover-<ino>-<mtime>`,
+ * (`<slug>.json.lock`), a takeover claim (`<slug>.json.lock.takeover-<ino>-<mtime>[-<gen>]`,
  * see `removeStaleLockSync` in `src/core/brain/sync-lockfile.ts`) and the stale-lock aside earlier releases
  * moved a lock to (`<slug>.json.lock.stale-<pid>`).
  */
 const SCOPE_RESIDUE_RE = new RegExp(
   `^(?:\\.[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.\\d+\\.\\d+\\.[0-9a-f]+\\.tmp` +
-    `|[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock(?:\\.stale-\\d+|\\.takeover-\\d+-\\d+)?)$`,
+    `|[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock(?:\\.stale-\\d+|\\.takeover-\\d+-\\d+(?:-\\d+)?)?)$`,
 );
 
 /** Scope slug used when no session id is available (single flat lane). */
