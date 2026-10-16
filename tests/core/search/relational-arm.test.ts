@@ -622,23 +622,18 @@ test("an unparseable declared window is refused where a current one passes", () 
   ]);
 });
 
-test("an edge whose polarity is a counted exclusion is refused", () => {
+test("a contradicts edge the query named is answered, not refused", () => {
+  // `[[seed]] contradicts` asks for exactly the contradicting pages:
+  // counting the polarity against the relation the query named would
+  // empty the answer under enforce and inflate every shadow measurement.
   writeMd(vault, "seed.md", '---\ncontradicts: "[[rival]]"\n---\n\nalpha seed.');
   writeMd(vault, "rival.md", "# Rival\n\nbeta contradictory content.");
   const store = armFixtureStore({ docs: { seed: 1, rival: 2 }, typed: [[1, "contradicts", 2]] });
   const outcome = runRelationalArm(store, vault, "[[seed]] contradicts", {
     configPath: modeConfigPath("enforce"),
   });
-  expect(outcome.rankedChunkIds).toEqual([]);
-  expect(outcome.refusals).toEqual([
-    {
-      document_id: 2,
-      chunk_id: 2,
-      path: "rival.md",
-      reasons: [`relational_arm:${RELATIONAL_ARM_REFUSAL_REASON.contradictsPolarity}`],
-      lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
-    },
-  ]);
+  expect(outcome.rankedChunkIds).toEqual([2]);
+  expect(outcome.refusals).toEqual([]);
 });
 
 test("a chain through an ineligible node refuses the downstream arrival too", () => {
@@ -816,31 +811,33 @@ test("the eligibility gate does not run when the arm does not walk", () => {
   expect("refusals" in outcome).toBe(false);
 });
 
-test("the resolved trust-gate mode reaches the arm through the caller's config path", async () => {
-  // The arm's only route to `dirty.md` is the walk: its body shares no
-  // keyword terms with the query. Enforce withholds it from the pack;
-  // shadow surfaces it with the arm's attribution, refusal counted.
-  writeMd(vault, "seed.md", '---\nrelated: "[[dirty]]"\n---\n\nalpha topic seed document.');
-  writeMd(
-    vault,
-    "dirty.md",
-    `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta divergent content.`,
-  );
+test("the effective config's trust-gate mode reaches the arm, not a fresh machine-config read", async () => {
+  // The arm's only route to `stale.md` is the walk: its body shares no
+  // keyword terms with the query. Its closed validity window is a reason
+  // only the edge gate reads, so the page gate cannot stand in for it.
+  // The machine config says off; the effective config (as a bench pin
+  // would override it) names the mode, and the arm must follow it.
+  writeMd(vault, "seed.md", '---\nrelated: "[[stale]]"\n---\n\nalpha topic seed document.');
+  writeMd(vault, "stale.md", "---\nvalid_until: 2000-01-01\n---\n\nbeta divergent content.");
   await indexVault(makeConfig({ vault, dbPath }));
   const configPath = join(vault, "arm-gate.yaml");
-  const cfgFor = (mode: "shadow" | "enforce") => {
-    writeFileSync(configPath, `search_trust_gate_mode: ${mode}\n`);
-    return {
-      ...makeConfig({ vault, dbPath, fusionMode: "rrf", relationalArmEnabled: true }),
-      configPath,
-    };
-  };
+  writeFileSync(configPath, "search_trust_gate_mode: off\n");
+  const cfgFor = (mode: "shadow" | "enforce") => ({
+    ...makeConfig({
+      vault,
+      dbPath,
+      fusionMode: "rrf",
+      relationalArmEnabled: true,
+      searchTrustGateMode: mode,
+    }),
+    configPath,
+  });
 
   const enforced = await search(cfgFor("enforce"), { query: "alpha [[seed]] related" });
-  expect(enforced.results.some((r) => r.path === "dirty.md")).toBe(false);
+  expect(enforced.results.some((r) => r.path === "stale.md")).toBe(false);
 
   const shadowed = await search(cfgFor("shadow"), { query: "alpha [[seed]] related" });
-  const dirty = shadowed.results.find((r) => r.path === "dirty.md");
-  expect(dirty).toBeDefined();
-  expect(dirty!.reasons.some((x) => x.startsWith("relational:"))).toBe(true);
+  const stale = shadowed.results.find((r) => r.path === "stale.md");
+  expect(stale).toBeDefined();
+  expect(stale!.reasons.some((x) => x.startsWith("relational:"))).toBe(true);
 });

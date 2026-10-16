@@ -46,6 +46,7 @@ import {
   SEARCH_TRUST_GATE_MODE,
   classifyRetrievalTrust,
   resolveSearchTrustGateMode,
+  type SearchTrustGateMode,
 } from "../../brain/trust/retrieval-gate.ts";
 import {
   RETRIEVAL_TRUST_REFUSAL_LANE,
@@ -97,7 +98,9 @@ export const RELATIONAL_ARM_REFUSAL_REASON = Object.freeze({
  * relevant-but-not-endorsing edge the pool-level pass only warns about.
  * `superseded_by` is not here - it is the supersession backbone the arm
  * annotates (`supersededBy`), pointing stale-to-fresh - and the positive
- * relations boost.
+ * relations boost. A polarity is never counted against an edge whose
+ * relation the query itself named: `[[X]] contradicts` asks for exactly
+ * those arrivals, and refusing them would empty the answer it asked for.
  */
 const REFUSAL_POLARITIES: ReadonlySet<string> = new Set(["contradicts"]);
 
@@ -164,6 +167,14 @@ export interface RelationalArmOptions {
    * env-only, exactly as a caller that consulted no config file did.
    */
   readonly configPath?: string | null;
+  /**
+   * The retrieval trust gate's resolved mode, threaded from the caller's
+   * effective config so the edge gate and the page gate answer to one
+   * posture even when a caller overrides the resolved config (a bench
+   * pin). Default: {@link resolveSearchTrustGateMode} over env + machine
+   * config.
+   */
+  readonly trustGateMode?: SearchTrustGateMode;
 }
 
 export interface RelationalReach {
@@ -206,6 +217,12 @@ export interface RelationalArmOutcome {
    * refusal is removed from (enforce) or kept in (shadow) the
    * contribution set AND counted here, while an omitted provenance step
    * is never named and never counted.
+   *
+   * The one drop with no record: under enforce, a node whose only
+   * reasons come from an arrived edge's source page the caller cannot
+   * read is removed and not recorded, because any record would disclose
+   * that an unreadable page sits upstream. Disclosure wins over the
+   * never-silently-dropped posture there, and only there.
    */
   readonly refusals?: ReadonlyArray<RetrievalTrustRefusal>;
 }
@@ -298,11 +315,15 @@ export function runRelationalArm(
   const budgets = opts.budgets ?? resolveTraversalBudgets({ env: process.env, config });
   const bridges = opts.entityBridges ?? resolveEntityBridgesEnabled({ env: process.env, config });
   // The edge-level eligibility gate (session-mining-economy, t_05a0eaa4)
-  // runs under the same resolved trust-gate mode the page gate answers
-  // to - the same env and the caller's own config map, so the two gates
-  // can never disagree about the posture. Off: no classification, no
-  // refusal field, the outcome shape byte-identical.
-  const trustGateMode = resolveSearchTrustGateMode({ env: process.env, config });
+  // runs under the trust-gate mode the page gate answers to - the
+  // caller's effective config threads it in, so the two gates can never
+  // disagree about the posture. Off: no classification, no refusal
+  // field, the outcome shape byte-identical.
+  const trustGateMode =
+    opts.trustGateMode ?? resolveSearchTrustGateMode({ env: process.env, config });
+  const namedRelations: ReadonlySet<string> = new Set(
+    relQuery.edgeTypes.map((t) => normalizeRelation(t)),
+  );
   const nodes = relationalFanout(fanoutStoreFor(store, bridges), seedDocIds, {
     maxDepth: RELATIONAL_MAX_DEPTH,
     edgeTypes: relQuery.edgeTypes,
@@ -343,6 +364,7 @@ export function runRelationalArm(
         nodePath: rep.path,
         sourcePath,
         arrivingRelation: lastStep?.relation ?? null,
+        namedRelations,
         cache: frontmatterCache,
         nowMs,
       });
@@ -479,7 +501,8 @@ function closedSupersessionTip(
  *     grammar; a DECLARED value that cannot be parsed is a refusal of
  *     its own, never a silent pass);
  *   - the arriving relation's polarity is not a counted exclusion
- *     (the existing relation-polarity vocabulary).
+ *     (the existing relation-polarity vocabulary), unless the query
+ *     named that relation itself.
  *
  * The split exists for the receipts' disclosure line: the `node` reasons
  * describe the node's own page and arriving edge, the `source` reasons
@@ -498,6 +521,8 @@ function classifyArrivalEligibility(input: {
   readonly sourcePath: string | null;
   /** The relation that carried the walk into the node, when known. */
   readonly arrivingRelation: string | null;
+  /** The normalized edge types the query named; their polarity is asked for, never refused. */
+  readonly namedRelations: ReadonlySet<string>;
   readonly cache: FrontmatterCache;
   readonly nowMs: number;
 }): { readonly node: string[]; readonly source: string[] } {
@@ -535,9 +560,12 @@ function classifyArrivalEligibility(input: {
     }
   }
 
+  const arriving =
+    input.arrivingRelation === null ? null : normalizeRelation(input.arrivingRelation);
   if (
-    input.arrivingRelation !== null &&
-    REFUSAL_POLARITIES.has(normalizeRelation(input.arrivingRelation))
+    arriving !== null &&
+    REFUSAL_POLARITIES.has(arriving) &&
+    !input.namedRelations.has(arriving)
   ) {
     node.push(
       `${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${RELATIONAL_ARM_REFUSAL_REASON.contradictsPolarity}`,

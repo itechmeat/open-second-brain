@@ -31,6 +31,7 @@ import {
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import {
+  isSearchTrustGateMode,
   resolveSearchTrustGateLegacyEnabled,
   resolveSearchTrustGateMode,
   SEARCH_TRUST_GATE_MODE,
@@ -653,6 +654,18 @@ function validateResolvedConfig(config: ResolvedSearchConfig, extraBodySource: s
   }
   validateWeight(config.keywordWeight, "search_keyword_weight");
   validateWeight(config.semanticWeight, "search_semantic_weight");
+  // A mode can arrive through an override (a bench pin) that skipped the
+  // key resolution, so the merged value is checked here too.
+  const gateMode: unknown = config.recall.searchTrustGateMode;
+  if (
+    gateMode !== undefined &&
+    !(typeof gateMode === "string" && isSearchTrustGateMode(gateMode))
+  ) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_trust_gate_mode must be 'off', 'shadow' or 'enforce', got '${String(gateMode)}'`,
+    );
+  }
   if (config.keywordWeight + config.semanticWeight > 1.0 + 1e-9) {
     throw new SearchError(
       "INVALID_INPUT",

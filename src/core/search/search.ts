@@ -42,6 +42,7 @@ import {
   runRelationalArm,
 } from "./pipeline/relational-arm.ts";
 import { resolveSearchRequest } from "./pipeline/request.ts";
+import { SEARCH_TRUST_GATE_MODE } from "../brain/trust/retrieval-gate.ts";
 import {
   resolveIterativeRequest,
   runDeciderRound,
@@ -673,6 +674,9 @@ export async function search(
     const relational = isRelationalArmActive(effectiveConfig, opts)
       ? runRelationalArm(store, effectiveConfig.vault, query, {
           configPath: effectiveConfig.configPath,
+          // One posture for the edge gate and the page gate: the mode the
+          // effective config resolved, overrides included.
+          trustGateMode: effectiveConfig.recall.searchTrustGateMode ?? SEARCH_TRUST_GATE_MODE.off,
           ...(deadline !== null ? { isExpired: () => deadlineExpired(deadline) } : {}),
           ...(opts.transportReach !== undefined ? { reach: opts.transportReach } : {}),
           // The caller's owner scope gates the provenance path nodes the
@@ -1045,9 +1049,10 @@ export async function search(
       frontmatterCache,
       nowMs,
       // The arm's eligibility refusals (present only under an active gate
-      // mode) ride into the receipt build, so the shadow receipts report
-      // the arm lane end to end; under enforce the receipts keep the
-      // pre-mode shape and the field is not consulted.
+      // mode) ride into the receipt build: under shadow they join the
+      // pool's would-be refusals, and under enforce they fill the
+      // receipts' enforce section, since the arm drops them before the
+      // pool where no exclusion can name them.
       ...(relational.refusals !== undefined ? { armRefusals: relational.refusals } : {}),
       ...(deadline !== null
         ? {

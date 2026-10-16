@@ -227,7 +227,7 @@ const BENCH_PIN_NESTED_KEYS: Readonly<Record<string, ReadonlyArray<string>>> = {
     "cacheTtlSeconds",
     "relationPolarityEnabled",
     "relationalArmEnabled",
-    "retrievalTrustGateEnabled",
+    "searchTrustGateMode",
     "supersedeFadeEnabled",
     "learnedWeightsEnabled",
     "activationEnabled",

@@ -512,6 +512,28 @@ test("the bench pin accepts the pool-cap knob name in a recall pin", () => {
   );
 });
 
+test("the bench pin names the trust gate mode, and the dead legacy field is refused by name", () => {
+  // A pin of the legacy field would measure with the gate off without
+  // any sign, so it is refused; the mode is the pinnable knob.
+  const pin = parseBenchPinnedKnobs('{"recall":{"searchTrustGateMode":"enforce"}}');
+  expect(pin.recall?.searchTrustGateMode).toBe("enforce");
+  expect(() => parseBenchPinnedKnobs('{"recall":{"retrievalTrustGateEnabled":true}}')).toThrow(
+    /retrievalTrustGateEnabled.*not a known knob/,
+  );
+});
+
+test("an override carrying an invalid trust gate mode is refused by the resolver", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const base = resolveSearchConfig({ vault: tmp, configPath });
+  expect(() =>
+    resolveSearchConfig({
+      vault: tmp,
+      configPath,
+      overrides: { recall: { ...base.recall, searchTrustGateMode: "measure" as "shadow" } },
+    }),
+  ).toThrow(/search_trust_gate_mode must be/);
+});
+
 // ── Retrieval trust gate mode (session-mining-economy, t_05a0eaa4) ──────────
 
 test("the trust gate mode defaults off and stays absent from the resolved recall config", () => {
