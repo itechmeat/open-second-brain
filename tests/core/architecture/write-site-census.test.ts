@@ -407,12 +407,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/lineage/ledger.ts": {
     categories: [C.appendOnlyLedger, C.lockPrimitive],
-    calls: ["appendFileSync", "unlinkSync"],
+    calls: ["appendFileSync"],
     reason:
       "appends one record line; the COMPACTION arm beside it already uses " +
       "`atomicWriteFileSync`, because rewriting is a different operation from " +
-      "appending. The `unlinkSync` breaks a lock proven stale by its own mtime, with " +
-      "exactly one retry.",
+      "appending. The trim lock it proves stale by its own mtime is broken through " +
+      "`removeStaleLockSync` in `sync-lockfile.ts`, with exactly one retry.",
   },
   "src/core/brain/freeze.ts": {
     categories: [C.lockPrimitive, C.retentionDelete],
@@ -1005,7 +1005,9 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "the lock itself. Its semantics come from the exclusive create; the body it " +
       "writes is a diagnostic pid/timestamp stamp whose failure is deliberately " +
-      "non-fatal, and the unlink is the release.",
+      "non-fatal, and the unlink is the release (only of a lock file its holder still " +
+      "owns) or the removal of an abandoned lock by the one contender whose exclusive " +
+      "takeover claim on that file won.",
   },
 
   // --- Metadata only -----------------------------------------------------

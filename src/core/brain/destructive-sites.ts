@@ -337,17 +337,13 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "the lock release and the process-exit sweep that releases any lock still held. " +
-        "A lock file's meaning comes entirely from its exclusive creation; removing one " +
-        "grants access rather than destroying anything.",
-    },
-    "src/core/brain/lineage/ledger.ts": {
-      calls: ["unlinkSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "breaks a lock its own mtime has proved stale past a fixed threshold, with the " +
-        "original `ELOCKED` rethrown when it has not. The ledger the lock protects is " +
-        "append-only and is not touched here.",
+        "the lock release and the process-exit sweep that releases any lock still held, " +
+        "each only while the lock file is still the one its holder created, and " +
+        "`removeStaleLockSync`, which removes an abandoned lock for the one contender whose " +
+        "exclusive takeover claim on that file won (the lineage gap-sidecar trim lock and " +
+        "the hook-state scope locks break theirs through it). A lock file's meaning comes " +
+        "entirely from its exclusive creation; removing one grants access rather than " +
+        "destroying anything.",
     },
 
     // --- Rewrites through a temp file ------------------------------------

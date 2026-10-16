@@ -25,7 +25,11 @@ import {
   updateHookState,
   writeHookStamp,
 } from "../../hooks/lib/session-state.ts";
-import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
+import {
+  _resetHeldLocksForTests,
+  acquireLockSync,
+  type LockHandle,
+} from "../../src/core/brain/sync-lockfile.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
 
 let vault: string;
@@ -276,51 +280,67 @@ describe("updateHookState", () => {
       expect(outcome).toEqual({ status: "ok", result: "took" });
       expect(readHookStamp(vault, "sess-1", KEY_A)).not.toBeNull();
       expect(existsSync(lockPath)).toBe(false);
-      expect(readdirSync(dir()).filter((name) => name.includes(".stale-"))).toEqual([]);
+      // Only the takeover's claim stays behind; no aside or second lock.
+      expect(
+        readdirSync(dir()).filter((name) => name.includes(".lock") && !name.includes(".takeover-")),
+      ).toEqual([]);
     } finally {
       _resetHeldLocksForTests();
     }
   });
 
-  test("the stale takeover moves the lockfile aside by rename, never unlinks it in place", () => {
+  test("a lock replaced by a fresh one after the stale judgement is not removed", () => {
     const lockPath = holdLock("sess-1");
     const old = (Date.now() - HOOK_STATE_STALE_LOCK_MS - 5_000) / 1000;
     utimesSync(lockPath, old, old);
-    // Occupy the rename target with a non-empty directory: the rename fails,
-    // so a takeover that goes through it must leave the stale lock in place.
-    const aside = `${lockPath}.stale-${process.pid}`;
-    mkdirSync(aside);
-    writeFileSync(join(aside, "keep"), "");
+    let liveIno: bigint | null = null;
+    // Judged stale, then replaced by a live holder's lock before the act.
+    const judgeThenReplace = (): boolean => {
+      unlinkSync(lockPath);
+      writeFileSync(lockPath, "held by a live hook\n");
+      liveIno = statSync(lockPath, { bigint: true }).ino;
+      return true;
+    };
     try {
-      const outcome = updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }), {
-        tryOnce: true,
-      });
-      expect(outcome).toEqual({ status: "busy" });
-      expect(existsSync(lockPath)).toBe(true);
+      expect(_clearStaleLockForTests(hookStateFilePath(vault, "sess-1"), judgeThenReplace)).toBe(
+        false,
+      );
+      expect(statSync(lockPath, { bigint: true }).ino).toBe(liveIno!);
     } finally {
       unlinkSync(lockPath);
-      rmSync(aside, { recursive: true, force: true });
-      _resetHeldLocksForTests();
     }
   });
 
-  test("a takeover that moved a live lock puts it back and reports no takeover", () => {
+  test("a contender acting on a stale judgement another contender already acted on leaves the winner's lock alone", () => {
     const lockPath = holdLock("sess-1");
-    const liveIno = statSync(lockPath, { bigint: true }).ino;
-    // The lock reads stale at the first check, but the file the rename moved
-    // is fresh: another contender re-acquired in between.
-    const staleOnlyUnderLockName = (path: string): boolean => path === lockPath;
+    const old = (Date.now() - HOOK_STATE_STALE_LOCK_MS - 5_000) / 1000;
+    utimesSync(lockPath, old, old);
+    const path = hookStateFilePath(vault, "sess-1");
+    const handles: LockHandle[] = [];
+    let winnerIno: bigint | null = null;
+    let judgements = 0;
+    // This contender read the abandoned lock and judged it stale; before it
+    // acts, another contender takes the same lock over and acquires. Any
+    // later judgement (of whatever this contender then holds in its hand)
+    // lets a third contender in if the lock name is empty at that moment.
+    const judge = (): boolean => {
+      judgements += 1;
+      if (judgements === 1) {
+        expect(_clearStaleLockForTests(path)).toBe(true);
+        handles.push(acquireLockSync(path));
+        winnerIno = statSync(lockPath, { bigint: true }).ino;
+        return true;
+      }
+      if (!existsSync(lockPath)) handles.push(acquireLockSync(path));
+      return false;
+    };
     try {
-      const tookOver = _clearStaleLockForTests(
-        hookStateFilePath(vault, "sess-1"),
-        staleOnlyUnderLockName,
-      );
-      expect(tookOver).toBe(false);
-      expect(existsSync(lockPath)).toBe(true);
-      expect(statSync(lockPath, { bigint: true }).ino).toBe(liveIno);
-      expect(readdirSync(dir()).filter((name) => name.includes(".stale-"))).toEqual([]);
+      expect(_clearStaleLockForTests(path, judge)).toBe(false);
+      expect(handles).toHaveLength(1);
+      expect(statSync(lockPath, { bigint: true }).ino).toBe(winnerIno!);
     } finally {
-      unlinkSync(lockPath);
+      for (const handle of handles) handle.release();
+      _resetHeldLocksForTests();
     }
   });
 
@@ -486,12 +506,14 @@ describe("pruneHookStateFiles", () => {
     const oldTmp = seed(".default.json.1.2.ab.tmp", 8 * DAY, now);
     const oldLock = seed("default.json.lock", 8 * DAY, now);
     const oldAside = seed("default.json.lock.stale-9", 8 * DAY, now);
+    const oldClaim = seed("default.json.lock.takeover-12-345", 8 * DAY, now);
     const freshLock = seed("aa-sess.json.lock", 1 * DAY, now);
     const freshTmp = seed(".aa-sess.json.3.4.cd.tmp", 1 * DAY, now);
     const txt = seed("notes.txt", 8 * DAY, now);
     const foreignTmp = seed(".Upper.json.1.2.ab.tmp", 8 * DAY, now);
-    expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(3);
+    expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(4);
     expect(existsSync(oldTmp)).toBe(false);
+    expect(existsSync(oldClaim)).toBe(false);
     expect(existsSync(oldLock)).toBe(false);
     expect(existsSync(oldAside)).toBe(false);
     expect(existsSync(freshLock)).toBe(true);

@@ -64,7 +64,7 @@
  * they ride the integrity chain without any change to it.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -84,7 +84,7 @@ import {
   type ShardedRow,
 } from "../ledger-shards.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
-import { acquireLockSync, type LockHandle } from "../sync-lockfile.ts";
+import { acquireLockSync, type LockHandle, removeStaleLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vault-identity.ts";
 import type { SessionLineage } from "./types.ts";
 
@@ -1072,8 +1072,11 @@ function acquireGapLock(path: string, nowMs: number): LockHandle {
     const errno = err as NodeJS.ErrnoException;
     if (errno.code !== "ELOCKED") throw err;
     const lockPath = typeof errno.path === "string" ? errno.path : `${path}.lock`;
-    if (nowMs - statSync(lockPath).mtimeMs <= GAP_LOCK_STALE_MS) throw err;
-    unlinkSync(lockPath);
+    // Removed only by the one contender that claims this abandoned file, so
+    // two trims that both judged it stale cannot both break it.
+    const abandoned = (st: { readonly mtimeMs: bigint }): boolean =>
+      nowMs - Number(st.mtimeMs) > GAP_LOCK_STALE_MS;
+    if (!removeStaleLockSync(lockPath, abandoned)) throw err;
     // Exactly one retry. A second ELOCKED means a live writer took the
     // lock in between, which is contention rather than abandonment.
     return acquireLockSync(path);

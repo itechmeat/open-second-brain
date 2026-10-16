@@ -13,6 +13,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -103,6 +104,23 @@ describe("acquireLockSync", () => {
     } finally {
       handle.release();
     }
+  });
+
+  test("release leaves a lock file it no longer owns in place", () => {
+    // A takeover removed this holder's lock and another process acquired the
+    // name; the first holder's release must not delete the second's lock.
+    const target = join(tmpRoot, "pref-owned.md");
+    const first = acquireLockSync(target);
+    unlinkSync(target + ".lock");
+    const second = acquireLockSync(target);
+    try {
+      first.release();
+      expect(existsSync(target + ".lock")).toBe(true);
+      expect(() => acquireLockSync(target)).toThrow(/lock busy/);
+    } finally {
+      second.release();
+    }
+    expect(existsSync(target + ".lock")).toBe(false);
   });
 });
 

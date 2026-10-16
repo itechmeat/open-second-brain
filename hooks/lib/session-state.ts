@@ -18,18 +18,14 @@
  */
 
 import { createHash } from "node:crypto";
-import {
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-} from "node:fs";
+import { type BigIntStats, lstatSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { acquireLockSync, type LockHandle } from "../../src/core/brain/sync-lockfile.ts";
+import {
+  acquireLockSync,
+  type LockHandle,
+  removeStaleLockSync,
+} from "../../src/core/brain/sync-lockfile.ts";
 import {
   resolveSessionScope,
   SESSION_SCOPE_MAX_LENGTH,
@@ -49,14 +45,19 @@ const HOOK_STATE_DIR = "hook-state";
 /** A scope state file name: a scope slug plus `.json`, nothing else. */
 const SCOPE_FILE_RE = new RegExp(`^[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json$`);
 
+/** A scope lockfile name: `<slug>.json.lock`. */
+const SCOPE_LOCK_RE = new RegExp(`^[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock$`);
+
 /**
  * Residue a killed hook can leave beside a scope file: an atomic-write temp
  * file (`.<slug>.json.<pid>.<ms>.<rand>.tmp`), an abandoned scope lockfile
- * (`<slug>.json.lock`) and a stale-lock aside (`<slug>.json.lock.stale-<pid>`).
+ * (`<slug>.json.lock`), a takeover claim (`<slug>.json.lock.takeover-<ino>-<mtime>`,
+ * see `removeStaleLockSync` in `src/core/brain/sync-lockfile.ts`) and the stale-lock aside earlier releases
+ * moved a lock to (`<slug>.json.lock.stale-<pid>`).
  */
 const SCOPE_RESIDUE_RE = new RegExp(
   `^(?:\\.[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.\\d+\\.\\d+\\.[0-9a-f]+\\.tmp` +
-    `|[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock(?:\\.stale-\\d+)?)$`,
+    `|[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock(?:\\.stale-\\d+|\\.takeover-\\d+-\\d+)?)$`,
 );
 
 /** Scope slug used when no session id is available (single flat lane). */
@@ -214,60 +215,34 @@ function tryLock(path: string): LockHandle | null {
   }
 }
 
-/** Whether the file at `path` was last modified more than the stale threshold ago. */
-function isStale(path: string): boolean {
-  return Date.now() - statSync(path).mtimeMs > HOOK_STATE_STALE_LOCK_MS;
+/** Whether a lockfile was last modified more than the stale threshold ago. */
+function isStale(st: BigIntStats): boolean {
+  return Date.now() - Number(st.mtimeMs) > HOOK_STATE_STALE_LOCK_MS;
 }
 
 /**
  * Take over the scope lockfile when its mtime is older than
  * {@link HOOK_STATE_STALE_LOCK_MS}, the residue of a hook killed mid-update.
- * Returns `true` when it removed one.
+ * Returns `true` when it removed one, after which the caller makes one fresh
+ * acquire attempt like any other contender.
  *
- * The takeover is a rename to a per-process aside name, not an unlink in
- * place: a rename moves exactly one file, so of two contenders that both saw
- * the stale lock, only one moves it. The other's rename then either fails
- * (nothing there) or moves the winner's fresh lock, which the re-check of the
- * moved file catches; that lock is linked back under its name (`link` never
- * overwrites) and the takeover reports `false`. Every I/O error reports
- * `false`.
- *
- * One residual race remains: while a moved live lock is aside, between the
- * rename and the link back, the lock name is absent, so a third contender
- * arriving in that window acquires alongside the live holder; the link back
- * then fails and the live holder's lock is lost. That needs a crash residue,
- * three contenders on one scope and an arrival within microseconds, and the
- * worst outcome is a lost update to the operator's own session state.
+ * The staleness judgement and the removal are tied to one file through
+ * `removeStaleLockSync` in `src/core/brain/sync-lockfile.ts`: the identity
+ * read with the judgement is the one it claims and re-checks, so a
+ * contender whose judgement is out of date (the abandoned lock was already
+ * taken over and a live holder re-acquired) removes nothing. A live
+ * holder's lock is never moved or removed, and a release removes only a
+ * lock its holder still owns, so the scope has at most one holder at a time
+ * through a takeover. Every I/O error reports `false`.
  */
-function clearStaleLock(path: string, stale: (path: string) => boolean = isStale): boolean {
-  const lockPath = path + ".lock";
-  const aside = `${lockPath}.stale-${process.pid}`;
-  try {
-    if (!stale(lockPath)) return false;
-    renameSync(lockPath, aside);
-  } catch {
-    return false;
-  }
-  try {
-    if (stale(aside)) return true;
-    // Moved a live holder's lock: put it back before anyone can see the gap widen.
-    linkSync(aside, lockPath);
-    return false;
-  } catch {
-    return false;
-  } finally {
-    try {
-      unlinkSync(aside);
-    } catch {
-      // already gone
-    }
-  }
+function clearStaleLock(path: string, stale: (st: BigIntStats) => boolean = isStale): boolean {
+  return removeStaleLockSync(path + ".lock", stale);
 }
 
 /**
  * Test-only entry to {@link clearStaleLock} with an injected stale check, so
- * a test can reach the "moved a live lock" branch, which otherwise needs an
- * mtime change between the two checks.
+ * a test can run another contender's takeover between this contender's
+ * judgement and its act - an interleaving real processes reach only by luck.
  *
  * The leading underscore is this repo's marker for a test-only export.
  */
@@ -278,7 +253,7 @@ export const _clearStaleLockForTests = clearStaleLock;
  * Acquire the scope's advisory lock. The read-merge-write is not atomic on its
  * own, so two concurrent hook processes could otherwise each read the file,
  * merge their own key, and clobber the other's stamp. A stale lockfile is
- * taken over once (rename aside, then one fresh attempt). With `tryOnce` a contended
+ * taken over once (claimed and removed, then one fresh attempt). With `tryOnce` a contended
  * lock yields `null` immediately; otherwise it retries within a bounded budget
  * before yielding `null`, and the caller degrades rather than throwing.
  */
@@ -382,7 +357,10 @@ const PRUNE_MAX_FILES = 200;
  * Delete scope state files (`<slug>.json`) and their write and lock residue
  * (see {@link SCOPE_RESIDUE_RE}) whose mtime is older than `maxAgeMs`,
  * removing at most `maxFiles` per sweep. A lock that old is far past
- * {@link HOOK_STATE_STALE_LOCK_MS}, so no live hook holds it. Symlinks and
+ * {@link HOOK_STATE_STALE_LOCK_MS}, so no live hook holds it; it is removed
+ * through the same claim a hook's takeover uses (`removeStaleLockSync`),
+ * which leaves a fresh claim file behind for
+ * a later sweep. Symlinks and
  * any name outside those shapes are left alone, and nothing is swept
  * when `.open-second-brain` or `hook-state` is itself a symlink: a vault
  * received from elsewhere could otherwise point the sweep at any directory.
@@ -410,9 +388,18 @@ export function pruneHookStateFiles(
     if (!SCOPE_FILE_RE.test(name) && !SCOPE_RESIDUE_RE.test(name)) continue;
     const path = join(dir, name);
     try {
-      const st = lstatSync(path);
-      if (!st.isFile() || nowMs - st.mtimeMs <= maxAgeMs) continue;
-      unlinkSync(path);
+      const st = lstatSync(path, { bigint: true });
+      if (!st.isFile() || nowMs - Number(st.mtimeMs) <= maxAgeMs) continue;
+      // A lock goes through the takeover claim, like a hook's takeover, so the
+      // sweep and a hook that judged the same lock stale never both remove it
+      // (the second would remove the first's freshly re-acquired lock).
+      if (SCOPE_LOCK_RE.test(name)) {
+        if (!removeStaleLockSync(path, (seen) => nowMs - Number(seen.mtimeMs) > maxAgeMs)) {
+          continue;
+        }
+      } else {
+        unlinkSync(path);
+      }
       removed += 1;
     } catch {
       // vanished or unremovable; leave it for the next sweep

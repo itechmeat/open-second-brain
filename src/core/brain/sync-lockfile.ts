@@ -26,6 +26,14 @@
  * the other was not used is reading the right question, and this is the
  * answer.
  *
+ * Ownership: a handle remembers the identity (device and inode) of the file
+ * its exclusive create made, and {@link LockHandle.release} and the exit hook
+ * remove the lock name only while it still names that file. A lock name
+ * that something else removed and another process re-created belongs to
+ * that process, and deleting it would let a third process in beside it; an
+ * abandoned-lock takeover ({@link removeStaleLockSync}) is one remover, an
+ * operator clearing a lock by hand another.
+ *
  * Stale-lock recovery: on normal process exit the cleanup hook unlinks
  * any still-held locks. On hard crash (SIGKILL, OOM, or the second
  * Ctrl-C that falls through to the default SIGINT disposition) the
@@ -53,6 +61,7 @@
  */
 
 import {
+  type BigIntStats,
   closeSync,
   constants as fsConstants,
   fstatSync,
@@ -70,29 +79,68 @@ import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "./path-constants.ts";
 export interface LockHandle {
   /** Filesystem path to the underlying `.lock` file. */
   readonly path: string;
-  /** Release the lock. Idempotent: a second call is a no-op. */
+  /**
+   * Release the lock: remove the `.lock` file while its name still holds the
+   * file this handle created, and leave a lock someone else now holds alone.
+   * Idempotent: a second call is a no-op.
+   */
   release(): void;
 }
 
 const LOCK_SUFFIX = ".lock";
 
-// Held locks, tracked at module scope so the exit hook can clean up.
-const heldLocks = new Set<string>();
+/**
+ * The file a holder created: device and inode as exact bigints. `null` when
+ * the platform reports no inode (some network and FAT volumes answer 0),
+ * where ownership cannot be told apart and release falls back to removing
+ * the name.
+ */
+type LockIdentity = { readonly dev: bigint; readonly ino: bigint } | null;
+
+// Held locks and the file each holder created, tracked at module scope so the
+// exit hook can clean up.
+const heldLocks = new Map<string, LockIdentity>();
 let exitHookInstalled = false;
 
 function ensureExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const lockPath of heldLocks) {
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        // best-effort; the next acquire will see ELOCKED and surface it
+    for (const [lockPath, identity] of heldLocks) {
+      if (ownsLockName(lockPath, identity)) {
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // best-effort; the next acquire will see ELOCKED and surface it
+        }
       }
     }
     heldLocks.clear();
   });
+}
+
+/** Identity of the file behind an open descriptor; `null` when it has none. */
+function identityOf(fd: number): LockIdentity {
+  try {
+    const st = fstatSync(fd, { bigint: true });
+    return st.ino === 0n ? null : { dev: st.dev, ino: st.ino };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `lockPath` still names the file this holder created. A missing name
+ * is not owned (nothing to remove); an unknown identity is presumed owned, the
+ * behaviour before ownership was tracked.
+ */
+function ownsLockName(lockPath: string, identity: LockIdentity): boolean {
+  try {
+    const st = lstatSync(lockPath, { bigint: true });
+    return identity === null || (st.dev === identity.dev && st.ino === identity.ino);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -142,8 +190,8 @@ function nameIsOccupied(path: string): boolean {
 /**
  * Acquire an exclusive lock for `target`. Returns a handle whose
  * {@link LockHandle.release} method unlinks the underlying `.lock`
- * file. Throws `Error & { code: 'ELOCKED' }` if the lock is already
- * held.
+ * file while it is still the one this call created. Throws
+ * `Error & { code: 'ELOCKED' }` if the lock is already held.
  *
  * The target file itself does NOT need to exist - first-time writes
  * acquire the lock before creating the target. The parent directory
@@ -180,6 +228,8 @@ export function acquireLockSync(target: string): LockHandle {
     }
   }
 
+  const identity = identityOf(fd);
+
   // Stamp pid + timestamp into the lock body. The contents are
   // purely diagnostic - the doctor surface reads them when reporting
   // stale locks. Failure to write is non-fatal: the lock semantics
@@ -198,7 +248,7 @@ export function acquireLockSync(target: string): LockHandle {
     }
   }
 
-  heldLocks.add(lockPath);
+  heldLocks.set(lockPath, identity);
   let released = false;
   return {
     path: lockPath,
@@ -206,6 +256,9 @@ export function acquireLockSync(target: string): LockHandle {
       if (released) return;
       released = true;
       heldLocks.delete(lockPath);
+      // The name no longer holds this holder's file: whoever holds it now
+      // keeps it. Removing it would admit a second holder beside them.
+      if (!ownsLockName(lockPath, identity)) return;
       // Anything past our own stamp was appended by a waiter (see
       // `markWaiting`): someone is queued for this lock, so a re-acquire from
       // this process steps back first. Best-effort, like the stamp itself.
@@ -223,6 +276,67 @@ export function acquireLockSync(target: string): LockHandle {
       if (waitedOn) contendedReleases.set(lockPath, Date.now());
     },
   };
+}
+
+/** Whether two stats describe the same file in the same state. */
+function sameLockFile(a: BigIntStats, b: BigIntStats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.mtimeNs === b.mtimeNs;
+}
+
+/**
+ * Remove an abandoned lock file: the file at `lockPath` when `stale` judges
+ * it abandoned, only while the name still holds that same file, and only for
+ * the one caller that claims that file first. Returns `true` when this call
+ * removed it; the caller then makes a fresh acquire attempt like any other
+ * contender. Never throws.
+ *
+ * A plain "stat, judge, unlink" lets two contenders that both judged the same
+ * abandoned lock both remove something: the first removes the abandoned
+ * lock and re-acquires, the second then removes that fresh lock and
+ * acquires too, and from there each holder's release can remove the next
+ * one's lock. Here the judgement and the removal are tied to one file.
+ *
+ * The claim is an exclusive create of a name derived from the judged file's
+ * identity (`<lock>.takeover-<inode>-<mtime ns>`): every contender that judged
+ * the same file races for the same claim name, and exclusive create is a
+ * compare-and-swap on Linux, macOS and Windows alike, so exactly one of them
+ * goes on. The claim is never removed here - it is the tombstone that turns
+ * away a late contender still acting on its judgement of that same file
+ * after the winner has re-acquired under the same name. It is a zero-byte
+ * file per takeover; a store with a sweep (the hook-state prune) removes old
+ * claims.
+ *
+ * The winner then re-reads the name and removes it only while it still
+ * holds the judged file, so a lock that was replaced by a fresh one in the
+ * meantime is never removed. Between that read and the unlink the name can
+ * only change if the judged lock's own holder releases it, which the
+ * staleness judgement presumes dead, as long as every other remover of the
+ * lock goes through this function.
+ */
+export function removeStaleLockSync(
+  lockPath: string,
+  stale: (st: BigIntStats) => boolean,
+): boolean {
+  let seen: BigIntStats;
+  try {
+    seen = lstatSync(lockPath, { bigint: true });
+    if (!stale(seen)) return false;
+  } catch {
+    return false;
+  }
+  try {
+    closeSync(openSync(`${lockPath}.takeover-${seen.ino}-${seen.mtimeNs}`, "wx", 0o600));
+  } catch {
+    // Claimed by another contender (or uncreatable): not ours to remove.
+    return false;
+  }
+  try {
+    if (!sameLockFile(lstatSync(lockPath, { bigint: true }), seen)) return false;
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

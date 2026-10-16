@@ -27,7 +27,15 @@
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +45,7 @@ import {
   lifecycleEventNeedsDedup,
 } from "../src/core/brain/session-lifecycle.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
+import { removeStaleLockSync } from "../src/core/brain/sync-lockfile.ts";
 import { SafeguardTimeoutError, type Safeguard } from "../src/core/brain/safeguard.ts";
 import {
   armProcessCeiling,
@@ -110,26 +119,50 @@ function lockPath(vault: string): string {
   return join(tmpdir(), `o2b-capture-${key}.lock`);
 }
 
-/** Take the per-vault worker lock; returns its release, or null on timeout. */
+/** Whether a worker lock is older than {@link WORKER_LOCK_STALE_MS}. */
+function workerLockAbandoned(st: { readonly mtimeMs: bigint }): boolean {
+  return Date.now() - Number(st.mtimeMs) > WORKER_LOCK_STALE_MS;
+}
+
+/**
+ * Take the per-vault worker lock; returns its release, or null on timeout.
+ *
+ * A lock older than {@link WORKER_LOCK_STALE_MS} is removed through
+ * `removeStaleLockSync`, so of two waiters that both judged it abandoned
+ * only one removes it, and the other never removes the lock the first then
+ * takes. The release removes the lock only while it is still the file this
+ * worker created.
+ */
 async function acquireWorkerLock(vault: string): Promise<(() => void) | null> {
   const path = lockPath(vault);
   const deadline = Date.now() + WORKER_LOCK_WAIT_MS;
   for (;;) {
+    let fd = -1;
     try {
-      closeSync(openSync(path, "wx"));
+      fd = openSync(path, "wx");
+    } catch {
+      removeStaleLockSync(path, workerLockAbandoned);
+    }
+    if (fd >= 0) {
+      let mine: { readonly dev: bigint; readonly ino: bigint } | null = null;
+      try {
+        mine = fstatSync(fd, { bigint: true });
+      } catch {
+        // unknown identity: release falls back to removing the name
+      } finally {
+        closeSync(fd);
+      }
       return () => {
         try {
+          const now = lstatSync(path, { bigint: true });
+          if (mine !== null && mine.ino !== 0n && (now.dev !== mine.dev || now.ino !== mine.ino)) {
+            return; // taken over and re-acquired by another worker: theirs now
+          }
           unlinkSync(path);
         } catch {
           // already gone
         }
       };
-    } catch {
-      try {
-        if (Date.now() - statSync(path).mtimeMs > WORKER_LOCK_STALE_MS) unlinkSync(path);
-      } catch {
-        // raced with the holder's release; retry
-      }
     }
     if (Date.now() >= deadline) return null;
     // oxlint-disable-next-line no-await-in-loop -- polling a lock, sequential by design
