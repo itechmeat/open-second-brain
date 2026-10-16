@@ -29,9 +29,10 @@ export const DECISION_MODEL_HOSTED_MAX_STATE_TOKENS = 32_000;
  * `vercel-evaluate` speaks the Vercel AI Gateway's renamed
  * `POST <base>/v1/evaluate` variant; `llm-emulation` asks an
  * OpenAI-compatible chat model for probabilities (uncalibrated, explicit
- * only).
+ * only); `converse` speaks a bearer-authenticated Converse-protocol
+ * (Bedrock-style) gateway's `POST <base>/converse`.
  */
-export type DecisionModelAdapter = "systemone" | "vercel-evaluate" | "llm-emulation";
+export type DecisionModelAdapter = "systemone" | "vercel-evaluate" | "llm-emulation" | "converse";
 
 /** Most `choice` options the wire format accepts in one question. */
 export const DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS = 255;

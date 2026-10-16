@@ -320,6 +320,22 @@ export const EGRESS_SITES = Object.freeze({
       "this provider, every record is `calibrated: false`, and `enforce` is refused unless " +
       "`decision_model_allow_uncalibrated` is true.",
   },
+  "decision-model-converse": {
+    id: "decision-model-converse",
+    verb: "decision_model_uses with decision_model_provider: converse",
+    module: "src/core/decision-model/converse.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "the optional decision-model route through a bearer-authenticated gateway that speaks " +
+      "the Bedrock-style Converse protocol: the same masked, clipped state and question texts " +
+      "as every decision route, POSTed as a chat-shaped request to the operator's configured " +
+      "gateway. The state and questions pass the shared guard before the body is built and a " +
+      "refusal sends nothing; the state is fenced as untrusted content because the mapping is " +
+      "chat-shaped, and the scan carries the resolved bearer key as a literal so a value that " +
+      "leaked into vault text cannot ride along with the credential it would otherwise meet. " +
+      "Off unless the operator enables it in machine config AND the named key variable is " +
+      "set; a vault can opt out.",
+  },
   "brain-telegram-capture": {
     id: "brain-telegram-capture",
     verb: "o2b brain telegram-run",

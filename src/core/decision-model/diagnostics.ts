@@ -52,7 +52,10 @@ export interface DecisionModelCheckReport {
   readonly enabled: boolean;
   readonly status: ResolvedDecisionModelConfig["status"];
   readonly provider: string | null;
-  /** The adapter the preset names (`systemone`, `vercel-evaluate`, `llm-emulation`). */
+  /**
+   * The adapter the preset names (`systemone`, `vercel-evaluate`,
+   * `llm-emulation`, `converse`).
+   */
   readonly adapter: string;
   readonly base_url: string | null;
   readonly model: string | null;

@@ -78,6 +78,13 @@ export function makeDecisionProvider(
           require("./systemone.ts") as typeof import("./systemone.ts");
         return new SystemOneDecisionProvider({ ...common, apiKey, calibrated: cfg.calibrated });
       }
+      case "converse": {
+        if (apiKey === null) return null;
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { ConverseDecisionProvider } =
+          require("./converse.ts") as typeof import("./converse.ts");
+        return new ConverseDecisionProvider({ ...common, apiKey, calibrated: cfg.calibrated });
+      }
     }
   } catch {
     // An endpoint the adapter refuses: treated as not configured. The
