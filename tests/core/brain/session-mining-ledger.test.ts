@@ -141,6 +141,26 @@ test("a non-object ledger refuses by name", () => {
   expect(() => readSessionMiningLedger(vault)).toThrow(/not an object/);
 });
 
+test("a wrong-shaped entries container refuses by name, never reads as empty", () => {
+  // Container-shape malformation is file-level corruption like a corrupt
+  // JSON body or an unknown schema: reading it as an empty ledger would
+  // silently unsuppress every barren session at once. Per-entry damage
+  // stays different (dropped, never guessed) and is pinned above.
+  const cases: ReadonlyArray<unknown> = [
+    { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION }, // entries absent
+    { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION, entries: null },
+    { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION, entries: [] },
+    { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION, entries: "nope" },
+    { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION, entries: 7 },
+  ];
+  for (const body of cases) {
+    seedLedger({});
+    writeFileSync(sessionMiningLedgerPath(vault), `${JSON.stringify(body)}\n`);
+    expect(() => readSessionMiningLedger(vault)).toThrow(/entries is not an object/);
+    expect(() => readSessionMiningLedger(vault)).toThrow(/session-mining-ledger\.json/);
+  }
+});
+
 test("an entry this build cannot read is dropped, never guessed at", () => {
   seedTurns(SESSION);
   const good: SessionMiningEntry = {

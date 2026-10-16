@@ -114,7 +114,10 @@ export interface SessionMiningLedger {
  * tombstoned, which is the correct answer for a vault that has mined
  * nothing. A CORRUPT or unknown-schema file is a hard error: a silent reset
  * would unsuppress every barren session at once and re-offer all of them to
- * the model on the next scan.
+ * the model on the next scan. The entries container is held to the same
+ * contract: a container that is absent, null, an array or a primitive is
+ * file-level corruption and refuses by name, while damage to a SINGLE entry
+ * drops that entry only.
  */
 export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   const path = sessionMiningLedgerPath(vault);
@@ -139,11 +142,18 @@ export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   }
   const entries: Record<string, SessionMiningEntry> = {};
   const raw = obj["entries"];
-  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-      const entry = readEntry(key, value);
-      if (entry !== null) entries[key] = entry;
-    }
+  // Container shape is file-level corruption, the same class as a corrupt
+  // body or an unknown schema: a string, array, null or absent container
+  // read as an empty ledger would silently unsuppress every barren session
+  // at once, which is the outcome the hard errors exist to prevent. This is
+  // different from per-ENTRY damage, which is dropped rather than guessed
+  // at, because a dropped entry can only re-open one session for mining.
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`session mining ledger entries is not an object: ${path}`);
+  }
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const entry = readEntry(key, value);
+    if (entry !== null) entries[key] = entry;
   }
   return { schema_version: SESSION_MINING_LEDGER_SCHEMA_VERSION, entries };
 }
