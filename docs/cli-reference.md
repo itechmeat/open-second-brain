@@ -439,7 +439,7 @@ o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_b
 o2b brain export              Read-only dump of active preferences, or (since v1.50.0) a session-transcript dataset: --format json|llms-txt|transcripts-jsonl [--out <path>] [--force]; the transcript form takes --transcripts <file|dir> and reads no vault at all (see "The transcript corpus" below). Since v1.49.0 the preference bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
 o2b brain bank-export         (CLI-only) One-file backup bundle: preferences, the page graph, page contracts, the sources dashboard. Redacted on the way out; refuses with exit 1 on an unreadable `pref-*.md` (since v1.49.0)
 o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge) [--trusted-restore]. Preference rows restore UNTRUSTED by default: every row lands `unconfirmed`, unpinned, at low confidence, on a fresh trial window dated from the restore - including a row the bundle already marked unconfirmed - and the run names each row it reset; `--trusted-restore` keeps the carried status, confidence, pin and window verbatim, for a backup you vouch for. A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)
-o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode). Since v1.49.0 BOTH modes refuse a Brain file they cannot parse - `--export` writes nothing and exits 1, and live mode does not start, because a browser showing a silently smaller graph is the same lie as a written file - and `--export` runs the shared redactor over the graph, so its output differs from a pre-v1.49.0 export on any vault holding a credential-shaped value
+o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode). Since v1.49.0 BOTH modes refuse a Brain file they cannot parse - `--export` writes nothing and exits 1, and live mode does not start, because a browser showing a silently smaller graph is the same lie as a written file - and `--export` runs the shared redactor over the graph, so its output differs from a pre-v1.49.0 export on any vault holding a credential-shaped value. Since v1.86.0 live mode serves two read-only console routes beside the graph, `/counts.json` (recall-telemetry summary, most-recalled artifacts, a written-per-day histogram over the trailing 30 days, per-surface report-snapshot dates that read as disabled while the feature is off) and `/status.json` (the operator snapshot), both re-reading the vault on every GET, and the page renders Counts and Vault status sections from them; a static export states that the live routes are unreachable instead of firing fetches that can only fail
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, ...). --remediate [--dry-run] plans a dependency-ordered repair and applies auto-safe content-hash re-stamps. Since v1.81.0 the report also prints a count-only archive section over Brain/.archives/ (entries, combined bytes, stamped pages whose entry is missing or mismatched, entries no page cites; silent on a vault that never archived a source) and runs the fail-soft `blank-session-identity` check, counting continuity records still carrying the legacy blank session id; both are informational and neither repairs
 o2b brain health              Semantic-health report (since v0.14.0): contradictory confirmed preferences, recurring concepts with no dedicated preference, stale claims, plus a clean | watch | investigate verdict
 o2b brain history             Render a preference's edit-history timeline (since v0.14.0): one entry per content mutation (principle / scope / status before -> after)
@@ -461,7 +461,7 @@ o2b brain mcp-landscape       List MCP servers configured across the vault (sinc
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
 o2b brain today               Read-only today dashboard: due and overdue obligations, open loops (`@osb loop <text>` markers, closed by `@osb loop close id=<id>`), merged recent activity, totals; --lookback-days (default 7), --limit (default 20), --json. Each section derives live; a failing section is reported and the rest still render
 o2b brain apply-markers       Turn `@osb set note=<target> field=<field> value=<value>` markers into schema-validated frontmatter writes. Report mode by default (writes nothing); --apply needs `guardrails.marker_writeback` in _brain.yaml, consumes applied markers so a re-run is idempotent, and leaves unresolvable or refused targets unconsumed; --path <subdir> (repeatable) or notes.read_paths
-o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it (see "Session logs this machine already has" below)
+o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it, and --propose-backlog batches the already-imported undistilled backlog into one ask-once distill envelope (see "Session logs this machine already has" below)
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
 o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0)
 o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
@@ -655,7 +655,7 @@ o2b brain maintenance         run --cron-template [--interval N] [--format cron|
 
 The schema pack gains four additive ontology fields (`labels`, `link_constraints`, `attributes`, `frontmatter_tiers`) with audited mutations through `o2b brain schema apply`. Link constraints enforce at index materialization: a typed edge whose endpoint page types violate the declared pairs falls back to an untyped link, `o2b brain schema lint` lists each violation, and removing the constraint restores the edges on the next index run. Tier drift detection rides the same index pass - the snapshot keeps the expected value, so reindexes never absorb a hand-edit, and `brain_doctor` warns with the open count. Filter labelled recall with `o2b search <q> --property labels=<dim>/<value>`. Secrets protect against context leakage and vault sync exposure, not against root; every custody operation lands a no-values record in `Brain/log/secret-custody/`. A maintenance gate skip exits 0 so cron never alarms on a quiet hour.
 
-The lane's vault-side knobs live in `Brain/_brain.yaml` - the two original ones under `maintenance:`, the storage cap and its thresholds under `storage:` (since v1.85.0, see "Storage lifecycle" below) - because they answer what the cron line cannot. `host_pressure_percent` adds a gate over the window and busy checks: skip when the host's one-minute run queue stands at or above that percentage of the CPUs this process may use. Unset by default, which leaves the gate off. Where the metric is degenerate - a platform whose load average is a constant, or a cgroup with a CPU bandwidth quota, where the run queue is the whole host's - the gate stays **open** and the journal carries a separate `pressure:unmeasurable` row naming the reason, so an unreadable host is never reported as a quiet one. Since v1.85.0 a configured storage cap adds the lane's fifth gate, evaluated last because it is the most expensive: a fresh byte census of the whole vault, skipping the pass at a measured critical tier with its own `skipped:capacity` verdict, the journal row carrying the tier and the reading behind it while the skipped run still appends its usage sample first. A capacity skip is a gate skip like any other - it exits 0 - and where the caller has no local reach the `status` surface renders the tier word and the unmeasurable reason without the byte-and-percent figures. `failure_streak_limit` (default 3) refuses a lane task that has failed that many times in a row in the run journal, naming the streak; a single journaled success clears it. The refusal is per task - the other three still run under the same lease - and there are two ways past it: `--retry <task>` (repeatable) attempts just that task with every gate the operator configured still in force, and `--force` runs the whole lane past the four soft gates - window, busy, pressure and capacity - and every streak refusal, never past the lease. Both escapes exist on the MCP surface too - `brain_maintenance` takes `retry_tasks`, `busy_minutes`, `busy_threshold` and a `status` `limit`, so an agent reading the refusal can act on it without reaching for `force`, which widens its bypass to every soft gate and every streak refusal. A refused task is reported as `REFUSED`, never `FAILED`, and the run exits **7** rather than 1: nothing was attempted, so nothing failed, but a standing refusal is not the quiet hour that exits 0 either. An attempted failure still exits 1 and outranks a refusal in the same run. The `refused:streak` journal row carries the count it refused on, so the streak does not silently reset when its evidence rolls off the journal cap.
+The lane's vault-side knobs live in `Brain/_brain.yaml` - the two original ones under `maintenance:`, the storage cap and its thresholds under `storage:` (since v1.85.0, see "Storage lifecycle" below) - because they answer what the cron line cannot. `host_pressure_percent` adds a gate over the window and busy checks: skip when the host's one-minute run queue stands at or above that percentage of the CPUs this process may use. Unset by default, which leaves the gate off. Where the metric is degenerate - a platform whose load average is a constant, or a cgroup with a CPU bandwidth quota, where the run queue is the whole host's - the gate stays **open** and the journal carries a separate `pressure:unmeasurable` row naming the reason, so an unreadable host is never reported as a quiet one. Since v1.85.0 a configured storage cap adds the lane's fifth gate, evaluated last because it is the most expensive: a fresh byte census of the whole vault, skipping the pass at a measured percent at or past `storage.pause_percent` (since v1.86.0; the line defaults to the warn band) or at the critical tier with its own `skipped:capacity` verdict, the journal row carrying the tier and the reading behind it, while every run the gate evaluated appends its usage sample - skip or proceed - so the day-based capacity trend keeps accumulating. A capacity skip is a gate skip like any other - it exits 0 - and where the caller has no local reach the `status` surface renders the tier word and the unmeasurable reason without the byte-and-percent figures. `failure_streak_limit` (default 3) refuses a lane task that has failed that many times in a row in the run journal, naming the streak; a single journaled success clears it. The refusal is per task - the other three still run under the same lease - and there are two ways past it: `--retry <task>` (repeatable) attempts just that task with every gate the operator configured still in force, and `--force` runs the whole lane past the four soft gates - window, busy, pressure and capacity - and every streak refusal, never past the lease. Both escapes exist on the MCP surface too - `brain_maintenance` takes `retry_tasks`, `busy_minutes`, `busy_threshold` and a `status` `limit`, so an agent reading the refusal can act on it without reaching for `force`, which widens its bypass to every soft gate and every streak refusal. A refused task is reported as `REFUSED`, never `FAILED`, and the run exits **7** rather than 1: nothing was attempted, so nothing failed, but a standing refusal is not the quiet hour that exits 0 either. An attempted failure still exits 1 and outranks a refusal in the same run. The `refused:streak` journal row carries the count it refused on, so the streak does not silently reset when its evidence rolls off the journal cap.
 
 Since v1.64.0 the lane's timeouts are honest and its embedding spend is named. A task killed at its safeguard deadline exits **6** (`probeIncomplete`), keyed on `timed_out` rows alone: the only proved fact is that the pass did not finish, which is not the same as a task failing; a proved failure (1) outranks a timeout, a timeout outranks a refusal (7), and the render says TIMED OUT with the safeguard detail. The reindex task stays keyword-only unless `maintenance_embeddings: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`, default `false`) opts it in; then it requests the embedding phase whenever the resolved semantic config can reach a provider, announces the pending-spend estimate before the pass, and journals the phase's own cost-gate result as the per-run receipt - model, tokens, estimated cost, and whether a bypass fired - on the task row, the journal line and the `maintenance_spend` metrics surface; the preview is an estimate by position, the receipt prices what the completed pass embedded, and a run killed mid-spend receipts nothing. `--force-cost` (MCP `force_cost`) bypasses a positive `embedding_cost_gate_usd` for this run, recorded on the receipt when it overrode a gate that would have refused. A safeguard timeout is journaled as `timed_out` and neither counts toward nor resets the failure streak that refuses a task.
 
@@ -929,6 +929,18 @@ once per change, folding warning- and action-severity findings into
 per-detector counts and staying silent while the findings set is
 unchanged. Claude Code only: runtimes whose Stop block would force a
 continuation turn stay silent.
+`backlog_nudge_enabled` (env
+`OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED`, default off) adds a
+SessionStart line that reports the count of imported sessions never
+distilled, read from a census that joins the session import ledger to
+the per-session mining record without opening a source log. The nudge is
+change-keyed, not timed: the line is injected when the count differs
+from the count injected last (state: one overwrite-only file,
+`.open-second-brain/backlog-nudge.count`), an unchanged backlog is never
+re-nagged, and a drained backlog is recorded without being announced.
+Under its deadline the hook degrades to silence, never to a fabricated
+number; flag off keeps the session preamble byte-identical (since
+v1.86.0).
 `o2b partner codegraph report` and `o2b doctor` aggregate codegraph
 status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
@@ -1187,13 +1199,15 @@ roots `src/core/runtime/host-facts.ts` declares:
 o2b brain import-session --status              Per-runtime found / imported / gap counts, and the roots each was looked for under
 o2b brain import-session --discover            The same report, plus the absolute path of every log that has never been imported
 o2b brain import-session --discover --all      Import that gap, one file at a time, through the same importSession the path form calls
+o2b brain import-session --propose-backlog     One ask-once envelope over the undistilled backlog (since v1.86.0): candidates whose dedup hash the vault already holds are dropped and named, the rest collapse to one proposal per distinct hash across sessions with every contributing session listed, and a session whose every candidate was already known is reported rather than re-proposed
 o2b brain import-session --status|--discover --progress
                                                Newline-delimited progress on stderr under the `sessions` operation, one `hash` stage
 ```
 
 The modes never blend, and a conflicting combination is refused by name
-rather than ranked: a path with `--discover` or `--status`, `--discover`
-with `--status`, or `--all` without `--discover`. Either ranking would be a
+rather than ranked: a path with `--discover`, `--status` or
+`--propose-backlog`, two mode flags together, `--propose-backlog` with
+`--all`, or `--all` without `--discover`. Either ranking would be a
 guess about which one the operator meant.
 
 `--discover --all` writes through the same `importSession` the path form
@@ -1376,25 +1390,41 @@ An uncapped vault is unbounded: `o2b brain storage` reports the bytes and
 the per-surface census, states `unbounded` plainly, invents no
 days-to-exhaustion figure, and nothing pauses and nothing refuses.
 Setting `storage.cap_bytes` in `Brain/_brain.yaml` turns on the tiers and
-every consumer of them; the four thresholds (`warn_percent`,
-`critical_percent`, `warn_days`, `critical_days`) default to 80 and 95
-percent of the cap and 30 and 7 days to it at the measured trend, and the
-critical band must sit past the warn band - a larger percent, a smaller
-day horizon. Each invocation takes one census and appends one
-`storage_usage` sample; from two or more samples a linear trend yields
-the days-to-capacity figure, and a tier is decided by the worse of its
-two bands. The census covers `brain_tree` and the dot-directories
-(`.snapshots/`, `.artifacts/`, `.archives/`, `.payloads/`, `.state/`)
-plus the derived store with its WAL/SHM sidecars; a surface that cannot
-be measured is refused by name, never reported as zero. Below local
+every consumer of them; the five thresholds (`warn_percent`,
+`pause_percent`, `critical_percent`, `warn_days`, `critical_days`)
+default to 80 and 95 percent of the cap - the pause line riding the warn
+band - and 30 and 7 days to it at the measured trend; the critical band
+must sit past the warn band, and an explicit `pause_percent` must sit
+below `critical_percent`, which is where interactive writes are refused
+outright. Each invocation takes one census and appends one
+`storage_usage` sample. Since v1.86.0 the trend is day-based: samples
+bucket to one point per UTC day (the day's last sample wins), a sample
+whose census was partial drops out of the fit entirely, and the fit needs
+three distinct days inside a trailing 30-day window before any
+days-to-capacity figure exists - two calls a minute apart around one
+ordinary write no longer extrapolate the burst into a full vault - while
+a tier is decided by the worse of its two bands, so a tier never rides a
+trend that was never fitted. The census covers `brain_tree` and the
+dot-directories (`.snapshots/`, `.artifacts/`, `.archives/`, `.payloads/`,
+`.state/`) plus the derived store - since v1.86.0 both the store files
+with their WAL/SHM sidecars and the directory's other contents, the
+ledgers, dead letters and checkpoints the meter used to miss - and it
+measures the store the configured location (`search_db_path` when set)
+points at, so the report, the lane gate and the doctor check answer about
+the same vault; a surface that cannot be measured is refused by name,
+never reported as zero. Below local
 reach the census is not taken: the report answers `measured: false` with
 the reason named and carries no figures. The CLI runs at local reach, so
 it always sees the measured form.
 
 The consumers are the maintenance lane's fifth gate (see "Write-time
 integrity and governance" above): a fresh census at decision time, never
-the stored aggregate, skipping the pass at a measured critical tier with
-its own `skipped:capacity` verdict; `brain_ingest_source`'s admission
+the stored aggregate, skipping the pass at a measured percent at or past
+`storage.pause_percent` (since v1.86.0) or at the critical tier with its
+own `skipped:capacity` verdict, and recording its census as a
+`storage_usage` sample on every run where the gate evaluated, skip or
+proceed, so a vault where nobody runs the storage report still grows a
+trend; `brain_ingest_source`'s admission
 refusal, which answers `capacity_exhausted` in the validate phase before
 the write path opens, so a refused ingest leaves the vault
 byte-identical; and the `storage-capacity` doctor check, which reports
@@ -1408,8 +1438,12 @@ to growth fine.
 
 Receipt compaction gives the two append-only receipt ledgers - the
 continuity ledger and the metrics ledger - a drain. `scan` inventories
-every shard read-only (records, foldable, protected, unparseable,
-aggregates, bytes) and names each shard it could not read; `compact`
+shards read-only (records, foldable, protected, unparseable, aggregates,
+bytes) and names each shard it could not read; since v1.86.0 it offers
+only this device's shard plus the legacy un-sharded file, and a foreign
+shard named by hand to `compact` is refused by name on previews and
+confirmed runs alike - another device's shard; compact it on the owning
+device. `compact`
 folds the records older than `--older-than-days` (default 30) into
 per-kind, per-month aggregate lines inside the shards the caller names
 with `--shard family:name` ids from a scan - a compact with no shard ids
@@ -1417,9 +1451,14 @@ is a usage error, never a guess. It previews unless `--apply` is passed;
 a confirmed run takes a recovery-point snapshot first and rewrites each
 shard atomically. `--expect N` asserts exactly N records will fold and
 aborts without writing on a mismatch; `--strict` refuses a confirmed
-compact that carries no count guard. Records in the protected classes
-never fold whatever their age - the `source_invalidation` audit trail
-and the two context-compaction kinds - and one `receipt_compaction` audit
+compact that carries no count guard. Since v1.86.0 folding is opt-in per
+kind: a closed allowlist names the pure telemetry kinds whose readers
+keep no per-record identity past the correlation window, and every other
+continuity kind - the functional records, the audit trail, the kinds a
+reader reads back as data - keeps verbatim whatever its age, an unknown
+kind failing closed to keep the same way a future build's records always
+do. Repeated folds merge into the existing per-kind, per-month aggregate
+instead of stacking a second line, and one `receipt_compaction` audit
 record closes a confirmed run. Compact is a local-reach surface (the
 `brain_receipts` tool refuses it by name below local reach, while scan
 stays readable at any reach); the CLI always runs at local reach. This
