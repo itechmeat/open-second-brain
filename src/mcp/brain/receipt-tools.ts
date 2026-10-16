@@ -23,7 +23,7 @@
 
 import { resolveAgentName } from "../../core/config.ts";
 import { compactReceiptLedgers } from "../../core/brain/receipts/compact.ts";
-import { scanReceiptLedgers } from "../../core/brain/receipts/scan.ts";
+import { receiptShardNameError, scanReceiptLedgers } from "../../core/brain/receipts/scan.ts";
 import { compactView, scanView } from "../../core/brain/receipts/views.ts";
 import {
   isReceiptMode,
@@ -85,7 +85,14 @@ function readShards(args: Record<string, unknown>): ReceiptShardRef[] {
   }
   return (raw as string[]).map((value) => {
     try {
-      return parseReceiptShardRef(value);
+      const ref = parseReceiptShardRef(value);
+      // Up front, beside the family check: a name the family's grammar
+      // does not recognise is the caller's invalid argument - a plain
+      // error escaping the core's per-shard handling would surface as an
+      // internal error instead (L9).
+      const nameError = receiptShardNameError(ref);
+      if (nameError !== null) throw new Error(nameError);
+      return ref;
     } catch (exc) {
       throw new MCPError(INVALID_PARAMS, (exc as Error).message);
     }

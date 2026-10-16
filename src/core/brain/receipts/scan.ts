@@ -215,6 +215,19 @@ function familyGrammar(family: ReceiptLedgerFamily): LedgerShardGrammar {
 }
 
 /**
+ * The caller-error message for a shard ref whose name the family's name
+ * grammar does not recognise - a typo, a path traversal, a sync-conflict
+ * copy - or `null` when the name is a real shard of the family. The
+ * boundaries validate through this BEFORE anything runs, so a malformed
+ * shard id is the caller's invalid-params error, never an internal one.
+ */
+export function receiptShardNameError(ref: ReceiptShardRef): string | null {
+  return parseShardedName(ref.name, familyGrammar(ref.family)) === null
+    ? `'${ref.name}' is not a ${ref.family} shard name`
+    : null;
+}
+
+/**
  * Resolve one shard ref to its file through the family's name grammar.
  * A name the grammar does not recognise - a typo, a path traversal, a
  * sync-conflict copy - is a named caller error before anything is read
@@ -224,10 +237,10 @@ export function resolveReceiptShardPath(
   vault: string,
   ref: ReceiptShardRef,
 ): { readonly path: string; readonly base: string; readonly shardId: string } {
-  const parsed = parseShardedName(ref.name, familyGrammar(ref.family));
-  if (parsed === null) {
-    throw new Error(`'${ref.name}' is not a ${ref.family} shard name`);
-  }
+  const nameError = receiptShardNameError(ref);
+  if (nameError !== null) throw new Error(nameError);
+  // The name error is null exactly when the grammar accepts the name.
+  const parsed = parseShardedName(ref.name, familyGrammar(ref.family))!;
   return {
     path: join(receiptLedgerDir(vault, ref.family), ref.name),
     base: parsed.base,

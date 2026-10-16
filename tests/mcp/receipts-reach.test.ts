@@ -30,6 +30,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { RECEIPT_COMPACTION_OPERATION } from "../../src/core/brain/receipts/types.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { RECEIPT_COMPACT_REACH_REASON, RECEIPT_TOOLS } from "../../src/mcp/brain/receipt-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -110,6 +111,45 @@ describe("brain_receipts compact at the caller's reach", () => {
     >;
     expect(res["measured"]).toBe(false);
     expect(res["reason"]).toBe(RECEIPT_COMPACT_REACH_REASON);
+  });
+
+  test("a shard name outside the family grammar is INVALID_PARAMS, never an internal error", async () => {
+    // L9: the `family:name` parser checks the family but not the name
+    // grammar, and the grammar refusal used to surface as a plain Error
+    // rethrown out of the handler - an internal error for what is the
+    // caller's malformed argument. Validated up front, by name.
+    for (const bad of ["continuity:../x", "continuity:.jsonl", "continuity:2026-08.jsonl.bak"]) {
+      try {
+        await receipts(
+          { ...ctx, reach: TRANSPORT_REACH.local },
+          { mode: "compact", shards: [bad] },
+        );
+        expect.unreachable(`'${bad}' must be refused`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(MCPError);
+        expect((err as MCPError).code).toBe(INVALID_PARAMS);
+        expect((err as MCPError).message).toContain("is not a continuity shard name");
+      }
+    }
+  });
+
+  test("a grammar-valid foreign shard is a refusal row, not invalid params", async () => {
+    // The boundary the grammar cannot express: a well-formed
+    // `<base>.<deviceId>.jsonl` name is a real shard - another device's,
+    // so the core answers a named failure row rather than a parameter
+    // error.
+    writeFileSync(
+      join(continuityLogDir(vault), "2026-08.telescope.jsonl"),
+      continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"),
+      "utf8",
+    );
+    const res = (await receipts(
+      { ...ctx, reach: TRANSPORT_REACH.local },
+      { mode: "compact", shards: ["continuity:2026-08.telescope.jsonl"] },
+    )) as { failures: Array<{ shard: string; message: string }> };
+    expect(res.failures).toHaveLength(1);
+    expect(res.failures[0]!.shard).toBe("continuity:2026-08.telescope.jsonl");
+    expect(res.failures[0]!.message).toContain("owning device");
   });
 
   test("at local reach the same tool previews the fold", async () => {
