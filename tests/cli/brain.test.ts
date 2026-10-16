@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
 
 let tmp: string;
 let vault: string;
@@ -45,6 +46,20 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
+
+/**
+ * The body of every logged doctor-repair event in the vault, in log
+ * order - the consent-verdict assertions read the receipt here.
+ */
+function repairEventBodies(vaultRoot: string): Array<Record<string, string>> {
+  const bodies: Array<Record<string, string>> = [];
+  for (const date of listLogDates(vaultRoot)) {
+    for (const e of readLogDay(vaultRoot, date).entries) {
+      if (e.eventType === "doctor-repair") bodies.push(e.body as Record<string, string>);
+    }
+  }
+  return bodies;
+}
 
 /** Bootstrap a fresh vault with the Brain layer installed. */
 async function bootstrap(): Promise<void> {
@@ -1271,12 +1286,71 @@ describe("brain doctor", () => {
     expect(readFileSync(wr, "utf8")).toBe(before);
 
     // Apply: exit 0, performs the fix, closes the gap.
-    const applied = await runCli(["brain", "doctor", "--vault", vault, "--repair", "--apply"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    });
+    const applied = await runCli(
+      ["brain", "doctor", "--vault", vault, "--repair", "--apply", "--yes"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
     expect(applied.returncode).toBe(0);
     expect(applied.stdout).toContain("fixed");
     expect(readFileSync(wr, "utf8")).toContain("interrupted");
+  });
+
+  test("--repair --apply in non-TTY without --yes refuses before writing and logs no event", async () => {
+    await bootstrap();
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    const wr = join(runs, "run-refuse.jsonl");
+    const before =
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-refuse" }) +
+      "\n";
+    writeFileSync(wr, before, "utf8");
+    const r = await runCli(["brain", "doctor", "--vault", vault, "--repair", "--apply"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("--yes");
+    expect(r.stderr).toContain("non-interactive");
+    // Refusal before any write: the gap is still there and no event fired.
+    expect(readFileSync(wr, "utf8")).toBe(before);
+    expect(repairEventBodies(vault)).toEqual([]);
+  });
+
+  test("--repair --apply --yes writes and the doctor-repair event body carries the consent verdict", async () => {
+    await bootstrap();
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(
+      join(runs, "run-consent.jsonl"),
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-consent" }) +
+        "\n",
+      "utf8",
+    );
+    const r = await runCli(["brain", "doctor", "--vault", vault, "--repair", "--apply", "--yes"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const bodies = repairEventBodies(vault);
+    expect(bodies.length).toBe(1);
+    expect(bodies[0]!["consent"]).toBe("yes-flag");
+  });
+
+  test("--repair dry-run prints a unified diff per fixable file", async () => {
+    await bootstrap();
+    const runs = join(vault, "Brain", "log", "dream-runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(
+      join(runs, "run-diff.jsonl"),
+      JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-diff" }) +
+        "\n",
+      "utf8",
+    );
+    const r = await runCli(["brain", "doctor", "--vault", vault, "--repair"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("---");
+    expect(r.stdout).toContain("+++");
+    expect(r.stdout).toContain("+ ");
   });
 
   test("--strict --repair --apply is refused (read-only guard)", async () => {

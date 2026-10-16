@@ -18,7 +18,11 @@ import {
 } from "../../../core/brain/provenance/source-archive.ts";
 import { annotateEntityAliasIssues } from "../../../core/brain/doctor/entity-alias-verdicts.ts";
 import { verdictFields, verdictLine } from "../../../core/decision-model/pair-verdict.ts";
-import { applyRepair, type RepairOutcome } from "../../../core/brain/diagnostics.ts";
+import {
+  applyRepair,
+  type RepairConsent,
+  type RepairOutcome,
+} from "../../../core/brain/diagnostics.ts";
 import {
   applyRemediation,
   collectDriftedSlugs,
@@ -36,6 +40,7 @@ import {
   info,
   ok,
   parse,
+  readSingleLine,
   resolveBrainAgent,
   usageError,
 } from "../helpers.ts";
@@ -133,6 +138,9 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     remediate: { type: "boolean" },
     repair: { type: "boolean" },
     apply: { type: "boolean" },
+    // t_b6bcd984: explicit consent for `--repair --apply` in a
+    // non-interactive run (the canonical upgrade ladder).
+    yes: { type: "boolean" },
     agent: { type: "string" },
     "dry-run": { type: "boolean" },
   });
@@ -153,12 +161,44 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
       return usageError("cannot combine --strict (read-only) with --repair --apply");
     }
     const dryRun = !flags["apply"];
+    // t_b6bcd984: fail-closed consent above the write, the canonical
+    // `brain upgrade --apply` ladder. Without --yes, a --json or
+    // non-TTY apply refuses before writing and logs no event; a TTY
+    // run sees the dry-run preview (now with the per-file diffs) and is
+    // asked once. A dry run never prompts and never gates.
+    let consent: RepairConsent | undefined;
+    if (!dryRun) {
+      if (flags["yes"]) {
+        consent = "yes-flag";
+      } else if (flags["json"] || !process.stdin.isTTY) {
+        return fail(
+          "brain doctor --repair --apply requires --yes in non-interactive mode " +
+            "(--json or non-TTY stdin); nothing was written",
+        );
+      } else {
+        const preview = applyRepair(vault, {
+          dryRun: true,
+          agent: resolveBrainAgent(flags, config),
+          configPath: config,
+          dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+        });
+        renderRepair(preview, false);
+        process.stderr.write("Proceed? [y/N] ");
+        const ans = await readSingleLine();
+        if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
+          ok("repair cancelled");
+          return 0;
+        }
+        consent = "interactive-yes";
+      }
+    }
     try {
       const outcome = applyRepair(vault, {
         dryRun,
         agent: resolveBrainAgent(flags, config),
         configPath: config,
         dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+        ...(consent === undefined ? {} : { consent }),
       });
       return renderRepair(outcome, Boolean(flags["json"]));
     } catch (exc) {
@@ -379,9 +419,10 @@ function runRemediate(
 
 /**
  * Render the guarded repair outcome. Dry-run lists what `--apply` would
- * do; apply lists what was done. Needs-review instances and unfixable
- * classes always print with their next-command hint (supplied by the
- * diagnostics-signal definition, never hardcoded here).
+ * do, with the unified diff of each fixable file under its line
+ * (t_b6bcd984); apply lists what was done. Needs-review instances and
+ * unfixable classes always print with their next-command hint (supplied
+ * by the diagnostics-signal definition, never hardcoded here).
  */
 function renderRepair(outcome: RepairOutcome, json: boolean): number {
   if (json) {
@@ -392,6 +433,9 @@ function renderRepair(outcome: RepairOutcome, json: boolean): number {
   const verb = outcome.dryRun ? "would fix" : "fixed";
   for (const f of outcome.applied) {
     process.stdout.write(`[${verb}] ${f.code}: ${f.detail}\n`);
+    if (f.diff) {
+      for (const d of f.diff.split("\n")) process.stdout.write(`  ${d}\n`);
+    }
   }
   for (const r of outcome.needsReview) {
     process.stdout.write(

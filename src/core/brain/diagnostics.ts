@@ -48,9 +48,11 @@ import { join } from "node:path";
 
 import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName } from "../config.ts";
+import { renderUnifiedDiff } from "../diff.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
 import { pathIsInside, vaultRelative } from "../path-safety.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import type { FrontmatterMap } from "../types.ts";
 
 import { UnclassifiedRepairCodeError, requireMechanicalRepair } from "./applier-capability.ts";
 
@@ -1086,6 +1088,15 @@ interface Fixer {
   plan(vault: string, findings: ReadonlyArray<DoctorIssue>): RepairItem[];
   /** Apply one applicable item. Returns null on an idempotent no-op. */
   apply(vault: string, item: RepairItem): AppliedFix | null;
+  /**
+   * The consent preview (t_b6bcd984): what `apply` would write to the
+   * item's file, as raw before/after bytes for the shared unified-diff
+   * renderer. Read-only and best-effort - `null` when the target is
+   * gone or the item's shape is not one this fixer can draw. The dry
+   * run renders it per applied item; the write path re-derives under
+   * its lock and stays the authority.
+   */
+  preview?(vault: string, item: RepairItem): { before: string; after: string } | null;
 }
 
 /** Doctor field name for the evidence list; its raw key is `_evidenced_by`. */
@@ -1104,6 +1115,22 @@ function isBrokenBrainRef(raw: string, known: ReadonlySet<string>): string | nul
   return target;
 }
 
+/** The terminal marker line a wal-gap close appends (fresh timestamp). */
+function interruptedMarkerLine(): string {
+  return (
+    JSON.stringify({
+      phase: WORKRUN_PHASE.interrupted,
+      at: new Date().toISOString(),
+      reason: "closed by doctor --repair",
+    }) + "\n"
+  );
+}
+
+/** Separator before an appended marker on a file not ending in a newline. */
+function danglingClosePrefix(existing: string): string {
+  return existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+}
+
 const walGapFixer: Fixer = {
   code: REPAIR_CODE.walGap,
   coversDoctorCode: "dangling-workrun",
@@ -1118,6 +1145,15 @@ const walGapFixer: Fixer = {
         detail: `close dangling workrun ${rel} with a terminal 'interrupted' marker`,
       };
     });
+  },
+  preview(vault: string, item: RepairItem): { before: string; after: string } | null {
+    const path = join(vault, item.target);
+    if (!existsSync(path)) return null;
+    const existing = readFileSync(path, "utf8");
+    return {
+      before: existing,
+      after: existing + danglingClosePrefix(existing) + interruptedMarkerLine(),
+    };
   },
   apply(vault: string, item: RepairItem): AppliedFix | null {
     const path = join(vault, item.target);
@@ -1135,15 +1171,8 @@ const walGapFixer: Fixer = {
       if (!scanDanglingWorkruns(vault).some((p) => vaultRelative(p, vault) === item.target)) {
         return null;
       }
-      const line =
-        JSON.stringify({
-          phase: WORKRUN_PHASE.interrupted,
-          at: new Date().toISOString(),
-          reason: "closed by doctor --repair",
-        }) + "\n";
       const existing = readFileSync(path, "utf8");
-      const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-      appendFileSync(path, prefix + line, "utf8");
+      appendFileSync(path, danglingClosePrefix(existing) + interruptedMarkerLine(), "utf8");
       return {
         code: item.code,
         target: item.target,
@@ -1154,6 +1183,37 @@ const walGapFixer: Fixer = {
     }
   },
 };
+
+/**
+ * The evidence prune derived in memory: the parsed frontmatter and body
+ * plus the pruned replacements. One derivation shared by the consent
+ * preview (which formats both sides into a diff) and the apply path
+ * (which writes the pruned side under its lock), so the two cannot
+ * drift. `null` on a page without a list-shaped `_evidenced_by` or when
+ * nothing would change (idempotent no-op).
+ */
+function evidencePruneDerived(
+  vault: string,
+  path: string,
+  dead: string,
+): { meta: FrontmatterMap; body: string; next: FrontmatterMap; nextBody: string } | null {
+  const [meta, body] = parseFrontmatter(path);
+  const arr = meta[EVIDENCED_BY_KEY];
+  if (!Array.isArray(arr)) return null;
+  const known = collectAllBasenames(vault);
+  const next = arr.filter((raw) => {
+    if (typeof raw !== "string") return true;
+    const broken = isBrokenBrainRef(raw, known);
+    return broken !== dead; // drop exactly the still-dead target
+  });
+  if (next.length === arr.length) return null; // idempotent no-op
+  return {
+    meta,
+    body,
+    next: { ...meta, [EVIDENCED_BY_KEY]: next },
+    nextBody: removeOriginBullet(body, dead),
+  };
+}
 
 const orphanedReferenceFixer: Fixer = {
   code: REPAIR_CODE.orphanedReference,
@@ -1177,12 +1237,23 @@ const orphanedReferenceFixer: Fixer = {
     }
     return items;
   },
+  preview(vault: string, item: RepairItem): { before: string; after: string } | null {
+    const [rel, field, dead] = item.target.split(TARGET_SEP);
+    if (rel === undefined || field !== EVIDENCED_BY_KEY || dead === undefined) return null;
+    const path = join(vault, rel);
+    if (!existsSync(path)) return null;
+    const derived = evidencePruneDerived(vault, path, dead);
+    if (derived === null) return null;
+    return {
+      before: formatFrontmatter(derived.meta, derived.body),
+      after: formatFrontmatter(derived.next, derived.nextBody),
+    };
+  },
   apply(vault: string, item: RepairItem): AppliedFix | null {
     const [rel, field, dead] = item.target.split(TARGET_SEP);
     if (rel === undefined || field !== EVIDENCED_BY_KEY || dead === undefined) return null;
     const path = join(vault, rel);
     if (!existsSync(path)) return null;
-    const known = collectAllBasenames(vault);
 
     let handle: ReturnType<typeof acquireLockSync>;
     try {
@@ -1191,21 +1262,12 @@ const orphanedReferenceFixer: Fixer = {
       return null; // contended: leave for a later run
     }
     try {
-      const [meta, body] = parseFrontmatter(path);
-      const arr = meta[EVIDENCED_BY_KEY];
-      if (!Array.isArray(arr)) return null;
-      const next = arr.filter((raw) => {
-        if (typeof raw !== "string") return true;
-        const broken = isBrokenBrainRef(raw, known);
-        return broken !== dead; // drop exactly the still-dead target
-      });
-      if (next.length === arr.length) return null; // idempotent no-op
-      meta[EVIDENCED_BY_KEY] = next;
+      const derived = evidencePruneDerived(vault, path, dead);
+      if (derived === null) return null; // unreadable list or idempotent no-op
       // Keep the human `## Origin` prose consistent: drop the matching
       // `- [[dead]]` bullet so the same dead target cannot re-surface as a
       // body-side broken-backlink after the frontmatter is pruned.
-      const nextBody = removeOriginBullet(body, dead);
-      writeFrontmatterAtomic(path, meta, nextBody, { overwrite: true });
+      writeFrontmatterAtomic(path, derived.next, derived.nextBody, { overwrite: true });
       return { code: item.code, target: item.target, detail: item.detail };
     } finally {
       handle.release();
@@ -1369,7 +1431,23 @@ export interface AppliedFix {
   readonly detail: string;
   /** Absolute path of the log file the typed event landed in (apply only). */
   readonly logPath?: string;
+  /**
+   * Unified diff of the fix, rendered by the shared core leaf against
+   * the fixer's consent preview (t_b6bcd984). Dry-run only: it shows
+   * what `--apply` would write. Absent when the fixer cannot draw one.
+   */
+  readonly diff?: string;
 }
+
+/**
+ * How a repair write was authorised, recorded verbatim in each
+ * doctor-repair event body (t_b6bcd984). The CLI passes `yes-flag` for
+ * an explicit `--yes` and `interactive-yes` for a confirmed y/N prompt;
+ * the MCP tool passes `caller-apply` - `apply: true` is the machine
+ * consent, and no new required argument is added to the tool. A dry run
+ * writes no event, so it records nothing.
+ */
+export type RepairConsent = "yes-flag" | "interactive-yes" | "caller-apply";
 
 export interface RepairOutcome {
   readonly dryRun: boolean;
@@ -1384,6 +1462,12 @@ export interface RepairOutcome {
 export interface ApplyRepairOptions {
   /** True previews without writing; false performs the fixes. */
   readonly dryRun: boolean;
+  /**
+   * How the write was authorised ({@link RepairConsent}). Recorded in
+   * each doctor-repair event body; absent on internal callers, which
+   * keeps the event's old shape.
+   */
+  readonly consent?: RepairConsent;
   /** Wall clock for the typed event timestamps. Defaults to `new Date()`. */
   readonly now?: Date;
   /** Agent identity recorded on each event. Resolver default when blank. */
@@ -1515,7 +1599,21 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   const applicable = fixes.filter((f) => f.applicable);
 
   if (opts.dryRun) {
-    const applied = applicable.map((f) => ({ code: f.code, target: f.target, detail: f.detail }));
+    const applied = applicable.map((f) => {
+      // The consent preview (t_b6bcd984): what this fix would write to
+      // the file, drawn by the fixer and rendered by the shared core
+      // leaf. Best-effort - a fixer that cannot draw one omits the key.
+      const fixer = FIXER_BY_CODE.get(f.code);
+      const preview = fixer?.preview?.(vault, f) ?? null;
+      return {
+        code: f.code,
+        target: f.target,
+        detail: f.detail,
+        ...(preview === null
+          ? {}
+          : { diff: renderUnifiedDiff(preview.before, preview.after, f.target) }),
+      };
+    });
     return Object.freeze({
       dryRun: true,
       applied: Object.freeze(applied),
@@ -1542,7 +1640,14 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
     const res = appendLogEvent(vault, {
       timestamp,
       eventType: BRAIN_LOG_EVENT_KIND.doctorRepair,
-      body: { code: result.code, target: result.target, detail: result.detail, agent },
+      body: {
+        code: result.code,
+        target: result.target,
+        detail: result.detail,
+        agent,
+        // t_b6bcd984: the receipt names how the write was authorised.
+        ...(opts.consent === undefined ? {} : { consent: opts.consent }),
+      },
     });
     applied.push({ ...result, logPath: res.logPath });
   }

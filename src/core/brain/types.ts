@@ -498,8 +498,12 @@ export const BRAIN_LOG_EVENT_KIND = {
    * fix for an issue class the doctor already detects. One event per applied
    * fix. Payload carries the diagnostics-signal `code` (e.g. `wal-gap`,
    * `orphaned-reference`), the `target` (vault-relative path or field ref the
-   * fix touched), a one-line `detail`, and the `agent`. A dry-run preview
-   * writes nothing and emits no event; re-running after a successful apply is
+   * fix touched), a one-line `detail`, the `agent`, and - since t_b6bcd984 -
+   * the `consent` verdict naming how the write was authorised: `yes-flag`
+   * (an explicit CLI `--yes`), `interactive-yes` (a confirmed y/N prompt),
+   * or `caller-apply` (the MCP tool's `apply: true`, which stays machine
+   * consent with no new required argument). A dry-run preview writes
+   * nothing and emits no event; re-running after a successful apply is
    * a no-op because the underlying issue is gone, so the timeline never
    * double-counts a fix.
    */

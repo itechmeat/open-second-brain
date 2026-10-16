@@ -99,6 +99,12 @@ async function toolBrainDoctor(
     }
     const outcome = applyRepair(ctx.vault, {
       dryRun: !apply,
+      // t_b6bcd984: `apply: true` IS the machine consent - the explicit
+      // argument the caller sent for this write. It is recorded as
+      // provenance in each doctor-repair event body (`caller-apply`);
+      // no new required argument is added, so agents calling the tool
+      // mid-flight are never broken.
+      ...(apply ? { consent: "caller-apply" as const } : {}),
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
       // The index-backed findings (`tier-drift`, `freshen-failing`) join
       // the plan as they join the report below. `tier-drift` is counted
@@ -394,7 +400,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_doctor",
     description:
-      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes for detected classes (WAL gaps, orphaned references), `repair`+`apply` performs them and logs one event per fix.",
+      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes for detected classes (WAL gaps, orphaned references) with a per-file diff, `repair`+`apply` performs them as machine consent (recorded as `caller-apply` in each fix's event) and logs one event per fix.",
     inputSchema: {
       type: "object",
       properties: {

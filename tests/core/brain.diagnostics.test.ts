@@ -75,6 +75,18 @@ function countRepairEvents(): number {
   return n;
 }
 
+/** Every logged doctor-repair event, in log order (consent assertions). */
+function repairEvents(): Array<{ body: Record<string, string | ReadonlyArray<string>> }> {
+  const events: Array<{ body: Record<string, string | ReadonlyArray<string>> }> = [];
+  for (const date of listLogDates(tmp)) {
+    for (const e of readLogDay(tmp, date).entries) {
+      if (e.eventType === "doctor-repair")
+        events.push(e as { body: Record<string, string | ReadonlyArray<string>> });
+    }
+  }
+  return events;
+}
+
 describe("diagnostics-signal model", () => {
   test("fixer codes are registered as auto-repairable with a next command", () => {
     for (const code of [REPAIR_CODE.walGap, REPAIR_CODE.orphanedReference]) {
@@ -228,5 +240,79 @@ describe("applyRepair - apply", () => {
     expect(out.applied).toEqual([]);
     expect(existsSync(path)).toBe(true);
     expect(readFileSync(path, "utf8")).toContain("pref-vanished"); // untouched
+  });
+});
+
+describe("applyRepair - consent receipt (t_b6bcd984)", () => {
+  test("the doctor-repair event body carries the consent verdict", () => {
+    writeDanglingWorkrun("run-consent");
+    const out = applyRepair(tmp, {
+      dryRun: false,
+      consent: "yes-flag",
+      now: new Date("2026-07-18T12:00:00Z"),
+    });
+    expect(out.applied.length).toBe(1);
+    const events = repairEvents();
+    expect(events.length).toBe(1);
+    expect(events[0]!.body["consent"]).toBe("yes-flag");
+  });
+
+  test("the MCP provenance value records as caller-apply", () => {
+    writeDanglingWorkrun("run-caller");
+    applyRepair(tmp, {
+      dryRun: false,
+      consent: "caller-apply",
+      now: new Date("2026-07-18T12:00:00Z"),
+    });
+    expect(repairEvents()[0]!.body["consent"]).toBe("caller-apply");
+  });
+
+  test("a dry run records nothing, with or without a verdict", () => {
+    writeDanglingWorkrun("run-dry-consent");
+    const out = applyRepair(tmp, {
+      dryRun: true,
+      consent: "yes-flag",
+      now: new Date("2026-07-18T12:00:00Z"),
+    });
+    expect(out.dryRun).toBe(true);
+    expect(countRepairEvents()).toBe(0);
+  });
+});
+
+describe("applyRepair - dry-run diff preview (t_b6bcd984)", () => {
+  test("the preview carries a unified diff of the fixable file", () => {
+    const wrPath = writeDanglingWorkrun("run-diff");
+    const before = readFileSync(wrPath, "utf8");
+    const out = applyRepair(tmp, { dryRun: true, now: new Date("2026-07-18T12:00:00Z") });
+    expect(out.applied.length).toBe(1);
+    const diff = out.applied[0]!.diff!;
+    expect(diff).toContain("---");
+    expect(diff).toContain("+++");
+    // The appended terminal marker is the change the preview shows; the
+    // untouched lines are summarized as matching context, not repeated
+    // (no removal line - the header's `---` is not a removal).
+    expect(diff).toContain("+ ");
+    expect(diff.split("\n").some((l) => l.startsWith("- "))).toBe(false);
+    // A preview writes nothing.
+    expect(readFileSync(wrPath, "utf8")).toBe(before);
+  });
+
+  test("the evidence-prune preview diffs the pruned frontmatter", () => {
+    writePreference(tmp, {
+      slug: "delta",
+      topic: "delta",
+      principle: "rule",
+      created_at: "2026-05-14T10:00:00Z",
+      unconfirmed_until: "2026-05-28T10:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[sig-never-existed]]"],
+    });
+    const out = applyRepair(tmp, { dryRun: true, now: new Date("2026-07-18T12:00:00Z") });
+    const fix = out.applied.find((f) => f.code === REPAIR_CODE.orphanedReference);
+    expect(fix).toBeDefined();
+    expect(fix!.diff).toBeDefined();
+    expect(fix!.diff).toContain("---");
+    // The dead evidence entry is what the diff removes.
+    expect(fix!.diff).toMatch(/-\s+.*sig-never-existed/);
   });
 });
