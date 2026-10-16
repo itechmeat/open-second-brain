@@ -499,6 +499,9 @@ async function toolBrainMaintenance(
     busy,
     ...(retryTasks.length > 0 ? { retryTasks } : {}),
     ...(window !== undefined ? { window } : {}),
+    // The server's own config file, so the capacity gate measures the
+    // store a search_db_path in it names.
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     tasks: lane.tasks,
   });
   // The run-level spend block, the CLI JSON payload's shape.

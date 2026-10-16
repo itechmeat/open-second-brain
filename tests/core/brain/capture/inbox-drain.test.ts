@@ -195,6 +195,34 @@ describe("the drain's ingest route under a capacity cap", () => {
     }
   });
 
+  test("an invalid storage block refuses the ingest route, as brain_ingest_source does", () => {
+    // pause_percent at or above critical is refused by the storage block's
+    // own validation; reading it as "no cap" would ingest past the bound.
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\n\nstorage:\n  cap_bytes: 10\n  pause_percent: 99\n",
+      "utf8",
+    );
+    writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.items[0]!.classification).toBe("unroutable");
+    expect(report.items[0]!.reason).toContain("config_invalid");
+    expect(existsSync(join(vault, "Brain", "sources"))).toBe(false);
+    expect(listStagedCaptures(vault)).toHaveLength(1);
+  });
+
+  test("an invalid unrelated block does not wedge the ingest route", () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\n\nmaintenance:\n  host_pressure_percent: not-a-number\n",
+      "utf8",
+    );
+    writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.items[0]!.classification).toBe("source-reference");
+    expect(report.routed).toBe(1);
+  });
+
   test("the refusal never writes a summary page", () => {
     configureCriticalCap();
     writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });

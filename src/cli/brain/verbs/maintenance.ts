@@ -410,6 +410,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         ...(window !== undefined ? { window } : {}),
         busy: { minutes: busyMinutes, threshold: busyThreshold },
         ...(retryTasks.length > 0 ? { retryTasks } : {}),
+        ...(config ? { configPath: config } : {}),
         tasks: lane.tasks,
       });
 

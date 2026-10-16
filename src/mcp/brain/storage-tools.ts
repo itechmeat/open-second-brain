@@ -91,6 +91,8 @@ export interface BuildStorageReportOptions {
   readonly vault: string;
   /** How far the caller had to reach; the census answers at local reach only. */
   readonly reach: TransportReach;
+  /** The explicit machine-config file the census resolves the store from. */
+  readonly configPath?: string;
 }
 
 /**
@@ -113,7 +115,10 @@ export function buildStorageReport(opts: BuildStorageReportOptions): StorageRepo
   // One census, three uses: the reading, the forecast's fresh truth,
   // and the sample. Fail-soft by the sampler's contract - an append
   // failure is carried on the report, not swallowed.
-  const sample = sampleStorageUsage(opts.vault);
+  const sample = sampleStorageUsage(
+    opts.vault,
+    opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+  );
   const forecast = forecastStorageUsage(opts.vault, {
     capBytes: storage.cap_bytes,
     latestUsage: sample.usage,
@@ -139,7 +144,11 @@ async function toolBrainStorage(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const format = coerceFormat(args);
-  const report = buildStorageReport({ vault: ctx.vault, reach: contextReach(ctx) });
+  const report = buildStorageReport({
+    vault: ctx.vault,
+    reach: contextReach(ctx),
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+  });
   return { format, ...report };
 }
 

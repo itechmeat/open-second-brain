@@ -368,6 +368,8 @@ export interface SampleStorageUsageOptions {
    * absent, the sampler measures as it always did.
    */
   readonly usage?: StorageUsage;
+  /** The explicit machine-config file the census resolves the store from. */
+  readonly configPath?: string;
 }
 
 export interface SampleStorageUsageResult {
@@ -403,7 +405,11 @@ export function sampleStorageUsage(
 ): SampleStorageUsageResult {
   const runId = opts.runId ?? mintRunId();
   const usage =
-    opts.usage ?? measureStorageUsage(vault, opts.now !== undefined ? { now: opts.now } : {});
+    opts.usage ??
+    measureStorageUsage(vault, {
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+    });
   let alreadyRecorded = false;
   try {
     alreadyRecorded = listMetrics(vault, { surface: STORAGE_USAGE_METRIC_SURFACE }).some(

@@ -46,7 +46,7 @@ import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { addObligation, obligationExists, parseCadence, ObligationError } from "../obligations.ts";
 import { ingestSource } from "../ingest/ingest.ts";
 import { CAPACITY_GATE_DECISION, evaluateIngestAdmission } from "../storage/gate.ts";
-import type { CapacityGateDecision } from "../storage/gate.ts";
+import type { IngestAdmission } from "../storage/gate.ts";
 import { MAINTENANCE_CAPACITY_REMEDY } from "../maintenance/lane.ts";
 import { isoSecond } from "../time.ts";
 import {
@@ -115,6 +115,8 @@ export interface DrainOptions {
   readonly apply: boolean;
   readonly agent: string;
   readonly now: Date;
+  /** The explicit machine-config file the admission census resolves the store from. */
+  readonly configPath?: string;
 }
 
 /** One item's route decided structurally, before any write. */
@@ -135,7 +137,7 @@ function classify(
   vault: string,
   note: CaptureNote,
   opts: DrainOptions,
-  admission: CapacityGateDecision | null,
+  admission: IngestAdmission,
 ): RoutePlan | UnroutableCapture {
   const body = note.body.trim();
   const firstLine = body.split("\n", 1)[0]!.trim();
@@ -200,11 +202,19 @@ function planSource(
   vault: string,
   url: string,
   opts: DrainOptions,
-  admission: CapacityGateDecision | null,
+  admission: IngestAdmission,
 ): RoutePlan | UnroutableCapture {
-  if (admission?.decision === CAPACITY_GATE_DECISION.skip) {
+  // A storage block the wall cannot see through refuses, the same rule
+  // brain_ingest_source applies: reading it as "no cap" would ingest past
+  // the operator's bound. The capture stays staged for a rerun once the
+  // block is fixed.
+  if (admission.configRefusal !== undefined) {
+    return new UnroutableCapture(`ingest refused (config_invalid): ${admission.configRefusal}`);
+  }
+  const decision = admission.decision;
+  if (decision?.decision === CAPACITY_GATE_DECISION.skip) {
     return new UnroutableCapture(
-      `ingest refused (capacity_exhausted): the vault measured at the ${admission.tier} ` +
+      `ingest refused (capacity_exhausted): the vault measured at the ${decision.tier} ` +
         `storage tier. ${MAINTENANCE_CAPACITY_REMEDY}.`,
     );
   }
@@ -313,17 +323,16 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
   let hubPool: HubPagePool | undefined;
   // One admission evaluation per drain, not per capture: the census is a
   // full vault walk, and the answer cannot change between captures of
-  // the same run. A null decision means no wall stands this pass - no
-  // configured cap, or a storage block that could not be validated,
-  // which is named on the operator's stderr rather than wedging the
-  // inbox shut.
-  const admission = evaluateIngestAdmission(vault, { now: opts.now });
-  if (admission.reason !== undefined) {
-    process.stderr.write(`capture inbox drain: ${admission.reason}\n`);
-  }
+  // the same run. A null decision with no config refusal means no wall
+  // stands this pass (no configured cap); a storage block the wall cannot
+  // see through refuses the ingest route by name, like brain_ingest_source.
+  const admission = evaluateIngestAdmission(vault, {
+    now: opts.now,
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
 
   for (const note of listStagedCaptures(vault)) {
-    const plan = classify(vault, note, opts, admission.decision);
+    const plan = classify(vault, note, opts, admission);
     if (plan instanceof UnroutableCapture) {
       unroutable += 1;
       items.push({

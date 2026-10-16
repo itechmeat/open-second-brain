@@ -50,7 +50,12 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
   });
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveBrainAgent(flags, config);
-  const report = drainInbox(vault, { apply: flags["apply"] === true, agent, now: new Date() });
+  const report = drainInbox(vault, {
+    apply: flags["apply"] === true,
+    agent,
+    now: new Date(),
+    configPath: config,
+  });
 
   const pending = flags["apply"] !== true && report.items.length > 0;
 

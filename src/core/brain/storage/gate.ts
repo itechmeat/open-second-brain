@@ -27,8 +27,7 @@
  * closing. Only a MEASURED breach skips.
  */
 
-import { BrainConfigError } from "../policy/errors.ts";
-import { loadStorageConfigSafe } from "../policy/load.ts";
+import { loadGateStorageConfig, StorageGateConfigError } from "./gate-config.ts";
 import type { StorageForecastTier } from "./forecast.ts";
 import { STORAGE_FORECAST_TIER, forecastStorageUsage } from "./forecast.ts";
 import { measureStorageUsage, type StorageUsage } from "./usage.ts";
@@ -97,6 +96,12 @@ export interface EvaluateCapacityGateOptions {
   readonly criticalDays?: number;
   /** Wall clock for the fresh census's stamp; defaults to the current time. */
   readonly now?: Date;
+  /**
+   * The explicit machine-config file the caller resolved from, so a
+   * `search_db_path` in it moves the measured store the same way it moves
+   * the indexer (`measureStorageUsage`'s option). Absent, the default file.
+   */
+  readonly configPath?: string;
 }
 
 /**
@@ -115,7 +120,10 @@ export function evaluateCapacityGate(
     return { decision: CAPACITY_GATE_DECISION.run, tier: STORAGE_FORECAST_TIER.unbounded };
   }
 
-  const fresh = measureStorageUsage(vault, opts.now !== undefined ? { now: opts.now } : {});
+  const fresh = measureStorageUsage(vault, {
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
   if (!fresh.complete) {
     return {
       decision: CAPACITY_GATE_DECISION.run,
@@ -166,24 +174,26 @@ export function evaluateCapacityGate(
 export interface EvaluateIngestAdmissionOptions {
   /** Wall clock for the fresh census; defaults to the current time. */
   readonly now?: Date;
+  /** The explicit machine-config file; see {@link EvaluateCapacityGateOptions.configPath}. */
+  readonly configPath?: string;
 }
 
-/** One admission evaluation: a gate decision, or why there is none. */
+/** One admission evaluation: a gate decision, or the refusal that replaces one. */
 export interface IngestAdmission {
   /**
    * The gate decision, when a configured cap was measured. `null` means
-   * no wall stands this pass - an unbounded vault, or a storage block
-   * that could not be read (see {@link reason}).
+   * no measurement was taken - an unbounded vault, or a storage block the
+   * wall cannot see through (see {@link configRefusal}).
    */
   readonly decision: CapacityGateDecision | null;
   /**
-   * Why no decision exists, when the wall was skipped rather than
-   * passed: a `_brain.yaml` that fails validation names the failing
-   * field here. Callers that have a warning channel write it; a wall
-   * that pretended to stand behind an unreadable config would refuse
-   * every capture forever on a typo in an unrelated block.
+   * Present when the `storage:` block (or the file it sits in) cannot be
+   * read, parsed or validated: the wall refuses ingest, naming the field,
+   * exactly as `brain_ingest_source` refuses with `config_invalid`. Every
+   * other block is never read here, so a typo elsewhere cannot wedge the
+   * wall either way.
    */
-  readonly reason?: string;
+  readonly configRefusal?: string;
 }
 
 /**
@@ -198,11 +208,12 @@ export interface IngestAdmission {
  * a drain, and a capture the wall would admit must not be refused by
  * one.
  *
- * A config that cannot be VALIDATED is not a vault without room: the
- * check fails open with the reason carried (see {@link IngestAdmission}),
- * because an ingest wall is a convenience-surface gate, not the commit
- * path - the core ingest reads no config, and a malformed unrelated
- * block must not wedge the capture inbox shut.
+ * The policy is read from the `storage:` block alone
+ * ({@link loadGateStorageConfig}, the reader `brain_ingest_source` uses),
+ * so the two walls apply one rule: a malformed unrelated block is never
+ * read and cannot wedge the capture inbox shut, while a storage block the
+ * wall cannot see through refuses ingest by name - reading it as "no cap"
+ * would run writes past an operator's bound.
  */
 export function evaluateIngestAdmission(
   vault: string,
@@ -210,18 +221,16 @@ export function evaluateIngestAdmission(
 ): IngestAdmission {
   let storage;
   try {
-    storage = loadStorageConfigSafe(vault);
+    storage = loadGateStorageConfig(vault);
   } catch (err) {
-    if (!(err instanceof BrainConfigError)) throw err;
-    return {
-      decision: null,
-      reason: `storage admission not evaluated: ${err.message}`,
-    };
+    if (!(err instanceof StorageGateConfigError)) throw err;
+    return { decision: null, configRefusal: err.message };
   }
   if (storage.cap_bytes === null) return { decision: null };
   return {
     decision: evaluateCapacityGate(vault, {
       now: opts.now ?? new Date(),
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
       capBytes: storage.cap_bytes,
       warnPercent: storage.warn_percent,
       criticalPercent: storage.critical_percent,

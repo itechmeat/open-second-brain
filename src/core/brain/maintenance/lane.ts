@@ -168,6 +168,11 @@ export interface EvaluateGatesOptions {
     capacity: CapacityGate,
     now: Date,
   ) => CapacityGateDecision;
+  /**
+   * The explicit machine-config file the caller resolved from, so the
+   * default census measures the store a `search_db_path` in it names.
+   */
+  readonly configPath?: string;
 }
 
 /**
@@ -449,7 +454,8 @@ function readCapacityDecision(
   opts: EvaluateGatesOptions,
 ): CapacityGateDecision | undefined {
   if (opts.capacity === undefined) return undefined;
-  return (opts.readCapacity ?? evaluateStorageCapacityGate)(vault, opts.capacity, opts.now);
+  if (opts.readCapacity !== undefined) return opts.readCapacity(vault, opts.capacity, opts.now);
+  return evaluateStorageCapacityGate(vault, opts.capacity, opts.now, opts.configPath);
 }
 
 /** The gate decision from a fresh on-disk census, never the stored aggregate. */
@@ -457,9 +463,11 @@ function evaluateStorageCapacityGate(
   vault: string,
   capacity: CapacityGate,
   now: Date,
+  configPath: string | undefined,
 ): CapacityGateDecision {
   return evaluateCapacityGate(vault, {
     now,
+    ...(configPath !== undefined ? { configPath } : {}),
     capBytes: capacity.cap_bytes,
     warnPercent: capacity.warn_percent,
     criticalPercent: capacity.critical_percent,
@@ -497,6 +505,7 @@ export async function runMaintenance(
       ...(opts.busy !== undefined ? { busy: opts.busy } : {}),
       ...(opts.readPressure !== undefined ? { readPressure: opts.readPressure } : {}),
       ...(opts.readCapacity !== undefined ? { readCapacity: opts.readCapacity } : {}),
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
       ...resolvePressureGate(opts.pressure, policy.host_pressure_percent),
       ...resolveCapacityGate(opts.capacity, storage),
     };

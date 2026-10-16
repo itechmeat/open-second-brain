@@ -36,7 +36,12 @@ import {
   measureStorageUsage,
   type StorageUsage,
 } from "../../../src/core/brain/storage/usage.ts";
-import { evaluateCapacityGate } from "../../../src/core/brain/storage/gate.ts";
+import {
+  evaluateCapacityGate,
+  evaluateIngestAdmission,
+} from "../../../src/core/brain/storage/gate.ts";
+import { sampleStorageUsage } from "../../../src/core/brain/storage/forecast.ts";
+import { runMaintenance } from "../../../src/core/brain/maintenance/lane.ts";
 import {
   STORAGE_CAPACITY_CRITICAL_CODE,
   storageCapacityCheck,
@@ -270,6 +275,38 @@ describe("the configured store location", () => {
       const usage = measureStorageUsage(vault, { now: NOW, configPath });
       expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStore)).toBe(2500);
       expect(usage.complete).toBe(true);
+    } finally {
+      rmSync(configHome, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit config file moves the store for the lane gate, the ingest wall and the sampler", async () => {
+    // A server started with --config holds that path; every census it
+    // takes must measure the store THAT file names, or the doctor and the
+    // gates disagree about the same vault.
+    const configHome = mkdtempSync(join(tmpdir(), "o2b-store-cfgpath-gates-"));
+    try {
+      mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+      writeFileSync(brainConfigPath(vault), "schema_version: 1\n\nstorage:\n  cap_bytes: 10000\n");
+      writeFileSync(join(vault, "Brain", "sources", "AA-page.md"), "x".repeat(6000), "utf8");
+      const movedDb = join(configHome, "moved.sqlite");
+      writeFileSync(movedDb, "x".repeat(3500), "utf8");
+      const configPath = join(configHome, "config.yaml");
+      writeFileSync(configPath, `vault: ${vault}\nsearch_db_path: ${movedDb}\n`, "utf8");
+
+      const admission = evaluateIngestAdmission(vault, { now: NOW, configPath });
+      expect(admission.decision?.decision).toBe("skip");
+
+      const sample = sampleStorageUsage(vault, { now: NOW, configPath });
+      expect(surfaceBytes(sample.usage, STORAGE_SURFACE.derivedStore)).toBe(3500);
+
+      const lane = await runMaintenance(vault, {
+        now: NOW,
+        holder: "tester",
+        tasks: [],
+        configPath,
+      });
+      expect(lane.capacity?.tier).toBe("critical");
     } finally {
       rmSync(configHome, { recursive: true, force: true });
     }
