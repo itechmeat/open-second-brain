@@ -29,6 +29,7 @@ import { runCli } from "../../../helpers/run-cli.ts";
 import { EXTRACT_CONTRACT_VERSION } from "../../../../src/core/brain/ingest/contract.ts";
 import {
   classifyPaths,
+  hashBytes,
   hashFile,
   hashPath,
   readManifest,
@@ -118,15 +119,55 @@ describe("ingestSource watermark stamping", () => {
     expect(entry.sha256).toBe(hashFile(join(vault, SOURCE)));
   });
 
-  test("an appended tail with no complete line reports an empty delta at the watermark", () => {
+  test("an appended tail with no complete line reports an empty delta and leaves the watermark", () => {
     writeSource("one\ntwo\n");
     ingestSource(vault, INPUT, OPTS);
     appendFileSync(join(vault, SOURCE), "half a line", "utf8");
 
     const res = ingestSource(vault, INPUT, OPTS);
     expect(res.extractionDelta).toEqual({ fromByte: 8, toByte: 8 });
-    // The run still covered the whole current source, so the stamp is full.
-    expect(readManifest(vault).entries[SOURCE]!.extracted_bytes).toBe(19);
+    // The stamp covers exactly the announced prefix (review M15): the
+    // unterminated fragment stays unstamped, and the next append's delta
+    // starts AT it instead of past it.
+    const entry = readManifest(vault).entries[SOURCE]!;
+    expect(entry.extracted_bytes).toBe(8);
+    expect(entry.sha256).toBe(hashBytes(new Uint8Array(Buffer.from("one\ntwo\n", "utf8"))));
+  });
+
+  test("a fragment stamp keeps the prefix proof consistent and the next delta stitches the fragment", () => {
+    // The review's M15 probe: the delta cut ends at the last complete
+    // newline, so the stamp must land there - at the bytes the delta
+    // series actually announced - and never at the raw file size.
+    writeSource("base\n");
+    ingestSource(vault, INPUT, OPTS);
+    expect(readManifest(vault).entries[SOURCE]!.extracted_bytes).toBe(5);
+
+    appendFileSync(join(vault, SOURCE), "line1\nline2-part", "utf8");
+    const second = ingestSource(vault, INPUT, OPTS);
+    expect(second.extractionDelta).toEqual({ fromByte: 5, toByte: 11 });
+
+    // The stamp lands at the announced boundary (11), NOT at the file
+    // size (21), and the digest describes exactly those leading bytes.
+    const stamped = readManifest(vault).entries[SOURCE]!;
+    expect(stamped.extracted_bytes).toBe(11);
+    expect(stamped.sha256).toBe(hashBytes(new Uint8Array(Buffer.from("base\nline1\n", "utf8"))));
+
+    // Accepted consequence (review M15): with the stamp behind EOF the
+    // file classifies modified until the fragment is terminated - one
+    // reclassification, never a stale skip.
+    expect(classifyPaths(vault, [SOURCE], readManifest(vault)).modified).toEqual([SOURCE]);
+
+    appendFileSync(join(vault, SOURCE), "-rest\nline3\n", "utf8");
+    const third = ingestSource(vault, INPUT, OPTS);
+    // The fragment rides the next delta instead of falling out of the
+    // delta series for good.
+    expect(third.extractionDelta).toEqual({ fromByte: 11, toByte: 33 });
+    const healed = readManifest(vault).entries[SOURCE]!;
+    expect(healed.extracted_bytes).toBe(33);
+    // The boundary is back at EOF, so the digest is a whole-file digest
+    // again and the unchanged classification holds.
+    expect(healed.sha256).toBe(hashFile(join(vault, SOURCE)));
+    expect(classifyPaths(vault, [SOURCE], readManifest(vault)).unchanged).toEqual([SOURCE]);
   });
 });
 

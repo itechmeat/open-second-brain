@@ -252,18 +252,18 @@ export interface IngestSourceResult {
    * {@link ./tail-read.ts} verified as a pure append - the recorded digest
    * still described the leading bytes. Present ONLY on that append shape: a
    * first ingest, a rewritten source, or a source with no watermark reports
-   * no delta and reprocesses fully. The range is reporting, not state - the
-   * stamp below always records the whole current source, because this
-   * pipeline's contract is a whole-source extraction per run.
+   * no delta and reprocesses fully.
    *
-   * The whole-source stamp is also what bounds a delta series: the tail
-   * cut ends at the LAST COMPLETE newline, so an append with no complete
-   * line yet reports an EMPTY delta (`toByte === fromByte`) while the
-   * stamp still advances to the file's full size - the unterminated
-   * fragment is extracted (extraction is whole-source) but announced by
-   * no delta, and the next append's delta starts PAST it rather than
-   * stitching it in. A fragment only enters a reported delta when the
-   * append that carries it ends with a newline before this run reads.
+   * The stamp below advances the watermark to exactly this range's `toByte`
+   * and records the digest of those leading bytes (review M15), so the next
+   * append's prefix proof verifies against the boundary the delta series
+   * announced. The range ends at the LAST COMPLETE newline, so an append
+   * with no complete line yet reports an EMPTY delta (`toByte ===
+   * fromByte`) and the watermark stays at `fromByte`: the unterminated
+   * fragment is extracted (extraction is whole-source) but announced by no
+   * delta, and the NEXT append's delta starts AT it, stitching the fragment
+   * in. A fragment only enters a reported delta when the append that
+   * carries it ends with a newline before this run reads.
    */
   readonly extractionDelta?: { readonly fromByte: number; readonly toByte: number };
 }
@@ -498,29 +498,29 @@ export function ingestSource(
       // No provable append can be reported for a source that cannot be read.
     }
     // Record the source's state under the live contract, WITH the extraction
-    // watermark: this run's contract is a whole-source extraction, so the
-    // stamp covers the full current file. That is what makes the NEXT
-    // append verifiable - the recorded digest describes exactly the leading
-    // extracted_bytes, so a later read either proves a pure append (delta
-    // above) or classifies modified and reprocesses fully.
-    let sourceSize: number | undefined;
-    let sourceDigest: string | undefined;
+    // watermark. The stamp covers exactly the prefix the reported delta
+    // announces (review M15): on a proven append the watermark advances to
+    // the delta's boundary-safe `toByte` and the recorded digest is the
+    // digest of exactly those leading bytes, so the next append's prefix
+    // proof verifies against the watermark the delta series actually
+    // announced, and an unterminated trailing fragment stays unstamped for
+    // the next delta to stitch in. On every other shape - a first ingest,
+    // a rewritten source, a shrink - this run is a whole-source pass and
+    // the stamp covers the full current file. Both arms keep ONE invariant:
+    // the recorded digest always describes exactly `extracted_bytes`
+    // leading bytes of the source.
+    let manifestStamp: { readonly digest: string; readonly bytes: number } | undefined;
     try {
-      // One stat, taken BEFORE the digest: the stamp must describe one
-      // snapshot of the source, so the byte count it claims is the file it
-      // hashed, not a size re-read after the hashing walked a possibly
-      // grown file.
-      sourceSize = statSync(sourceAbs).size;
-      sourceDigest = hashPath(sourceAbs);
+      manifestStamp = extractionWatermarkStamp(sourceAbs, extractionDelta);
     } catch {
       // Vanished or changed kind mid-flight: skip the stamp, reprocess fully.
     }
-    if (sourceDigest !== undefined && sourceSize !== undefined) {
+    if (manifestStamp !== undefined) {
       updateManifest(vault, [canonicalSource], {
         [canonicalSource]: {
-          sha256: sourceDigest,
+          sha256: manifestStamp.digest,
           fingerprint: computeExtractionContractFingerprint(vault),
-          extracted_bytes: sourceSize,
+          extracted_bytes: manifestStamp.bytes,
           extracted_at: isoSecond(opts.now),
         },
       });
@@ -698,26 +698,70 @@ export function appendedExtractionDelta(
 }
 
 /**
+ * The manifest stamp this run's source state earns: the digest and byte
+ * count the extraction watermark records. On a reported append the stamp
+ * covers exactly the announced prefix - the digest of the leading `toByte`
+ * bytes - so the recorded digest and the watermark never disagree about
+ * where the delta series stands (review M15). On every other shape the run
+ * is a whole-source pass and the stamp covers the full current file, whose
+ * digest then also answers the `unchanged` classification; a fragment
+ * stamp accepts one reclassification until the fragment is terminated and
+ * the source re-ingested. A source that cannot be stated - vanished, a
+ * directory in the file's place - throws, and the caller skips the stamp.
+ */
+function extractionWatermarkStamp(
+  sourceAbs: string,
+  delta: IngestSourceResult["extractionDelta"],
+): { readonly digest: string; readonly bytes: number } {
+  if (delta !== undefined) {
+    // Positioned reads bounded at `toByte`: a file that grows while the
+    // prefix is hashed cannot leak past the announced boundary.
+    return { digest: hashPrefix(sourceAbs, delta.toByte), bytes: delta.toByte };
+  }
+  // One stat, taken BEFORE the digest: the stamp must describe one
+  // snapshot of the source, so the byte count it claims is the file it
+  // hashed, not a size re-read after the hashing walked a possibly grown
+  // file.
+  const size = statSync(sourceAbs).size;
+  return { digest: hashPath(sourceAbs), bytes: size };
+}
+
+/**
  * Does the SHA-256 of the first `watermark` bytes of `sourceAbs` equal
  * `expected`? An unreadable or too-short prefix cannot PROVE an append, so
  * it answers false - the modified classification and its full reprocess are
  * the safe direction, never a skipped stale delta.
  */
 function prefixHashMatches(sourceAbs: string, watermark: number, expected: string): boolean {
+  try {
+    return hashPrefix(sourceAbs, watermark) === expected;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The SHA-256 of exactly the first `bytes` leading bytes of `sourceAbs`,
+ * read with positioned reads off the shared non-blocking open. A read that
+ * comes up short of `bytes` (the file shrank below the prefix) hashes what
+ * is there - a digest that can no longer match a recorded prefix, which is
+ * the answer the proof needs. An unopenable source throws.
+ */
+function hashPrefix(sourceAbs: string, bytes: number): string {
   const fd = openSync(sourceAbs, SOURCE_OPEN_FLAGS);
   try {
     const hash = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(Math.min(PREFIX_HASH_CHUNK_BYTES, watermark));
+    const chunk = Buffer.allocUnsafe(Math.min(PREFIX_HASH_CHUNK_BYTES, bytes));
     let position = 0;
-    let remaining = watermark;
+    let remaining = bytes;
     while (remaining > 0) {
       const count = readSync(fd, chunk, 0, Math.min(chunk.length, remaining), position);
-      if (count === 0) return false;
+      if (count === 0) break;
       hash.update(count === chunk.length ? chunk : chunk.subarray(0, count));
       position += count;
       remaining -= count;
     }
-    return hash.digest("hex") === expected;
+    return hash.digest("hex");
   } finally {
     closeSync(fd);
   }
