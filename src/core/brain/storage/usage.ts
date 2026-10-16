@@ -38,7 +38,17 @@
  * is the `brain_tree` surface, `vault-content`. The derived store
  * (`brain.sqlite` plus its WAL and SHM sidecars) is resolved through the
  * search layer's own resolver so the meter can never disagree with the
- * indexer about which file is the store; it is `derived`.
+ * indexer about which file is the store; it is `derived`. The rest of
+ * the store's directory (`.open-second-brain/` - the hook audit, the
+ * watchdog fallback audit, the dead letters, the checkpoints, the
+ * session ledgers, the maintenance journal and lease database) is the
+ * `derived_store_dir` surface: it accumulates for months outside any
+ * `Brain/` lane, and a census that skipped it would read a busy
+ * hook-driven vault as flat while the disk filled. It reports as
+ * `vault-content` as a whole - most of it is regenerable, but the
+ * secret custody, the dead letters and the lockfiles are not, and a
+ * capacity report that overstated the deletable side would be the
+ * dangerous direction to err in.
  *
  * The meter is read-only, never follows symlinks, and takes no
  * wall-clock reading: the timestamp it stamps comes from the injected
@@ -81,6 +91,12 @@ export const STORAGE_SURFACE = Object.freeze({
   internalState: "internal_state",
   /** The derived store and its WAL/SHM sidecars. */
   derivedStore: "derived_store",
+  /**
+   * `<vault>/.open-second-brain/` minus the store files - the
+   * accumulating machinery state the store's directory carries beside
+   * the store.
+   */
+  derivedStoreDir: "derived_store_dir",
 } as const);
 
 export type StorageSurface = (typeof STORAGE_SURFACE)[keyof typeof STORAGE_SURFACE];
@@ -94,6 +110,7 @@ export const STORAGE_SURFACES: ReadonlyArray<StorageSurface> = Object.freeze([
   STORAGE_SURFACE.payloads,
   STORAGE_SURFACE.internalState,
   STORAGE_SURFACE.derivedStore,
+  STORAGE_SURFACE.derivedStoreDir,
 ]);
 
 /** Why a surface has no byte reading. */
@@ -161,6 +178,7 @@ const SURFACE_TIERS: Readonly<Record<StorageSurface, StorageTier>> = Object.free
   [STORAGE_SURFACE.payloads]: STORAGE_TIER.vaultContent,
   [STORAGE_SURFACE.internalState]: STORAGE_TIER.vaultContent,
   [STORAGE_SURFACE.derivedStore]: STORAGE_TIER.derived,
+  [STORAGE_SURFACE.derivedStoreDir]: STORAGE_TIER.vaultContent,
 });
 
 /** The sqlite sidecar suffixes that belong to the store surface. */
@@ -200,12 +218,16 @@ function addFile(path: string, add: (bytes: number) => void, refuse: () => void)
  * read below the point of refusal are discarded with it: the caller
  * (`measureDirSurface`) records a refused surface in its refusal set
  * only, so no caller can read a partial total as the surface's size.
+ * `skipFiles` names absolute paths counted by a surface of their own
+ * (the store files inside the store's directory), so no byte is counted
+ * twice.
  */
 function walkTree(
   root: string,
   skipTopLevel: ReadonlyArray<string>,
   add: (bytes: number) => void,
   refuse: () => void,
+  skipFiles: ReadonlyArray<string> = [],
 ): void {
   let entries;
   try {
@@ -217,11 +239,13 @@ function walkTree(
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (skipTopLevel.includes(entry.name)) continue;
-      walkTree(join(root, entry.name), [], add, refuse);
+      walkTree(join(root, entry.name), [], add, refuse, skipFiles);
       continue;
     }
     if (!entry.isFile()) continue;
-    addFile(join(root, entry.name), add, refuse);
+    const filePath = join(root, entry.name);
+    if (skipFiles.includes(filePath)) continue;
+    addFile(filePath, add, refuse);
   }
 }
 
@@ -241,6 +265,7 @@ function measureDirSurface(
   skipTopLevel: ReadonlyArray<string>,
   readings: Map<StorageSurface, number>,
   refusals: Set<StorageSurface>,
+  skipFiles: ReadonlyArray<string> = [],
 ): void {
   let bytes = 0;
   let refused = refusals.has(surface);
@@ -250,7 +275,7 @@ function measureDirSurface(
   const refuse = (): void => {
     refused = true;
   };
-  walkTree(root, skipTopLevel, add, refuse);
+  walkTree(root, skipTopLevel, add, refuse, skipFiles);
   if (refused) refusals.add(surface);
   else readings.set(surface, bytes);
 }
@@ -304,6 +329,22 @@ export function measureStorageUsage(
     measureDirSurface(surface, join(brain, dir), [], readings, refusals);
   }
   const storePath = opts.storePath ?? resolveConfiguredIndexPath(vault);
+  // The store's directory is a counted surface of its own, minus the
+  // store files - they are the derived_store surface, and the skip list
+  // is what keeps one byte from landing in two surfaces.
+  const storeFiles = [
+    storePath,
+    `${storePath}${STORE_WAL_SUFFIX}`,
+    `${storePath}${STORE_SHM_SUFFIX}`,
+  ];
+  measureDirSurface(
+    STORAGE_SURFACE.derivedStoreDir,
+    join(vault, DERIVED_STORE_DIR),
+    [],
+    readings,
+    refusals,
+    storeFiles,
+  );
   measureStoreSurface(storePath, readings, refusals);
 
   const surfaces = STORAGE_SURFACES.filter((s) => readings.has(s)).map((s) => ({

@@ -23,11 +23,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 
 import { DERIVED_STORE_DIR, DERIVED_STORE_FILE } from "../../../src/core/brain/path-constants.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
+import { STATE_SURFACES } from "../../../src/core/state/surfaces.ts";
 import {
   STORAGE_SURFACE,
   STORAGE_TIER,
@@ -284,5 +285,64 @@ describe("the configured store location", () => {
     expect(reported).not.toBeNull();
     expect(Number(reported![1])).toBe(decision.reading!.measuredBytes);
     expect(decision.reading!.measuredBytes).toBeGreaterThan(9_000);
+  });
+});
+
+describe("the census against the state catalogue", () => {
+  test("every catalogued state surface lands in exactly one counted surface", () => {
+    // The meter claims to charge every durable state surface for the
+    // bytes it keeps on disk. STATE_SURFACES is the catalogue of those
+    // locations: seed a file at every row's default location and require
+    // the census to see every byte exactly once. A new writer under
+    // `.open-second-brain/` (or anywhere else) with no counted surface -
+    // or a path the walk excludes, or a byte counted by two surfaces -
+    // breaks the delta.
+    const PROBE_BYTES = 16;
+    const paths = [...new Set(STATE_SURFACES.map((row) => row.derive(vault, null)))];
+    // The meter's directory surfaces: a probe written AT one of these
+    // roots would be a regular file standing where a walkable directory
+    // belongs, and the walk would refuse the surface.
+    const DIR_BASENAMES = [
+      ".snapshots",
+      ".artifacts",
+      ".archives",
+      ".payloads",
+      ".state",
+      DERIVED_STORE_DIR,
+    ];
+    const seeded = new Set<string>();
+    for (const path of paths) {
+      // A row whose path is a strict prefix of another row's path is a
+      // DIRECTORY row: its probe goes inside it, or it would be a regular
+      // file standing where another row's parent must be.
+      const isParent = paths.some((other) => other !== path && other.startsWith(`${path}${sep}`));
+      const target =
+        isParent || DIR_BASENAMES.includes(basename(path)) ? join(path, "probe.bin") : path;
+      if (seeded.has(target)) continue;
+      seeded.add(target);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "x".repeat(PROBE_BYTES), "utf8");
+    }
+    const usage = measureStorageUsage(vault, { now: NOW });
+    expect(usage.complete).toBe(true);
+    expect(usage.totalBytes).toBe(seeded.size * PROBE_BYTES);
+  });
+
+  test("the store's directory is a counted surface beside the store itself", () => {
+    // The accumulating state beside brain.sqlite: the hook audit, the
+    // session ledger, the maintenance lease database - pre-fix none of
+    // it was counted, and the forecast read a busy vault as flat.
+    const storeDir = join(vault, DERIVED_STORE_DIR);
+    mkdirSync(join(storeDir, "hook-audit"), { recursive: true });
+    writeFileSync(join(storeDir, "hook-audit", "2026-W42.jsonl"), "x".repeat(700), "utf8");
+    writeFileSync(join(storeDir, "sessions.jsonl"), "x".repeat(300), "utf8");
+    writeFileSync(join(storeDir, "maintenance.sqlite"), "x".repeat(500), "utf8");
+    // The store itself stays on its own surface, never double-counted.
+    writeFileSync(join(storeDir, DERIVED_STORE_FILE), "x".repeat(1000), "utf8");
+    writeFileSync(join(storeDir, `${DERIVED_STORE_FILE}-wal`), "x".repeat(200), "utf8");
+    const usage = measureStorageUsage(vault, { now: NOW });
+    expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStoreDir)).toBe(1500);
+    expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStore)).toBe(1200);
+    expect(usage.complete).toBe(true);
   });
 });
