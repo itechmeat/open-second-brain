@@ -719,6 +719,76 @@ test("a provenance omission is not a refusal: reach gating stays identical-to-ab
   expect(farReach!.path.some((step) => step.documentId === 2)).toBe(false);
 });
 
+test("a withheld quarantined arrival is receipted identically to its absence", () => {
+  // The walked node is BOTH quarantined and reserved against remote
+  // reads: the row-level filters withhold its row, so a refusal record
+  // naming it would hand a caller the path, the ids and a structural
+  // fact about a page it cannot read. The receipts must read exactly as
+  // they would had the page never existed.
+  writeMd(vault, "seed.md", '---\nrelated: "[[secret]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "secret.md",
+    '---\nstatus: quarantine\nvisibility: ["private"]\n---\n\nbeta secret content.',
+  );
+  const store = armFixtureStore({ docs: { seed: 1, secret: 2 }, typed: [[1, "related", 2]] });
+  const present = runRelationalArm(store, vault, "[[seed]] related", {
+    configPath: modeConfigPath("shadow"),
+    reach: TRANSPORT_REACH.remote,
+  });
+  expect(present.refusals).toEqual([]);
+  expect(JSON.stringify(present)).not.toContain("secret.md");
+  // The same walk over a store where the node does not exist refuses
+  // nothing, and the refusal records are the same bytes.
+  const absent = runRelationalArm(
+    armFixtureStore({ docs: { seed: 1 }, typed: [] }),
+    vault,
+    "[[seed]] related",
+    {
+      configPath: modeConfigPath("shadow"),
+      reach: TRANSPORT_REACH.remote,
+    },
+  );
+  expect(JSON.stringify(present.refusals)).toBe(JSON.stringify(absent.refusals));
+});
+
+test("a withheld source page's signals ride no readable node's refusal", () => {
+  // The far node's own frontmatter is clean; its refusal reasons come
+  // entirely from the quarantined page the walk crossed - and that page
+  // is reserved against the caller's reach. Naming far would disclose
+  // mid's marker status, so mid contributes no reasons to any record.
+  writeMd(vault, "seed.md", '---\nrelated: "[[mid]]"\n---\n\nalpha topic seed document.');
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nstatus: quarantine\nvisibility: ["private"]\nextends: "[[far]]"\n---\n\nbeta hidden mid.',
+  );
+  writeMd(vault, "far.md", "# Far\n\ngamma downstream content.");
+  const store = armFixtureStore({
+    docs: { seed: 1, mid: 2, far: 3 },
+    typed: [
+      [1, "related", 2],
+      [2, "extends", 3],
+    ],
+  });
+  const shadow = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("shadow"),
+    reach: TRANSPORT_REACH.remote,
+  });
+  // Seeds are not walked nodes; both reached nodes still contribute under
+  // shadow, and no refusal names anything about the withheld page.
+  expect(shadow.rankedChunkIds.toSorted()).toEqual([2, 3]);
+  expect(refusalPaths(shadow)).toEqual([]);
+  // Enforce keeps the full excluding verdict - the drops stay, only the
+  // records disappear.
+  const enforced = runRelationalArm(store, vault, "[[seed]] related extends", {
+    configPath: modeConfigPath("enforce"),
+    reach: TRANSPORT_REACH.remote,
+  });
+  expect(enforced.rankedChunkIds).toEqual([]);
+  expect(refusalPaths(enforced)).toEqual([]);
+});
+
 test("a malformed mode value fails only the relational query the gate governs", () => {
   writeMd(vault, "seed.md", '---\nrelated: "[[near]]"\n---\n\nalpha topic seed document.');
   writeMd(vault, "near.md", "# Near\n\nbeta content.");

@@ -198,13 +198,35 @@ export interface RelationalArmOutcome {
    * lists every walked node whose arrival (its own frontmatter signals,
    * its validity window at query time, the arriving edge's polarity, or
    * the arrived edge's source endpoint) the classification marked
-   * ineligible. This is a DIFFERENT act from the reach gating's
-   * identical-to-absent provenance convention above: a refusal is
-   * removed from (enforce) or kept in (shadow) the contribution set AND
-   * counted here, while an omitted provenance step is never named and
-   * never counted.
+   * ineligible AND whose derivation the caller could read: a node, or an
+   * edge source, withheld at the caller's reach and owner scope
+   * contributes no record, so the receipts read the same whether the walk
+   * crossed unreadable documents or not. This is a DIFFERENT act from the
+   * reach gating's identical-to-absent provenance convention above: a
+   * refusal is removed from (enforce) or kept in (shadow) the
+   * contribution set AND counted here, while an omitted provenance step
+   * is never named and never counted.
    */
   readonly refusals?: ReadonlyArray<RetrievalTrustRefusal>;
+}
+
+/**
+ * Whether a caller at this reach and owner scope could read the page: the
+ * exact verdict {@link gatePath} applies to every provenance step, so
+ * both disclosure channels - the provenance beside a row and the trust
+ * receipts' refusal records - are held to the same line.
+ */
+function isCallerReadable(
+  vault: string,
+  path: string,
+  reach: TransportReach,
+  agentScope: string | null,
+  cache: FrontmatterCache,
+): boolean {
+  return (
+    isPathReadableAtReach(vault, path, reach, cache) &&
+    (agentScope === null || isPathOwnerVisible(vault, path, agentScope, cache))
+  );
 }
 
 /**
@@ -314,25 +336,45 @@ export function runRelationalArm(
       // the source is a seed the caller named itself.
       const lastStep = node.path.at(-1);
       const sourceStep = node.path.length >= 2 ? node.path.at(-2) : undefined;
-      const eligibilityReasons = classifyArrivalEligibility({
+      const sourceMeta = sourceStep === undefined ? undefined : titles.get(sourceStep.documentId);
+      const sourcePath = sourceMeta?.path ?? null;
+      const eligibility = classifyArrivalEligibility({
         vault,
         nodePath: rep.path,
-        sourcePath:
-          sourceStep === undefined ? null : (titles.get(sourceStep.documentId)?.path ?? null),
+        sourcePath,
         arrivingRelation: lastStep?.relation ?? null,
         cache: frontmatterCache,
         nowMs,
       });
-      if (eligibilityReasons.length > 0) {
-        refusals.push(
-          Object.freeze({
-            document_id: rep.documentId,
-            chunk_id: rep.chunkId,
-            path: rep.path,
-            reasons: Object.freeze(eligibilityReasons),
-            lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
-          }),
-        );
+      if (eligibility.node.length + eligibility.source.length > 0) {
+        // A refusal is RECORDED only for what the caller could read at
+        // its reach and owner scope - the identical-to-absent convention
+        // the provenance gate below holds: a page withheld there
+        // contributes nothing to the receipts, so the records a caller
+        // sees read the same whether the walk crossed unreadable
+        // documents or not. The enforcement verdict below stays the FULL
+        // classification: the exclusion (enforce) or the kept
+        // contribution (shadow) does not depend on what was recordable.
+        const recordable = isCallerReadable(vault, rep.path, reach, agentScope, frontmatterCache)
+          ? [
+              ...eligibility.node,
+              ...(sourcePath === null ||
+              isCallerReadable(vault, sourcePath, reach, agentScope, frontmatterCache)
+                ? eligibility.source
+                : []),
+            ]
+          : [];
+        if (recordable.length > 0) {
+          refusals.push(
+            Object.freeze({
+              document_id: rep.documentId,
+              chunk_id: rep.chunkId,
+              path: rep.path,
+              reasons: Object.freeze(recordable.toSorted()),
+              lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+            }),
+          );
+        }
         // Enforce removes the ineligible edge's node from the
         // contribution set; shadow counts it and contributes as usual.
         if (trustGateMode === SEARCH_TRUST_GATE_MODE.enforce) continue;
@@ -423,9 +465,9 @@ function closedSupersessionTip(
 }
 
 /**
- * The eligibility verdict for one walked node's arrival, as sorted
- * namespaced structural reason tokens (empty when eligible). Four
- * questions, all frontmatter-structural, none prose:
+ * The eligibility verdict for one walked node's arrival, split by which
+ * page each reason was derived from. Four questions, all frontmatter-
+ * structural, none prose:
  *
  *   - the node's page and - for a node reached from another walked node -
  *     the arrived edge's source page carry one of the page gate's three
@@ -438,6 +480,12 @@ function closedSupersessionTip(
  *     its own, never a silent pass);
  *   - the arriving relation's polarity is not a counted exclusion
  *     (the existing relation-polarity vocabulary).
+ *
+ * The split exists for the receipts' disclosure line: the `node` reasons
+ * describe the node's own page and arriving edge, the `source` reasons
+ * describe ANOTHER page, and a record may carry a page's facts only when
+ * that page is readable at the caller's reach and scope. The enforcement
+ * verdict is the union and never differs between modes.
  *
  * An unreadable page answers no signals, the same tolerance the page
  * gate's shared frontmatter reader gives it.
@@ -452,17 +500,18 @@ function classifyArrivalEligibility(input: {
   readonly arrivingRelation: string | null;
   readonly cache: FrontmatterCache;
   readonly nowMs: number;
-}): string[] {
-  const reasons: string[] = [];
-  const pageGateReasons = (path: string): void => {
+}): { readonly node: string[]; readonly source: string[] } {
+  const node: string[] = [];
+  const source: string[] = [];
+  const pageGateReasons = (path: string, into: string[]): void => {
     const entry = readCachedFrontmatterEntry(input.cache, input.vault, path);
     if (entry.unreadable) return;
     for (const reason of classifyRetrievalTrust(entry.meta).reasons) {
-      reasons.push(`${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${reason}`);
+      into.push(`${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${reason}`);
     }
   };
-  pageGateReasons(input.nodePath);
-  if (input.sourcePath !== null) pageGateReasons(input.sourcePath);
+  pageGateReasons(input.nodePath, node);
+  if (input.sourcePath !== null) pageGateReasons(input.sourcePath, source);
 
   const entry = readCachedFrontmatterEntry(input.cache, input.vault, input.nodePath);
   if (!entry.unreadable) {
@@ -471,15 +520,15 @@ function classifyArrivalEligibility(input: {
     const window = parseValidityWindow(entry.meta);
     if (window !== null) {
       if (window.invalid) {
-        reasons.push(
+        node.push(
           `${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${RELATIONAL_ARM_REFUSAL_REASON.invalidValidityWindow}`,
         );
       } else if (window.validFromMs !== null && window.validFromMs > input.nowMs) {
-        reasons.push(
+        node.push(
           `${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${RELATIONAL_ARM_REFUSAL_REASON.pendingValidityWindow}`,
         );
       } else if (window.validUntilMs !== null && window.validUntilMs < input.nowMs) {
-        reasons.push(
+        node.push(
           `${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${RELATIONAL_ARM_REFUSAL_REASON.closedValidityWindow}`,
         );
       }
@@ -490,11 +539,11 @@ function classifyArrivalEligibility(input: {
     input.arrivingRelation !== null &&
     REFUSAL_POLARITIES.has(normalizeRelation(input.arrivingRelation))
   ) {
-    reasons.push(
+    node.push(
       `${RELATIONAL_ARM_REFUSAL_NAMESPACE}:${RELATIONAL_ARM_REFUSAL_REASON.contradictsPolarity}`,
     );
   }
-  return reasons.toSorted();
+  return { node, source };
 }
 
 /**
@@ -525,13 +574,7 @@ function gatePath(
   for (const step of steps) {
     const meta = titles.get(step.documentId);
     const unreadable =
-      meta === undefined ||
-      !isPathReadableAtReach(vault, meta.path, reach, cache) ||
-      // The same owner-scope verdict the row-level filters apply to
-      // content rows: an owner-private page another agent owns is as
-      // withheld from provenance as an unreadable one. No requested
-      // scope means no ownership filtering - the opt-in default.
-      (agentScope !== null && !isPathOwnerVisible(vault, meta.path, agentScope, cache));
+      meta === undefined || !isCallerReadable(vault, meta.path, reach, agentScope, cache);
     if (unreadable) continue;
     gated.push(step);
     if (supersededBy === undefined) {

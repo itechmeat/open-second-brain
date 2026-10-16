@@ -14,12 +14,13 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { UNTRUSTED_SOURCE_TAG } from "../../../src/core/brain/untrusted-source.ts";
 import { ENTITY_CONTAMINATION_FRONTMATTER_KEY } from "../../../src/core/brain/truth/contamination.ts";
 import {
@@ -274,6 +275,60 @@ describe("retrieval trust gate on the search path", () => {
       arm: { "relational_arm:closed_validity_window": 1 },
       pool: {},
     });
+  });
+
+  test("a withheld quarantined page is receipted identically to its absence under shadow", async () => {
+    // The walked page is quarantined AND reserved against the remote
+    // caller's reach: no lane may name it in the receipts, so the refusal
+    // section reads exactly as it would had the page never existed. A
+    // second, readable walk target keeps the pool non-empty on both
+    // sides, so the receipts exist to be compared.
+    writeMd(
+      vault,
+      "seed.md",
+      '---\nrelated: "[[hidden]]"\nextends: "[[visible]]"\n---\n\nalpha topic seed document.',
+    );
+    writeMd(
+      vault,
+      "hidden.md",
+      '---\nstatus: quarantine\nvisibility: ["private"]\n---\n\nbeta hidden divergent content.',
+    );
+    writeMd(vault, "visible.md", "# Visible\n\ngamma readable neighbor content.");
+    await indexVault(makeConfig({ vault, dbPath }));
+    const configPath = join(vault, "gate-mode.yaml");
+    writeFileSync(configPath, "search_trust_gate_mode: shadow\n");
+    const cfg = {
+      ...makeConfig({
+        vault,
+        dbPath,
+        fusionMode: "rrf",
+        relationalArmEnabled: true,
+        searchTrustGateMode: "shadow",
+      }),
+      configPath,
+    };
+
+    const present = await search(cfg, {
+      query: "alpha [[seed]] related extends",
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    const presentTrace = present.retrievalDecisionTrace!;
+    expect(presentTrace.mode).toBe("shadow");
+    expect(presentTrace.refused).toBe(0);
+    expect(presentTrace.refusals).toEqual([]);
+
+    // The same vault, the page gone: the refusal section is the same
+    // bytes (the counts around it legitimately differ - the row vanished).
+    rmSync(join(vault, "hidden.md"));
+    await indexVault(cfg);
+    const absent = await search(cfg, {
+      query: "alpha [[seed]] related extends",
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    const absentTrace = absent.retrievalDecisionTrace!;
+    expect(JSON.stringify({ refused: presentTrace.refused, refusals: presentTrace.refusals })).toBe(
+      JSON.stringify({ refused: absentTrace.refused, refusals: absentTrace.refusals }),
+    );
   });
 
   test("the explain envelope names the resolved mode under shadow and stays silent under enforce", async () => {
