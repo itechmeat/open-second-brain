@@ -5,7 +5,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -301,6 +308,47 @@ describe("brain_ingest_source - capture_scope", () => {
       entities: [{ category: "concept", name: "Remote" }],
     })) as Record<string, unknown>;
     expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.urlOnly);
+  });
+});
+
+/**
+ * The appended-delta wire fields (review M14), following the capture_scope
+ * pattern: `extraction_delta` is absent on every shape that is not a proven
+ * append, and carries the named kind beside the snake_case byte range.
+ */
+describe("brain_ingest_source - extraction_delta", () => {
+  interface DeltaResult {
+    readonly extraction_delta?:
+      | { readonly kind: string; readonly from_byte: number; readonly to_byte: number }
+      | undefined;
+  }
+  const ingest = (sourcePath: string) =>
+    handler(ctx, {
+      source_path: sourcePath,
+      summary: "Grew?",
+      entities: [{ category: "concept", name: "Grew" }],
+    }) as Promise<DeltaResult>;
+
+  test("a first ingest answers no extraction_delta", async () => {
+    seed("Log/growth.md", "one\n");
+    const res = await ingest("Log/growth.md");
+    expect(res.extraction_delta).toBeUndefined();
+  });
+
+  test("an appended source answers its boundary-safe range and kind", async () => {
+    seed("Log/growth.md", "one\n");
+    await ingest("Log/growth.md");
+    appendFileSync(join(vault, "Log/growth.md"), "two\n", "utf8");
+    const res = await ingest("Log/growth.md");
+    expect(res.extraction_delta).toEqual({ kind: "appended", from_byte: 4, to_byte: 8 });
+  });
+
+  test("a rewritten source answers no extraction_delta", async () => {
+    seed("Log/growth.md", "one\n");
+    await ingest("Log/growth.md");
+    writeFileSync(join(vault, "Log/growth.md"), "entirely different\n", "utf8");
+    const res = await ingest("Log/growth.md");
+    expect(res.extraction_delta).toBeUndefined();
   });
 });
 

@@ -397,6 +397,21 @@ async function toolBrainIngestSource(
             ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
           }
         : {}),
+      // The appended delta this run proved (t_a9cd4221, review M14): the
+      // boundary-safe byte range beside its named kind, absent on every
+      // shape that is not a proven append - a first ingest, a rewrite, a
+      // source with no watermark. The range lets the caller see what this
+      // summary is newly about; extraction itself stays whole-source, so
+      // the field is reporting, never a claim that only the tail was read.
+      ...(res.extractionDelta !== undefined
+        ? {
+            extraction_delta: {
+              kind: res.extractionDelta.kind,
+              from_byte: res.extractionDelta.fromByte,
+              to_byte: res.extractionDelta.toByte,
+            },
+          }
+        : {}),
       // Only for an HTML or CSV/TSV source, so a text source's payload is
       // byte-identical to before. Counts and tokens only, never content.
       ...(res.parts !== undefined ? { parts: serializeParts(res.parts) } : {}),
