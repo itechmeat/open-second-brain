@@ -478,8 +478,8 @@ reference with its structural reasons) and `memory_trust_assessment` (the
 same exclusion set as a reason histogram). Both are by-products of the
 retrieval trust gate, which runs in one of three modes
 (`search_trust_gate_mode: off | shadow | enforce`; the bare
-`search_trust_gate_enabled` alone maps to `shadow`, measuring without
-excluding, and `enforce` is what excludes): with the gate off the
+`search_trust_gate_enabled` alone maps to `enforce`, which excludes, and
+`shadow` measures without excluding): with the gate off the
 response carries `retrieval_trace_unavailable` naming the switches that
 produce them (`search_trust_gate_enabled`, or
 `search_trust_gate_mode: shadow`) instead of going quiet. Without

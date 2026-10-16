@@ -87,8 +87,8 @@ beforeEach(async () => {
   writeAged("notes/quarantined.md", QUARANTINED);
 
   const onPath = join(configHome, "gate-on.yaml");
-  // The gate must EXCLUDE here, and the legacy boolean alone now
-  // measures (shadow): enforcement is named explicitly.
+  // The gate must EXCLUDE here; the mode is named explicitly so the
+  // test does not lean on the legacy boolean mapping.
   atomicWriteFileSync(
     onPath,
     `vault: ${vault}\nsearch_trust_gate_enabled: true\nsearch_trust_gate_mode: enforce\n`,
@@ -157,6 +157,7 @@ describe("brain_search explain: retrieval receipts", () => {
     const on = (await call(gateOn, { explain: true })) as unknown as Record<string, unknown>;
     delete on["retrieval_decision_trace"];
     delete on["memory_trust_assessment"];
+    delete on["retrieval_trust_gate_mode"];
     for (const r of on["results"] as Array<Record<string, unknown>>) delete r["score_breakdown"];
 
     expect(JSON.stringify(on)).toBe(JSON.stringify(first));

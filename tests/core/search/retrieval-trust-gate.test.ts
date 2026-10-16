@@ -9,8 +9,9 @@
  *     receipts, whose `excluded` counts stay untouched.
  *   - enforce: today's excluding behavior, made explicit.
  *
- * The legacy `search_trust_gate_enabled` boolean alone now maps to
- * shadow: a vault must name `enforce` to exclude.
+ * The legacy `search_trust_gate_enabled` boolean alone maps to enforce,
+ * the excluding behavior it had before the mode existed: a vault opts
+ * into measuring by naming `shadow`.
  */
 
 import { test, expect, beforeEach, afterEach, describe, spyOn } from "bun:test";
@@ -147,19 +148,17 @@ describe("retrieval trust gate on the search path", () => {
     });
   });
 
-  test("the legacy boolean alone now maps to shadow (measure, not exclude)", async () => {
+  test("the legacy boolean alone keeps excluding across the upgrade", async () => {
     writeMd(vault, "clean.md", CLEAN);
     writeMd(vault, "quarantined.md", QUARANTINED);
-    // No explicit mode: the legacy true maps to shadow.
+    // No explicit mode, resolved the way a pre-mode config resolves.
     const cfg = makeConfig({ vault, dbPath, retrievalTrustGateEnabled: true });
 
     await indexVault(cfg);
     const out = await search(cfg, { query: "widget calibration", limit: 5 });
 
-    expect(out.results.map((r) => r.path).toSorted()).toEqual(["clean.md", "quarantined.md"]);
-    expect(out.retrievalDecisionTrace!.mode).toBe("shadow");
-    expect(out.retrievalDecisionTrace!.refused).toBe(1);
-    expect(out.retrievalDecisionTrace!.excluded).toBe(0);
+    expect(out.results.map((r) => r.path)).toEqual(["clean.md"]);
+    expect(out.retrievalDecisionTrace!.excluded).toBe(1);
   });
 
   test("enforce named explicitly keeps the excluding behavior and today's receipt shape", async () => {
@@ -407,7 +406,7 @@ describe("retrieval trust gate on the search path", () => {
     expect("mode" in assessment).toBe(false);
   });
 
-  test("the explain envelope names the resolved mode under shadow and stays silent under enforce", async () => {
+  test("the explain envelope names the resolved mode under both active modes", async () => {
     writeMd(vault, "clean.md", CLEAN);
     writeMd(vault, "quarantined.md", QUARANTINED);
     const off = makeConfig({ vault, dbPath });
@@ -426,9 +425,10 @@ describe("retrieval trust gate on the search path", () => {
     expect(shadowEnvelope[RETRIEVAL_DECISION_TRACE_KEY]).toBeDefined();
     expect(shadowEnvelope[RETRIEVAL_TRUST_GATE_MODE_KEY]).toBe("shadow");
 
-    // Enforce keeps today's envelope exactly: the receipts, no mode key.
+    // Enforce keeps the receipt shape but the envelope still names the
+    // mode, so a vault's posture is visible whichever mode is in force.
     const enforceEnvelope = explainEnvelope(enforceOutcome, request);
     expect(enforceEnvelope[RETRIEVAL_DECISION_TRACE_KEY]).toBeDefined();
-    expect(enforceEnvelope[RETRIEVAL_TRUST_GATE_MODE_KEY]).toBeUndefined();
+    expect(enforceEnvelope[RETRIEVAL_TRUST_GATE_MODE_KEY]).toBe("enforce");
   });
 });

@@ -31,6 +31,7 @@ import {
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import {
+  resolveSearchTrustGateLegacyEnabled,
   resolveSearchTrustGateMode,
   SEARCH_TRUST_GATE_MODE,
 } from "../brain/trust/retrieval-gate.ts";
@@ -1313,16 +1314,13 @@ export function resolveSearchConfig(opts: {
     false,
     "search_metadata_boost_gate",
   );
-  const retrievalTrustGateEnabled = parseBool(
-    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE", "search_trust_gate_enabled"),
-    false,
-    "search_trust_gate_enabled",
-  );
+  const retrievalTrustGateEnabled = resolveSearchTrustGateLegacyEnabled({ env, config });
   // The gate's mode (session-mining-economy, t_05a0eaa4): an explicit
   // `search_trust_gate_mode` wins (invalid values refused naming the key
   // in force, `parseFusionMode` discipline), else the legacy boolean
-  // above maps true to shadow and false to off. The refusal for a bad
-  // legacy boolean is the `parseBool` one above, naming that key.
+  // above maps true to enforce - the excluding behavior it always had -
+  // and false to off. A bad legacy boolean is refused above, naming the
+  // key in force.
   const searchTrustGateMode = resolveSearchTrustGateMode({ env, config });
   const supersedeFadeEnabled = parseBool(
     envOrConfig(

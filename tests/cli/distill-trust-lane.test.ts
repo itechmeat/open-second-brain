@@ -24,9 +24,10 @@
  *
  * These tests pin the facts at once: the default resolves the gate off,
  * an ordinary search DOES return the untrusted page with that default,
- * the legacy boolean alone now mounts the gate in shadow (the page still
- * returns, the refusal is counted), and the same search stops returning
- * it once the gate is named enforcing. The description is then required
+ * the legacy boolean alone keeps the excluding behavior it had before the
+ * mode existed, the shadow mode measures without excluding (the page
+ * still returns, the refusal is counted), and the same search stops
+ * returning it once the gate is named enforcing. The description is then required
  * to name that setting - so if the default is ever flipped, the last
  * test fails and the wording gets revisited rather than silently
  * becoming understated.
@@ -114,10 +115,16 @@ describe("the quarantine is real, and it is opt-in", () => {
     expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(true);
   });
 
-  test("with the legacy boolean alone, the search still returns it - the gate measures in shadow", async () => {
-    // Session-mining-economy: the legacy boolean alone maps to the
-    // measure-only mode, so the page surfaces and the refusal is counted.
+  test("with the legacy boolean alone, the search stops returning it", async () => {
+    // A vault that turned the gate on before the mode existed keeps
+    // excluding across the upgrade.
     const path = await seedDistillation(`${TRUST_GATE_CONFIG_KEY}: true\n`);
+    const paths = await queryPaths();
+    expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(false);
+  });
+
+  test("with the gate in shadow, the search still returns it and counts the refusal", async () => {
+    const path = await seedDistillation(`search_trust_gate_mode: shadow\n`);
     const paths = await queryPaths();
     expect(paths.some((p) => p.endsWith(path) || path.endsWith(p))).toBe(true);
     const explain = await runCli(["search", CLAIM_TERM, "--json", "--explain", "--limit", "20"], {

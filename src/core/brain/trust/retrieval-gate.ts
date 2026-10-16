@@ -31,7 +31,9 @@
  * classification, excludes nothing and records every would-be refusal
  * with its structural reasons into the receipts, and `off` - the default
  * - does not run the gate at all, keeping ranking and the outcome shape
- * byte-identical. The legacy boolean enable flag maps `true` to `shadow`.
+ * byte-identical. The legacy boolean enable flag maps `true` to `enforce`,
+ * the excluding behavior it always had, so an upgrade never quietly stops
+ * excluding; `shadow` is reached only by naming it.
  */
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -105,9 +107,10 @@ export const SEARCH_TRUST_GATE_LEGACY_CONFIG = "search_trust_gate_enabled";
  * config; an invalid value is a misconfiguration refused with a
  * `SearchError` naming the key actually in force - never silently
  * defaulted); absent the mode key, the legacy boolean maps `true` to
- * `shadow` and `false` to `off`; with neither set the default is `off`.
- * Shadow is non-destructive precisely so enablement can be the first
- * step: a vault that wants the excluding behavior names `enforce`.
+ * `enforce` - the excluding behavior it switched on before the mode
+ * existed, so a vault that opted in keeps excluding across the upgrade -
+ * and `false` to `off`; with neither set the default is `off`. Measuring
+ * first is an explicit `search_trust_gate_mode: shadow`.
  */
 export function resolveSearchTrustGateMode(input: {
   readonly env?: NodeJS.ProcessEnv;
@@ -126,15 +129,32 @@ export function resolveSearchTrustGateMode(input: {
       `${inForce} must be 'off', 'shadow' or 'enforce', got '${raw}'`,
     );
   }
+  return resolveSearchTrustGateLegacyEnabled({ env, config })
+    ? SEARCH_TRUST_GATE_MODE.enforce
+    : SEARCH_TRUST_GATE_MODE.off;
+}
+
+/**
+ * The legacy boolean enable flag, env over machine config, default
+ * false. An invalid value is refused naming the key actually in force,
+ * so an operator who set the env var is not sent to a config key they
+ * never wrote.
+ */
+export function resolveSearchTrustGateLegacyEnabled(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly config?: Readonly<Record<string, string>>;
+}): boolean {
+  const env = input.env ?? {};
   const legacy = envOrConfig(
     env,
-    config,
+    input.config ?? {},
     SEARCH_TRUST_GATE_LEGACY_ENV,
     SEARCH_TRUST_GATE_LEGACY_CONFIG,
   );
-  return legacy !== null && parseBool(legacy, false, SEARCH_TRUST_GATE_LEGACY_CONFIG)
-    ? SEARCH_TRUST_GATE_MODE.shadow
-    : SEARCH_TRUST_GATE_MODE.off;
+  const inForce = env[SEARCH_TRUST_GATE_LEGACY_ENV]
+    ? SEARCH_TRUST_GATE_LEGACY_ENV
+    : SEARCH_TRUST_GATE_LEGACY_CONFIG;
+  return parseBool(legacy, false, inForce);
 }
 
 export interface RetrievalTrustVerdict {

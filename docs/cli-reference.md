@@ -848,8 +848,9 @@ every exclusion; `shadow` runs the same classification, excludes
 nothing, and records every would-be refusal with its structural reasons
 into the same receipts; `off` - the default - runs no gate. The legacy
 `search_trust_gate_enabled` (env `OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`)
-stays as the bare enable: true maps to `shadow`, so excluding is named
-explicitly with `enforce`; `search_supersede_fade_enabled` (env
+stays as the bare enable: true maps to `enforce`, the excluding
+behavior it always had, so measuring first is named explicitly with
+`shadow`; `search_supersede_fade_enabled` (env
 `OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE`) makes an inbound `supersedes`
 / `superseded_by` relation on a successor fade the unchanged superseded
 note by a named multiplier. All default off and leave ranking

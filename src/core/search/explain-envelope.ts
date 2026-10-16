@@ -80,10 +80,11 @@ export const RETRIEVAL_DECISION_TRACE_KEY = "retrieval_decision_trace";
 export const MEMORY_TRUST_ASSESSMENT_KEY = "memory_trust_assessment";
 
 /**
- * Response key carrying the gate's resolved mode. Present only when the
- * receipts name one - the shadow mode stamps its receipts, whose
- * serialization is how the envelope names the mode; enforce keeps
- * today's envelope exactly, and off has no receipts to name anything.
+ * Response key carrying the gate's resolved mode, present whenever the
+ * gate ran. The shadow mode stamps its receipts; enforce keeps the
+ * pre-mode receipt shape, so a stampless receipt names enforce - receipts
+ * exist only when the gate ran in one of the two active modes. Off has no
+ * receipts and so no mode key.
  */
 export const RETRIEVAL_TRUST_GATE_MODE_KEY = "retrieval_trust_gate_mode";
 
@@ -169,9 +170,9 @@ export function explainEnvelope(
       : {
           [RETRIEVAL_DECISION_TRACE_KEY]: trace,
           [MEMORY_TRUST_ASSESSMENT_KEY]: assessment,
-          // The resolved mode, named only when the receipts carry one
-          // (shadow stamps them; enforce and off name nothing).
-          ...(trace.mode !== undefined ? { [RETRIEVAL_TRUST_GATE_MODE_KEY]: trace.mode } : {}),
+          // The resolved mode of the gate that built these receipts:
+          // shadow stamps them, enforce leaves them stampless.
+          [RETRIEVAL_TRUST_GATE_MODE_KEY]: trace.mode ?? "enforce",
         };
   if (timing === undefined) return receipts;
   return {

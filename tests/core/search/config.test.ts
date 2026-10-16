@@ -536,9 +536,11 @@ test("an explicit trust gate mode resolves from config, env winning", () => {
   expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe("shadow");
 });
 
-test("the legacy boolean maps true to shadow and false to off", () => {
+test("the legacy boolean maps true to enforce and false to off", () => {
   writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_enabled: true\n`);
-  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe("shadow");
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.searchTrustGateMode).toBe(
+    "enforce",
+  );
 
   writeFileSync(configPath, `vault: "${tmp}"\nsearch_trust_gate_enabled: false\n`);
   expect(
@@ -587,6 +589,14 @@ test("an invalid trust gate mode is refused naming the key in force", () => {
   }
   expect(envMessage).toContain("OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE");
   expect(envMessage).not.toContain("search_trust_gate_mode must");
+});
+
+test("an invalid legacy trust gate boolean from the env names the env var", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  process.env["OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE"] = "yes";
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(
+    "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE must be",
+  );
 });
 
 test("a trust gate mode change re-keys the config fingerprint", () => {

@@ -153,11 +153,12 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // by DEFAULT: it works through `status: quarantine` plus the entity page
     // status scope, which nothing gates. The same words mean less here.
     //
-    // Session-mining-economy: the legacy boolean alone now mounts the gate
-    // in the measure-only shadow mode, so exclusion requires the mode to
-    // name `enforce` explicitly. The description states both keys.
+    // Session-mining-economy: the legacy boolean still mounts the gate in
+    // the excluding mode, and an explicit `search_trust_gate_mode: enforce`
+    // does the same; `shadow` measures without excluding. The description
+    // states both keys.
     description:
-      "Distill one source into atomic claims; runs no model, checks quotes. Writes an idempotent page citing each claim as `[[source#^block]]`. `untrusted_source` pages surface unless the gate enforces (`search_trust_gate_mode: enforce`; `search_trust_gate_enabled` alone measures). `trust` names the lane.",
+      "Distill one source into atomic claims; runs no model, checks quotes. Writes an idempotent page citing each claim as `[[source#^block]]`. `untrusted_source` pages surface unless the gate enforces (`search_trust_gate_enabled: true` or `search_trust_gate_mode: enforce`). `trust` names the lane.",
     inputSchema: {
       type: "object",
       properties: {

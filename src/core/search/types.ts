@@ -1702,7 +1702,7 @@ export interface ResolvedRecallConfig {
    * or `enforce` (today's excluding behavior, made explicit). Resolved
    * as the explicit `search_trust_gate_mode` key (env
    * OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE_MODE), else the legacy
-   * `search_trust_gate_enabled` boolean mapped true to shadow, else off.
+   * `search_trust_gate_enabled` boolean mapped true to enforce, else off.
    * The mode rides the query-cache key, and the explain envelope names
    * it under shadow.
    */

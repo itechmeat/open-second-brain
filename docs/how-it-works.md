@@ -1709,8 +1709,8 @@ was deleted therefore surfaces as `url-only`, a `bounded-local` page counts
 as backed only while its excerpt still matches its digest, and quarantined
 pages are skipped: they already carry the `untrusted_source` marker, which
 names the same condition (and which the retrieval trust gate excludes
-under `search_trust_gate_mode: enforce` - the bare
-`search_trust_gate_enabled` alone measures in `shadow`).
+under `search_trust_gate_mode: enforce` or the legacy
+`search_trust_gate_enabled: true`; `shadow` only measures).
 
 ## Non-Markdown sources (since v1.69.0)
 

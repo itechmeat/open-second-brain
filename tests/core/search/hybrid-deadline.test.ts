@@ -331,8 +331,8 @@ function stalledRerankConfig(opts: { cacheEnabled?: boolean; rerankBaseUrl?: str
       vault,
       dbPath,
       retrievalTrustGateEnabled: true,
-      // The gate must EXCLUDE here, and the legacy boolean alone now
-      // measures (shadow): enforcement is named explicitly.
+      // The gate must EXCLUDE here; the mode is named explicitly so the
+      // test does not lean on the legacy boolean mapping.
       searchTrustGateMode: "enforce",
       cacheEnabled: opts.cacheEnabled ?? false,
       rerank: {

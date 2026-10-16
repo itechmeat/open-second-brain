@@ -113,10 +113,14 @@ describe("o2b search --explain: retrieval receipts", () => {
     expect(payload["retrieval_decision_trace"]).toEqual(TRACE);
     expect(payload["memory_trust_assessment"]).toEqual(ASSESSMENT);
     expect("retrieval_trace_unavailable" in payload).toBe(false);
+    // Stampless receipts come from the enforcing gate, and the envelope
+    // names that mode.
+    expect(payload["retrieval_trust_gate_mode"]).toBe("enforce");
     // The rest of the payload is untouched: the explain keys are appended.
     const off = JSON.stringify(jsonForOutcome(outcome(true)));
     delete payload["retrieval_decision_trace"];
     delete payload["memory_trust_assessment"];
+    delete payload["retrieval_trust_gate_mode"];
     expect(JSON.stringify(payload)).toBe(off);
   });
 
@@ -276,8 +280,8 @@ describe("o2b search --explain end to end", () => {
         "---\ntitle: Bad\nstatus: quarantine\n---\n\n# Bad\n\nThe widget calibration is unsafe.\n",
       );
       const configPath = join(configHome, "config.yaml");
-      // The gate must EXCLUDE here, and the legacy boolean alone now
-      // measures (shadow): enforcement is named explicitly.
+      // The gate must EXCLUDE here; the mode is named explicitly so the
+      // test does not lean on the legacy boolean mapping.
       atomicWriteFileSync(
         configPath,
         `vault: ${vault}\nsearch_trust_gate_enabled: true\nsearch_trust_gate_mode: enforce\n`,
