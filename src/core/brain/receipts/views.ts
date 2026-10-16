@@ -85,6 +85,11 @@ export function compactView(result: ReceiptCompactResult): Record<string, unknow
     },
     ...(result.snapshotRunId !== undefined ? { snapshot_run_id: result.snapshotRunId } : {}),
     ...(result.recoverability !== undefined ? { recoverability: result.recoverability } : {}),
+    // The run's net cost (M6): the ledger shrink beside the recovery
+    // point's own bytes - a whole-Brain archive in a counted surface -
+    // so the caller can see growth the shrink did not pay for.
+    ...(result.snapshotBytes !== undefined ? { snapshot_bytes: result.snapshotBytes } : {}),
+    ...(result.netDeltaBytes !== undefined ? { net_delta_bytes: result.netDeltaBytes } : {}),
     ...(result.auditRecordId !== undefined ? { audit_record_id: result.auditRecordId } : {}),
     ...(result.auditError !== undefined ? { audit_error: result.auditError } : {}),
   };

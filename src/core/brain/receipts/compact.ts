@@ -46,7 +46,10 @@
  * widened - so a shard never carries a second line per (kind, month).
  * The audit is the additive `receipt_compaction` continuity
  * kind (one record per confirmed run that folded, never on a dry run),
- * carrying the honest per-shard outcomes including failures. An audit
+ * carrying the honest per-shard outcomes including failures, and the
+ * run's net cost - the ledger shrink beside the recovery point's own
+ * bytes, both on the result and in the audit payload, since the archive
+ * lands in a surface the storage census counts. An audit
  * record that cannot be appended after the shards are durable is a
  * named outcome on the result (`auditError`), never a post-write throw:
  * the run's work is done by then, and discarding it would leave the
@@ -58,7 +61,7 @@
  * string `run_at`, so an aggregate is inert bytes to every reader.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 import { resolveAgentName } from "../../config.ts";
 import { atomicWriteFileSync, isFileDrift } from "../../fs-atomic.ts";
@@ -187,6 +190,21 @@ export interface ReceiptCompactResult {
   readonly recoverability?: RecoverabilityVerdict;
   /** Present on a confirmed run that appended its audit record. */
   readonly auditRecordId?: string;
+  /**
+   * Present on a confirmed run that took its recovery point: the
+   * archive's size in bytes, measured once durable. The recovery point
+   * is a whole-`Brain/` archive written into a surface the storage
+   * census counts as vault content BEFORE the ledger shrink lands, so
+   * the shrink alone is not the run's cost (M6).
+   */
+  readonly snapshotBytes?: number;
+  /**
+   * Present with {@link snapshotBytes}: the ledger shrink minus the
+   * recovery point's growth. Negative means the run left the vault
+   * LARGER than it found it - the figure an operator at a capacity tier
+   * needs before believing a fold moved the needle.
+   */
+  readonly netDeltaBytes?: number;
   /**
    * Present on a confirmed run whose audit record could not be appended:
    * the shards above are folded and the recovery point exists, but the
@@ -602,6 +620,15 @@ export function compactReceiptLedgers(
   );
   const outcomes = gated.result.outcomes;
   const foldedShards = new Set(outcomes.map((outcome) => outcome.shard));
+  // The run's net cost (M6): the recovery point is a whole-`Brain/`
+  // archive already on disk in a surface the storage census counts, so
+  // the ledger shrink alone is not what the vault did. Measured off the
+  // durable archive; `null` only if the stat itself fails, and then the
+  // figures stay absent rather than reading as zero.
+  const ledgerShrink =
+    sumOutcomes(outcomes, (o) => o.bytesBefore) - sumOutcomes(outcomes, (o) => o.bytesAfter);
+  const snapshotBytes = fileSizeBytes(gated.snapshot.path);
+  const netDeltaBytes = snapshotBytes === null ? null : ledgerShrink - snapshotBytes;
 
   // One audit record per confirmed run that folded something, with the
   // honest outcomes - failures included - so the ledger says what the
@@ -629,6 +656,9 @@ export function compactReceiptLedgers(
         aggregates: sumOutcomes(outcomes, (o) => o.aggregates),
         bytes_before: sumOutcomes(outcomes, (o) => o.bytesBefore),
         bytes_after: sumOutcomes(outcomes, (o) => o.bytesAfter),
+        ...(snapshotBytes !== null
+          ? { snapshot_bytes: snapshotBytes, net_delta_bytes: netDeltaBytes }
+          : {}),
         failures: failures.map((failure) => ({ ...failure })),
       },
     }).id;
@@ -653,9 +683,27 @@ export function compactReceiptLedgers(
     totals: totalsOf(outcomes, failures),
     snapshotRunId: gated.result.runId,
     recoverability: gated.recoverability,
+    ...(snapshotBytes !== null
+      ? { snapshotBytes, netDeltaBytes: ledgerShrink - snapshotBytes }
+      : {}),
     ...(auditRecordId !== undefined ? { auditRecordId } : {}),
     ...(auditError !== undefined ? { auditError } : {}),
   });
+}
+
+/**
+ * Byte length of the recovery-point archive, measured off disk. `null`
+ * only when the stat itself fails - the snapshot gate has already made
+ * the archive durable or aborted the run - and the net figures then stay
+ * absent rather than reading as zero.
+ */
+function fileSizeBytes(path: string): number | null {
+  try {
+    const stats = statSync(path);
+    return stats.isFile() ? stats.size : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Rewrite every planned shard, fail-soft per shard, under one snapshot. */

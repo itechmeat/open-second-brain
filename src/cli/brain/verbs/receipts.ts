@@ -107,6 +107,13 @@ function renderCompact(result: ReceiptCompactResult, json: boolean): number {
   if (result.snapshotRunId !== undefined) {
     process.stdout.write(`recovery point: ${result.snapshotRunId}\n`);
   }
+  if (result.snapshotBytes !== undefined && result.netDeltaBytes !== undefined) {
+    process.stdout.write(
+      `net: ${result.netDeltaBytes} bytes (ledger shrank ` +
+        `${result.totals.bytesBefore - result.totals.bytesAfter}, ` +
+        `recovery point added ${result.snapshotBytes})\n`,
+    );
+  }
   if (result.dryRun) {
     process.stdout.write("preview only - pass --apply to fold these shards\n");
   }

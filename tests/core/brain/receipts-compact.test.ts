@@ -42,6 +42,7 @@ import {
   RECEIPT_SHARD_FOREIGN_DEVICE,
   RECEIPT_SHARD_UNREADABLE,
 } from "../../../src/core/brain/receipts/scan.ts";
+import { compactView } from "../../../src/core/brain/receipts/views.ts";
 import {
   RECEIPT_COMPACTION_OPERATION,
   RECEIPT_FOLD_SCHEMA,
@@ -355,6 +356,42 @@ describe("compactReceiptLedgers", () => {
     expect(result.totals.folded).toBe(0);
     expect(digestVaultTree(vault)).toBe(after);
     expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(audits);
+  });
+
+  test("the confirmed result reports the recovery point's bytes and the net delta", () => {
+    // M6 (confirm half): the recovery point is a whole-Brain archive
+    // written BEFORE the ledger shrink lands, into a surface the storage
+    // census counts as vault content. A result carrying only the ledger
+    // shrink reads as pure win even where the net effect is growth. The
+    // confirmed result names both sides: the archive's bytes, and the
+    // ledger shrink minus the recovery point's growth.
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", MIXED_SHARD);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.snapshotRunId).toBeDefined();
+    expect(result.snapshotBytes).toBeGreaterThan(0);
+    const shrink = result.totals.bytesBefore - result.totals.bytesAfter;
+    expect(shrink).toBeGreaterThan(0);
+    expect(result.netDeltaBytes).toBe(shrink - result.snapshotBytes!);
+    // A dry run takes no recovery point, so it names neither.
+    writeShard(continuityLogDir(vault), "2026-07.jsonl", [
+      continuityLine("recall_telemetry", "2026-07-10T12:00:00Z"),
+    ]);
+    const preview = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-07.jsonl" }],
+      now: NOW,
+      dryRun: true,
+    });
+    expect(preview.snapshotBytes).toBeUndefined();
+    expect(preview.netDeltaBytes).toBeUndefined();
+    // Both figures ride the shared wire view.
+    const view = compactView(result);
+    expect(view["snapshot_bytes"]).toBe(result.snapshotBytes);
+    expect(view["net_delta_bytes"]).toBe(result.netDeltaBytes);
+    expect(compactView(preview)["snapshot_bytes"]).toBeUndefined();
   });
 
   test("a shard whose fold would not shrink is collected and the rest of the run completes", () => {
