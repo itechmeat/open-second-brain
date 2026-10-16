@@ -85,6 +85,20 @@ Vault locations vary per user. Discover candidates in this order:
 3. A new directory at `~/vault/` if none are found and the user
    agrees.
 
+## Consent before apply
+
+The apply lanes that rewrite client configuration —
+`o2b install --target <runtime> --apply` and
+`o2b brain protect --target <runtime> --apply` — ask once before
+writing. On an interactive terminal they print the plan with a unified
+diff of the target file and prompt (`Proceed? [y/N]`); answering
+anything but `y`/`yes` writes nothing. In a non-interactive run
+(`--json`, CI, no TTY) there is no one to ask, so the command refuses
+fail-closed and writes nothing; pass `--yes` to authorise the write
+explicitly. A consent refusal exits with code 6 (`o2b install`) and
+names the missing flag on stderr. `--check`, `--plan` and dry runs
+never prompt and never gate.
+
 ## Verification
 
 After any install path completes, run:

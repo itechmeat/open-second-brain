@@ -7,9 +7,17 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
@@ -94,7 +102,9 @@ describe("o2b install --target X (plan-only)", () => {
 
 describe("o2b install --target X --apply", () => {
   test("writes the cursor config file", async () => {
-    const r = await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    const r = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
+      env: envBase(),
+    });
     expect(r.returncode).toBe(0);
     const cfgPath = join(home, ".cursor", "mcp.json");
     expect(existsSync(cfgPath)).toBe(true);
@@ -104,7 +114,7 @@ describe("o2b install --target X --apply", () => {
   });
 
   test("user hand-edit + re-apply without --force exits 4", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const cfgPath = join(home, ".cursor", "mcp.json");
     const before = JSON.parse(readFileSync(cfgPath, "utf8"));
     before.mcpServers["open-second-brain"] = { command: "TAMPERED", args: [] };
@@ -113,18 +123,82 @@ describe("o2b install --target X --apply", () => {
     const future = new Date(Date.now() + 3600 * 1000);
     utimesSync(cfgPath, future, future);
 
-    const r = await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    const r = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
+      env: envBase(),
+    });
     expect(r.returncode).toBe(4);
     expect(r.stderr).toContain("hand-edited");
+  });
+
+  test(
+    "--apply in --json/non-TTY without --yes exits non-zero, names --yes, " +
+      "and leaves ~/.gemini/settings.json byte-identical",
+    async () => {
+      const cfgPath = join(home, ".gemini", "settings.json");
+      // A pre-existing file with operator content must survive untouched.
+      const original = '{\n  "theme": "dark"\n}\n';
+      mkdirSync(dirname(cfgPath), { recursive: true });
+      writeFileSync(cfgPath, original);
+
+      // Both non-interactive shapes refuse: an explicit --json call and a
+      // bare call whose stdin is not a TTY (subprocess spawns never get one).
+      const jsonRun = await runCli(["install", "--target", "gemini-cli", "--apply", "--json"], {
+        env: envBase(),
+      });
+      expect(jsonRun.returncode).toBe(INSTALL_EXIT.consentRefused);
+      expect(jsonRun.stderr).toContain("--yes");
+      expect(jsonRun.stderr).toContain("non-interactive");
+      expect(readFileSync(cfgPath, "utf8")).toBe(original);
+
+      const ttylessRun = await runCli(["install", "--target", "gemini-cli", "--apply"], {
+        env: envBase(),
+      });
+      expect(ttylessRun.returncode).toBe(INSTALL_EXIT.consentRefused);
+      expect(ttylessRun.stderr).toContain("--yes");
+      // Nothing was written: the operator's file is byte-identical.
+      expect(readFileSync(cfgPath, "utf8")).toBe(original);
+    },
+  );
+
+  test("--apply --yes writes and the apply JSON carries the consent verdict", async () => {
+    const r = await runCli(["install", "--target", "gemini-cli", "--apply", "--yes", "--json"], {
+      env: envBase(),
+    });
+    expect(r.returncode).toBe(0);
+    expect(existsSync(join(home, ".gemini", "settings.json"))).toBe(true);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(payload["consent"]).toBe("confirmed");
+  });
+
+  test("--plan prints a unified diff of the settings file", async () => {
+    const cfgPath = join(home, ".gemini", "settings.json");
+    mkdirSync(dirname(cfgPath), { recursive: true });
+    writeFileSync(cfgPath, '{\n  "theme": "dark"\n}\n');
+    const r = await runCli(["install", "--target", "gemini-cli"], { env: envBase() });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("---");
+    expect(r.stdout).toContain("+++");
+    expect(r.stdout).toContain("+ ");
+    // The operator's own key survives in the merged preview.
+    expect(r.stdout).toContain("theme");
+  });
+
+  test("a consent refusal keeps its own exit code, distinct from usage and drift", () => {
+    expect(INSTALL_EXIT.consentRefused).toBe(6);
+    const codes = Object.values(INSTALL_EXIT);
+    expect(new Set(codes).size).toBe(codes.length);
   });
 });
 
 describe("o2b install --target generic", () => {
   test("--out <path> writes the JSON payload to that path", async () => {
     const outPath = join(home, "snippet.json");
-    const r = await runCli(["install", "--target", "generic", "--apply", "--out", outPath], {
-      env: envBase(),
-    });
+    const r = await runCli(
+      ["install", "--target", "generic", "--apply", "--yes", "--out", outPath],
+      {
+        env: envBase(),
+      },
+    );
     expect(r.returncode).toBe(0);
     expect(existsSync(outPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(outPath, "utf8"));
@@ -133,7 +207,7 @@ describe("o2b install --target generic", () => {
 
   test("--format yaml emits YAML to stdout", async () => {
     const r = await runCli(
-      ["install", "--target", "generic", "--apply", "--out", "-", "--format", "yaml"],
+      ["install", "--target", "generic", "--apply", "--yes", "--out", "-", "--format", "yaml"],
       { env: envBase() },
     );
     expect(r.returncode).toBe(0);
@@ -149,7 +223,7 @@ describe("o2b install --check", () => {
   });
 
   test("after install --apply, reports ok and exits 0", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const r = await runCli(["install", "--check", "--target", "cursor"], { env: envBase() });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("ok");
@@ -167,7 +241,7 @@ describe("o2b install --check", () => {
   });
 
   test("after partial-key drift, exits 3", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const cfgPath = join(home, ".cursor", "mcp.json");
     const parsed = JSON.parse(readFileSync(cfgPath, "utf8"));
     delete parsed.mcpServers["open-second-brain-writer"];
@@ -178,7 +252,7 @@ describe("o2b install --check", () => {
   });
 
   test("after canonical payload drift, exits 3", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const cfgPath = join(home, ".cursor", "mcp.json");
     const parsed = JSON.parse(readFileSync(cfgPath, "utf8"));
     parsed.mcpServers["open-second-brain"].command = "TAMPERED";
@@ -227,7 +301,7 @@ describe("o2b install --check exit codes distinguish the verify states", () => {
 
 describe("o2b uninstall --target X", () => {
   test("dry-run prints what would be removed but does nothing", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const r = await runCli(["uninstall", "--target", "cursor"], { env: envBase() });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("dry-run");
@@ -237,7 +311,7 @@ describe("o2b uninstall --target X", () => {
   });
 
   test("--apply removes OSB keys", async () => {
-    await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+    await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
     const r = await runCli(["uninstall", "--target", "cursor", "--apply"], { env: envBase() });
     expect(r.returncode).toBe(0);
     const parsed = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8"));

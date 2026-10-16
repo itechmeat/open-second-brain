@@ -81,7 +81,7 @@ function cursorArgs(): ReadonlyArray<string> {
 describe("--config parameterises the whole run", () => {
   test("the named file supplies the tool profile, not the machine default", async () => {
     const applied = await runCli(
-      ["install", "--target", "cursor", "--config", namedConfig, "--apply"],
+      ["install", "--target", "cursor", "--config", namedConfig, "--apply", "--yes"],
       { env: bareEnv() },
     );
     expect(applied.returncode).toBe(INSTALL_EXIT.ok);
@@ -91,7 +91,7 @@ describe("--config parameterises the whole run", () => {
   });
 
   test("--check against the same file reports no drift", async () => {
-    await runCli(["install", "--target", "cursor", "--config", namedConfig, "--apply"], {
+    await runCli(["install", "--target", "cursor", "--config", namedConfig, "--apply", "--yes"], {
       env: bareEnv(),
     });
     const checked = await runCli(
@@ -107,7 +107,7 @@ describe("--config parameterises the whole run", () => {
     // check must say so. This is the control for the case above: a fix
     // that made every config path resolve to the same answer would pass
     // the first two cases and fail this one.
-    await runCli(["install", "--target", "cursor", "--config", namedConfig, "--apply"], {
+    await runCli(["install", "--target", "cursor", "--config", namedConfig, "--apply", "--yes"], {
       env: bareEnv(),
     });
     const checked = await runCli(

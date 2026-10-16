@@ -21,6 +21,7 @@
 
 import type { DataOwnership } from "../../core/install/ownership.ts";
 import type { FrictionDiff, FrictionMatrix } from "../../core/install/friction.ts";
+import type { ConsentVerdict } from "../../core/trust.ts";
 import type {
   ApplyResult,
   DetectResult,
@@ -130,6 +131,12 @@ export function renderPlan(plan: InstallPlan): string {
   for (const [i, step] of plan.steps.entries()) {
     lines.push(`  step ${i + 1}: [${step.kind}] ${step.preview}`);
     if (step.path) lines.push(`             path: ${step.path}`);
+    // t_b6bcd984: the consent flow shows the operator the file diff, not
+    // just the one-line summary. Indented under the step it belongs to.
+    if (step.diff) {
+      lines.push("");
+      for (const d of step.diff.split("\n")) lines.push(`  ${d}`);
+    }
   }
   if (plan.postNotes.length > 0) {
     lines.push("");
@@ -140,12 +147,13 @@ export function renderPlan(plan: InstallPlan): string {
   return lines.join("\n");
 }
 
-export function renderApplyResult(result: ApplyResult): string {
+export function renderApplyResult(result: ApplyResult, consent: ConsentVerdict): string {
   const m = result.manifest;
   const lines: string[] = [];
   lines.push(`o2b install --target ${result.target} --apply — done`);
   lines.push(`  operation:   ${m.operation}`);
   lines.push(`  config path: ${m.config_path ?? "(none)"}`);
+  lines.push(`  consent:     ${consent}`);
   if (m.owned_keys?.length) {
     lines.push(`  owned keys:`);
     for (const k of m.owned_keys) lines.push(`    - ${k}`);
@@ -168,9 +176,19 @@ export function renderApplyResult(result: ApplyResult): string {
  * `.steps_executed` keeps working and gains a version it never had, which
  * a re-nesting would have broken to announce a change that took nothing
  * away.
+ *
+ * `consent` (t_b6bcd984) rides the same envelope, additive under
+ * schema_version 1: it records how the write was authorised. The verdict
+ * deliberately does NOT go into the sidecar manifest - that is a
+ * schema'd document with `applied_at` semantics; the receipt for consent
+ * is this CLI payload.
  */
-export function renderApplyJson(result: ApplyResult, ownership: DataOwnership): string {
-  return installJson({ ...result, [DATA_OWNERSHIP_KEY]: ownership });
+export function renderApplyJson(
+  result: ApplyResult,
+  ownership: DataOwnership,
+  consent: ConsentVerdict,
+): string {
+  return installJson({ consent, ...result, [DATA_OWNERSHIP_KEY]: ownership });
 }
 
 export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {

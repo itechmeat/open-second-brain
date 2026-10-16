@@ -104,7 +104,7 @@ describe("o2b install shares the canonical vault chain", () => {
 describe("the payload the installer writes names the resolved vault", () => {
   test("VAULT_DIR set alongside a different config vault writes VAULT_DIR's path", async () => {
     const r = await runCli(
-      ["install", "--target", "generic", "--apply", "--out", "-", "--config", configPath],
+      ["install", "--target", "generic", "--apply", "--yes", "--out", "-", "--config", configPath],
       { env: { VAULT_DIR: envVault, OPEN_SECOND_BRAIN_CONFIG: configPath } },
     );
     expect(r.returncode).toBe(0);

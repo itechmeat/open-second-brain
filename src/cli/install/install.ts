@@ -20,6 +20,7 @@
  *   3  --check found drift
  *   4  user-modified-block conflict on apply (use --force to override)
  *   5  --check found a runtime it proved unreachable
+ *   6  apply refused for want of consent in non-interactive mode (use --yes)
  *
  * Code 5 exists because 0 was wrong. `--check` used to exit 0 for both
  * `not-installed` and `mcp-unreachable`, so `o2b install --check` reported
@@ -29,6 +30,8 @@
  */
 
 import { parseFlags } from "../argparse.ts";
+import { ok } from "../output.ts";
+import { readSingleLine } from "../brain/helpers.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../../core/install/env.ts";
@@ -76,11 +79,13 @@ export const INSTALL_EXIT = Object.freeze({
   drift: 3,
   userModifiedBlock: 4,
   mcpUnreachable: 5,
+  consentRefused: 6,
 } as const);
 
 interface ParsedInstallArgs {
   readonly target: string | null;
   readonly apply: boolean;
+  readonly yes: boolean;
   readonly check: boolean;
   readonly friction: boolean;
   readonly base: string | null;
@@ -98,6 +103,7 @@ function parseInstallArgs(argv: string[]): ParsedInstallArgs {
   const { flags } = parseFlags(argv, {
     target: { type: "string" },
     apply: { type: "boolean" },
+    yes: { type: "boolean" },
     check: { type: "boolean" },
     friction: { type: "boolean" },
     base: { type: "string" },
@@ -121,6 +127,7 @@ function parseInstallArgs(argv: string[]): ParsedInstallArgs {
   return {
     target: (flags["target"] as string | undefined) ?? null,
     apply: Boolean(flags["apply"]),
+    yes: Boolean(flags["yes"]),
     check: Boolean(flags["check"]),
     friction: Boolean(flags["friction"]),
     base: (flags["base"] as string | undefined) ?? null,
@@ -261,7 +268,7 @@ export async function cmdInstall(argv: string[]): Promise<number> {
   if (!args.target) return runDetect(args);
 
   // --target X with or without --apply.
-  return runTarget(args);
+  return await runTarget(args);
 }
 
 function runDetect(args: ParsedInstallArgs): number {
@@ -367,7 +374,7 @@ function runFriction(args: ParsedInstallArgs): number {
   return INSTALL_EXIT.ok;
 }
 
-function runTarget(args: ParsedInstallArgs): number {
+async function runTarget(args: ParsedInstallArgs): Promise<number> {
   const adapter = defaultRegistry.get(args.target!);
   if (!adapter) return refuseUnknownTarget("--target", args.target!);
   const env = installEnvForArgs(args);
@@ -404,6 +411,30 @@ function runTarget(args: ParsedInstallArgs): number {
     return INSTALL_EXIT.ok;
   }
 
+  // t_b6bcd984: fail-closed consent above the write lane, the canonical
+  // ladder of `brain upgrade --apply`. Without --yes, a --json or
+  // non-TTY run refuses before anything is written (the drift guard
+  // below still fires on an explicit yes); an interactive run sees the
+  // plan with the file diff and is asked once. A consent gate sits
+  // above the write guard and never gates dry runs - this path only
+  // runs with --apply.
+  if (!args.yes) {
+    if (args.json || !process.stdin.isTTY) {
+      process.stderr.write(
+        `error: o2b install --target ${args.target} --apply requires --yes in ` +
+          "non-interactive mode (--json or non-TTY stdin); nothing was written\n",
+      );
+      return INSTALL_EXIT.consentRefused;
+    }
+    process.stdout.write(renderPlan(plan));
+    process.stdout.write("Proceed? [y/N] ");
+    const ans = await readSingleLine();
+    if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
+      ok("install cancelled");
+      return INSTALL_EXIT.ok;
+    }
+  }
+
   try {
     const result = adapter.apply(plan, payload, env, opts);
     // An apply that returned changed the machine, so the close fires
@@ -411,9 +442,9 @@ function runTarget(args: ParsedInstallArgs): number {
     // runtime nobody installed.
     const ownership = ownershipFor(env, args.config);
     if (args.json) {
-      process.stdout.write(renderApplyJson(result, ownership));
+      process.stdout.write(renderApplyJson(result, ownership, "confirmed"));
     } else {
-      process.stdout.write(renderApplyResult(result));
+      process.stdout.write(renderApplyResult(result, "confirmed"));
       process.stdout.write(renderDataOwnership(ownership));
     }
     return INSTALL_EXIT.ok;

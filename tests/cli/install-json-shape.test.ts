@@ -115,7 +115,14 @@ describe("every install --json payload declares its schema version", () => {
   test(
     "apply - the one mode that changes the machine, and the one that had none",
     async () => {
-      const payload = await payloadOf(["install", "--target", "cursor", "--apply", "--json"]);
+      const payload = await payloadOf([
+        "install",
+        "--target",
+        "cursor",
+        "--apply",
+        "--yes",
+        "--json",
+      ]);
       expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
     },
     CLI_TIMEOUT_MS,
@@ -150,8 +157,10 @@ describe("every install --json payload names its fields", () => {
       const payload = await payloadOf(["install", "--target", "cursor", "--json"]);
       expect(keys(payload)).toBe("plan,schema_version");
       expect(keys(payload["plan"])).toBe("postNotes,steps,target");
+      // `diff` is additive and present only when the file would change;
+      // a first install into an empty home always changes it.
       for (const step of (payload["plan"] as { steps: ReadonlyArray<unknown> }).steps) {
-        expect(keys(step)).toBe("kind,path,preview");
+        expect(keys(step)).toBe("diff,kind,path,preview");
       }
     },
     CLI_TIMEOUT_MS,
@@ -160,7 +169,14 @@ describe("every install --json payload names its fields", () => {
   test(
     "apply carries the manifest it wrote, at the top level as before",
     async () => {
-      const payload = await payloadOf(["install", "--target", "cursor", "--apply", "--json"]);
+      const payload = await payloadOf([
+        "install",
+        "--target",
+        "cursor",
+        "--apply",
+        "--yes",
+        "--json",
+      ]);
       // `schema_version` is ADDED beside the result's own fields rather than
       // nesting the result under a key: an existing consumer reading
       // `.manifest` or `.steps_executed` keeps working and gains a version,
@@ -168,6 +184,9 @@ describe("every install --json payload names its fields", () => {
       expect(keys(payload)).toContain("manifest");
       expect(keys(payload)).toContain("steps_executed");
       expect(keys(payload)).toContain("target");
+      // t_b6bcd984: the consent verdict rides the CLI receipt (not the
+      // sidecar manifest), additive under schema_version 1.
+      expect(keys(payload)).toContain("consent");
     },
     CLI_TIMEOUT_MS,
   );
@@ -192,7 +211,14 @@ describe("the opencode V2 config shape in the apply payload", () => {
       const opencodeConfig = join(home, ".config", "opencode", "opencode.json");
       mkdirSync(dirname(opencodeConfig), { recursive: true });
       writeFileSync(opencodeConfig, JSON.stringify({ mcp: { servers: {} } }, null, 2) + "\n");
-      const payload = await payloadOf(["install", "--target", "opencode", "--apply", "--json"]);
+      const payload = await payloadOf([
+        "install",
+        "--target",
+        "opencode",
+        "--apply",
+        "--yes",
+        "--json",
+      ]);
       const manifest = payload["manifest"] as Record<string, unknown>;
       expect(manifest["config_path"]).toBe(opencodeConfig);
       expect(manifest["owned_keys"]).toEqual([

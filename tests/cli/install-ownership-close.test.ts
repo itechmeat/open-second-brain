@@ -68,7 +68,9 @@ describe("a successful apply closes by saying what the operator owns", () => {
   test(
     "the human surface names the resolved vault and the exceptions",
     async () => {
-      const r = await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+      const r = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
+        env: envBase(),
+      });
       expect(r.returncode).toBe(0);
       expect(r.stdout).toContain(CLOSE_HEADING);
       expect(r.stdout).toContain(vault);
@@ -81,7 +83,7 @@ describe("a successful apply closes by saying what the operator owns", () => {
   test(
     "the machine surface carries the same value under data_ownership",
     async () => {
-      const r = await runCli(["install", "--target", "cursor", "--apply", "--json"], {
+      const r = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--json"], {
         env: envBase(),
       });
       expect(r.returncode).toBe(0);
@@ -116,7 +118,7 @@ describe("a verify only closes when something verified ok", () => {
   test(
     "after an install, a passing check closes on both surfaces",
     async () => {
-      await runCli(["install", "--target", "cursor", "--apply"], { env: envBase() });
+      await runCli(["install", "--target", "cursor", "--apply", "--yes"], { env: envBase() });
 
       const human = await runCli(["install", "--check", "--target", "cursor"], { env: envBase() });
       expect(human.returncode).toBe(0);

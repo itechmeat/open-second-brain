@@ -78,6 +78,13 @@ export interface InstallStep {
   readonly kind: InstallStepKind;
   readonly path: string | null;
   readonly preview: string;
+  /**
+   * Unified diff of the target file this step would rewrite, rendered by
+   * the shared core leaf (t_b6bcd984). Present only when the on-disk
+   * content would actually change; a plan that touches nothing carries
+   * no diff key. Additive under the plan payload's existing shape.
+   */
+  readonly diff?: string;
 }
 
 export interface InstallPlan {
