@@ -28,14 +28,17 @@ import { join } from "node:path";
 
 import { appendMetric, listMetrics, metricsDir } from "../../../src/core/brain/metrics.ts";
 import {
+  MIN_TREND_DAYS,
   STORAGE_CRITICAL_DAYS_DEFAULT,
   STORAGE_CRITICAL_PERCENT_DEFAULT,
   STORAGE_USAGE_METRIC_SURFACE,
   STORAGE_WARN_DAYS_DEFAULT,
   STORAGE_WARN_PERCENT_DEFAULT,
+  TREND_WINDOW_DAYS,
   forecastStorageUsage,
   sampleStorageUsage,
 } from "../../../src/core/brain/storage/forecast.ts";
+import { evaluateCapacityGate } from "../../../src/core/brain/storage/gate.ts";
 import { measureStorageUsage } from "../../../src/core/brain/storage/usage.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
@@ -62,6 +65,15 @@ function seedSample(daysAgo: number, totalBytes: number): void {
   });
 }
 
+/** Seed one `storage_usage` sample at an exact instant, sub-day precision. */
+function seedSampleAt(t: Date, totalBytes: number, runId: string, measured = true): void {
+  appendMetric(vault, {
+    surface: STORAGE_USAGE_METRIC_SURFACE,
+    runAt: t.toISOString(),
+    payload: { run_id: runId, total_bytes: totalBytes, measured },
+  });
+}
+
 describe("forecastStorageUsage", () => {
   test("returns the linear slope, days to cap and tier over seeded samples", () => {
     seedSample(2, 100);
@@ -84,27 +96,29 @@ describe("forecastStorageUsage", () => {
     expect(STORAGE_WARN_DAYS_DEFAULT).toBe(30);
     expect(STORAGE_CRITICAL_DAYS_DEFAULT).toBe(7);
 
-    // A gentle slope keeps the days boundary out of the decision: 20
-    // days to the cap at 10 bytes per day.
+    // Two samples a day apart are under the three-day minimum: no slope,
+    // so the percent comparison alone decides - exactly 80 warns.
     seedSample(1, 790);
     seedSample(0, 800);
     expect(forecastStorageUsage(vault, { capBytes: CAP }).tier).toBe("warn");
 
     seedSample(-1, 950);
-    // 95 percent used, and 5 days to the cap - critical on both counts.
+    // 95 percent used; the three-day fit (790, 800, 950) gives 40 bytes
+    // per day, so 1.25 days to the cap - critical on both counts.
     expect(forecastStorageUsage(vault, { capBytes: CAP }).tier).toBe("critical");
   });
 
   test("the percent boundaries are inclusive with no trend to decide instead", () => {
-    // The tier fixtures above sit inside the days bands too, so a
+    // The tier fixtures below sit inside the days bands too, so a
     // comparison flipped exclusive would still answer warn/critical
     // through the days path and the percent boundary would go unpinned.
-    // A FLAT history has slope 0 and no daysToCap, so the percent
-    // comparison alone decides: exactly 80 warns, exactly 95 is critical.
+    // Two distinct days fit no slope at all (the three-day minimum), so
+    // the percent comparison alone decides: exactly 80 warns, exactly 95
+    // is critical, and neither carries a daysToCap figure.
     seedSample(1, 800);
     seedSample(0, 800);
     const warn = forecastStorageUsage(vault, { capBytes: CAP });
-    expect(warn.slopeBytesPerDay).toBe(0);
+    expect(warn.slopeBytesPerDay).toBe(null);
     expect(warn.daysToCap).toBe(null);
     expect(warn.percentUsed).toBe(80);
     expect(warn.tier).toBe("warn");
@@ -113,6 +127,7 @@ describe("forecastStorageUsage", () => {
     seedSample(1, 950);
     seedSample(0, 950);
     const critical = forecastStorageUsage(vault, { capBytes: CAP });
+    expect(critical.slopeBytesPerDay).toBe(null);
     expect(critical.daysToCap).toBe(null);
     expect(critical.percentUsed).toBe(95);
     expect(critical.tier).toBe("critical");
@@ -134,9 +149,10 @@ describe("forecastStorageUsage", () => {
 
   test("a percent-only warn never outranks a critical days horizon", () => {
     // 280 of 350 bytes is exactly 80 percent (warn by percent), and a
-    // slope of 10 bytes per day puts the cap exactly 7 days out
-    // (critical by days). The critical comparison runs first, so the
+    // three-day slope of 10 bytes per day puts the cap exactly 7 days
+    // out (critical by days). The critical comparison runs first, so the
     // days horizon decides the tier.
+    seedSample(2, 260);
     seedSample(1, 270);
     seedSample(0, 280);
     const forecast = forecastStorageUsage(vault, { capBytes: 350 });
@@ -146,7 +162,9 @@ describe("forecastStorageUsage", () => {
   });
 
   test("exactly the warn days to cap warns", () => {
-    // current 300, slope 10 per day: 30 days to 600, at the boundary.
+    // current 300, three-day slope 10 per day: 30 days to 600, at the
+    // boundary.
+    seedSample(2, 280);
     seedSample(1, 290);
     seedSample(0, 300);
     const warn = forecastStorageUsage(vault, { capBytes: 600 });
@@ -156,7 +174,9 @@ describe("forecastStorageUsage", () => {
   });
 
   test("exactly the critical days to cap is critical", () => {
-    // current 300, slope 50 per day: 7 days to 650, at the boundary.
+    // current 300, three-day slope 50 per day: 7 days to 650, at the
+    // boundary.
+    seedSample(2, 200);
     seedSample(1, 250);
     seedSample(0, 300);
     const critical = forecastStorageUsage(vault, { capBytes: 650 });
@@ -205,11 +225,75 @@ describe("forecastStorageUsage", () => {
   });
 
   test("a shrinking vault never forecasts past the cap", () => {
+    seedSample(2, 600);
     seedSample(1, 500);
     seedSample(0, 400);
     const forecast = forecastStorageUsage(vault, { capBytes: CAP });
     expect(forecast.slopeBytesPerDay).toBe(-100);
     expect(forecast.daysToCap).toBe(null);
+    expect(forecast.tier).toBe("ok");
+  });
+
+  test("two samples a minute apart never produce a day-based tier", () => {
+    // The H2 burst probe: a vault a third full, one ordinary 20 KB write
+    // between two calls of the storage report a minute apart. The burst
+    // extrapolates to tens of megabytes per day when fitted raw, which
+    // read `critical` and refused ingest on a healthy vault. The trend
+    // is day-based: both samples land on one UTC day, so no slope
+    // exists, daysToCap stays null and the tier answers from the percent
+    // alone - the fresh census the gate hands in measures 31 percent.
+    expect(MIN_TREND_DAYS).toBe(3);
+    const t0 = new Date(Date.parse("2026-10-15T12:00:00Z"));
+    const base = 300 * 1024;
+    mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "sources", "AA-base.md"), "x".repeat(base), "utf8");
+    seedSampleAt(t0, base, "burst-1");
+    writeFileSync(join(vault, "Brain", "sources", "AA-grow.md"), "x".repeat(20 * 1024), "utf8");
+    seedSampleAt(new Date(t0.getTime() + 60_000), base + 20 * 1024, "burst-2");
+    // The gate's path: fresh census for the percent, day-based history
+    // for the trend.
+    const decision = evaluateCapacityGate(vault, {
+      capBytes: 1024 * 1024,
+      now: new Date(t0.getTime() + 90_000),
+    });
+    expect(decision.tier).toBe("ok");
+    expect(decision.decision).toBe("run");
+    expect(decision.reading!.percentUsed).toBeLessThan(35);
+    expect(decision.reading!.slopeBytesPerDay).toBe(null);
+    expect(decision.reading!.daysToCap).toBe(null);
+    // The samples-only path holds to the two-truths rule: one bucketed
+    // day is one observation, and samples alone never tier.
+    const forecast = forecastStorageUsage(vault, { capBytes: 1024 * 1024 });
+    expect(forecast.tier).toBe("no_forecast");
+  });
+
+  test("an intraday burst folds into the day's last sample once days exist", () => {
+    // Three distinct days fit a slope, and the day bucket keeps only the
+    // day's LAST sample: a burst of intra-day readings cannot steer the
+    // fit, whatever their spacing.
+    seedSampleAt(new Date("2026-10-13T09:00:00Z"), 100, "d1");
+    seedSampleAt(new Date("2026-10-14T09:00:00Z"), 200, "d2");
+    // A burst on the last day, hours BEFORE the settled reading: three
+    // readings minutes apart that the bucket must fold away.
+    seedSampleAt(new Date("2026-10-15T08:00:00Z"), 9_900, "d3a");
+    seedSampleAt(new Date("2026-10-15T08:01:00Z"), 9_950, "d3b");
+    seedSampleAt(new Date("2026-10-15T09:00:00Z"), 300, "d3-final");
+    const forecast = forecastStorageUsage(vault, { capBytes: 10_000 });
+    expect(forecast.slopeBytesPerDay).toBe(100);
+    expect(forecast.measuredBytes).toBe(300);
+  });
+
+  test("the fit runs over the trailing window, not the whole history", () => {
+    // A reclamation 40 days ago (the vault was emptied) must not drag the
+    // slope: the fit sees only the last TREND_WINDOW_DAYS days, where the
+    // vault grows at a steady 100 bytes per day.
+    expect(TREND_WINDOW_DAYS).toBe(30);
+    seedSample(40, 0);
+    seedSample(2, 300);
+    seedSample(1, 400);
+    seedSample(0, 500);
+    const forecast = forecastStorageUsage(vault, { capBytes: 100_000 });
+    expect(forecast.slopeBytesPerDay).toBe(100);
     expect(forecast.tier).toBe("ok");
   });
 

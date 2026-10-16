@@ -19,6 +19,19 @@
  * history, which is what keeps a gate honest on a vault that filled up
  * before it ever sampled twice.
  *
+ * ## The trend
+ *
+ * The slope is DAY-based, because the thing it forecasts is growth per
+ * day. Samples are bucketed to one point per UTC day (the day's last
+ * sample wins), the fit needs {@link MIN_TREND_DAYS} distinct days
+ * before it exists at all, and it runs over the trailing
+ * {@link TREND_WINDOW_DAYS} days only, so old history - including
+ * reclamation - stops steering the line after the window slides past.
+ * Until the minimum exists there is no `daysToCap` figure and the tier
+ * answers from the percent alone: two calls of the storage report a
+ * minute apart, with one ordinary write between them, must never
+ * extrapolate a burst into a full vault (the H2 failure this replaces).
+ *
  * ## Tier boundaries
  *
  * The boundaries are module-level constants and the comparison is
@@ -58,8 +71,24 @@ export const STORAGE_WARN_DAYS_DEFAULT = 30;
 /** The critical boundary in days to the cap, at the measured trend. Inclusive. */
 export const STORAGE_CRITICAL_DAYS_DEFAULT = 7;
 
-/** Stored samples needed before a linear trend exists. */
+/** Stored samples needed before the newest stored point may stand in for a census. */
 const MIN_TREND_SAMPLES = 2;
+
+/**
+ * Distinct UTC days the trend fits over. Below this there is no slope at
+ * all: two closely spaced samples around one ordinary write would
+ * otherwise extrapolate that burst to a huge daily growth and drive a
+ * vault a third full to `critical`. Three days is the shortest span that
+ * describes a rate rather than a single jump.
+ */
+export const MIN_TREND_DAYS = 3;
+
+/**
+ * The fit runs over this many trailing days of samples, never the whole
+ * history: a vault that shrank a season ago must not carry that slope
+ * forward once the window has slid past it.
+ */
+export const TREND_WINDOW_DAYS = 30;
 
 /** Milliseconds in one day; the unit the trend is reported in. */
 const MS_PER_DAY = 86_400_000;
@@ -109,11 +138,16 @@ export interface StorageForecast {
   readonly capBytes: number | null;
   /** `measuredBytes / capBytes * 100`, or `null` with no cap or no reading. */
   readonly percentUsed: number | null;
-  /** Bytes per day over the stored samples, or `null` with no trend. */
+  /**
+   * Bytes per day over the trailing window of day-bucketed samples, or
+   * `null` with no trend: fewer than three distinct days fits no slope.
+   */
   readonly slopeBytesPerDay: number | null;
   /**
    * Days until the cap at the current trend, or `null` when there is no
-   * trend or the trend does not reach the cap.
+   * trend (under three distinct days) or the trend does not reach the
+   * cap. Null is why the percent-only tiers exist: a tier can never ride
+   * a trend that was never fitted.
    */
   readonly daysToCap: number | null;
   /** The surfaces the freshest census could not read, when `unmeasurable`. */
@@ -150,27 +184,54 @@ interface TrendPoint {
   readonly bytes: number;
 }
 
-/** Parse the `storage_usage` samples into points; torn records drop out. */
+/**
+ * The UTC day index of a fractional-day timestamp (days since the epoch,
+ * floored). Two samples share a bucket exactly when they share a UTC
+ * calendar day.
+ */
+function utcDay(day: number): number {
+  return Math.floor(day);
+}
+
+/**
+ * Parse the `storage_usage` samples into trend points: torn records drop
+ * out, the rest are bucketed to one point per UTC day - the day's LAST
+ * sample, so a burst of intra-day readings is noise the fit never sees -
+ * and the result is ordered oldest first.
+ */
 function parseSamples(samples: ReadonlyArray<MetricRecord>): TrendPoint[] {
-  const points: TrendPoint[] = [];
+  const byDay = new Map<number, TrendPoint>();
   for (const record of samples) {
     const t = Date.parse(record.run_at);
     const bytes = record.payload["total_bytes"];
     if (!Number.isFinite(t) || typeof bytes !== "number" || !Number.isFinite(bytes)) continue;
-    points.push({ day: t / MS_PER_DAY, bytes });
+    const point: TrendPoint = { day: t / MS_PER_DAY, bytes };
+    const kept = byDay.get(utcDay(point.day));
+    // Later in the day wins; a tie keeps the record read last, which is
+    // the one appended later.
+    if (kept === undefined || point.day >= kept.day) byDay.set(utcDay(point.day), point);
   }
-  return points.toSorted((a, b) => a.day - b.day);
+  return [...byDay.values()].toSorted((a, b) => a.day - b.day);
 }
 
-/** Least-squares slope in bytes per day over the points. */
+/**
+ * Least-squares slope in bytes per day over the day-bucketed points, or
+ * `null` when no day-based trend exists: fewer than
+ * {@link MIN_TREND_DAYS} distinct days inside the trailing
+ * {@link TREND_WINDOW_DAYS}-day window fits nothing, and the caller
+ * tiers on percent only.
+ */
 function linearSlope(points: ReadonlyArray<TrendPoint>): number | null {
-  if (points.length < MIN_TREND_SAMPLES) return null;
-  const n = points.length;
-  const meanDay = points.reduce((s, p) => s + p.day, 0) / n;
-  const meanBytes = points.reduce((s, p) => s + p.bytes, 0) / n;
+  if (points.length < MIN_TREND_DAYS) return null;
+  const newestDay = points[points.length - 1]!.day;
+  const window = points.filter((p) => p.day >= newestDay - TREND_WINDOW_DAYS);
+  if (window.length < MIN_TREND_DAYS) return null;
+  const n = window.length;
+  const meanDay = window.reduce((s, p) => s + p.day, 0) / n;
+  const meanBytes = window.reduce((s, p) => s + p.bytes, 0) / n;
   let cov = 0;
   let varDay = 0;
-  for (const p of points) {
+  for (const p of window) {
     const dx = p.day - meanDay;
     cov += dx * (p.bytes - meanBytes);
     varDay += dx * dx;
