@@ -39,6 +39,7 @@ import {
   type ReceiptScanReport,
 } from "../../../src/core/brain/receipts/types.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 
 const CONTINUITY_SCHEMA = "o2b.continuity.v1";
 const METRICS_SCHEMA = "o2b.metrics.v1";
@@ -104,7 +105,7 @@ describe("scanReceiptLedgers", () => {
       writeShard(continuity, "2026-08.jsonl", [
         continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"),
       ]);
-      writeShard(continuity, "2026-09.telescope.jsonl", [
+      writeShard(continuity, "2026-09.jsonl", [
         continuityLine("gate_telemetry", "2026-09-15T12:00:00Z"),
       ]);
       const report = scanReceiptLedgers(vault, { now: NOW });
@@ -113,11 +114,7 @@ describe("scanReceiptLedgers", () => {
       // 2026-08-10 is 46 days before the pinned now: past the 30-day fold age.
       expect(august.foldable).toBe(1);
       expect(august.protectedRecords).toBe(0);
-      const september = shardOf(
-        report,
-        RECEIPT_LEDGER_FAMILY.continuity,
-        "2026-09.telescope.jsonl",
-      );
+      const september = shardOf(report, RECEIPT_LEDGER_FAMILY.continuity, "2026-09.jsonl");
       // A record inside the window is neither foldable nor protected.
       expect(september.records).toBe(1);
       expect(september.foldable).toBe(0);
@@ -286,7 +283,7 @@ describe("scanReceiptLedgers", () => {
         metricLine("storage_usage", "2026-08-15T00:00:00Z"),
         metricLine("storage_usage", "2026-09-20T00:00:00Z"),
       ]);
-      writeShard(metrics, "recall_probe.telescope.jsonl", [
+      writeShard(metrics, "recall_probe.jsonl", [
         metricLine("recall_probe", "2026-08-02T00:00:00Z", { session_id: "sess-1" }),
       ]);
       const report = scanReceiptLedgers(vault, { now: NOW });
@@ -295,7 +292,7 @@ describe("scanReceiptLedgers", () => {
       expect(usage.records).toBe(3);
       expect(usage.foldable).toBe(2);
       expect(usage.protectedRecords).toBe(0);
-      const probe = shardOf(report, RECEIPT_LEDGER_FAMILY.metrics, "recall_probe.telescope.jsonl");
+      const probe = shardOf(report, RECEIPT_LEDGER_FAMILY.metrics, "recall_probe.jsonl");
       expect(probe.foldable).toBe(0);
       expect(probe.protectedRecords).toBe(1);
     } finally {
@@ -428,6 +425,43 @@ describe("scanReceiptLedgers", () => {
     } finally {
       cleanup();
     }
+  });
+
+  test("the scan offers only this device's shard and the legacy un-sharded file", () => {
+    // M11: ledger shards are per device - only one device ever writes a
+    // given file, and the lock and compare-and-swap a fold runs under are
+    // local only. Offering another device's shard invites rewriting a
+    // file a peer is appending to, which is exactly the sync conflict the
+    // shard layout exists to prevent. The inventory therefore covers this
+    // device's shard plus the legacy un-sharded file, and no others.
+    withDeviceId("telescope", () => {
+      vault = mintVault();
+      try {
+        writeShard(continuityLogDir(vault), "2026-08.jsonl", [
+          continuityLine("recall_telemetry", "2026-08-10T12:00:00Z"),
+        ]);
+        writeShard(continuityLogDir(vault), "2026-07.telescope.jsonl", [
+          continuityLine("gate_telemetry", "2026-07-10T12:00:00Z"),
+        ]);
+        writeShard(continuityLogDir(vault), "2026-06.other.jsonl", [
+          continuityLine("gate_telemetry", "2026-06-10T12:00:00Z"),
+        ]);
+        writeShard(metricsDir(vault), "recall_probe.other.jsonl", [
+          metricLine("recall_probe", "2026-06-11T12:00:00Z"),
+        ]);
+        const report = scanReceiptLedgers(vault, { now: NOW });
+        // This device's shard and the legacy file, in family then name
+        // order; the other device's continuity and metrics shards are
+        // nobody's to offer here.
+        expect(report.shards.map((shard) => `${shard.family}:${shard.name}`)).toEqual([
+          "continuity:2026-07.telescope.jsonl",
+          "continuity:2026-08.jsonl",
+        ]);
+        expect(report.totals.shards).toBe(2);
+      } finally {
+        cleanup();
+      }
+    });
   });
 
   test("a vault with no ledgers scans to an empty report without throwing", () => {

@@ -12,7 +12,10 @@
  * The gates, in order, before anything is written:
  *
  *   1. Shard refs resolve through the family's name grammar - a name
- *      that is not a shard is a caller error, never a traversal.
+ *      that is not a shard is a caller error, never a traversal - and
+ *      name a shard THIS device owns: another device's shard is refused
+ *      by name, because the per-file lock and the compare-and-swap are
+ *      local only and a rewrite here would diverge the peer's copy.
  *   2. A fresh per-shard recount against the disk (never the caller's
  *      scan numbers) feeds the count guard: an `expect` mismatch aborts
  *      before any write, snapshot included.
@@ -73,6 +76,7 @@ import {
   classifyContinuityRecord,
   classifyMetricRecord,
   isFoldAggregateLine,
+  RECEIPT_SHARD_FOREIGN_DEVICE,
   RECEIPT_SHARD_UNREADABLE,
   resolveReceiptShardPath,
 } from "./scan.ts";
@@ -85,6 +89,7 @@ import {
   type ReceiptLedgerFamily,
   type ReceiptShardRef,
 } from "./types.ts";
+import { resolveAppendShardId } from "../ledger-shards.ts";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -343,6 +348,13 @@ function planShard(
 ): { readonly plan: ShardPlan } | { readonly failure: ReceiptFoldFailure } {
   const display = receiptShardRefId(ref);
   const resolved = resolveReceiptShardPath(vault, ref);
+  // A shard is one device's file and the lock and compare-and-swap below
+  // are local only: rewriting a peer's shard here would diverge the copy
+  // it is appending to. Refused by name, on previews and confirmed runs
+  // alike - a shard the owning device must fold.
+  if (resolved.shardId !== "" && resolved.shardId !== resolveAppendShardId()) {
+    return { failure: { shard: display, message: RECEIPT_SHARD_FOREIGN_DEVICE } };
+  }
   let text: string;
   try {
     text = readFileSync(resolved.path, "utf8");

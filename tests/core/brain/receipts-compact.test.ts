@@ -38,7 +38,10 @@ import {
   compactReceiptLedgers,
   RECEIPT_AUDIT_APPEND_FAILED,
 } from "../../../src/core/brain/receipts/compact.ts";
-import { RECEIPT_SHARD_UNREADABLE } from "../../../src/core/brain/receipts/scan.ts";
+import {
+  RECEIPT_SHARD_FOREIGN_DEVICE,
+  RECEIPT_SHARD_UNREADABLE,
+} from "../../../src/core/brain/receipts/scan.ts";
 import {
   RECEIPT_COMPACTION_OPERATION,
   RECEIPT_FOLD_SCHEMA,
@@ -51,6 +54,7 @@ import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.t
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { WriteRefusedError } from "../../../src/core/brain/write-disposition.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
 
 const NOW = new Date("2026-09-25T00:00:00Z");
@@ -585,6 +589,48 @@ describe("compactReceiptLedgers", () => {
     } finally {
       rmSync(`${shardPath}.lock`, { force: true });
     }
+  });
+
+  test("another device's shard is refused by name; this device's shard beside it still folds", () => {
+    // M11: shards are named per device so exactly one device writes a
+    // given file, but the fold's lock and compare-and-swap are local
+    // only - rewriting a peer's shard here is the divergent-copy conflict
+    // the shard layout exists to prevent. A named foreign shard is a
+    // refusal by name, and the local shard in the same selection folds.
+    withDeviceId("", () => {
+      writeShard(continuityLogDir(vault), "2026-08.telescope.jsonl", MIXED_SHARD);
+      writeShard(continuityLogDir(vault), "2026-07.jsonl", [
+        continuityLine("recall_telemetry", "2026-07-10T12:00:00Z", { note: "local a" }),
+        continuityLine("recall_telemetry", "2026-07-20T12:00:00Z", { note: "local b" }),
+      ]);
+      const result = compactReceiptLedgers(vault, {
+        shards: [
+          { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.telescope.jsonl" },
+          { family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-07.jsonl" },
+        ],
+        now: NOW,
+        dryRun: false,
+      });
+      expect(result.failures).toEqual([
+        {
+          shard: "continuity:2026-08.telescope.jsonl",
+          message: RECEIPT_SHARD_FOREIGN_DEVICE,
+        },
+      ]);
+      expect(result.totals.folded).toBe(2);
+      // The foreign shard is untouched on disk.
+      expect(readShard(continuityLogDir(vault), "2026-08.telescope.jsonl")).toBe(MIXED_SHARD);
+      // A dry run refuses the same way, so a preview never promises a
+      // peer's fold.
+      const preview = compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.telescope.jsonl" }],
+        now: NOW,
+        dryRun: true,
+      });
+      expect(preview.failures).toEqual([
+        { shard: "continuity:2026-08.telescope.jsonl", message: RECEIPT_SHARD_FOREIGN_DEVICE },
+      ]);
+    });
   });
 
   test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {
