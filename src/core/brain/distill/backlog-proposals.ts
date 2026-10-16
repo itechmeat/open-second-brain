@@ -129,15 +129,16 @@ export function buildBacklogProposals(
       sessions: [...sessionsByHash.get(hash)!].toSorted(),
     };
   });
-  dropped.sort((a, b) =>
-    a.sessionId === b.sessionId
-      ? a.topic === b.topic
-        ? a.dedupHash.localeCompare(b.dedupHash)
-        : a.topic.localeCompare(b.topic)
-      : a.sessionId.localeCompare(b.sessionId),
-  );
+  dropped.sort(compareDrops);
 
   return { proposals, dropped, reportOnlySessions };
+}
+
+/** Drops in (session, topic, dedup hash) order. */
+function compareDrops(a: BacklogProposalDrop, b: BacklogProposalDrop): number {
+  if (a.sessionId !== b.sessionId) return a.sessionId.localeCompare(b.sessionId);
+  if (a.topic !== b.topic) return a.topic.localeCompare(b.topic);
+  return a.dedupHash.localeCompare(b.dedupHash);
 }
 
 /**

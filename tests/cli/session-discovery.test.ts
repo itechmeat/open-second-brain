@@ -37,6 +37,7 @@ import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { sessionLedgerPath } from "../../src/core/brain/sessions/discover.ts";
+import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
@@ -77,6 +78,7 @@ interface DiscoveryJson {
   readonly gap: number;
   readonly by_runtime: ReadonlyArray<CoverageRow>;
   readonly mining?: MiningCensusJson;
+  readonly mining_error?: string;
   readonly would_import?: ReadonlyArray<string>;
   readonly files?: ReadonlyArray<{ readonly file: string }>;
 }
@@ -99,6 +101,13 @@ interface ProposeBacklogJson {
     readonly dedup_hash: string;
   }>;
   readonly report_only_sessions: ReadonlyArray<string>;
+  readonly mining_steps: ReadonlyArray<{
+    readonly session_id: string;
+    readonly surveyed_turns_hash: string;
+    readonly turns_mined: number;
+    readonly llm_step: { readonly status: string; readonly prompt: string };
+  }>;
+  readonly mining_steps_remaining: number;
 }
 
 /**
@@ -410,6 +419,27 @@ describe("the mining census rides the coverage report", () => {
     expect(status.mining?.undistilled).toBe(0);
   });
 
+  test("a census failure leaves the coverage report standing and names the census unavailable", async () => {
+    // A corrupt mining ledger is refused by the census by design; that is
+    // a fact about the census, not about what was imported.
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+    mkdirSync(dirname(sessionMiningLedgerPath(vault)), { recursive: true });
+    writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
+
+    const json = await run(["--status", "--json"]);
+    expect(json.returncode).toBe(0);
+    const body = JSON.parse(json.stdout) as DiscoveryJson;
+    expect(body.imported).toBe(1);
+    expect(body.mining).toBeUndefined();
+    expect(body.mining_error).toContain("session mining ledger");
+
+    const text = await run(["--discover"]);
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("found: 1");
+    expect(text.stdout).toContain("mining: unavailable (");
+  });
+
   test("the human rendering carries the mining lines per runtime", async () => {
     claudeLog("one.jsonl", "alpha");
     expect((await run(["--discover", "--all", "--recall"])).returncode).toBe(0);
@@ -460,6 +490,43 @@ describe("--propose-backlog batches the distill proposals ask-once", () => {
     expect(body.dropped.map((d) => d.session_id).toSorted()).toEqual(["one.jsonl", "two.jsonl"]);
     expect(body.dropped[0]?.dedup_hash).toBe(body.dropped[1]?.dedup_hash);
     expect(body.report_only_sessions).toEqual(["one.jsonl", "two.jsonl"]);
+  });
+
+  test("an undistilled session gets a mining step, and answering it drains the backlog", async () => {
+    // The free text a model would mine is what leaves a session
+    // undistilled, so the envelope hands out the mining step for it; an
+    // extract-signals commit of the answer (empty here) records the
+    // session as mined and the backlog drains.
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+
+    const before = JSON.parse(
+      (await run(["--propose-backlog", "--json"])).stdout,
+    ) as ProposeBacklogJson;
+    expect(before.undistilled).toBe(1);
+    expect(before.mining_steps.map((s) => s.session_id)).toEqual(["one.jsonl"]);
+    expect(before.mining_steps[0]?.llm_step.status).toBe("needs-llm-step");
+    expect(before.mining_steps_remaining).toBe(0);
+
+    const commit = await runCli(
+      [
+        "brain",
+        "extract-signals",
+        "one.jsonl",
+        "--payload",
+        JSON.stringify({ items: [] }),
+        "--vault",
+        vault,
+      ],
+      { env: { HOME: home } },
+    );
+    expect(commit.returncode).toBe(0);
+
+    const after = JSON.parse(
+      (await run(["--propose-backlog", "--json"])).stdout,
+    ) as ProposeBacklogJson;
+    expect(after.undistilled).toBe(0);
+    expect(after.mining_steps).toEqual([]);
   });
 
   test("an empty backlog is an explicit empty envelope, not a failure", async () => {

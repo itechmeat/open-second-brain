@@ -91,7 +91,8 @@ async function main(): Promise<void> {
     const sessions = count === 1 ? "session" : "sessions";
     const line =
       `Open Second Brain session backlog: ${count} imported ${sessions} not yet distilled. ` +
-      "Run 'o2b brain import-session --status' for the per-runtime breakdown.";
+      "Run 'o2b brain import-session --status' for the per-runtime breakdown, or " +
+      "'o2b brain import-session --propose-backlog --json' for the next sessions to mine.";
     process.stdout.write(
       JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: line } }) + "\n",
     );

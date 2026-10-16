@@ -49,6 +49,13 @@ import {
   minedTurnMaterial,
   type SessionMiningCensus,
 } from "../../../core/brain/sessions/mining-census.ts";
+import { buildMiningStep } from "../../../core/brain/extract-signals.ts";
+import type { NeedsLlmStep } from "../../../core/brain/llm-step.ts";
+import { minedTurnsHash } from "../../../core/brain/session-mining-ledger.ts";
+import {
+  buildSessionTurnIndex,
+  type SessionTurnIndex,
+} from "../../../core/brain/session-recall.ts";
 import {
   SESSION_RESUME_DISCARD,
   type SessionResumeDiscard,
@@ -346,8 +353,11 @@ async function sweep(req: SweepRequest): Promise<number> {
     // The distillation census is vault-side (the two ledgers plus the
     // continuity turns the mining lane itself reads), so it rides the
     // coverage report without re-hashing a single source log. Its own
-    // deadline is fresh: discovery's safeguard was spent on the sweep.
-    let mining: SessionMiningCensus;
+    // deadline is fresh: discovery's safeguard was spent on the sweep. A
+    // census failure (a corrupt mining ledger, a deadline) is a fact about
+    // the census, not about import coverage: the coverage the operator
+    // asked for is still reported, with the census named unavailable.
+    let mining: SessionMiningCensus | { readonly error: string };
     try {
       mining = buildMiningCensus(req.vault, {
         safeguard: createSafeguard({
@@ -356,7 +366,7 @@ async function sweep(req: SweepRequest): Promise<number> {
         }),
       });
     } catch (exc) {
-      return fail(`session mining census failed: ${(exc as Error).message ?? exc}`);
+      mining = { error: (exc as Error).message ?? String(exc) };
     }
     emitCoverage(discovery, mining, { asJson: req.asJson, listGap: req.discover });
     return 0;
@@ -403,6 +413,13 @@ async function sweep(req: SweepRequest): Promise<number> {
   return failures.length > 0 ? 1 : 0;
 }
 
+/**
+ * How many undistilled sessions one `--propose-backlog` call hands out as
+ * mining steps. Each step embeds the session's user turns, so the batch is
+ * bounded; answered steps leave the backlog and the next call continues.
+ */
+const BACKLOG_MINING_BATCH = 5;
+
 interface ProposeBacklogRequest {
   readonly vault: string;
   readonly config: string | null;
@@ -420,20 +437,34 @@ interface ProposeBacklogRequest {
  * the presenting agent asks. An empty backlog is an explicit empty
  * envelope and exits 0; it is an answer, not a failure.
  *
- * The candidates are the feedback markers in the sessions' mined turn
- * material (the same material the mining plan embeds) - the one candidate
- * form the kernel can see without a model. The dedup index is the shared
+ * The marker candidates are the feedback markers in the sessions' mined
+ * turn material (the same material the mining plan embeds) - the one
+ * candidate form the kernel can see without a model. Import already writes
+ * every marker it sees, so a marker proposal surfaces only material that
+ * was removed from the vault after import. The dedup index is the shared
  * vault-wide one, so proposals cross-deduplicate against every capture
  * path exactly as the write-time gate does.
+ *
+ * What actually leaves a session undistilled is the free text a model
+ * would mine, so the envelope also carries the mining steps for the first
+ * {@link BACKLOG_MINING_BATCH} undistilled sessions: the same
+ * needs-llm-step a `brain extract-signals` plan returns, per session. The
+ * agent answers each with an `extract-signals` commit, which dedups
+ * against the vault (so a fact a second session raises again is written
+ * once) and records the session in the mining ledger - so every answered
+ * step leaves the backlog, and the next call batches the next sessions.
  */
 async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<number> {
   let census: SessionMiningCensus;
+  let turnIndex: SessionTurnIndex;
   try {
+    turnIndex = buildSessionTurnIndex(req.vault);
     census = buildMiningCensus(req.vault, {
       safeguard: createSafeguard({
         operation: OPERATION.sessions,
         timeoutMs: resolveSafeguardTimeoutMs(OPERATION.sessions, req.config ?? undefined),
       }),
+      turns: turnIndex,
     });
   } catch (exc) {
     return fail(`session mining census failed: ${(exc as Error).message ?? exc}`);
@@ -441,13 +472,27 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
 
   const boundary = buildCaptureBoundary(req.vault);
   const candidates: BacklogCandidate[] = [];
+  const miningSteps: Array<{
+    readonly sessionId: string;
+    readonly surveyedTurnsHash: string;
+    readonly turnsMined: number;
+    readonly llmStep: NeedsLlmStep;
+  }> = [];
   for (const row of census.byRuntime) {
     for (const sessionId of row.undistilledSessionIds) {
-      const material = minedTurnMaterial(req.vault, sessionId, boundary);
+      const material = minedTurnMaterial(req.vault, sessionId, boundary, turnIndex);
       // A census undistilled row is minable by construction; the null arm
       // is the boundary changing between the two reads, and contributes
       // no candidates rather than a guess.
       if (material === null) continue;
+      if (miningSteps.length < BACKLOG_MINING_BATCH) {
+        miningSteps.push({
+          sessionId,
+          surveyedTurnsHash: minedTurnsHash(material),
+          turnsMined: material.length,
+          llmStep: buildMiningStep(sessionId, material),
+        });
+      }
       for (const turn of material) {
         for (const marker of discoverMarkers(turn.text)) {
           if (!isFeedbackMarker(marker)) continue;
@@ -489,6 +534,13 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
         dedup_hash: d.dedupHash,
       })),
       report_only_sessions: envelope.reportOnlySessions,
+      mining_steps: miningSteps.map((step) => ({
+        session_id: step.sessionId,
+        surveyed_turns_hash: step.surveyedTurnsHash,
+        turns_mined: step.turnsMined,
+        llm_step: step.llmStep,
+      })),
+      mining_steps_remaining: Math.max(0, census.undistilled - miningSteps.length),
     });
     return 0;
   }
@@ -508,6 +560,18 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
   for (const drop of envelope.dropped) info(`  ${drop.sessionId}: ${drop.topic}`);
   ok(`sessions with nothing new: ${envelope.reportOnlySessions.length}`);
   for (const sessionId of envelope.reportOnlySessions) info(`  ${sessionId}`);
+  ok(`mining steps: ${miningSteps.length}`);
+  for (const step of miningSteps) {
+    ok(`  mine: ${step.sessionId} (${step.turnsMined} user turn(s))`);
+  }
+  if (miningSteps.length > 0) {
+    ok(
+      "  answer each with 'o2b brain extract-signals <session> --payload <json>' " +
+        "(use --json here for the envelopes); an empty answer still drains the session",
+    );
+  }
+  const remaining = Math.max(0, census.undistilled - miningSteps.length);
+  if (remaining > 0) ok(`undistilled sessions after this batch: ${remaining}`);
   return 0;
 }
 
@@ -595,9 +659,11 @@ function miningJson(census: SessionMiningCensus): Record<string, unknown> {
 /** Report what the sweep found, without importing anything. */
 function emitCoverage(
   discovery: SessionDiscovery,
-  mining: SessionMiningCensus,
+  censusOrError: SessionMiningCensus | { readonly error: string },
   opts: { asJson: boolean; listGap: boolean },
 ): void {
+  const miningError = "error" in censusOrError ? censusOrError.error : null;
+  const mining = "error" in censusOrError ? null : censusOrError;
   if (opts.asJson) {
     okJson({
       found: discovery.found,
@@ -606,7 +672,7 @@ function emitCoverage(
       unparsable: discovery.unparsable,
       unreadable: discovery.unreadable,
       by_runtime: discovery.byRuntime.map(coverageJson),
-      mining: miningJson(mining),
+      ...(mining !== null ? { mining: miningJson(mining) } : { mining_error: miningError }),
       ...(opts.listGap
         ? { would_import: discovery.byRuntime.flatMap((row) => [...row.gapPaths]) }
         : {}),
@@ -617,7 +683,8 @@ function emitCoverage(
   ok(`imported: ${discovery.imported}`);
   ok(`gap: ${discovery.gap}`);
   if (discovery.unparsable > 0) ok(`unparsable: ${discovery.unparsable}`);
-  if (mining.imported > 0) {
+  if (miningError !== null) ok(`mining: unavailable (${miningError})`);
+  if (mining !== null && mining.imported > 0) {
     ok(
       `mining: ${mining.distilled} distilled, ${mining.knownNothingNew} known-nothing-new, ` +
         `${mining.undistilled} undistilled`,
@@ -629,7 +696,7 @@ function emitCoverage(
     ok(`  imported: ${row.imported}`);
     ok(`  gap: ${row.gap}`);
     if (row.unparsable > 0) ok(`  unparsable: ${row.unparsable}`);
-    const minedRow = mining.byRuntime.find((m) => m.runtime === row.runtime);
+    const minedRow = mining?.byRuntime.find((m) => m.runtime === row.runtime);
     if (minedRow !== undefined) {
       ok(`  distilled: ${minedRow.distilled}`);
       ok(`  known-nothing-new: ${minedRow.knownNothingNew}`);
