@@ -152,9 +152,11 @@ test("turns_mined carries the stored turn timestamp, on the tool and the CLI ali
 //
 //  7. A session tombstoned by a barren commit gets no envelope: the plan
 //     carries the tombstone reason and the recorded breakdown, and no turn
-//     text rides out to the caller.
+//     text rides out to the caller. The tombstone exists only when the
+//     commit relayed the plan's surveyed_turns_hash back.
 //  8. The `force` argument bypasses the tombstone for exactly one plan
-//     call, and the tool declares it.
+//     call, and the tool declares it; so does the surveyed_turns_hash
+//     argument the commit relays.
 //  9. A ledger write failure on a successful commit rides the commit
 //     response by name; the tool description documents both behaviors.
 
@@ -163,8 +165,21 @@ function corruptMiningLedger(): void {
   writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
 }
 
+/** The plan response's surveyed hash, for the commit that answers it. */
+async function surveyedHash(): Promise<string> {
+  const plan = (await tool().handler(ctx, { session: SESSION })) as {
+    surveyed_turns_hash: string;
+  };
+  return plan.surveyed_turns_hash;
+}
+
 test("a tombstoned session returns the recorded breakdown instead of an envelope", async () => {
-  const mine = (await tool().handler(ctx, { session: SESSION, items: [] })) as {
+  const hash = await surveyedHash();
+  const mine = (await tool().handler(ctx, {
+    session: SESSION,
+    items: [],
+    surveyed_turns_hash: hash,
+  })) as {
     phase: string;
     written: unknown[];
   };
@@ -189,8 +204,23 @@ test("a tombstoned session returns the recorded breakdown instead of an envelope
   expect(plan.turns_mined).toEqual([]);
 });
 
+test("a barren commit that never saw the plan records nothing and fails open", async () => {
+  // Without the relayed hash the commit has no material the verdict was
+  // earned over, so it records nothing rather than keying a tombstone on
+  // whatever the session holds now.
+  const mine = (await tool().handler(ctx, { session: SESSION, items: [] })) as {
+    phase: string;
+    written: unknown[];
+  };
+  expect(mine.phase).toBe("commit");
+  expect(mine.written).toEqual([]);
+  const plan = (await tool().handler(ctx, { session: SESSION })) as { skipped?: unknown };
+  expect(plan.skipped).toBeUndefined();
+});
+
 test("force bypasses the tombstone for exactly one plan call and is declared", async () => {
-  await tool().handler(ctx, { session: SESSION, items: [] });
+  const hash = await surveyedHash();
+  await tool().handler(ctx, { session: SESSION, items: [], surveyed_turns_hash: hash });
   const forced = (await tool().handler(ctx, { session: SESSION, force: true })) as {
     llm_step: { status: string } | null;
     skipped?: unknown;
@@ -201,22 +231,29 @@ test("force bypasses the tombstone for exactly one plan call and is declared", a
     skipped?: { reason: string };
   };
   expect(after.skipped?.reason).toBe("mining_tombstone");
-  // The argument is part of the published contract, not a hidden escape.
+  // The arguments are part of the published contract, not hidden escapes.
   const schema = tool().inputSchema as {
-    properties: { force?: { type: string } };
+    properties: { force?: { type: string }; surveyed_turns_hash?: { type: string } };
   };
   expect(schema.properties.force?.type).toBe("boolean");
+  expect(schema.properties.surveyed_turns_hash?.type).toBe("string");
 });
 
 test("the tool description documents the tombstone and the force escape", () => {
   const description = tool().description;
   expect(description).toContain("tombstone");
   expect(description).toContain("force");
+  expect(description).toContain("surveyed_turns_hash");
 });
 
 test("a ledger write failure on a successful commit rides the commit response by name", async () => {
+  const hash = await surveyedHash();
   corruptMiningLedger();
-  const res = (await tool().handler(ctx, { session: SESSION, items: [] })) as {
+  const res = (await tool().handler(ctx, {
+    session: SESSION,
+    items: [],
+    surveyed_turns_hash: hash,
+  })) as {
     phase: string;
     written: unknown[];
     mining_ledger_failure?: string;

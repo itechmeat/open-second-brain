@@ -149,6 +149,9 @@ test("phase one carries exactly one spine envelope over the user turns", () => {
   expect(plan.sessionId).toBe(SESSION);
   expect(plan.turnsScanned).toBe(3);
   expect(plan.turnsMined.map((t) => t.turnId)).toEqual(["t1", "t3"]);
+  // The surveyed hash names the material the plan put in front of the
+  // caller; the commit passes it back so the mining record keys on it.
+  expect(plan.surveyedTurnsHash).toBe(minedTurnsHash(plan.turnsMined));
   expect(plan.llmStep.status).toBe(NEEDS_LLM_STEP);
   expect(plan.llmStep.prompt).toContain("Always name the release theme");
   // The assistant turn is not mining material.
@@ -633,13 +636,15 @@ test("the session mining ledger schema version is pinned at 1", () => {
 //
 // 24. A successful commit with nothing written and nothing staged records
 //     the zero-yield tombstone with the outcome breakdown, whatever mix of
-//     empty answer, dedupes and durability refusals produced it.
+//     empty answer, dedupes and durability refusals produced it - keyed on
+//     the hash the PLAN surveyed, which the caller passes back.
 // 25. A commit with a yield (written or staged nonzero) records nothing, and
 //     neither does a commit that ends in a partial-write error - a failed
 //     run is not a barren one.
-// 26. The recorded hash is recomputed from the turns present AT COMMIT
-//     time, so an import landing between plan and commit tombstones the
-//     material the commit actually covered.
+// 26. The tombstone keys on the material the model actually answered, so a
+//     turn imported between plan and commit is never suppressed unseen; a
+//     commit that answers no plan of this module's attests nothing and
+//     records nothing, which is the safe direction.
 // 27. When the commit itself succeeds but the ledger write fails, the
 //     result names the failure and nothing throws; the field is absent
 //     whenever the ledger was not attempted or succeeded.
@@ -648,21 +653,40 @@ function ledgerEntry(): SessionMiningEntry | undefined {
   return readSessionMiningLedger(vault).entries[SESSION];
 }
 
-test("an empty answer records the zero-yield tombstone over the planned material", () => {
+/** A commit that answers `planExtractSignals`, attesting the surveyed hash. */
+function commitAnsweringPlan(
+  items: ReadonlyArray<Record<string, unknown>>,
+  opts: Partial<{ durabilityDenylist: ReadonlyArray<RegExp>; writeApprovalEnabled: boolean }> = {},
+): { plan: ReturnType<typeof planExtractSignals>; res: ReturnType<typeof commitExtractedSignals> } {
   const plan = planExtractSignals(vault, SESSION, { now: NOW });
-  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items },
+    {
+      agent: "tester",
+      now: NOW,
+      surveyedTurnsHash: plan.surveyedTurnsHash,
+      ...opts,
+    },
+  );
+  return { plan, res };
+}
+
+test("an empty answer records the zero-yield tombstone over the planned material", () => {
+  const { plan, res } = commitAnsweringPlan([]);
   expect(res.written).toEqual([]);
   const entry = ledgerEntry();
   expect(entry).toBeDefined();
+  expect(entry!.minedContentHash).toBe(plan.surveyedTurnsHash);
   expect(entry!.minedContentHash).toBe(minedTurnsHash(plan.turnsMined));
   expect(entry!.outcome).toEqual({ written: 0, staged: 0, deduped: 0, durabilityRejected: 0 });
   expect(entry!.recordedAt).toBe("2026-08-22T10:00:00Z");
 });
 
 test("a commit whose items all dedupe records the zero-yield breakdown", () => {
-  const payload = { items: [item()] };
-  commitExtractedSignals(vault, SESSION, payload, { agent: "tester", now: NOW });
-  const second = commitExtractedSignals(vault, SESSION, payload, { agent: "tester", now: NOW });
+  commitAnsweringPlan([item()]);
+  const { res: second } = commitAnsweringPlan([item()]);
   expect(second.written).toEqual([]);
   expect(second.deduped).toBe(1);
   expect(ledgerEntry()!.outcome).toEqual({
@@ -674,11 +698,11 @@ test("a commit whose items all dedupe records the zero-yield breakdown", () => {
 });
 
 test("a commit whose items all fail the durability gate records the refusals", () => {
-  const res = commitExtractedSignals(
-    vault,
-    SESSION,
-    { items: [item({ topic: "noise", principle: "temporary scratch note" })] },
-    { agent: "tester", now: NOW, durabilityDenylist: [/scratch/] },
+  const { res } = commitAnsweringPlan(
+    [item({ topic: "noise", principle: "temporary scratch note" })],
+    {
+      durabilityDenylist: [/scratch/],
+    },
   );
   expect(res.written).toEqual([]);
   expect(res.durabilityRejected).toBe(1);
@@ -691,21 +715,12 @@ test("a commit whose items all fail the durability gate records the refusals", (
 });
 
 test("a commit with a yield records nothing", () => {
-  commitExtractedSignals(vault, SESSION, { items: [item()] }, { agent: "tester", now: NOW });
+  commitAnsweringPlan([item()]);
   expect(readSessionMiningLedger(vault).entries).toEqual({});
 });
 
 test("a staged yield records nothing either", () => {
-  commitExtractedSignals(
-    vault,
-    SESSION,
-    { items: [item()] },
-    {
-      agent: "tester",
-      now: NOW,
-      writeApprovalEnabled: true,
-    },
-  );
+  commitAnsweringPlan([item()], { writeApprovalEnabled: true });
   expect(pendingFiles().length).toBe(1);
   expect(readSessionMiningLedger(vault).entries).toEqual({});
 });
@@ -723,14 +738,54 @@ test("a partial-write failure records nothing - a failed run is not a barren one
   expect(readSessionMiningLedger(vault).entries).toEqual({});
 });
 
-test("the commit recomputes the mined-content hash at commit time", () => {
-  const before = planExtractSignals(vault, SESSION, { now: NOW });
+test("the tombstone keys on the surveyed hash, not the turns present at commit time", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
   importTurns(SESSION, [turn("t9", "user", "Imported after the plan was built.")]);
-  commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
-  const after = planExtractSignals(vault, SESSION, { now: NOW });
+  commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [] },
+    {
+      agent: "tester",
+      now: NOW,
+      surveyedTurnsHash: plan.surveyedTurnsHash,
+    },
+  );
   const entry = ledgerEntry()!;
-  expect(entry.minedContentHash).toBe(minedTurnsHash(after.turnsMined));
-  expect(entry.minedContentHash).not.toBe(minedTurnsHash(before.turnsMined));
+  // The verdict was earned over the planned material, and that is the
+  // material the record describes - never what the session holds by now.
+  expect(entry.minedContentHash).toBe(minedTurnsHash(plan.turnsMined));
+});
+
+test("a turn imported between plan and commit is not suppressed unseen", async () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  importTurns(SESSION, [turn("t9", "user", "Imported after the plan was built.")]);
+  commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [] },
+    {
+      agent: "tester",
+      now: NOW,
+      surveyedTurnsHash: plan.surveyedTurnsHash,
+    },
+  );
+  // The tombstone covers the old material only, so the next plan still
+  // offers the new turn to a model.
+  const next = await planExtractSignalsPrefiltered(vault, SESSION, {
+    now: NOW,
+    decisionModel: null,
+  });
+  expect(next.skipped).toBeUndefined();
+  expect(next.turnsMined.map((t) => t.turnId)).toEqual(["t1", "t3", "t9"]);
+});
+
+test("a commit that answers no plan attests nothing and records nothing", () => {
+  // Without a plan there is no material the verdict was earned over; a
+  // tombstone keyed on whatever the session holds now could suppress turns
+  // no model ever saw. Recording nothing keeps the session eligible.
+  commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  expect(readSessionMiningLedger(vault).entries).toEqual({});
 });
 
 /** Plants a corrupt mining ledger so a read of it refuses by name. */
@@ -740,8 +795,21 @@ function seedCorruptLedger(): void {
 }
 
 test("a ledger write failure on a successful commit is named, never thrown", () => {
+  // The plan is built (and surveys the ledger) before the corruption, the
+  // way a real round does: the commit then attests its hash and the record
+  // attempt hits the corrupt file.
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
   seedCorruptLedger();
-  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [] },
+    {
+      agent: "tester",
+      now: NOW,
+      surveyedTurnsHash: plan.surveyedTurnsHash,
+    },
+  );
   expect(res.written).toEqual([]);
   expect(res.miningLedgerFailure).toContain("session mining ledger is corrupted JSON");
   // The vault was never touched by the failed record.
@@ -764,7 +832,7 @@ test("a yield-bearing commit does not touch a corrupt ledger and names no failur
 });
 
 test("the ledger-failure field is absent when the record succeeded", () => {
-  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  const { res } = commitAnsweringPlan([]);
   expect(ledgerEntry()).toBeDefined();
   expect("miningLedgerFailure" in res).toBe(false);
 });

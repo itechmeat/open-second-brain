@@ -32,10 +32,13 @@
  *
  * The commit is also the mining ledger's write side (session-mining-ledger.ts):
  * a commit that ends with nothing written and nothing staged records a
- * zero-yield tombstone over the turn material it surveyed, and the plan
- * gate reads that record to stop re-proposing a barren session on every
- * re-scan. A yield - staged or written - never tombstones, and neither
- * does a partial write.
+ * zero-yield tombstone over the turn material the PLAN surveyed - the plan
+ * carries the hash of the turns it offered, and the surfaces pass it back
+ * with the answer - so the record describes the material the barren verdict
+ * was actually earned over. The plan gate reads that record to stop
+ * re-proposing a barren session on every re-scan. A commit that answers no
+ * plan of this module's attests nothing and records nothing, and a yield -
+ * staged or written - never tombstones; neither does a partial write.
  *
  * Precision beats recall, as it does in `fact-extract.ts`: the cap and the
  * floor are refusals, not filters. A payload over either limit is rejected
@@ -217,6 +220,14 @@ export interface SignalExtractionPlan {
   readonly turnsScanned: number;
   /** The user turns the prompt embeds, in record order. */
   readonly turnsMined: ReadonlyArray<MinedTurn>;
+  /**
+   * {@link minedTurnsHash} of {@link turnsMined}: the material this plan
+   * put in front of the caller. The commit that answers this plan passes
+   * it back as {@link CommitExtractedSignalsOptions.surveyedTurnsHash}, so
+   * the mining record keys on the material the verdict was earned over,
+   * never on whatever the session holds by commit time.
+   */
+  readonly surveyedTurnsHash: string;
   /** The limits the payload will be held to, echoed so the caller can read them. */
   readonly cap: number;
   readonly confidenceFloor: number;
@@ -313,6 +324,16 @@ export interface CommitExtractedSignalsOptions {
   readonly writeApprovalEnabled?: boolean;
   /** Shared dedup index; built from the vault when omitted. */
   readonly dedup?: Map<string, DedupIndexEntry>;
+  /**
+   * The answered plan's {@link SignalExtractionPlan.surveyedTurnsHash}: the
+   * hash of the turns the caller was actually shown. The mining record keys
+   * on it, so an import landing between plan and commit cannot put a
+   * tombstone on turns no model ever saw. Absent means this commit answers
+   * no plan of this module's, and then there is no material the verdict was
+   * earned over - so nothing is recorded, and the session stays eligible
+   * (the safe direction, the same one an unreadable entry gets).
+   */
+  readonly surveyedTurnsHash?: string;
 }
 
 // ----- Semantic rules the descriptor language cannot express ---------------
@@ -454,9 +475,6 @@ function readItems(payload: unknown): ReadonlyArray<unknown> | null {
 /**
  * The user turns the prompt embeds, in record order: the import path's
  * role rule, the message-level capture boundary, and blank text dropped.
- * Shared by the plan (which offers them) and the commit (which hashes the
- * turns present at commit time for the mining ledger), so the two can
- * never disagree on what a run covered.
  */
 function selectMinedTurns(
   boundary: CaptureBoundary,
@@ -519,6 +537,7 @@ export function planExtractSignals(
     boundaryDecision,
     turnsScanned: turns.length,
     turnsMined: Object.freeze(mined),
+    surveyedTurnsHash: minedTurnsHash(mined),
     cap: AUTO_EXTRACT_PER_SESSION_CAP,
     confidenceFloor: AUTO_EXTRACT_CONFIDENCE_FLOOR,
     llmStep: buildMiningStep(trimmed, mined, { sourceTurnHint: opts.sourceTurnHint === true }),
@@ -740,18 +759,22 @@ export function commitExtractedSignals(
   // run that FAILED did not end, so it tombstones nothing.
   const staged = writeApprovalEnabled ? written.length : 0;
   let miningLedgerFailure: string | undefined;
-  if (written.length === 0 && staged === 0) {
-    // The hash covers the turns present NOW, not the ones a plan once
-    // offered: an import landing between plan and commit makes this
-    // tombstone describe the material the commit actually surveyed, and a
-    // later scan of that material is the one it must suppress.
-    const mined = selectMinedTurns(boundary, listSessionRawTurns(vault, trimmed));
+  // The tombstone keys on the hash the PLAN surveyed - the material the
+  // barren verdict was earned over - not on whatever turns the session
+  // holds by commit time. An import landing between plan and commit
+  // changes the session's material without changing the answer, and a
+  // record over the new material would suppress turns no model ever saw.
+  // A commit that answers no plan of this module's attests nothing, so it
+  // records nothing: without surveyed material there is nothing honest to
+  // key a tombstone on, and failing open to a re-mine is the safe
+  // direction.
+  if (written.length === 0 && staged === 0 && opts.surveyedTurnsHash !== undefined) {
     try {
       recordSessionMiningOutcome(
         vault,
         {
           sessionId: trimmed,
-          minedContentHash: minedTurnsHash(mined),
+          minedContentHash: opts.surveyedTurnsHash,
           outcome: { written: 0, staged: 0, deduped, durabilityRejected: rejected.length },
         },
         opts.now,

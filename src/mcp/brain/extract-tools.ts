@@ -67,6 +67,10 @@ async function toolBrainExtractSignals(
           text: t.text,
           timestamp: t.timestamp,
         })),
+        // The hash of the material this plan offered; the commit that
+        // answers it passes it back as `surveyed_turns_hash` so the mining
+        // tombstone keys on the surveyed material.
+        surveyed_turns_hash: plan.surveyedTurnsHash,
         cap: plan.cap,
         confidence_floor: plan.confidenceFloor,
         llm_step: plan.llmStep,
@@ -100,12 +104,22 @@ async function toolBrainExtractSignals(
       };
     }
     const now = new Date();
+    const surveyedTurnsHash = coerceStr(args, "surveyed_turns_hash", false);
     const res = commitExtractedSignals(
       ctx.vault,
       session,
       { items: args["items"] },
       // Loaded with parallel I/O here, where the tool can await it.
-      { agent, now, dedup: await loadDedupIndex(ctx.vault) },
+      {
+        agent,
+        now,
+        dedup: await loadDedupIndex(ctx.vault),
+        // The answered plan's surveyed hash, echoed back by the caller:
+        // what the zero-yield tombstone keys on. Absent, the commit
+        // records nothing - there is no material the verdict was earned
+        // over.
+        ...(surveyedTurnsHash ? { surveyedTurnsHash } : {}),
+      },
     );
     recordExtractPrefilterCommit(ctx.vault, decisionModel, res, now);
     return {
@@ -136,13 +150,18 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan. With `items` writes `source_type: auto_extract` signals to Brain/inbox/. Barren sessions skip with reason 'mining_tombstone'; `force` re-mines once. Refuses over-cap, under-floor, repeated-topic.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan. With `items` writes `source_type: auto_extract` signals to Brain/inbox/, passing the plan response's `surveyed_turns_hash` back so a barren commit records its tombstone against the material the verdict was earned over. Barren sessions skip with reason 'mining_tombstone'; `force` re-mines once. Refuses over-cap, under-floor, repeated-topic.",
     inputSchema: {
       type: "object",
       properties: {
         session: {
           type: "string",
           description: "Recall session id of an already-imported session.",
+        },
+        surveyed_turns_hash: {
+          type: "string",
+          description:
+            "Commit phase only: the `surveyed_turns_hash` from the plan response this payload answers. Omit it and a barren commit records nothing.",
         },
         items: {
           type: "array",

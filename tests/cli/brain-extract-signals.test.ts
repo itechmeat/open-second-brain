@@ -196,9 +196,11 @@ describe("think-block strip (t_dac8bf7e)", () => {
 
 // ----- The zero-yield mining tombstone on the surface ------------------------
 //
-//  6. A commit that lands nothing tombstones the session, and the next
-//     plan says so by name with the recorded breakdown - in --json and in
-//     text - instead of re-offering the same turns.
+//  6. A commit that lands nothing tombstones the session - keyed on the
+//     surveyed hash the plan printed, which the commit relays back - and
+//     the next plan says so by name with the recorded breakdown, in --json
+//     and in text, instead of re-offering the same turns. A commit that
+//     answers no plan records nothing, so the session stays eligible.
 //  7. --force bypasses the tombstone for exactly one plan call: the forced
 //     plan carries the envelope, and the plan after it is suppressed again.
 //  8. A ledger write failure on a successful commit exits 0 and names the
@@ -209,9 +211,24 @@ function corruptMiningLedger(): void {
   writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
 }
 
+/** The plan's surveyed hash, from the --json plan phase. */
+async function surveyedHash(): Promise<string> {
+  const r = await run([SESSION, "--json"]);
+  expect(r.returncode).toBe(0);
+  return (JSON.parse(r.stdout) as { surveyed_turns_hash: string }).surveyed_turns_hash;
+}
+
 describe("mining tombstone", () => {
   test("a barren commit tombstones the session and the next plan names it", async () => {
-    const mine = await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    const hash = await surveyedHash();
+    const mine = await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
     expect(mine.returncode).toBe(0);
     const r = await run([SESSION, "--json"]);
     expect(r.returncode).toBe(0);
@@ -241,8 +258,20 @@ describe("mining tombstone", () => {
     expect(payload.turns_mined).toEqual([]);
   });
 
+  test("a barren commit without the surveyed hash records nothing and fails open", async () => {
+    // The relay is what makes the tombstone honest: without it the commit
+    // has no material to key on, records nothing, and the session stays
+    // eligible - never suppressed on unverified evidence.
+    const mine = await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    expect(mine.returncode).toBe(0);
+    const r = await run([SESSION, "--json"]);
+    const payload = JSON.parse(r.stdout) as { skipped?: unknown };
+    expect(payload.skipped).toBeUndefined();
+  });
+
   test("text mode names the tombstone and the force escape", async () => {
-    await run([SESSION, "--payload", JSON.stringify({ items: [] })]);
+    const hash = await surveyedHash();
+    await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--surveyed-turns-hash", hash]);
     const r = await run([SESSION]);
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("already mined");
@@ -252,7 +281,15 @@ describe("mining tombstone", () => {
   });
 
   test("--force bypasses the tombstone for exactly one plan call", async () => {
-    await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    const hash = await surveyedHash();
+    await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
     const forced = await run([SESSION, "--force", "--json"]);
     expect(forced.returncode).toBe(0);
     const forcedPayload = JSON.parse(forced.stdout) as {
@@ -268,15 +305,30 @@ describe("mining tombstone", () => {
   });
 
   test("a ledger write failure on a successful commit exits 0 and names the failure", async () => {
+    const hash = await surveyedHash();
     corruptMiningLedger();
-    const mine = await run([SESSION, "--payload", JSON.stringify({ items: [] }), "--json"]);
+    const mine = await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
     expect(mine.returncode).toBe(0);
     const payload = JSON.parse(mine.stdout) as { ok: boolean; mining_ledger_failure?: string };
     expect(payload.ok).toBe(true);
     expect(payload.mining_ledger_failure).toContain("session mining ledger is corrupted JSON");
 
-    // Text mode names it too, on the same exit code.
-    const text = await run([SESSION, "--payload", JSON.stringify({ items: [] })]);
+    // Text mode names it too, on the same exit code (this commit relays
+    // the hash as well, so the record attempt happens here too).
+    const text = await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [] }),
+      "--surveyed-turns-hash",
+      hash,
+    ]);
     expect(text.returncode).toBe(0);
     expect(text.stdout).toContain("mining ledger");
   });

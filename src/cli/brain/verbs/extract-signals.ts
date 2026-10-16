@@ -8,6 +8,13 @@
  * that answer and writes the accepted items as speculative inbox signals.
  * OSB runs no model on either path.
  *
+ * A commit that answers a plan passes that plan's `surveyed_turns_hash`
+ * back with `--surveyed-turns-hash`: it is what the zero-yield mining
+ * tombstone keys on, so the record describes the material the verdict was
+ * earned over rather than whatever the session holds by commit time. A
+ * commit without it records nothing - without surveyed material there is
+ * nothing honest to key a tombstone on.
+ *
  * A session already mined at its current content that yielded nothing
  * accepted carries a tombstone in the session mining ledger; its plan phase
  * returns the recorded breakdown instead of an envelope (reason
@@ -44,6 +51,7 @@ import {
 import {
   brainVerbContext,
   fail,
+  normalizeFlagString,
   ok,
   okJson,
   parse,
@@ -53,7 +61,7 @@ import {
 
 const USAGE =
   "usage: o2b brain extract-signals <session-ref> [--payload <json> | --payload-file <path>] " +
-  "[--force] [--agent <name>] [--vault <path>] [--json]";
+  "[--surveyed-turns-hash <sha256>] [--force] [--agent <name>] [--vault <path>] [--json]";
 
 /** Refusals the operator caused, reported without a stack. */
 const NAMED_REFUSALS = [ExtractSignalsError, ResponseShapeError, ResponseCheckError] as const;
@@ -68,12 +76,19 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
     agent: { type: "string" },
     payload: { type: "string" },
     "payload-file": { type: "string" },
+    "surveyed-turns-hash": { type: "string" },
     force: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sessionRef = positional[0];
   if (!sessionRef || sessionRef.trim() === "") return usageError(USAGE);
   const asJson = flags["json"] === true;
+  const surveyedTurnsHashRaw = normalizeFlagString(flags["surveyed-turns-hash"]);
+  if (flags["surveyed-turns-hash"] !== undefined && surveyedTurnsHashRaw === null) {
+    return usageError(
+      `${USAGE}\nerror: --surveyed-turns-hash must be a non-empty string when provided`,
+    );
+  }
 
   try {
     const { config, vault } = brainVerbContext(flags);
@@ -106,6 +121,10 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
             text: t.text,
             timestamp: t.timestamp,
           })),
+          // The hash of the material this plan offered; the commit that
+          // answers it passes it back with --surveyed-turns-hash so the
+          // mining tombstone keys on the surveyed material.
+          surveyed_turns_hash: plan.surveyedTurnsHash,
           cap: plan.cap,
           confidence_floor: plan.confidenceFloor,
           llm_step: plan.llmStep,
@@ -162,6 +181,7 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       ok(`limits: at most ${plan.cap} items, confidence >= ${plan.confidenceFloor}`);
       if (plan.llmStep !== null) {
         ok(`needs-llm-step: ${plan.llmStep.step} -> ${plan.llmStep.target_path}`);
+        ok(`surveyed turns hash: ${plan.surveyedTurnsHash}`);
       }
       return 0;
     }
@@ -191,6 +211,10 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       // Loaded with parallel I/O here, where the caller can await it; the
       // commit's own fallback is the synchronous walk.
       dedup: await loadDedupIndex(vault),
+      // The answered plan's surveyed hash, relayed by the calling agent:
+      // what the zero-yield tombstone keys on. Absent, the commit records
+      // nothing - there is no material the verdict was earned over.
+      ...(surveyedTurnsHashRaw !== null ? { surveyedTurnsHash: surveyedTurnsHashRaw } : {}),
     });
     recordExtractPrefilterCommit(vault, decisionModel, res, now);
     if (asJson) {
