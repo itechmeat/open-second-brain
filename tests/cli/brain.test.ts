@@ -1547,7 +1547,7 @@ describe("brain protect", () => {
   test("--apply writes settings.json and is idempotent", async () => {
     await bootstrap();
     const first = await runCli(
-      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply"],
+      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply", "--yes"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(first.returncode).toBe(0);
@@ -1557,7 +1557,7 @@ describe("brain protect", () => {
     expect(bytesAfterFirst).toContain("Write(");
 
     const second = await runCli(
-      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply"],
+      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply", "--yes"],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(second.returncode).toBe(0);
@@ -1565,11 +1565,61 @@ describe("brain protect", () => {
     expect(readFileSync(settingsPath, "utf8")).toBe(bytesAfterFirst);
   });
 
+  test("--apply without --yes in non-TTY refuses and settings.json is unchanged", async () => {
+    await bootstrap();
+    const settingsPath = join(vault, ".claude", "settings.json");
+    const original = '{\n  "theme": "dark"\n}\n';
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    writeFileSync(settingsPath, original);
+    const r = await runCli(
+      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("--yes");
+    expect(r.stderr).toContain("non-interactive");
+    // The refusal happens before any write: the operator's file survives.
+    expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    // No sidecar manifest was written either.
+    expect(existsSync(join(vault, ".open-second-brain", "protect.lock.json"))).toBe(false);
+  });
+
+  test("--apply --yes writes, and the JSON carries the consent verdict and the backup path", async () => {
+    await bootstrap();
+    const settingsPath = join(vault, ".claude", "settings.json");
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    writeFileSync(settingsPath, '{\n  "theme": "dark"\n}\n');
+    const r = await runCli(
+      [
+        "brain",
+        "protect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(payload["consent"]).toBe("confirmed");
+    expect(typeof payload["backup"]).toBe("string");
+    expect(payload["backup"]).not.toBe("");
+    // The own-write backup holds the pre-apply bytes.
+    expect(readFileSync(payload["backup"] as string, "utf8")).toBe('{\n  "theme": "dark"\n}\n');
+  });
+
   test("apply + unprotect round-trip leaves no managed entries", async () => {
     await bootstrap();
-    await runCli(["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    });
+    await runCli(
+      ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply", "--yes"],
+      {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      },
+    );
     const r = await runCli(["brain", "unprotect", "--target", "claudecode", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });

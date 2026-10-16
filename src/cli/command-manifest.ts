@@ -332,7 +332,13 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),
-        command("protect", "Emit runtime deny rules for Brain"),
+        command("protect", "Emit runtime deny rules for Brain", [
+          flag("target", "string"),
+          flag("vault", "string"),
+          flag("apply", "boolean"),
+          flag("yes", "boolean"),
+          flag("json", "boolean"),
+        ]),
         command("unprotect", "Remove managed runtime deny rules"),
         command(
           "snapshot",

@@ -8,6 +8,7 @@ import {
   BrainProtectError,
   buildProtectRules,
   claudeCodeRulePath,
+  computeProtect,
   printSnippet,
   PROTECT_SCHEMA_VERSION,
   readManifest,
@@ -218,6 +219,30 @@ describe("applyProtect claudecode", () => {
     expect(settings.permissions.deny).toContain(`Write(${cc(abs(vault))}/Brain/preferences/**)`);
   });
 
+  test("computeProtect returns before/after without writing (t_b6bcd984)", () => {
+    const vault = mkVault();
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    const original = '{\n  "theme": "dark"\n}\n';
+    writeFileSync(join(vault, ".claude", "settings.json"), original);
+    const c = computeProtect({ target: "claudecode", vault });
+    expect(c.changed).toBe(true);
+    expect(c.before).toBe(original);
+    // The after-side merges the OSB rules beside the operator's own key.
+    expect(c.after).toContain('"theme": "dark"');
+    expect(c.after).toContain(`Write(${cc(abs(vault))}/Brain/preferences/**)`);
+    // The compute step is a preview: the file on disk is untouched.
+    expect(readFileSync(join(vault, ".claude", "settings.json"), "utf8")).toBe(original);
+  });
+
+  test("computeProtect reports no change when settings already match", () => {
+    const vault = mkVault();
+    applyProtect({ target: "claudecode", vault });
+    const onDisk = readFileSync(join(vault, ".claude", "settings.json"), "utf8");
+    const c = computeProtect({ target: "claudecode", vault });
+    expect(c.changed).toBe(false);
+    expect(c.after).toBe(onDisk);
+  });
+
   test("idempotent: second apply produces byte-identical settings", () => {
     const vault = mkVault();
     applyProtect({ target: "claudecode", vault });
@@ -288,6 +313,20 @@ describe("applyProtect codex", () => {
     applyProtect({ target: "codex", vault, __homeOverride: home });
     const second = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(second).toBe(first);
+  });
+
+  test("computeProtect codex returns before/after without writing (t_b6bcd984)", () => {
+    const home = mkHome();
+    const vault = mkVault();
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const userToml = '# user content\nmodel = "gpt-5.5"\n';
+    writeFileSync(join(home, ".codex", "config.toml"), userToml);
+    const c = computeProtect({ target: "codex", vault, __homeOverride: home });
+    expect(c.changed).toBe(true);
+    expect(c.before).toBe(userToml);
+    expect(c.after).toContain("# >>> open-second-brain managed >>>");
+    expect(c.after.startsWith(userToml)).toBe(true);
+    expect(readFileSync(join(home, ".codex", "config.toml"), "utf8")).toBe(userToml);
   });
 
   test("preserves user content outside the fence", () => {

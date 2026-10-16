@@ -70,7 +70,7 @@ Brain verbs (observing memory):
   unpin            Clear the pinned flag (idempotent)
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
-  protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
+  protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply --yes])
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
   permissions      Show the trust policy document and query the decision ledger (show | ledger)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)

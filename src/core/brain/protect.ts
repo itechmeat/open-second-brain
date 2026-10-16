@@ -426,6 +426,35 @@ export function applyProtect(opts: ApplyOptions): ApplyResult {
   }
 }
 
+/**
+ * What one protect apply would change, computed without writing
+ * (t_b6bcd984). The consent flow's preview step: `before` is the exact
+ * on-disk content, `after` the merged result the write step would put
+ * back, `changed` whether the write would happen at all. Everything the
+ * consent ladder needs to show a unified diff and refuse fail-closed
+ * before `applyProtect` (the write) is allowed to run.
+ */
+export interface ProtectCompute {
+  readonly destination: string;
+  readonly before: string;
+  readonly after: string;
+  readonly changed: boolean;
+}
+
+/**
+ * The compute half of {@link applyProtect}: same derivation, no backup,
+ * no write, no manifest. Pure with respect to the target file - it
+ * reads it, never mutates anything.
+ */
+export function computeProtect(opts: ApplyOptions): ProtectCompute {
+  switch (opts.target) {
+    case "claudecode":
+      return computeClaudeCode(opts.vault);
+    case "codex":
+      return computeCodex(opts.vault, opts.__homeOverride);
+  }
+}
+
 export function unprotect(opts: UnprotectOptions): void {
   switch (opts.target) {
     case "claudecode":
@@ -465,13 +494,20 @@ function readSettingsJson(path: string): { raw: string; parsed: ClaudeSettings }
   return { raw, parsed };
 }
 
-function applyClaudeCode(vault: string): ApplyResult {
+/**
+ * One claudecode derivation: the file-level compute plus the manifest
+ * record the write step stamps. One derivation so the consent preview
+ * and the write cannot disagree.
+ */
+function deriveClaudeCode(vault: string): {
+  compute: ProtectCompute;
+  manifest: ReturnType<typeof renderClaudeCode>["manifest"];
+} {
   ensureVaultBootstrapped(vault);
   const rules = buildProtectRules(vault);
   const rendered = renderClaudeCode(rules, vault);
   const settingsDir = join(vault, ".claude");
   const dest = join(settingsDir, "settings.json");
-  mkdirSync(settingsDir, { recursive: true });
 
   const prev = readManifest(vault, "claudecode") as ManifestRecordClaudeCode | null;
   const { raw: before, parsed: settings } = readSettingsJson(dest);
@@ -499,14 +535,38 @@ function applyClaudeCode(vault: string): ApplyResult {
   }
 
   const after = JSON.stringify(settings, null, 2) + "\n";
-  const changed = after !== before;
+  return {
+    compute: Object.freeze({
+      destination: dest,
+      before,
+      after,
+      changed: after !== before,
+    }),
+    manifest: rendered.manifest,
+  };
+}
+
+/** The merged settings content one claudecode apply would write. */
+function computeClaudeCode(vault: string): ProtectCompute {
+  return deriveClaudeCode(vault).compute;
+}
+
+function applyClaudeCode(vault: string): ApplyResult {
+  // Compute first (the exact derivation the consent preview showed),
+  // then the write: backup, settings write, manifest - in that order,
+  // unchanged.
+  const { compute, manifest } = deriveClaudeCode(vault);
+  const { destination: dest, before, after, changed } = compute;
   let backupPath = "";
   if (changed && before !== "") {
     backupPath = `${dest}.bak.${Date.now()}`;
     atomicWriteFileSync(backupPath, before);
   }
-  if (changed) atomicWriteFileSync(dest, after);
-  writeManifestIfChanged(vault, rendered.manifest);
+  if (changed) {
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    atomicWriteFileSync(dest, after);
+  }
+  writeManifestIfChanged(vault, manifest);
   return Object.freeze({
     target: "claudecode" as const,
     destination: dest,
@@ -616,10 +676,17 @@ function insertCodexFence(raw: string, fence: string): string {
   return before + sep + fence + after;
 }
 
-function applyCodex(vault: string, homeOverride?: string): ApplyResult {
+/**
+ * One codex derivation: the file-level compute plus the owned paths the
+ * write step stamps into the manifest. One derivation so the consent
+ * preview and the write cannot disagree.
+ */
+function deriveCodex(
+  vault: string,
+  homeOverride: string | undefined,
+): { compute: ProtectCompute; ownedPaths: ReadonlyArray<string> } {
   ensureVaultBootstrapped(vault);
   const dest = codexConfigPath(homeOverride);
-  mkdirSync(join(dest, ".."), { recursive: true });
 
   const before = readFileOrEmpty(dest);
   const rules = buildProtectRules(vault);
@@ -636,18 +703,42 @@ function applyCodex(vault: string, homeOverride?: string): ApplyResult {
   );
   const fence = renderCodexEntries([...keptEntries, ...currentEntries]).body;
   const after = replaceCodexFence(before, fence);
-  const changed = after !== before;
+  return {
+    compute: Object.freeze({
+      destination: dest,
+      before,
+      after,
+      changed: after !== before,
+    }),
+    ownedPaths: currentEntries.map((e) => e.path),
+  };
+}
+
+/** The merged config.toml content one codex apply would write. */
+function computeCodex(vault: string, homeOverride: string | undefined): ProtectCompute {
+  return deriveCodex(vault, homeOverride).compute;
+}
+
+function applyCodex(vault: string, homeOverride?: string): ApplyResult {
+  // Compute first (the exact derivation the consent preview showed),
+  // then the write: backup, config write, manifest - in that order,
+  // unchanged.
+  const { compute, ownedPaths } = deriveCodex(vault, homeOverride);
+  const { destination: dest, before, after, changed } = compute;
   let backupPath = "";
   if (changed && before !== "") {
     backupPath = `${dest}.bak.${Date.now()}`;
     atomicWriteFileSync(backupPath, before);
   }
-  if (changed) atomicWriteFileSync(dest, after);
+  if (changed) {
+    mkdirSync(join(dest, ".."), { recursive: true });
+    atomicWriteFileSync(dest, after);
+  }
   writeManifestIfChanged(vault, {
     schema_version: PROTECT_SCHEMA_VERSION,
     target: "codex",
     vault,
-    owned_paths: currentEntries.map((e) => e.path),
+    owned_paths: ownedPaths,
   });
   return Object.freeze({
     target: "codex" as const,

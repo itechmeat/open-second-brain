@@ -67,7 +67,7 @@ fire end-to-end use
 ## Machine-enforce write protection (optional)
 
 ```bash
-o2b brain protect --target claudecode --vault /path/to/vault --apply
+o2b brain protect --target claudecode --vault /path/to/vault --apply --yes
 o2b brain unprotect --target claudecode --vault /path/to/vault
 ```
 

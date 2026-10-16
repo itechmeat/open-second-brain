@@ -113,7 +113,7 @@ The bundled `hooks/hooks.json` registers a `PostToolUse` hook
 ## Machine-enforce write protection (optional)
 
 ```bash
-o2b brain protect --target codex --vault /path/to/vault --apply
+o2b brain protect --target codex --vault /path/to/vault --apply --yes
 o2b brain unprotect --target codex --vault /path/to/vault
 ```
 

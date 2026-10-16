@@ -1,18 +1,21 @@
 import {
   applyProtect,
   BrainProtectError,
+  computeProtect,
   isProtectTarget,
   printSnippet,
   PROTECT_TARGETS,
   unprotect,
 } from "../../../core/brain/protect.ts";
-import { brainVerbContext, fail, info, ok, okJson, parse } from "../helpers.ts";
+import { renderUnifiedDiff } from "../../../core/diff.ts";
+import { brainVerbContext, fail, info, ok, okJson, parse, readSingleLine } from "../helpers.ts";
 
 export async function cmdBrainProtect(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     target: { type: "string", required: true },
     vault: { type: "string" },
     apply: { type: "boolean" },
+    yes: { type: "boolean" },
     json: { type: "boolean" },
   });
   const rawTarget = typeof flags["target"] === "string" ? flags["target"] : undefined;
@@ -26,9 +29,34 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
 
   try {
     if (flags["apply"]) {
+      // t_b6bcd984: consent, then write. The compute step is a pure
+      // preview - before/after/changed, nothing on disk moves - so the
+      // fail-closed ladder (the canonical `brain upgrade --apply` one)
+      // can show the unified diff and still refuse without a side
+      // effect. A no-op apply needs no consent, exactly as upgrade
+      // skips its prompt when nothing is pending.
+      const compute = computeProtect({ target, vault });
+      if (compute.changed && !flags["yes"]) {
+        if (flags["json"] || !process.stdin.isTTY) {
+          return fail(
+            `brain protect --apply requires --yes in non-interactive mode ` +
+              "(--json or non-TTY stdin); nothing was written",
+          );
+        }
+        info(renderUnifiedDiff(compute.before, compute.after, compute.destination));
+        process.stderr.write("Proceed? [y/N] ");
+        const ans = await readSingleLine();
+        if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
+          ok("protect cancelled");
+          return 0;
+        }
+      } else if (compute.changed && !flags["json"]) {
+        info(renderUnifiedDiff(compute.before, compute.after, compute.destination));
+      }
       const result = applyProtect({ target, vault });
       if (flags["json"]) {
         okJson({
+          consent: "confirmed",
           target: result.target,
           destination: result.destination,
           changed: result.changed,
