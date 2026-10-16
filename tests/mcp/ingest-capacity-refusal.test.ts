@@ -74,6 +74,7 @@ interface Fixture {
 function fixture(
   capBytes: number | undefined,
   reach: TransportReach = TRANSPORT_REACH.local,
+  configAppend = "",
 ): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-ingest-cap-"));
   bases.push(base);
@@ -86,6 +87,7 @@ function fixture(
   if (capBytes !== undefined) {
     appendFileSync(brainConfigPath(vault), `\nstorage:\n  cap_bytes: ${capBytes}\n`);
   }
+  if (configAppend.length > 0) appendFileSync(brainConfigPath(vault), configAppend);
   const server = new MCPServer({ vault, configPath }, { reach });
   return { vault, configPath, server };
 }
@@ -189,6 +191,51 @@ describe("brain_ingest_source capacity admission", () => {
     // check left no usage sample behind: with no cap in force the check
     // never measured.
     expect(listMetrics(f.vault, { surface: STORAGE_USAGE_SURFACE })).toEqual([]);
+  });
+});
+
+describe("the admission gate reads only the storage block (review M1)", () => {
+  test("a typo in an unrelated block never breaks the ingest on a vault with no cap", async () => {
+    // The review's probe: the maintenance block is invalid, and the
+    // storage block the gate decides from is absent - no cap, the
+    // documented default where nothing refuses. The whole-file validation
+    // the old loader ran made this ingest an internal error naming a host
+    // path; the block-scoped read answers the gate's actual question.
+    const f = fixture(
+      undefined,
+      TRANSPORT_REACH.local,
+      "\nmaintenance:\n  host_pressure_percent: banana\n",
+    );
+    const res = await ingest(f);
+    expect(res.error).toBeUndefined();
+    expect(brainPageTexts(f.vault).some((text) => text.includes(SUMMARY))).toBe(true);
+  });
+
+  test("a broken storage block refuses by name, free of host paths", async () => {
+    // The gate cannot know whether a cap is in force, so a broken policy
+    // is never silently read as "no cap": the refusal names the field and
+    // carries the registered code - and never the config's host path,
+    // which a remote caller has no business learning.
+    const f = fixture(undefined, TRANSPORT_REACH.local, "\nstorage:\n  cap_bytes: banana\n");
+    const res = await ingest(f);
+    expect(readRpcErrorCode(res)).toBe("config_invalid");
+    const message = res.error?.message ?? "";
+    expect(message).toContain("brain_ingest_source");
+    expect(message).toContain("storage.cap_bytes");
+    expect(message).not.toContain(f.vault);
+  });
+
+  test("an unparseable config refuses by name, free of host paths", async () => {
+    const f = fixture(
+      undefined,
+      TRANSPORT_REACH.local,
+      "\nstorage:\n  cap_bytes: 5\n   warn_percent: 80\n",
+    );
+    const res = await ingest(f);
+    expect(readRpcErrorCode(res)).toBe("config_invalid");
+    const message = res.error?.message ?? "";
+    expect(message).toContain("brain_ingest_source");
+    expect(message).not.toContain(f.vault);
   });
 });
 
