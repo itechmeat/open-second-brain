@@ -234,16 +234,30 @@ describe("self-heal reindex: the child's terminal outcome", () => {
         rewindToPreV14Schema(dbPath());
         const runId = mintSelfHealRunId();
 
-        const code = await cmdSearchReindex([
-          "--self-heal",
-          runId,
-          "--vault",
-          vault,
-          "--config",
-          configPath,
-        ]);
+        const stderr: string[] = [];
+        const write = process.stderr.write.bind(process.stderr);
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+          stderr.push(String(chunk));
+          return true;
+        }) as typeof process.stderr.write;
+        let code: number;
+        try {
+          code = await cmdSearchReindex([
+            "--self-heal",
+            runId,
+            "--vault",
+            vault,
+            "--config",
+            configPath,
+          ]);
+        } finally {
+          process.stderr.write = write;
+        }
 
         expect(code).toBe(0);
+        // A migration is reported as one, not as an index that was current.
+        expect(stderr.join("")).toContain("was migrated in place");
+        expect(stderr.join("")).not.toContain("is current; no rebuild was needed");
         expect(readSelfHealReindexRows(vault).find((row) => row.runId === runId)?.outcome).toBe(
           SELF_HEAL_REINDEX_OUTCOME.completed,
         );

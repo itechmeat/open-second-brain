@@ -344,6 +344,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   const observation = observeIndexRun(flags, "reindex");
   const interrupt = onInterrupt(OPERATION.reindex);
   let stats: IndexStats | null;
+  let migrated = false;
   try {
     const reindexOpts: IndexVaultOptions = {
       safeguard: reindexSafeguard(flags),
@@ -362,6 +363,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
       // migrated in place so its stored embeddings survive (#256).
       const healed = await healIndex(cfg, reindexOpts);
       stats = healed.kind === "rebuilt" ? healed.stats : null;
+      migrated = healed.kind === "migrated";
     }
   } catch (err) {
     // The only report a self-heal run's failure ever gets. Recorded before
@@ -398,7 +400,12 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     );
   }
   if (stats === null) {
-    process.stderr.write(`search index ${cfg.dbPath} is current; no rebuild was needed\n`);
+    process.stderr.write(
+      migrated
+        ? `search index ${cfg.dbPath} was migrated in place to the current schema; ` +
+            `its stored embeddings were kept and no rebuild was needed\n`
+        : `search index ${cfg.dbPath} is current; no rebuild was needed\n`,
+    );
     return 0;
   }
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
