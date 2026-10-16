@@ -39,7 +39,10 @@ import {
   type RankAdjuster,
   type RankAdjustVerdict,
 } from "../../search/rank-adjust.ts";
-import type { BrainSearchResult } from "../../search/types.ts";
+// The row type from the declared leaf, not the `types.ts` aggregate that
+// re-exports it: the aggregate resolves this module's mode, so naming the
+// aggregate back from here would close an import cycle.
+import type { BrainSearchResult } from "../../search/search-result.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
 import { RETRIEVAL_TRUST_REFUSAL_LANE, type RetrievalTrustRefusal } from "./retrieval-receipts.ts";
 import { hasUntrustedSourceMarker } from "./untrusted-provenance.ts";
