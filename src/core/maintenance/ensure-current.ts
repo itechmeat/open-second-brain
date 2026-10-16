@@ -374,6 +374,14 @@ export async function ensureVaultCurrent(
   try {
     const configPath = opts.configPath ?? defaultConfigPath();
     const config = resolveSearchConfig({ vault, configPath });
+    // 3. A current index that has gone stale: catch it up in the
+    //    background so the session's first read is not the one that pays.
+    const freshenIfStale = (): void => {
+      freshen = maybeFreshenIndex(config, {
+        lastIndexedAt: readLastIndexedAt(config.dbPath),
+        ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
+      });
+    };
     if (inspectIndex(config) !== "current") {
       if (background) {
         reindexSpawn = startSelfHealReindex(vault, configPath, config.dbPath, errors);
@@ -384,14 +392,13 @@ export async function ensureVaultCurrent(
         const healed = await healIndex(config);
         reindexTriggered = healed.kind === "rebuilt";
         indexUpgraded = healed.kind === "migrated";
+        // An in-place upgrade (or a heal another process finished) touches
+        // no document, so files changed since the last index run are still
+        // stale - the full rebuild this replaced used to pick them up.
+        if (!reindexTriggered) freshenIfStale();
       }
     } else {
-      // 3. A current index that has gone stale: catch it up in the
-      //    background so the session's first read is not the one that pays.
-      freshen = maybeFreshenIndex(config, {
-        lastIndexedAt: readLastIndexedAt(config.dbPath),
-        ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
-      });
+      freshenIfStale();
     }
   } catch (e) {
     errors.push(`search-reindex: ${message(e)}`);

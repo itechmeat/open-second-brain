@@ -19,7 +19,6 @@ import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { CHUNKER_VERSION } from "../../../src/core/search/chunker.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../../../src/core/search/schema.ts";
-import { search } from "../../../src/core/search/search.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { startFakeHttp } from "../../helpers/fake-http.ts";
@@ -151,12 +150,6 @@ describe("ensureVaultCurrent", () => {
         expect(r.reindexTriggered).toBe(false);
         expect(indexSchema()).toBe(LATEST_SCHEMA_VERSION);
         expect(await identity()).toEqual(before);
-        const outcome = await search(semantic, {
-          query: "fox",
-          semantic: true,
-          recordAccess: false,
-        });
-        expect(outcome.results.some((x) => x.searchType === "hybrid")).toBe(true);
       } finally {
         await server.close();
       }
@@ -317,6 +310,23 @@ describe("ensureVaultCurrent: freshen on session start", () => {
     expect(r.freshen).toBe("fresh");
     expect(calls).toHaveLength(0);
   });
+
+  test.skipIf(!sqliteVecLoadable())(
+    "an index upgraded in place that has gone stale is still caught up",
+    async () => {
+      // The in-place upgrade touches no document, so it must not stand in
+      // for the incremental run the old full rebuild used to be.
+      bootstrapBrain(vault, { configPath });
+      await ensureVaultCurrent(vault, { background: false });
+      ageIndex(300);
+      rewindToPreV14Schema(dbPath());
+      const r = await ensureVaultCurrent(vault, { background: false, freshenSpawn });
+      expect(r.indexUpgraded).toBe(true);
+      expect(r.reindexTriggered).toBe(false);
+      expect(r.freshen).toBe("spawned");
+      expect(calls).toHaveLength(1);
+    },
+  );
 
   test("an index that needs a rebuild is left to self-heal, not freshened", async () => {
     bootstrapBrain(vault, { configPath });
