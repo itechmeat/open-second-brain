@@ -23,11 +23,48 @@
  *     one-time mass reprocess is owed.
  */
 
+import * as fsNamespace from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, appendFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+
+// Positioned-read observer for the delta pass. The ONLY positioned readSync
+// reachable from ingestSource is the append-proof snapshot's byte walk; the
+// trust and archive lanes read with a null position and the in-lock stamp
+// hashes through readFileSync. Counting positioned bytes against the source's
+// inode therefore measures exactly the delta pass, with no behavior change
+// (every call is forwarded untouched). Same forwarding-mock idiom as
+// digest-actions.test.ts: capture the originals BEFORE the mock.
+const realReadSync = fsNamespace.readSync;
+const realFstatSync = fsNamespace.fstatSync;
+let positionedReadTarget: { readonly dev: number; readonly ino: number } | undefined;
+let positionedReadBytes = 0;
+
+mock.module("node:fs", () => ({
+  ...fsNamespace,
+  readSync(
+    fd: number,
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number | null,
+  ): number {
+    const count = realReadSync(fd, buffer, offset, length, position);
+    if (positionedReadTarget !== undefined && typeof position === "number" && count > 0) {
+      try {
+        const st = realFstatSync(fd);
+        if (st.dev === positionedReadTarget.dev && st.ino === positionedReadTarget.ino) {
+          positionedReadBytes += count;
+        }
+      } catch {
+        // An unstattable fd is not the observed read; the count stays.
+      }
+    }
+    return count;
+  },
+}));
 
 import { runCli } from "../../../helpers/run-cli.ts";
 import { EXTRACT_CONTRACT_VERSION } from "../../../../src/core/brain/ingest/contract.ts";
@@ -74,6 +111,34 @@ describe("ingestSource watermark stamping", () => {
     const entry = readManifest(vault).entries[SOURCE]!;
     expect(entry.extracted_bytes).toBe(8);
     expect(entry.extracted_at).toBe("2026-06-13T12:00:00Z");
+    expect(entry.sha256).toBe(hashFile(join(vault, SOURCE)));
+  });
+
+  test("a first ingest issues no positioned read against the source", () => {
+    // Several positioned-read chunks wide, so a wasted whole-source walk
+    // would show up in the counter; a skipped one does not.
+    writeSource("first-ingest line of a larger source\n".repeat(5000));
+    const size = statSync(join(vault, SOURCE)).size;
+
+    const sourceStat = statSync(join(vault, SOURCE));
+    positionedReadTarget = { dev: sourceStat.dev, ino: sourceStat.ino };
+    const before = positionedReadBytes;
+    let res: ReturnType<typeof ingestSource>;
+    try {
+      res = ingestSource(vault, INPUT, OPTS);
+    } finally {
+      positionedReadTarget = undefined;
+    }
+    // With no watermark nothing can be proven and no tail can exist, so the
+    // append-proof machinery has no byte of the source to read: the run's
+    // only whole-source pass is the in-lock stamp hash (readFileSync,
+    // invisible to this counter).
+    expect(positionedReadBytes - before).toBe(0);
+    // The observable answers the skip must preserve: no delta, and the
+    // full-size in-lock stamp exactly as before.
+    expect(res.extractionDelta).toBeUndefined();
+    const entry = readManifest(vault).entries[SOURCE]!;
+    expect(entry.extracted_bytes).toBe(size);
     expect(entry.sha256).toBe(hashFile(join(vault, SOURCE)));
   });
 

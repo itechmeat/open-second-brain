@@ -799,10 +799,11 @@ interface AppendSnapshot {
  * The whole-source stamp is NOT answered here: the full-size arms record
  * it through updateManifest's in-lock watermark request (review L1), whose
  * hash is the only one that cannot go stale, so this pass never hashes
- * past the tail. `watermark <= 0` skips the proof and the tail (no delta
- * is possible), keeping a first ingest as cheap as its read under the
- * lock. A source that cannot be opened or is not a regular file throws;
- * the caller answers that fail-safe way.
+ * past the tail. `watermark <= 0` answers without reading a single byte -
+ * no proof against nothing is possible and no tail can exist - so a first
+ * ingest's only whole-source pass is the in-lock stamp hash itself, which
+ * is the first watermark. A source that cannot be opened or is not a
+ * regular file throws; the caller answers that fail-safe way.
  */
 function readAppendSnapshot(
   sourceAbs: string,
@@ -814,7 +815,20 @@ function readAppendSnapshot(
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error(`not a regular file: ${sourceAbs}`);
     const size = stat.size;
-    const provePrefix = watermark > 0;
+    if (watermark <= 0) {
+      // No watermark: the walk below would read every byte to EOF and
+      // compute nothing - no prefix to hash, no tail to collect. The
+      // full-size stamp this arm feeds IS the first watermark, recorded
+      // through the in-lock request, so the guards above (the ENOENT and
+      // not-a-file windows the caller's catch answers) are all this call
+      // still owes.
+      return {
+        size,
+        prefixProven: false,
+        tail: { overCap: false, bytes: Buffer.alloc(0) },
+        hashThroughWatermark: createHash("sha256"),
+      };
+    }
     const hashPrefix = createHash("sha256");
     const hashThroughWatermark = createHash("sha256");
     const tailParts: Buffer[] = [];
@@ -831,7 +845,7 @@ function readAppendSnapshot(
         hashPrefix.update(head);
         hashThroughWatermark.update(head);
       }
-      if (provePrefix && position + count > watermark && tailFilled <= EXTRACTION_DELTA_MAX_BYTES) {
+      if (position + count > watermark && tailFilled <= EXTRACTION_DELTA_MAX_BYTES) {
         const part = buf.subarray(Math.max(0, watermark - position));
         tailParts.push(part);
         tailFilled += part.length;
@@ -840,7 +854,7 @@ function readAppendSnapshot(
     }
     return {
       size,
-      prefixProven: provePrefix && hashPrefix.digest("hex") === expectedDigest,
+      prefixProven: hashPrefix.digest("hex") === expectedDigest,
       tail:
         tailFilled > EXTRACTION_DELTA_MAX_BYTES
           ? { overCap: true }
@@ -851,7 +865,6 @@ function readAppendSnapshot(
     closeSync(fd);
   }
 }
-
 /**
  * The appended delta a snapshot proves, boundary-safe: a pure append within
  * the delta cap cut at the last complete newline. Everything else - no
