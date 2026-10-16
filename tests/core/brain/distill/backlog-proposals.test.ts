@@ -20,6 +20,7 @@ import { computeDedupHash, type DedupIndexEntry } from "../../../../src/core/bra
 import {
   buildBacklogProposals,
   type BacklogCandidate,
+  type BacklogProposal,
 } from "../../../../src/core/brain/distill/backlog-proposals.ts";
 
 function candidate(overrides: Partial<BacklogCandidate> = {}): BacklogCandidate {
@@ -139,6 +140,11 @@ describe("buildBacklogProposals", () => {
     const result = buildBacklogProposals(pending, new Map());
     expect(result.proposals.length).toBe(1);
     expect(result.proposals[0]?.sessions).toEqual(["alpha.jsonl", "beta.jsonl"]);
+    // The hash unifies the missing and the empty scope, so the proposal
+    // must not carry one or not depending on the input order either.
+    const reversed = buildBacklogProposals(pending.toReversed(), new Map());
+    expect(result).toEqual(reversed);
+    expect("scope" in result.proposals[0]!).toBe(false);
   });
 
   test("the result is deterministic: proposals by hash, drops by session then topic", () => {
@@ -164,5 +170,29 @@ describe("buildBacklogProposals", () => {
       ["alpha.jsonl", "known rule"],
       ["beta.jsonl", "another known"],
     ]);
+  });
+
+  test("one hash class picks its representative by content, not by input order", () => {
+    // computeDedupHash normalizes case, so both spellings share a hash
+    // while their raw fields differ; which one stands for the proposal
+    // must not depend on which candidate the input listed first.
+    const loud = candidate({
+      sessionId: "beta.jsonl",
+      topic: "Declare the Roots",
+      principle: "Declare the roots  exactly once.",
+    });
+    const quiet = candidate({
+      sessionId: "gamma.jsonl",
+      topic: "declare the roots",
+      principle: "Declare the roots exactly once.",
+    });
+    const expectStable = (pending: ReadonlyArray<BacklogCandidate>): BacklogProposal[] =>
+      buildBacklogProposals(pending, new Map()).proposals;
+    const first = expectStable([loud, quiet]);
+    const reversed = expectStable([quiet, loud]);
+    expect(first).toEqual(reversed);
+    expect(first[0]?.topic).toBe("Declare the Roots");
+    expect(first[0]?.principle).toBe("Declare the roots  exactly once.");
+    expect(first[0]?.sessions).toEqual(["beta.jsonl", "gamma.jsonl"]);
   });
 });

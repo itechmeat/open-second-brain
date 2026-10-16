@@ -46,7 +46,13 @@ export interface BacklogProposalDrop {
 /** One ask-once proposal: everything the vault does not yet hold, per hash. */
 export interface BacklogProposal {
   readonly dedupHash: string;
-  /** The first candidate's fields, as the proposal's representative form. */
+  /**
+   * The representative form of the hash class: the candidate whose
+   * (topic, signal, principle, scope) tuple sorts first within the class,
+   * so the proposal text cannot depend on the caller's input order. The
+   * dedup hash normalizes case and width, so one class can hold
+   * candidates whose raw fields differ.
+   */
   readonly topic: string;
   readonly signal: "positive" | "negative";
   readonly principle: string;
@@ -65,9 +71,10 @@ export interface BacklogProposals {
 
 /**
  * Batch the pending candidates ask-once. Empty input is an explicit empty
- * envelope, not silence. Deterministic: proposals sort by dedup hash,
- * drops by session then topic, so two runs over the same backlog agree
- * byte for byte regardless of the input order.
+ * envelope, not silence. Deterministic: proposals sort by dedup hash, each
+ * proposal's representative fields are the content-stable pick within its
+ * hash class, drops sort by session then topic, so two runs over the same
+ * backlog agree byte for byte regardless of the input order.
  */
 export function buildBacklogProposals(
   pending: ReadonlyArray<BacklogCandidate>,
@@ -93,6 +100,9 @@ export function buildBacklogProposals(
     if (sessions === undefined) {
       sessions = new Set();
       sessionsByHash.set(hash, sessions);
+    }
+    const current = representativeByHash.get(hash);
+    if (current === undefined || precedes(candidate, current)) {
       representativeByHash.set(hash, candidate);
     }
     sessions.add(candidate.sessionId);
@@ -111,7 +121,11 @@ export function buildBacklogProposals(
       topic: representative.topic,
       signal: representative.signal,
       principle: representative.principle,
-      ...(representative.scope !== undefined ? { scope: representative.scope } : {}),
+      // The hash unifies a missing scope with an empty one, so the
+      // representative's raw empty string is dropped too: a proposal that
+      // carried it or not depending on which candidate won the class
+      // would not be byte-for-byte deterministic.
+      ...(representative.scope ? { scope: representative.scope } : {}),
       sessions: [...sessionsByHash.get(hash)!].toSorted(),
     };
   });
@@ -124,4 +138,20 @@ export function buildBacklogProposals(
   );
 
   return { proposals, dropped, reportOnlySessions };
+}
+
+/**
+ * Whether `a`'s (topic, signal, principle, scope) tuple sorts before `b`'s,
+ * field by field in code-unit order. The missing and the empty scope
+ * compare equal, mirroring the dedup hash's own unification, so a class
+ * whose members differ only there still picks one representative whatever
+ * the input order.
+ */
+function precedes(a: BacklogCandidate, b: BacklogCandidate): boolean {
+  if (a.topic !== b.topic) return a.topic < b.topic;
+  if (a.signal !== b.signal) return a.signal < b.signal;
+  if (a.principle !== b.principle) return a.principle < b.principle;
+  const aScope = a.scope ?? "";
+  const bScope = b.scope ?? "";
+  return aScope < bScope;
 }
