@@ -320,10 +320,19 @@ export interface RunMaintenanceResult {
  * What an operator does about a lane the capacity gate skipped. The
  * reclamation verbs are the remedy, then a re-run; raising the cap is
  * the operator's own decision and names the file only they should edit.
+ *
+ * The remedy also names pruning the recovery points, because both
+ * reclamation verbs archive all of `Brain/` into `Brain/.snapshots/`
+ * before they free anything - a compressed copy of the vault lands in a
+ * COUNTED surface first - and a remedy that can grow the vault while it
+ * shrinks the ledger is not one an operator can follow blind at 96
+ * percent.
  */
 export const MAINTENANCE_CAPACITY_REMEDY =
   "free space by running receipt compaction or retiring near-duplicate copies, " +
-  "or raise storage.cap_bytes in Brain/_brain.yaml, then re-run";
+  "then prune the recovery points both write into Brain/.snapshots " +
+  "(snapshots.retention_count bounds them), or raise storage.cap_bytes in " +
+  "Brain/_brain.yaml, then re-run";
 
 /** The capacity block both lane front doors attach to a skipped run. */
 export interface MaintenanceCapacityReport {

@@ -33,6 +33,7 @@ import {
 } from "../../../src/core/brain/maintenance/journal.ts";
 import { acquireLease, currentLease } from "../../../src/core/brain/maintenance/lease.ts";
 import { BRAIN_STORAGE_DEFAULTS } from "../../../src/core/brain/policy/blocks/storage.ts";
+import { MAINTENANCE_CAPACITY_REMEDY } from "../../../src/core/brain/maintenance/lane.ts";
 import {
   STORAGE_FORECAST_TIER,
   STORAGE_USAGE_METRIC_SURFACE,
@@ -480,6 +481,16 @@ interface CapacityReportJson {
 }
 
 describe("lane surfaces carry the capacity verdict", () => {
+  test("the remedy names pruning the snapshot recovery points", () => {
+    // M6: both reclamation verbs the remedy prescribes archive all of
+    // Brain/ into Brain/.snapshots - a COUNTED surface - before they
+    // free anything, so at 96 percent the "remedy" can first grow the
+    // vault. The remedy names the retention knob, or an operator
+    // following it blind reads pure shrink where there is a swap.
+    expect(MAINTENANCE_CAPACITY_REMEDY).toContain("Brain/.snapshots");
+    expect(MAINTENANCE_CAPACITY_REMEDY).toContain("snapshots.retention_count");
+  });
+
   function seedSkipRow(): void {
     appendJournal(vault, {
       ts: NOW.toISOString(),
