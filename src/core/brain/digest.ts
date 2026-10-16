@@ -45,7 +45,7 @@ import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summ
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { BRAIN_RETIRED_REL, brainDirs, vaultRelative } from "./paths.ts";
-import { collectMaintenanceActions } from "./maintenance/collect.ts";
+import { collectMaintenanceActions, type MaintenanceCollectError } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import { loadActiveMostAppliedSafe } from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
@@ -303,6 +303,14 @@ export interface DigestJson {
    */
   readonly actions: ReadonlyArray<ActionItem>;
   /**
+   * The maintenance scans that refused while the digest was collected
+   * (review M10), rendered as a named row - a thin `actions` list must be
+   * readable as healthy rather than indistinguishable from a scan that
+   * failed. Present only when at least one scan refused, so a clean
+   * payload stays byte-identical.
+   */
+  readonly collect_errors?: ReadonlyArray<MaintenanceCollectError>;
+  /**
    * Aggregate vault trust verdict (v0.10.16). Absent when no
    * doctor input was threaded into the digest call; consumers that
    * only need the legacy preference-and-signal sections can ignore
@@ -380,6 +388,14 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
+      ...(data.collect_errors.length > 0
+        ? {
+            collect_errors: data.collect_errors.map((e) => ({
+              scan: e.signal,
+              message: e.message,
+            })),
+          }
+        : {}),
       // Guarded: dreamSummary may arrive from an untyped JSON-RPC
       // boundary (or from a future caller that has not populated
       // every array). Optional-chain the inner length read.
@@ -442,6 +458,8 @@ interface DigestData {
   readonly most_applied: DigestJsonMostApplied;
   readonly connection_health: DigestJsonConnectionHealth;
   readonly actions: ReadonlyArray<ActionItem>;
+  /** Raw collected failures; rendered on the wire as `{scan, message}` rows. */
+  readonly collect_errors: ReadonlyArray<MaintenanceCollectError>;
 }
 
 function collectDigestData(
@@ -604,6 +622,10 @@ function collectDigestData(
     entries: mostAppliedEntries,
   };
 
+  // The collector's absorbed scan failures (review M10): observed here so
+  // the digest can say why its actions list came back thin.
+  const collectErrors: MaintenanceCollectError[] = [];
+
   return {
     new_unconfirmed,
     confirmed,
@@ -616,7 +638,11 @@ function collectDigestData(
     agent_summary,
     most_applied,
     connection_health: computeConnectionHealth(vault, inbound, preferences, refs),
-    actions: refs.keep(collectMaintenanceActions(vault), (action) => [action.target]),
+    actions: refs.keep(
+      collectMaintenanceActions(vault, { onError: (e) => collectErrors.push(e) }),
+      (action) => [action.target],
+    ),
+    collect_errors: collectErrors,
   };
 }
 

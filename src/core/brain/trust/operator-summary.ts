@@ -25,7 +25,7 @@ import { toPosix } from "../../path-safety.ts";
 
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
-import { collectMaintenanceActions } from "../maintenance/collect.ts";
+import { collectMaintenanceActions, type MaintenanceCollectError } from "../maintenance/collect.ts";
 import type { ActionItem } from "../maintenance/action-scorer.ts";
 import type { DoctorIssueNaming } from "../diagnostics.ts";
 import { brainDirs } from "../paths.ts";
@@ -52,6 +52,17 @@ export interface OperatorSummary {
   readonly verification_delta: VerificationDeltaResult;
   readonly top_actions: ReadonlyArray<ActionItem>;
   readonly instruction_file_warnings: ReadonlyArray<InstructionFileCeilingWarning>;
+  /**
+   * The maintenance scans that refused while the actions were collected
+   * (review M10), rendered as `{scan, message}` rows - the same shape the
+   * digest and doctor rows carry. A thin `top_actions` list must be
+   * readable as healthy rather than indistinguishable from a scan that
+   * failed. Present only when at least one scan refused.
+   */
+  readonly collect_errors?: ReadonlyArray<{
+    readonly scan: MaintenanceCollectSignal;
+    readonly message: string;
+  }>;
 }
 
 export interface DigestSummary {
@@ -135,10 +146,12 @@ export function buildOperatorSummary(
     maxLines: guardrails.instruction_file_max_lines,
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
   });
+  const collectErrors: { scan: MaintenanceCollectSignal; message: string }[] = [];
   const topActions = safeTopActions(
     vault,
     opts.topActionsN ?? DEFAULT_TOP_ACTIONS_N,
     opts.keepAction,
+    collectErrors,
   );
 
   const trust = computeTrustVerdict({
@@ -161,6 +174,7 @@ export function buildOperatorSummary(
     verification_delta: verification,
     top_actions: topActions,
     instruction_file_warnings: instructionWarnings,
+    ...(collectErrors.length > 0 ? { collect_errors: Object.freeze(collectErrors) } : {}),
   });
 }
 
@@ -203,6 +217,15 @@ export function renderOperatorSummaryMarkdown(summary: OperatorSummary): string 
     out.push("");
     for (const a of summary.top_actions) {
       out.push(`- ${a.category}: ${a.title}`);
+    }
+  }
+
+  if (summary.collect_errors !== undefined && summary.collect_errors.length > 0) {
+    out.push("");
+    out.push("## Collection errors");
+    out.push("");
+    for (const e of summary.collect_errors) {
+      out.push(`- ${e.scan}: ${e.message}`);
     }
   }
 
@@ -319,9 +342,12 @@ function safeTopActions(
   vault: string,
   topN: number,
   keepAction: BuildOperatorSummaryOptions["keepAction"],
+  collectErrors: MaintenanceCollectError[],
 ): ReadonlyArray<ActionItem> {
   try {
-    const all = collectMaintenanceActions(vault);
+    const all = collectMaintenanceActions(vault, {
+      onError: (e) => collectErrors.push({ scan: e.signal, message: e.message }),
+    });
     const kept = keepAction === undefined ? all : all.filter(keepAction);
     return Object.freeze(kept.slice(0, Math.max(0, topN)));
   } catch {

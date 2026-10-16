@@ -5,12 +5,28 @@
  * when populated, and that an empty vault stays quiet.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
+
+// A forwarding mock over the dedup scan (the claim-provenance precedent):
+// inert unless this file's failing-scan test turns it on, so the mocks
+// never answer differently for any other test file sharing the process.
+import * as pageDedupModule from "../../../src/core/brain/page-dedup.ts";
+
+const realFindDuplicateCandidates = pageDedupModule.findDuplicateCandidates;
+let failDedup = false;
+
+mock.module("../../../src/core/brain/page-dedup.ts", () => ({
+  ...pageDedupModule,
+  findDuplicateCandidates: (vault: string) => {
+    if (failDedup) throw new Error("the dedup scan refused");
+    return realFindDuplicateCandidates(vault);
+  },
+}));
 
 let vault: string;
 
@@ -51,6 +67,37 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
+});
+
+describe("brain_digest collect_errors surface (review M10)", () => {
+  test("a healthy vault renders no collect_errors row", () => {
+    const res = renderDigest(vault, {
+      format: "json",
+      since: new Date("2026-05-24T00:00:00Z"),
+      until: new Date("2026-05-25T00:00:00Z"),
+    });
+    const payload = JSON.parse(res.content) as { collect_errors?: unknown };
+    expect(payload.collect_errors).toBeUndefined();
+  });
+
+  test("a failed scan is rendered as a named collect_errors row", () => {
+    failDedup = true;
+    try {
+      const res = renderDigest(vault, {
+        format: "json",
+        since: new Date("2026-05-24T00:00:00Z"),
+        until: new Date("2026-05-25T00:00:00Z"),
+      });
+      const payload = JSON.parse(res.content) as {
+        collect_errors?: ReadonlyArray<{ scan: string; message: string }>;
+      };
+      expect(payload.collect_errors).toEqual([
+        { scan: "dedup", message: "the dedup scan refused" },
+      ]);
+    } finally {
+      failDedup = false;
+    }
+  });
 });
 
 describe("brain_digest actions surface", () => {

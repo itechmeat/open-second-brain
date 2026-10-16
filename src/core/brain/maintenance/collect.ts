@@ -34,9 +34,11 @@ export interface MaintenanceCollectError {
 export interface CollectMaintenanceActionsOptions {
   /**
    * Observes each per-signal collection failure as it is absorbed. The scan
-   * stays fail-soft either way; the doctor, digest and health surfaces call
-   * without an observer and keep today's quiet contract, and a caller
-   * diagnosing a thin report passes one to hear what refused.
+   * stays fail-soft either way; the doctor, digest and operator-summary
+   * surfaces pass a collector and render what refused as a named
+   * `collect_errors` row (review M10), so a thin report because the vault
+   * is healthy is no longer indistinguishable from a thin report because a
+   * scan refused.
    */
   readonly onError?: (error: MaintenanceCollectError) => void;
 }

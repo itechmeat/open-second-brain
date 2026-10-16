@@ -91,6 +91,40 @@ describe("buildOperatorSummary - structural envelope", () => {
   });
 });
 
+describe("buildOperatorSummary - collect_errors (review M10)", () => {
+  test("a failed maintenance scan lands in the envelope as a named row", () => {
+    // A FILE at Brain/preferences makes the dedup scan's readdir refuse;
+    // every other reader on this surface degrades instead of throwing.
+    rmSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "preferences"), "not a directory", "utf8");
+
+    const r = buildOperatorSummary(vault, {});
+    // The break can refuse more than one scan on this surface (the lint
+    // resolver shares the directory); the row is about WHAT refused, so
+    // the assertion is on the shape and the named dedup entry.
+    const errors = r.collect_errors ?? [];
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.scan === "dedup")).toBe(true);
+    for (const e of errors) {
+      expect(e.message.replace(/\\/g, "/")).toContain("preferences");
+    }
+  });
+
+  test("a healthy vault carries no collect_errors row", () => {
+    const r = buildOperatorSummary(vault, {});
+    expect(r.collect_errors).toBeUndefined();
+  });
+
+  test("the markdown renderer names the collected errors when present", () => {
+    rmSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "preferences"), "not a directory", "utf8");
+
+    const md = renderOperatorSummaryMarkdown(buildOperatorSummary(vault, {}));
+    expect(md).toContain("## Collection errors");
+    expect(md).toContain("dedup");
+  });
+});
+
 describe("renderOperatorSummaryMarkdown", () => {
   test("markdown contains the three signal sections", () => {
     const r = buildOperatorSummary(vault, { dreamSummary: emptyDream() });

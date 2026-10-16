@@ -7,7 +7,10 @@
  */
 
 import { resolveSearchConfig } from "../../core/search/index.ts";
-import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
+import {
+  collectMaintenanceActions,
+  type MaintenanceCollectError,
+} from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
 import { annotateEntityAliasIssues } from "../../core/brain/doctor/entity-alias-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
@@ -182,6 +185,11 @@ async function toolBrainDoctor(
   // Resolved through the same table the CLI renderer reads.
   const noExit = noExitReasons([...errors, ...warnings, ...(uncertain ?? [])].map((i) => i.code));
 
+  // The maintenance collector's absorbed scan failures (review M10):
+  // observed here so a thin `suggested_actions` list is readable as
+  // healthy rather than indistinguishable from a scan that refused.
+  const collectErrors: MaintenanceCollectError[] = [];
+
   return {
     format,
     ok,
@@ -204,7 +212,10 @@ async function toolBrainDoctor(
     // because nothing here downgrades the `ok` flag - actions are
     // suggestions, not invariant violations.
     suggested_actions: view
-      .keep(collectMaintenanceActions(ctx.vault), (a) => [a.target])
+      .keep(
+        collectMaintenanceActions(ctx.vault, { onError: (e) => collectErrors.push(e) }),
+        (a) => [a.target],
+      )
       .map((a) => ({
         id: a.id,
         category: a.category,
@@ -212,6 +223,11 @@ async function toolBrainDoctor(
         impact: a.impact,
         ...(a.target !== undefined ? { target: a.target } : {}),
       })),
+    // Rendered only when a scan refused, so a clean payload is
+    // byte-identical to the pre-row shape (review M10).
+    ...(collectErrors.length > 0
+      ? { collect_errors: collectErrors.map((e) => ({ scan: e.signal, message: e.message })) }
+      : {}),
     // v0.10.16: trust-layer fields. `trust_verdict` is always populated
     // by runDoctor; `verification_delta_summary` only when the caller
     // threads a dream summary through (not exposed via this tool's
