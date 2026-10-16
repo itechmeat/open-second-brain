@@ -138,7 +138,6 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
   "token_impact_outcome",
   "context_pack_outcome",
   "context_pack_evidence",
-  "skill_invoked",
   "decision_model_call",
   "decision_model_extract_commit",
 ]);
@@ -178,7 +177,12 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
  *     destroy exactly that auditability;
  *   - `receipt_compaction` - the compaction audit trail itself; a fold
  *     that removed the record of the run before it would erase the only
- *     account of what the fold has already destroyed.
+ *     account of what the fold has already destroyed;
+ *   - `skill_invoked` - read back as data by `deriveSkillUsage`, whose
+ *     lifetime per-skill counts order the skill offers; a fold past the
+ *     cutoff would collapse a skill's usage to its last window and
+ *     reorder the offers (its payload carries `agent`, not `agent_id`, so
+ *     the clip-key rule never protected it either).
  */
 export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
   "source_invalidation",
@@ -195,6 +199,7 @@ export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object
   "recall_observed_use",
   "negative_recall",
   "receipt_compaction",
+  "skill_invoked",
 ]);
 
 /** One shard selected for compaction, as a scan reported it. */

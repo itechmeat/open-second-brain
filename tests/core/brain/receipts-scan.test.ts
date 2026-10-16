@@ -286,6 +286,14 @@ describe("scanReceiptLedgers", () => {
     // been given, which a fold past the cutoff would destroy.
     expect(KEPT_CONTINUITY_KINDS).toContain("recall_observed_use");
     expect(KEPT_CONTINUITY_KINDS).toContain("negative_recall");
+    // `skill_invoked` is the lifetime usage `deriveSkillUsage` ranks the
+    // skill offers by; a fold would collapse it to the last window.
+    expect(
+      classifyContinuityRecord(
+        { kind: "skill_invoked", createdAt: "2026-08-01T00:00:00Z" },
+        cutoffMs,
+      ),
+    ).toBe("protected");
     expect(FOLDABLE_CONTINUITY_KINDS).not.toContain("recall_observed_use");
     expect(FOLDABLE_CONTINUITY_KINDS).not.toContain("negative_recall");
   });
