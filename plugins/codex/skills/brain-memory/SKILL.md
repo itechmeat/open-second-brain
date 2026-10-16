@@ -185,6 +185,9 @@ exact bytes with `brain_session_expand` `{payload: "<ref>"}` or
 `o2b brain payload get <ref>` rather than guessing what was elided.
 
 To mine taste signals from an imported session afterwards, call
-`brain_extract_signals` `{session}` and answer its one envelope (optionally
-citing each item's `source_turn`); a plan with `llm_step: null` and
-`skipped` means there is nothing to mine, so commit nothing.
+`brain_extract_signals` `{session}` and answer its one envelope by calling
+it again with `{session, items}` (optionally citing each item's
+`source_turn`). Commit even when you found nothing - `items: []` records
+that the session had nothing new, so it is not offered to a model again. A
+plan with `llm_step: null` and `skipped` means there is nothing to mine, so
+commit nothing.

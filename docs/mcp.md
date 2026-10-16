@@ -2186,8 +2186,14 @@ format characters), when it contains NUL, or when it exceeds the cap.
   bypasses the tombstone for exactly one plan call, for a caller that
   removed the downstream preference and wants the session re-proposed; a
   corrupt mining ledger refuses the plan by name rather than reading as
-  empty. A commit that succeeds but cannot record its tombstone still
-  succeeds and carries `mining_ledger_failure` by name.
+  empty. The commit keys its record on the session's turns as they stand
+  at commit time, so answering the envelope with `{session, items}` (an
+  empty `items` included) is all it takes; the optional
+  `surveyed_turns_hash` argument passes the plan's hash back as a check -
+  a value that is not a SHA-256 hex digest refuses the commit, and one the
+  session no longer matches writes no mining record and names why. A
+  commit that succeeds but cannot record its tombstone still succeeds and
+  carries `mining_ledger_failure` by name.
 - Advisory decision-model fields (optional, see
   [decision-models/dedup-tension.md](decision-models/dedup-tension.md) and
   [decision-models/labels.md](decision-models/labels.md)). All of them are

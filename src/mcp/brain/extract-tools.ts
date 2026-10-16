@@ -114,10 +114,9 @@ async function toolBrainExtractSignals(
         agent,
         now,
         dedup: await loadDedupIndex(ctx.vault),
-        // The answered plan's surveyed hash, echoed back by the caller:
-        // what the zero-yield tombstone keys on. Absent, the commit
-        // records nothing - there is no material the verdict was earned
-        // over.
+        // The answered plan's surveyed hash, when the caller echoes it: a
+        // check that the session did not change since the plan. Absent,
+        // the commit records over the session's current mined turns.
         ...(surveyedTurnsHash ? { surveyedTurnsHash } : {}),
       },
     );
@@ -150,7 +149,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan; with `items` pass the plan's `surveyed_turns_hash` back so a barren commit records its tombstone. Barren sessions skip as 'mining_tombstone'; `force` re-mines once. Refuses caps, floors, repeats.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan; with `items` commit, and a barren commit records a tombstone. Barren sessions skip as 'mining_tombstone'; `force` re-mines once. Refuses caps, floors, repeats.",
     inputSchema: {
       type: "object",
       properties: {
@@ -161,7 +160,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         surveyed_turns_hash: {
           type: "string",
           description:
-            "Commit phase only: the `surveyed_turns_hash` from the plan response this payload answers. Omit it and a barren commit records nothing.",
+            "Commit phase only, optional: the plan's `surveyed_turns_hash`. If the session changed since that plan, no mining record is written.",
         },
         items: {
           type: "array",

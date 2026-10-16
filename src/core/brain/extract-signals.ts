@@ -222,10 +222,10 @@ export interface SignalExtractionPlan {
   readonly turnsMined: ReadonlyArray<MinedTurn>;
   /**
    * {@link minedTurnsHash} of {@link turnsMined}: the material this plan
-   * put in front of the caller. The commit that answers this plan passes
-   * it back as {@link CommitExtractedSignalsOptions.surveyedTurnsHash}, so
-   * the mining record keys on the material the verdict was earned over,
-   * never on whatever the session holds by commit time.
+   * put in front of the caller. The commit that answers this plan may pass
+   * it back as {@link CommitExtractedSignalsOptions.surveyedTurnsHash} to
+   * check the session did not change in between; the commit records over
+   * the current material either way.
    */
   readonly surveyedTurnsHash: string;
   /** The limits the payload will be held to, echoed so the caller can read them. */
@@ -326,12 +326,16 @@ export interface CommitExtractedSignalsOptions {
   readonly dedup?: Map<string, DedupIndexEntry>;
   /**
    * The answered plan's {@link SignalExtractionPlan.surveyedTurnsHash}: the
-   * hash of the turns the caller was actually shown. The mining record keys
-   * on it, so an import landing between plan and commit cannot put a
-   * tombstone on turns no model ever saw. Absent means this commit answers
-   * no plan of this module's, and then there is no material the verdict was
-   * earned over - so nothing is recorded, and the session stays eligible
-   * (the safe direction, the same one an unreadable entry gets).
+   * hash of the turns the caller was actually shown. Optional: the commit
+   * always recomputes the hash of the session's CURRENT mined turns and
+   * records the outcome over that, so the documented flow (plan, answer
+   * the envelope, commit the items) writes its record without relaying
+   * anything. When the hash IS relayed it is a check: it must be a SHA-256
+   * hex digest (anything else refuses the commit before a write), and when
+   * it differs from the current material - an import landed between plan
+   * and commit, or the hash came from another plan - nothing is recorded
+   * and the commit names that as its mining ledger failure, so a tombstone
+   * never lands on turns no model saw.
    */
   readonly surveyedTurnsHash?: string;
 }
@@ -623,6 +627,9 @@ function transcriptLabel(turn: MinedTurn): string {
 
 // ----- Phase two: what the caller mined ------------------------------------
 
+/** A plan's surveyed-turns hash: a SHA-256 digest in lowercase hex. */
+const SURVEYED_TURNS_HASH_RE = /^[0-9a-f]{64}$/;
+
 /**
  * Validate the returned payload and write the accepted items.
  *
@@ -648,6 +655,14 @@ export function commitExtractedSignals(
   if (boundaryDecision !== "capture") {
     throw new ExtractSignalsError(
       `session ${trimmed} is classified '${boundaryDecision}' by the capture boundary; it may not produce signals`,
+    );
+  }
+  if (
+    opts.surveyedTurnsHash !== undefined &&
+    !SURVEYED_TURNS_HASH_RE.test(opts.surveyedTurnsHash)
+  ) {
+    throw new ExtractSignalsError(
+      `surveyed_turns_hash must be the 64-character lowercase hex digest a plan printed, got '${opts.surveyedTurnsHash}'`,
     );
   }
   // Structure first, then the cross-item rules. Nothing is written until
@@ -754,26 +769,43 @@ export function commitExtractedSignals(
     );
   }
 
-  // Every commit that answers a plan is the ledger's write trigger: the
-  // outcome breakdown is recorded over the hash the PLAN surveyed - the
-  // material the verdict was earned over - whatever the yield was. The
-  // zero-yield record is the tombstone the plan gate suppresses on; a
-  // yield record is the distilled state the census reports, and it is NOT
-  // a tombstone - the session stays minable. A thrown
-  // ExtractSignalsWriteError never reaches here: a run that FAILED did not
-  // end, so it records nothing. And a commit that answers no plan of this
-  // module's attests nothing, so it records nothing: without surveyed
-  // material there is nothing honest to key a record on, and failing open
-  // to a re-mine is the safe direction.
+  // Every commit is the ledger's write trigger: the outcome breakdown is
+  // recorded over the hash of the session's current mined turns - the
+  // material a plan issued now would offer, and the one the plan gate and
+  // the census compare against - whatever the yield was. The zero-yield
+  // record is the tombstone the plan gate suppresses on; a yield record is
+  // the distilled state the census reports, and it is NOT a tombstone -
+  // the session stays minable. A thrown ExtractSignalsWriteError never
+  // reaches here: a run that FAILED did not end, so it records nothing. A
+  // session with no mined material records nothing either, and a relayed
+  // plan hash that no longer matches the material records nothing and
+  // says so: failing open to a re-mine is the safe direction.
   const staged = writeApprovalEnabled ? written.length : 0;
   let miningLedgerFailure: string | undefined;
-  if (opts.surveyedTurnsHash !== undefined) {
+  let currentHash: string | null = null;
+  try {
+    const mined = selectMinedTurns(boundary, listSessionRawTurns(vault, trimmed));
+    currentHash = mined.length === 0 ? null : minedTurnsHash(mined);
+  } catch (err) {
+    miningLedgerFailure = err instanceof Error ? err.message : String(err);
+  }
+  if (
+    currentHash !== null &&
+    opts.surveyedTurnsHash !== undefined &&
+    opts.surveyedTurnsHash !== currentHash
+  ) {
+    miningLedgerFailure =
+      `the session's turns no longer match the surveyed_turns_hash this commit answers ` +
+      `(${opts.surveyedTurnsHash}); no mining record was written, so the session stays minable`;
+    currentHash = null;
+  }
+  if (currentHash !== null) {
     try {
       recordSessionMiningOutcome(
         vault,
         {
           sessionId: trimmed,
-          minedContentHash: opts.surveyedTurnsHash,
+          minedContentHash: currentHash,
           outcome: {
             written: written.length,
             staged,

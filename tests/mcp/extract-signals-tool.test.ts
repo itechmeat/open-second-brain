@@ -152,8 +152,9 @@ test("turns_mined carries the stored turn timestamp, on the tool and the CLI ali
 //
 //  7. A session tombstoned by a barren commit gets no envelope: the plan
 //     carries the tombstone reason and the recorded breakdown, and no turn
-//     text rides out to the caller. The tombstone exists only when the
-//     commit relayed the plan's surveyed_turns_hash back.
+//     text rides out to the caller. Answering the envelope is enough:
+//     the commit keys the record on the session's current turns, and a
+//     relayed surveyed_turns_hash is only a check.
 //  8. The `force` argument bypasses the tombstone for exactly one plan
 //     call, and the tool declares it; so does the surveyed_turns_hash
 //     argument the commit relays.
@@ -204,16 +205,33 @@ test("a tombstoned session returns the recorded breakdown instead of an envelope
   expect(plan.turns_mined).toEqual([]);
 });
 
-test("a barren commit that never saw the plan records nothing and fails open", async () => {
-  // Without the relayed hash the commit has no material the verdict was
-  // earned over, so it records nothing rather than keying a tombstone on
-  // whatever the session holds now.
+test("the documented flow - plan, then commit the answer - tombstones without any relay", async () => {
+  // The skill's flow: call with {session}, answer the envelope with
+  // {session, items}. Nothing tells the caller to echo a hash, so the
+  // tombstone must land without one.
+  await tool().handler(ctx, { session: SESSION });
   const mine = (await tool().handler(ctx, { session: SESSION, items: [] })) as {
     phase: string;
-    written: unknown[];
+    mining_ledger_failure?: string;
   };
   expect(mine.phase).toBe("commit");
-  expect(mine.written).toEqual([]);
+  expect(mine.mining_ledger_failure).toBeUndefined();
+  const plan = (await tool().handler(ctx, { session: SESSION })) as {
+    skipped?: { reason: string };
+  };
+  expect(plan.skipped?.reason).toBe("mining_tombstone");
+});
+
+test("a relayed hash the session no longer matches records nothing and says so", async () => {
+  // A hash from another plan (or a session that changed since) must not
+  // overwrite the record with one that never matches.
+  const foreign = "0".repeat(64);
+  const mine = (await tool().handler(ctx, {
+    session: SESSION,
+    items: [],
+    surveyed_turns_hash: foreign,
+  })) as { mining_ledger_failure?: string };
+  expect(mine.mining_ledger_failure).toContain(foreign);
   const plan = (await tool().handler(ctx, { session: SESSION })) as { skipped?: unknown };
   expect(plan.skipped).toBeUndefined();
 });
@@ -243,7 +261,6 @@ test("the tool description documents the tombstone and the force escape", () => 
   const description = tool().description;
   expect(description).toContain("tombstone");
   expect(description).toContain("force");
-  expect(description).toContain("surveyed_turns_hash");
 });
 
 test("a ledger write failure on a successful commit rides the commit response by name", async () => {

@@ -634,15 +634,15 @@ test("the session mining ledger schema version is pinned at 1", () => {
 
 // ----- Record-at-commit (session-mining-economy) ----------------------------
 //
-// 24. Every successful commit that answers a plan records its outcome
-//     breakdown over the surveyed hash: zero-yield as the tombstone's
+// 24. Every successful commit records its outcome breakdown over the
+//     session's current mined turns: zero-yield as the tombstone's
 //     evidence, yield as the distilled state the census reports.
 // 25. A commit that ends in a partial-write error records nothing - a
 //     failed run is not an outcome.
-// 26. The tombstone keys on the material the model actually answered, so a
-//     turn imported between plan and commit is never suppressed unseen; a
-//     commit that answers no plan of this module's attests nothing and
-//     records nothing, which is the safe direction.
+// 26. A turn imported between plan and commit is never suppressed unseen:
+//     a relayed plan hash that no longer matches records nothing and names
+//     why. Without a relay the commit records over the current material,
+//     which is what the documented flow does.
 // 27. When the commit itself succeeds but the ledger write fails, the
 //     result names the failure and nothing throws; the field is absent
 //     whenever the ledger was not attempted or succeeded.
@@ -746,10 +746,10 @@ test("a partial-write failure records nothing - a failed run is not a barren one
   expect(readSessionMiningLedger(vault).entries).toEqual({});
 });
 
-test("the tombstone keys on the surveyed hash, not the turns present at commit time", () => {
+test("a relayed plan hash the session outgrew records nothing and names why", () => {
   const plan = planExtractSignals(vault, SESSION, { now: NOW });
   importTurns(SESSION, [turn("t9", "user", "Imported after the plan was built.")]);
-  commitExtractedSignals(
+  const res = commitExtractedSignals(
     vault,
     SESSION,
     { items: [] },
@@ -759,10 +759,10 @@ test("the tombstone keys on the surveyed hash, not the turns present at commit t
       surveyedTurnsHash: plan.surveyedTurnsHash,
     },
   );
-  const entry = ledgerEntry()!;
-  // The verdict was earned over the planned material, and that is the
-  // material the record describes - never what the session holds by now.
-  expect(entry.minedContentHash).toBe(minedTurnsHash(plan.turnsMined));
+  // The verdict was earned over material the session no longer holds, so
+  // no record may claim the current turns.
+  expect(ledgerEntry()).toBeUndefined();
+  expect(res.miningLedgerFailure).toContain(plan.surveyedTurnsHash);
 });
 
 test("a turn imported between plan and commit is not suppressed unseen", async () => {
@@ -788,12 +788,13 @@ test("a turn imported between plan and commit is not suppressed unseen", async (
   expect(next.turnsMined.map((t) => t.turnId)).toEqual(["t1", "t3", "t9"]);
 });
 
-test("a commit that answers no plan attests nothing and records nothing", () => {
-  // Without a plan there is no material the verdict was earned over; a
-  // tombstone keyed on whatever the session holds now could suppress turns
-  // no model ever saw. Recording nothing keeps the session eligible.
-  commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
-  expect(readSessionMiningLedger(vault).entries).toEqual({});
+test("a commit without a relayed hash records over the session's current mined turns", () => {
+  // The documented flow relays nothing; the commit derives the material
+  // itself, so the barren answer still lands its tombstone.
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const res = commitExtractedSignals(vault, SESSION, { items: [] }, { agent: "tester", now: NOW });
+  expect(res.miningLedgerFailure).toBeUndefined();
+  expect(ledgerEntry()?.minedContentHash).toBe(plan.surveyedTurnsHash);
 });
 
 /** Plants a corrupt mining ledger so a read of it refuses by name. */

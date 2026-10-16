@@ -8,12 +8,13 @@
  * that answer and writes the accepted items as speculative inbox signals.
  * OSB runs no model on either path.
  *
- * A commit that answers a plan passes that plan's `surveyed_turns_hash`
- * back with `--surveyed-turns-hash`: it is what the zero-yield mining
- * tombstone keys on, so the record describes the material the verdict was
- * earned over rather than whatever the session holds by commit time. A
- * commit without it records nothing - without surveyed material there is
- * nothing honest to key a tombstone on.
+ * Every commit records its outcome in the session mining ledger over the
+ * session's current mined turns, so a barren commit leaves the zero-yield
+ * tombstone without any relay. `--surveyed-turns-hash` optionally passes
+ * the answered plan's `surveyed_turns_hash` back as a check: a malformed
+ * value refuses the commit, and a value the session no longer matches (it
+ * changed since the plan) writes the signals but no mining record, and
+ * says so.
  *
  * A session already mined at its current content that yielded nothing
  * accepted carries a tombstone in the session mining ledger; its plan phase
@@ -121,9 +122,9 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
             text: t.text,
             timestamp: t.timestamp,
           })),
-          // The hash of the material this plan offered; the commit that
-          // answers it passes it back with --surveyed-turns-hash so the
-          // mining tombstone keys on the surveyed material.
+          // The hash of the material this plan offered; a commit may pass it
+          // back with --surveyed-turns-hash to check the session did not
+          // change in between.
           surveyed_turns_hash: plan.surveyedTurnsHash,
           cap: plan.cap,
           confidence_floor: plan.confidenceFloor,
@@ -216,9 +217,9 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       // Loaded with parallel I/O here, where the caller can await it; the
       // commit's own fallback is the synchronous walk.
       dedup: await loadDedupIndex(vault),
-      // The answered plan's surveyed hash, relayed by the calling agent:
-      // what the zero-yield tombstone keys on. Absent, the commit records
-      // nothing - there is no material the verdict was earned over.
+      // The answered plan's surveyed hash, when relayed: a check that the
+      // session did not change since the plan. Absent, the commit records
+      // over the session's current mined turns.
       ...(surveyedTurnsHashRaw !== null ? { surveyedTurnsHash: surveyedTurnsHashRaw } : {}),
     });
     recordExtractPrefilterCommit(vault, decisionModel, res, now);
