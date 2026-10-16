@@ -38,7 +38,11 @@
  *
  * Idempotency: a re-run recounts a compacted shard, finds nothing
  * foldable, and writes nothing - no rewrite, no snapshot, no audit
- * record. The audit is the additive `receipt_compaction` continuity
+ * record. When a later run does fold new records into an
+ * already-compacted shard (a slid cutoff, a re-import), it merges into
+ * the aggregate line it finds - count and bytes summed, first and last
+ * widened - so a shard never carries a second line per (kind, month).
+ * The audit is the additive `receipt_compaction` continuity
  * kind (one record per confirmed run that folded, never on a dry run),
  * carrying the honest per-shard outcomes including failures. An audit
  * record that cannot be appended after the shards are durable is a
@@ -126,10 +130,28 @@ export interface ReceiptFoldGroup {
 
 /** One fold group together with where its aggregate line is written. */
 interface GroupEntry {
-  /** Index into the shard's lines of the group's first folded record. */
-  readonly firstIndex: number;
+  /**
+   * Line index the group's aggregate line is written at: the position of
+   * the group's first folded record, or of the earliest prior aggregate
+   * line the group merged, whichever comes first.
+   */
+  readonly emitIndex: number;
   /** The fold group, replaced in place as later records join it. */
   group: ReceiptFoldGroup;
+}
+
+/**
+ * The prior aggregate one existing fold line carries, when the line is
+ * one this family's engine wrote and its numbers are intact enough to
+ * merge into. Anything else stays verbatim.
+ */
+interface PriorFold {
+  readonly kind: string;
+  readonly month: string;
+  readonly count: number;
+  readonly bytes: number;
+  readonly first: string;
+  readonly last: string;
 }
 
 /** One shard the confirmed run could not rewrite, with the reason. */
@@ -201,6 +223,8 @@ interface ShardPlan {
   readonly kept: number;
   /** Fold groups in first-occurrence order, each with its aggregate slot. */
   readonly groupEntries: ReadonlyArray<GroupEntry>;
+  /** Prior aggregate lines a merge consumed; the rebuild drops them. */
+  readonly mergedPriorLines: ReadonlyArray<number>;
   /** Exact text the recount read; the compare-and-swap anchor. */
   readonly text: string;
   readonly bytesBefore: number;
@@ -265,6 +289,47 @@ function instantOf(timestamp: string): number {
 }
 
 /**
+ * Read the prior aggregate one parsed line carries, when the line is a
+ * fold line this family's engine wrote and its fields are intact enough
+ * to merge into: matching family, string kind/surface and month, string
+ * first/last bounds, and a positive safe-integer count and non-negative
+ * byte total. Anything else - a foreign family's line, a corrupt one -
+ * returns `null` and stays verbatim.
+ */
+function mergeableFold(parsed: unknown, family: ReceiptLedgerFamily): PriorFold | null {
+  if (!isFoldAggregateLine(parsed)) return null;
+  const fold = (parsed as { readonly fold: Record<string, unknown> }).fold;
+  if (fold["family"] !== family) return null;
+  const continuity = family === RECEIPT_LEDGER_FAMILY.continuity;
+  const kind = fold[continuity ? "kind" : "surface"];
+  const first = fold[continuity ? "first_created_at" : "first_run_at"];
+  const last = fold[continuity ? "last_created_at" : "last_run_at"];
+  const count = fold["count"];
+  const bytes = fold["bytes"];
+  if (typeof kind !== "string" || typeof fold["month"] !== "string") return null;
+  if (typeof first !== "string" || typeof last !== "string") return null;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) return null;
+  if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) return null;
+  return { kind, month: fold["month"] as string, count, bytes, first, last };
+}
+
+/**
+ * Fold a prior aggregate's mass into a group this run is building: counts
+ * and byte totals sum, and the first/last bounds widen by instant - the
+ * same compare the fold itself uses, so a fractional-second stamp cannot
+ * win a bound it does not own.
+ */
+function mergePrior(group: ReceiptFoldGroup, prior: PriorFold): ReceiptFoldGroup {
+  return {
+    ...group,
+    count: group.count + prior.count,
+    bytes: group.bytes + prior.bytes,
+    first: instantOf(prior.first) < instantOf(group.first) ? prior.first : group.first,
+    last: instantOf(prior.last) > instantOf(group.last) ? prior.last : group.last,
+  };
+}
+
+/**
  * Recount one named shard against the disk. A shard that cannot be read
  * yields a failure instead of a plan - named unreadable, with its
  * `family:name` identity and no filesystem detail, since the raw error
@@ -288,6 +353,15 @@ function planShard(
   const lines = text.split("\n").filter((line) => line.trim() !== "");
   const byKey = new Map<string, GroupEntry>();
   const groupEntries: GroupEntry[] = [];
+  // Prior aggregate lines a merge consumed: the rebuild drops them in
+  // favour of the one merged aggregate line their group emits.
+  const mergedPriorLines = new Set<number>();
+  // Prior aggregates met before the group's first new record: one per
+  // key, absorbed when the entry is created.
+  const priorsByKey = new Map<
+    string,
+    Array<{ readonly index: number; readonly prior: PriorFold }>
+  >();
   let foldable = 0;
   let kept = 0;
   for (const [index, line] of lines.entries()) {
@@ -296,6 +370,27 @@ function planShard(
       parsed = JSON.parse(line);
     } catch {
       kept += 1; // a torn line is nobody's to fold
+      continue;
+    }
+    if (isFoldAggregateLine(parsed)) {
+      // M13: an aggregate line this engine wrote joins its key's group -
+      // repeated runs must never stack a second line per (kind, month).
+      // A group with no new record yet is created by the first record
+      // that reaches it; until then the line stays verbatim untouched.
+      const prior = mergeableFold(parsed, ref.family);
+      if (prior !== null) {
+        const key = `${prior.kind}\u0000${prior.month}`;
+        const entry = byKey.get(key);
+        if (entry !== undefined) {
+          entry.group = mergePrior(entry.group, prior);
+          mergedPriorLines.add(index);
+          continue;
+        }
+        const pendings = priorsByKey.get(key) ?? [];
+        pendings.push({ index, prior });
+        priorsByKey.set(key, pendings);
+      }
+      kept += 1;
       continue;
     }
     const verdict = verdictFor(ref.family, parsed, resolved.base, cutoffMs);
@@ -308,18 +403,25 @@ function planShard(
     const bytes = Buffer.byteLength(line, "utf8");
     const existing = byKey.get(key);
     if (existing === undefined) {
-      const entry: GroupEntry = {
-        firstIndex: index,
-        group: {
-          shard: display,
-          kind: verdict.kind!,
-          month: verdict.month!,
-          count: 1,
-          first: verdict.timestamp!,
-          last: verdict.timestamp!,
-          bytes,
-        },
+      let emitIndex = index;
+      let group: ReceiptFoldGroup = {
+        shard: display,
+        kind: verdict.kind!,
+        month: verdict.month!,
+        count: 1,
+        first: verdict.timestamp!,
+        last: verdict.timestamp!,
+        bytes,
       };
+      const pendings = priorsByKey.get(key);
+      if (pendings !== undefined) {
+        for (const pending of pendings) {
+          group = mergePrior(group, pending.prior);
+          mergedPriorLines.add(pending.index);
+          emitIndex = Math.min(emitIndex, pending.index);
+        }
+      }
+      const entry: GroupEntry = { emitIndex, group };
       byKey.set(key, entry);
       groupEntries.push(entry);
       continue;
@@ -350,6 +452,7 @@ function planShard(
       foldable,
       kept,
       groupEntries: Object.freeze(groupEntries),
+      mergedPriorLines: Object.freeze([...mergedPriorLines]),
       text,
       bytesBefore: Buffer.byteLength(text, "utf8"),
     },
@@ -383,23 +486,20 @@ function aggregateLine(family: ReceiptLedgerFamily, group: ReceiptFoldGroup): st
 
 /**
  * Rebuild one shard's content: kept lines verbatim in order, each fold
- * group's aggregate line at the position of the group's first folded
- * record. Deterministic for a given shard and cutoff.
+ * group's - possibly merged - aggregate line at the group's emit index.
+ * Deterministic for a given shard and cutoff.
  */
 function rebuildContent(plan: ShardPlan): string {
-  const byIndex = new Map<number, GroupEntry>(plan.groupEntries.map((e) => [e.firstIndex, e]));
-  const emitted = new Set<string>();
+  const emitAt = new Map<number, GroupEntry>(plan.groupEntries.map((e) => [e.emitIndex, e]));
+  const merged = new Set(plan.mergedPriorLines);
   const out: string[] = [];
   for (const [index, line] of plan.lines.entries()) {
-    const entry = byIndex.get(index);
+    const entry = emitAt.get(index);
     if (entry !== undefined) {
-      const key = `${entry.group.kind}\u0000${entry.group.month}`;
-      if (!emitted.has(key)) {
-        emitted.add(key);
-        out.push(aggregateLine(plan.ref.family, entry.group));
-      }
+      out.push(aggregateLine(plan.ref.family, entry.group));
       continue;
     }
+    if (merged.has(index)) continue; // replaced by the merged aggregate above
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);

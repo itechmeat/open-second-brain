@@ -89,6 +89,11 @@ function readShard(dir: string, name: string): string {
   return readFileSync(join(dir, name), "utf8");
 }
 
+/** Byte length of one record line, newline separators excluded. */
+function recordLineBytes(line: string): number {
+  return Buffer.byteLength(line.trimEnd(), "utf8");
+}
+
 /** The continuity shard the happy-path tests fold: two old, one protected, one young. */
 const MIXED_SHARD = [
   continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "first old" }),
@@ -449,6 +454,92 @@ describe("compactReceiptLedgers", () => {
     expect(listContinuityRecords(vault, { kind: "session_entity_mention" })).toHaveLength(28);
     expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(28);
     expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).not.toContain(RECEIPT_FOLD_SCHEMA);
+  });
+
+  test("a later run merges into the existing (kind, month) aggregate instead of adding a second line", () => {
+    // M13: the cutoff slides with each run and re-imports append new old
+    // records into an already-compacted monthly shard, so a shard folded
+    // twice used to gain a SECOND aggregate line per (kind, month) - a
+    // growing stack the one-aggregate-per-key contract forbids, and whose
+    // ~200-byte lines could tip a small fold into the strict-shrink
+    // refusal. The fold now merges into the aggregate it finds: count and
+    // bytes sum, first and last widen.
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", [
+      continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "first" }),
+      continuityLine("recall_telemetry", "2026-08-20T12:00:00Z", { note: "second" }),
+    ]);
+    const first = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(first.totals.aggregates).toBe(1);
+    // A re-import appends another old record into the same monthly shard.
+    const compacted = readShard(continuityLogDir(vault), "2026-08.jsonl");
+    const reimported = continuityLine("recall_telemetry", "2026-08-15T12:00:00Z", {
+      note: "re-imported",
+    });
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", compacted + reimported);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.totals.folded).toBe(1);
+    // The small fold merged instead of failing the strict-shrink guard.
+    expect(result.failures).toEqual([]);
+    const lines = readShard(continuityLogDir(vault), "2026-08.jsonl")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    expect(lines).toHaveLength(1);
+    const fold = (JSON.parse(lines[0]!) as { fold: Record<string, unknown> }).fold;
+    expect(fold.kind).toBe("recall_telemetry");
+    expect(fold.month).toBe("2026-08");
+    expect(fold.count).toBe(3);
+    expect(fold.first_created_at).toBe("2026-08-10T12:00:00Z");
+    expect(fold.last_created_at).toBe("2026-08-20T12:00:00Z");
+    expect(fold.bytes).toBe(
+      recordLineBytes(
+        continuityLine("recall_telemetry", "2026-08-10T12:00:00Z", { note: "first" }),
+      ) +
+        recordLineBytes(
+          continuityLine("recall_telemetry", "2026-08-20T12:00:00Z", { note: "second" }),
+        ) +
+        recordLineBytes(reimported),
+    );
+  });
+
+  test("a metrics fold merges into the existing (surface, month) aggregate the same way", () => {
+    writeShard(metricsDir(vault), "storage_usage.jsonl", [
+      metricLine("storage_usage", "2026-08-01T00:00:00Z", { bytes: 10 }),
+      metricLine("storage_usage", "2026-08-05T00:00:00Z", { bytes: 11 }),
+    ]);
+    compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    const compacted = readShard(metricsDir(vault), "storage_usage.jsonl");
+    writeShard(metricsDir(vault), "storage_usage.jsonl", [
+      compacted,
+      metricLine("storage_usage", "2026-08-03T00:00:00Z", { bytes: 12 }),
+    ]);
+    const result = compactReceiptLedgers(vault, {
+      shards: [{ family: RECEIPT_LEDGER_FAMILY.metrics, name: "storage_usage.jsonl" }],
+      now: NOW,
+      dryRun: false,
+    });
+    expect(result.totals.folded).toBe(1);
+    expect(result.failures).toEqual([]);
+    const lines = readShard(metricsDir(vault), "storage_usage.jsonl")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    expect(lines).toHaveLength(1);
+    const fold = (JSON.parse(lines[0]!) as { fold: Record<string, unknown> }).fold;
+    expect(fold.surface).toBe("storage_usage");
+    expect(fold.count).toBe(3);
+    expect(fold.first_run_at).toBe("2026-08-01T00:00:00Z");
+    expect(fold.last_run_at).toBe("2026-08-05T00:00:00Z");
   });
 
   test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {
