@@ -524,6 +524,30 @@ export function classifyPaths(
   return result;
 }
 
+/** One path's watermark request: the stamp the caller wants recorded. */
+export interface ManifestWatermarkRequest {
+  /** ISO-8601 `extracted_at` stamp, from the caller's injected clock. */
+  readonly at: string;
+}
+
+export interface UpdateManifestOptions {
+  /**
+   * Request an extraction watermark per path (review L1): updateManifest
+   * stats and hashes the source ITSELF, INSIDE the manifest lock, and
+   * records the full entry - the live digest, the live contract
+   * fingerprint, the byte count of the file it hashed and the caller's
+   * stamp. A request supersedes any pinned record for the same path: the
+   * pinned form carries a digest computed OUTSIDE the lock, and two
+   * concurrent runs over an appended source can then land the older
+   * digest-and-watermark pair last - the race L1 names. With the request
+   * there is no precomputed pair to go stale. A source that cannot be
+   * stat'ed or hashed throws by name after the lock is released and
+   * nothing is written; a caller that wants the vanished-source skip
+   * guards the call the way the ingest pipeline already does.
+   */
+  readonly watermarks?: Readonly<Record<string, ManifestWatermarkRequest>>;
+}
+
 /**
  * Record post-ingest state for `paths`, merging into the existing manifest.
  * A path still on disk gets its current hash recorded TOGETHER with the live
@@ -554,6 +578,7 @@ export function updateManifest(
   vault: string,
   paths: readonly string[],
   records: Readonly<Record<string, ManifestEntry>> = {},
+  opts: UpdateManifestOptions = {},
 ): boolean {
   const handle = acquireLockSyncWithRetry(manifestPath(vault), undefined, {
     remedy: ingestLockRemedy,
@@ -566,6 +591,20 @@ export function updateManifest(
       const abs = join(vault, canonical);
       if (!existsSync(abs)) {
         delete entries[canonical];
+        continue;
+      }
+      // The in-lock watermark request (L1): one stat, one hash, of the
+      // file as it exists UNDER the lock - never a caller-precomputed
+      // pair that a concurrent append can stale out.
+      const watermark = opts.watermarks?.[canonical];
+      if (watermark !== undefined) {
+        const size = statSync(abs).size;
+        entries[canonical] = {
+          sha256: hashPath(abs),
+          fingerprint: live,
+          extracted_bytes: size,
+          extracted_at: watermark.at,
+        };
         continue;
       }
       const pinned = records[canonical];
