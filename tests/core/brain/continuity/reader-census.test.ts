@@ -121,9 +121,6 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/pre-compact-extract.ts":
     "reads `pre_compact_extract` for the append-time dedupe-key lookup.",
   "src/core/brain/recall-telemetry.ts": "reads `recall_telemetry` for list and summary.",
-  "src/core/brain/session-mining-ledger.ts":
-    "reads the continuity store once per prune pass for the sessions that still " +
-    "hold turns, so a tombstone whose session lost its turns is dropped.",
   "src/core/brain/recent-turns.ts": "reads `recent_turn` for the sequence counter and the window.",
   "src/core/brain/session-recall.ts":
     "reads the WHOLE store for `session_turn` / `session_summary_node`, plus a " +
@@ -168,7 +165,7 @@ const READ_MODEL_READER_COUNT = 4;
 // 27 -> 28: the session-mining-economy wave registers the explorer console
 // collector (`explorer-console.ts`), which reads every kind inside the
 // 30-day window for the written-per-day histogram.
-const DIRECT_STORE_READER_COUNT = 29;
+const DIRECT_STORE_READER_COUNT = 28;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 
