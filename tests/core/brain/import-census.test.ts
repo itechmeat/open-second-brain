@@ -30,7 +30,11 @@ import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-templa
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { computeDedupHash } from "../../../src/core/brain/dedup-hash.ts";
-import { updateManifest } from "../../../src/core/brain/ingest/content-manifest.ts";
+import {
+  readManifest,
+  updateManifest,
+  writeManifestAtomic,
+} from "../../../src/core/brain/ingest/content-manifest.ts";
 import { importSession } from "../../../src/core/brain/sessions/import.ts";
 import {
   buildReadBackCensus,
@@ -202,6 +206,35 @@ describe("censusIngestedPaths - the ingest lane reads back its content hashes", 
     const census = censusIngestedPaths(vault, ["Docs/a.md", "Docs/b.md"]);
     expect(census.attempted).toBe(2);
     expect(census.found).toBe(2);
+    expect(census.outcome).toBe(RECONCILIATION_OUTCOME.complete);
+  });
+
+  test("a retired source whose bytes are unchanged is found, not a lost write", () => {
+    // The resurrect guard marks the entry retired_into a canonical page
+    // and leaves the SOURCE on disk (only the derived copy is removed).
+    // The read-back then runs again over the same plan's completed set
+    // (reconcilePlan). Recorded, on disk, still hashing to the recorded
+    // digest - that is the found definition, so the marker must not
+    // turn a claim the vault can reproduce into a false lost-write
+    // alarm.
+    writeVaultFile("Docs/a.md", "alpha\n");
+    updateManifest(vault, ["Docs/a.md"]);
+    const manifest = readManifest(vault);
+    writeManifestAtomic(
+      vault,
+      {
+        ...manifest.entries,
+        "Docs/a.md": {
+          ...manifest.entries["Docs/a.md"]!,
+          retired_into: "Brain/sources/src-canonical.md",
+        },
+      },
+      manifest.contract,
+    );
+
+    const census = censusIngestedPaths(vault, ["Docs/a.md"]);
+    expect(census.found).toBe(1);
+    expect([...census.missing]).toEqual([]);
     expect(census.outcome).toBe(RECONCILIATION_OUTCOME.complete);
   });
 

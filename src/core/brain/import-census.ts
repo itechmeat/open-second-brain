@@ -114,10 +114,16 @@ export function censusSessionSignals(
 
 /**
  * Ingest lane: read back the content-manifest entries of the sources an
- * ingest claims to have completed. Found means `unchanged` - recorded, still
- * on disk, and still hashing to the recorded digest. A path that is `new`
- * (never recorded), `modified` (recorded hash no longer matches) or `missing`
- * (gone from disk) is a claim the manifest cannot confirm.
+ * ingest claims to have completed. Found means the manifest recorded the
+ * path, it is still on disk, and it still hashes to the recorded digest -
+ * the `unchanged` classification, and `retired` beside it: a retirement
+ * marks the entry `retired_into` a canonical page and removes the DERIVED
+ * copy, never the source, so a byte-identical source behind the marker is
+ * a claim the vault still reproduces, not a loss (reconcilePlan re-reads
+ * a plan's completed set, and a source retired between two runs of the
+ * same plan is still on disk). A path that is `new` (never recorded),
+ * `modified` (recorded hash no longer matches) or `missing` (gone from
+ * disk) is a claim the manifest cannot confirm.
  */
 export function censusIngestedPaths(
   vault: string,
@@ -127,7 +133,8 @@ export function censusIngestedPaths(
   // Canonical on both sides: `classifyPaths` reports canonical keys, so a
   // claim spelled any other way would never match its own classification.
   const keys = [...new Set(claimedPaths.map((p) => canonicalNotePath(p)))];
-  const confirmed = new Set(classifyPaths(vault, keys, readManifest(vault)).unchanged);
+  const classification = classifyPaths(vault, keys, readManifest(vault));
+  const confirmed = new Set([...classification.unchanged, ...classification.retired]);
   return buildReadBackCensus(keys, (path) => confirmed.has(path));
 }
 
