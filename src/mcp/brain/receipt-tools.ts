@@ -113,12 +113,17 @@ async function toolBrainReceipts(
     return scanView(scanReceiptLedgers(ctx.vault, { olderThanDays, now: new Date() }));
   }
 
-  // The destructive half, gated like the storage report gates its
-  // whole-vault census (`./storage-tools.ts`): compact rewrites named
-  // ledger shards in place and reports whole-ledger byte totals, and a
-  // caller below local reach gets the named refusal instead of a plan -
-  // no shard list, no figures, no write lane entered. The scan above
-  // stays readable at any reach: it writes nothing.
+  // The destructive half: compact rewrites named ledger shards in place,
+  // and every guarantee the rewrite runs under - vault identity, the
+  // permissions-document consult, the recovery point, the per-file locks -
+  // is host-local. A caller below local reach gets the named refusal
+  // instead of a plan: no shard list, no figures, no write lane entered.
+  // The rationale names the write lane, not the byte figures (L11): the
+  // scan above reports the same per-shard figures at any reach by design,
+  // so figures were never the thing that stops at local reach - and the
+  // growth check that reads the same scan runs on the host, where the
+  // distinction has no meaning. The scan stays readable at any reach: it
+  // writes nothing.
   if (contextReach(ctx) !== TRANSPORT_REACH.local) {
     // Returned as the literal, `satisfies`-checked against the refusal
     // interface: the handler's wire type is Record<string, unknown>, and
@@ -129,8 +134,9 @@ async function toolBrainReceipts(
       measured: false,
       reason: RECEIPT_COMPACT_REACH_REASON satisfies ReceiptCompactRefusalReason,
       detail:
-        "receipt compaction folds records in named ledger shards and reports " +
-        "whole-ledger byte totals; it answers at local reach only",
+        "receipt compaction rewrites named ledger shards in place; its write lane and " +
+        "guards (vault identity, permissions document, recovery point) are host-local, " +
+        "so it answers at local reach only",
     } satisfies ReceiptCompactRefusal;
   }
 

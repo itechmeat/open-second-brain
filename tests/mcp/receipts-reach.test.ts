@@ -3,12 +3,23 @@
  * wave review).
  *
  * Compact is the destructive half of the receipts surface: it rewrites
- * named ledger shards in place and reports whole-ledger byte totals -
- * the same figure class the storage report refuses to take below local
- * reach (`brain_storage`). Below local reach the fold is therefore not
- * planned at all: a named refusal, no shard plan, no byte totals, and
+ * named ledger shards in place, under guarantees that are all host-local
+ * - vault identity, the permissions-document consult, the recovery
+ * point, the per-file locks. Below local reach the fold is therefore not
+ * planned at all: a named refusal, no shard plan, no byte figures, and
  * no write lane entered. Scan stays readable at any reach - a read-only
- * inventory withholds nothing a caller could not ask for another way.
+ * inventory that withholds nothing a caller could not ask for another
+ * way.
+ *
+ * Reach rationale, decided on review (L11): the refusal names the
+ * host-local write lane, NOT the byte figures. It used to say it stopped
+ * because compact "reports whole-ledger byte totals", while scan - and
+ * the receipt-ledger-growth doctor check that reads the same scan, on
+ * the host where reach has no meaning - return the same per-shard
+ * figures at any reach. Figures were never the differentiator; the
+ * destructive rewrite is. Dropping the figures below local reach was the
+ * alternative and is worse: the scan's contract is to withhold nothing,
+ * and the doctor has no reach to drop them at.
  *
  * Claims pinned here:
  *
