@@ -19,6 +19,13 @@ import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { CHUNKER_VERSION } from "../../../src/core/search/chunker.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../../../src/core/search/schema.ts";
+import { search } from "../../../src/core/search/search.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+import { startFakeHttp } from "../../helpers/fake-http.ts";
+import { rewindToPreV14Schema, stampSchemaVersion } from "../../helpers/schema-rewind.ts";
+import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let vault: string;
 let configHome: string;
@@ -86,17 +93,75 @@ describe("ensureVaultCurrent", () => {
     expect(r.errors).toEqual([]);
   });
 
-  test("rebuilds a stale-schema index", async () => {
+  test("rebuilds an index stamped by a newer schema", async () => {
     bootstrapBrain(vault, { configPath });
     await ensureVaultCurrent(vault, { background: false }); // build a current index
-    const db = new Database(dbPath());
-    db.run("UPDATE index_state SET value = '1' WHERE key = 'schema_version'");
-    db.close();
+    stampSchemaVersion(dbPath(), LATEST_SCHEMA_VERSION + 1);
 
     const r = await ensureVaultCurrent(vault, { background: false });
     expect(r.reindexTriggered).toBe(true);
     expect(indexSchema()).toBe(LATEST_SCHEMA_VERSION);
   });
+
+  test.skipIf(!sqliteVecLoadable())(
+    "upgrades an older-schema semantic index in place, keeping its embeddings (#256)",
+    async () => {
+      bootstrapBrain(vault, { configPath });
+      const server = await startFakeHttp();
+      try {
+        const semantic = makeConfig({
+          vault,
+          dbPath: dbPath(),
+          semantic: {
+            enabled: true,
+            provider: "openai-compat",
+            baseUrl: server.url,
+            model: "fake-model",
+            apiKey: FAKE_PROVIDER_KEY,
+            dimension: 4,
+            queryPrefix: "query: ",
+            passagePrefix: "passage: ",
+            maxRetries: 1,
+          },
+        });
+        atomicWriteFileSync(join(vault, "fox.md"), "# Fox\n\nThe quick brown fox.\n");
+        await indexVault(semantic, { embeddings: true });
+        const identity = async () => {
+          const s = await Store.open(semantic, { mode: "read" });
+          try {
+            return [
+              s.countEmbeddings(),
+              s.getState("embedding_prefix_query"),
+              s.getState("embedding_prefix_passage"),
+            ];
+          } finally {
+            await s.close();
+          }
+        };
+        const before = await identity();
+        expect(before[0]).toBeGreaterThan(0);
+        rewindToPreV14Schema(dbPath());
+
+        // The session-start config is keyword-only: it must not touch the
+        // embedding identity while it upgrades the index.
+        const r = await ensureVaultCurrent(vault, { background: false });
+
+        expect(r.errors).toEqual([]);
+        expect(r.indexUpgraded).toBe(true);
+        expect(r.reindexTriggered).toBe(false);
+        expect(indexSchema()).toBe(LATEST_SCHEMA_VERSION);
+        expect(await identity()).toEqual(before);
+        const outcome = await search(semantic, {
+          query: "fox",
+          semantic: true,
+          recordAccess: false,
+        });
+        expect(outcome.results.some((x) => x.searchType === "hybrid")).toBe(true);
+      } finally {
+        await server.close();
+      }
+    },
+  );
 
   test("honors an explicit configPath for the search index", async () => {
     bootstrapBrain(vault, { configPath });
@@ -256,9 +321,7 @@ describe("ensureVaultCurrent: freshen on session start", () => {
   test("an index that needs a rebuild is left to self-heal, not freshened", async () => {
     bootstrapBrain(vault, { configPath });
     await ensureVaultCurrent(vault, { background: false });
-    const db = new Database(dbPath());
-    db.run("UPDATE index_state SET value = '1' WHERE key = 'schema_version'");
-    db.close();
+    stampSchemaVersion(dbPath(), LATEST_SCHEMA_VERSION + 1);
     const r = await ensureVaultCurrent(vault, { background: false, freshenSpawn });
     expect(r.reindexTriggered).toBe(true);
     expect(r.freshen).toBeNull();

@@ -23,7 +23,12 @@ import {
   SearchError,
   serializeChunkWindowCensus,
 } from "../../../core/search/index.ts";
-import type { ChunkWindowCensus, IndexStats } from "../../../core/search/index.ts";
+import type {
+  ChunkWindowCensus,
+  IndexStats,
+  IndexVaultOptions,
+} from "../../../core/search/index.ts";
+import { healIndex } from "../../../core/search/self-heal.ts";
 import {
   recordSelfHealOutcome,
   SELF_HEAL_REINDEX_OUTCOME,
@@ -279,11 +284,14 @@ async function runFreshenChild(
  *
  * `--self-heal <run-id>` marks the run as the automatic post-upgrade
  * rebuild that `ensureVaultCurrent` spawns detached, with every stream
- * ignored because there is no terminal to write to. It changes nothing
- * about the rebuild; it only makes the run's terminal outcome - success or
- * the failure by name - land on the `self_heal_reindex` metrics surface
- * under the run id the parent minted, which is the only place such a run
- * can be read from afterwards and the only thing its two rows pair on.
+ * ignored because there is no terminal to write to. Such a run heals
+ * rather than rebuilds unconditionally: an index on an older schema is
+ * migrated in place, keeping its stored embeddings, and an index another
+ * process already brought current is left alone (`self-heal.ts`). The
+ * run's terminal outcome - success or the failure by name - lands on the
+ * `self_heal_reindex` metrics surface under the run id the parent minted,
+ * which is the only place such a run can be read from afterwards and the
+ * only thing its two rows pair on.
  */
 export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -335,9 +343,9 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   const cfg = resolveSelfHealConfig(flags, selfHeal, startedAt);
   const observation = observeIndexRun(flags, "reindex");
   const interrupt = onInterrupt(OPERATION.reindex);
-  let stats: IndexStats;
+  let stats: IndexStats | null;
   try {
-    stats = await reindexVault(cfg, {
+    const reindexOpts: IndexVaultOptions = {
       safeguard: reindexSafeguard(flags),
       embeddings: flagBoolean(flags, "embeddings"),
       forceCost: flagBoolean(flags, "force-cost"),
@@ -346,7 +354,15 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
         ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
         : undefined,
       ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
-    });
+    };
+    if (selfHeal === undefined) {
+      stats = await reindexVault(cfg, reindexOpts);
+    } else {
+      // The automatic run heals rather than rebuilds: an older schema is
+      // migrated in place so its stored embeddings survive (#256).
+      const healed = await healIndex(cfg, reindexOpts);
+      stats = healed.kind === "rebuilt" ? healed.stats : null;
+    }
   } catch (err) {
     // The only report a self-heal run's failure ever gets. Recorded before
     // the rethrow so the row exists whatever the caller's stderr is
@@ -380,6 +396,10 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
       selfHeal,
       Date.now() - startedAt,
     );
+  }
+  if (stats === null) {
+    process.stderr.write(`search index ${cfg.dbPath} is current; no rebuild was needed\n`);
+    return 0;
   }
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
   return 0;

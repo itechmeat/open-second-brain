@@ -33,6 +33,13 @@ import { cmdSearchReindex } from "../../../src/cli/search/verbs/indexing.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { acquireWriterLock } from "../../../src/core/search/store/writer-lock.ts";
 import { waitForSelfHealUpgradeWorker } from "../../helpers/self-heal-children.ts";
+import { indexVault } from "../../../src/core/search/indexer.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+import { startFakeHttp } from "../../helpers/fake-http.ts";
+import { rewindToPreV14Schema } from "../../helpers/schema-rewind.ts";
+import { makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let vault: string;
 let configHome: string;
@@ -194,6 +201,61 @@ describe("self-heal reindex: the spawn decision", () => {
 });
 
 describe("self-heal reindex: the child's terminal outcome", () => {
+  test.skipIf(!sqliteVecLoadable())(
+    "a child on an older-schema index upgrades it in place and keeps its embeddings (#256)",
+    async () => {
+      const server = await startFakeHttp();
+      try {
+        const semantic = makeConfig({
+          vault,
+          dbPath: dbPath(),
+          semantic: {
+            enabled: true,
+            provider: "openai-compat",
+            baseUrl: server.url,
+            model: "fake-model",
+            apiKey: FAKE_PROVIDER_KEY,
+            dimension: 4,
+            maxRetries: 1,
+          },
+        });
+        writeMd(vault, "fox.md", "# Fox\n\nThe quick brown fox.");
+        await indexVault(semantic, { embeddings: true });
+        const vectors = async () => {
+          const s = await Store.open(semantic, { mode: "read" });
+          try {
+            return s.countEmbeddings();
+          } finally {
+            await s.close();
+          }
+        };
+        const before = await vectors();
+        expect(before).toBeGreaterThan(0);
+        rewindToPreV14Schema(dbPath());
+        const runId = mintSelfHealRunId();
+
+        const code = await cmdSearchReindex([
+          "--self-heal",
+          runId,
+          "--vault",
+          vault,
+          "--config",
+          configPath,
+        ]);
+
+        expect(code).toBe(0);
+        expect(readSelfHealReindexRows(vault).find((row) => row.runId === runId)?.outcome).toBe(
+          SELF_HEAL_REINDEX_OUTCOME.completed,
+        );
+        expect(await vectors()).toBe(before);
+        expect(existsSync(`${dbPath()}.bak`)).toBe(false);
+      } finally {
+        await server.close();
+      }
+    },
+    CONTENTION_BUDGET_MS,
+  );
+
   test(
     "a child that loses the lock records the failure by name",
     async () => {

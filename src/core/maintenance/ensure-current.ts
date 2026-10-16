@@ -23,13 +23,10 @@ import { defaultConfigPath } from "../config.ts";
 import { o2bCommand } from "./o2b-command.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { resolveSearchConfig } from "../search/index.ts";
-import { reindexVault } from "../search/indexer.ts";
-import { CHUNKER_VERSION } from "../search/chunker.ts";
-import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../search/schema.ts";
-import { CHUNKER_VERSION_STATE_KEY, LAST_INDEXED_AT_STATE_KEY } from "../search/store/state.ts";
+import { healIndex, inspectIndex } from "../search/self-heal.ts";
+import { LAST_INDEXED_AT_STATE_KEY } from "../search/store/state.ts";
 import { maybeFreshenIndex, type FreshenDecision } from "../search/freshen.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
-import type { ResolvedSearchConfig } from "../search/types.ts";
 import {
   mintSelfHealRunId,
   recordSelfHealSpawn,
@@ -90,6 +87,11 @@ export interface EnsureCurrentResult {
   /** A search reindex was started (background) or completed (foreground). */
   readonly reindexTriggered: boolean;
   /**
+   * In the foreground, the index was on an older schema and was migrated
+   * in place, keeping its stored embeddings, so no reindex was needed.
+   */
+  readonly indexUpgraded: boolean;
+  /**
    * In `background` mode, what was done about a reindex this run found
    * necessary. `null` when none was needed, or when the run was in the
    * foreground and there was no child to decide about.
@@ -125,20 +127,6 @@ function message(e: unknown): string {
   return e instanceof Error ? (e.message ?? String(e)) : String(e);
 }
 
-/**
- * Whether the index holds chunks cut by older chunking rules: documents
- * are present and the recorded CHUNKER_VERSION is not this binary's (or
- * was never recorded). An unchanged file is never re-chunked by an
- * incremental run, so only a rebuild replaces those chunks.
- */
-function chunksAreStale(db: Database): boolean {
-  const row = db
-    .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ? LIMIT 1")
-    .get(CHUNKER_VERSION_STATE_KEY);
-  if (row?.value === String(CHUNKER_VERSION)) return false;
-  return db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() !== null;
-}
-
 /** The index's `last_indexed_at`, or null when it cannot be read. */
 function readLastIndexedAt(dbPath: string): string | null {
   let db: Database;
@@ -155,27 +143,6 @@ function readLastIndexedAt(dbPath: string): string | null {
     );
   } catch {
     return null;
-  } finally {
-    closeDatabase(db);
-  }
-}
-
-/**
- * Cheap, read-only check: is the search index absent, on a stale schema,
- * or chunked by older rules?
- */
-function indexNeedsRebuild(config: ResolvedSearchConfig): boolean {
-  if (!existsSync(config.dbPath)) return true;
-  let db: Database;
-  try {
-    db = new Database(config.dbPath, { readonly: true });
-  } catch {
-    return true; // unreadable -> rebuild
-  }
-  try {
-    return readSchemaVersion(db) !== LATEST_SCHEMA_VERSION || chunksAreStale(db);
-  } catch {
-    return true; // corrupt / non-OSB file -> rebuild
   } finally {
     closeDatabase(db);
   }
@@ -361,6 +328,7 @@ export async function ensureVaultCurrent(
   let brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null = null;
   let brainUpgradeOutcome: SelfHealUpgradeOutcome | null = null;
   let reindexTriggered = false;
+  let indexUpgraded = false;
   let reindexSpawn: SelfHealSpawnDecision | null = null;
   let freshen: FreshenDecision | null = null;
 
@@ -372,6 +340,7 @@ export async function ensureVaultCurrent(
       brainUpgradeSpawn: null,
       brainUpgradeOutcome: null,
       reindexTriggered: false,
+      indexUpgraded: false,
       reindexSpawn: null,
       freshen: null,
       skipped: "not-initialized",
@@ -398,20 +367,23 @@ export async function ensureVaultCurrent(
     errors.push(`brain-upgrade: ${message(e)}`);
   }
 
-  // 2. Search index - rebuild if absent, on a stale schema, or chunked by
-  //    older rules.
+  // 2. Search index - an older schema is migrated in place (the stored
+  //    embeddings survive); an absent, unreadable or newer index, or one
+  //    chunked by older rules, is rebuilt (#256). In the background the
+  //    detached self-heal child applies the same policy.
   try {
     const configPath = opts.configPath ?? defaultConfigPath();
     const config = resolveSearchConfig({ vault, configPath });
-    if (indexNeedsRebuild(config)) {
+    if (inspectIndex(config) !== "current") {
       if (background) {
         reindexSpawn = startSelfHealReindex(vault, configPath, config.dbPath, errors);
         // A run that declined to spawn started nothing, and saying it did
         // would report a rebuild that is not this run's.
         reindexTriggered = reindexSpawn === SELF_HEAL_SPAWN.spawned;
       } else {
-        await reindexVault(config);
-        reindexTriggered = true;
+        const healed = await healIndex(config);
+        reindexTriggered = healed.kind === "rebuilt";
+        indexUpgraded = healed.kind === "migrated";
       }
     } else {
       // 3. A current index that has gone stale: catch it up in the
@@ -430,6 +402,7 @@ export async function ensureVaultCurrent(
     brainUpgradeSpawn,
     brainUpgradeOutcome,
     reindexTriggered,
+    indexUpgraded,
     reindexSpawn,
     freshen,
     skipped: "",
