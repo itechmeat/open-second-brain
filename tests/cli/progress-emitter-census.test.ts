@@ -244,7 +244,8 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.reindex,
     stage: "walk",
   },
-  "core/search/indexer.ts#reindexVault": {
+  // reindexVault delegates to reindexVaultUnless, which owns the counter.
+  "core/search/indexer.ts#reindexVaultUnless": {
     entryPoint: "o2b search reindex --progress",
     operation: OPERATION.reindex,
     stage: "lock",

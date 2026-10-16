@@ -243,6 +243,7 @@ describe("every module that takes a lock is under a scanned root", () => {
     ["core/brain/query-demand.ts", "Brain"],
     ["core/brain/receipts/compact.ts", "Brain"],
     ["core/brain/session-mining-ledger.ts", ".open-second-brain"],
+    ["core/brain/session-mining-surveys.ts", ".open-second-brain"],
     ["core/brain/sessions/discover.ts", ".open-second-brain"],
     ["core/brain/skill-proposals.ts", "Brain"],
   ]);
