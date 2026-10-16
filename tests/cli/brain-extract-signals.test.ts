@@ -280,6 +280,35 @@ describe("mining tombstone", () => {
     expect(r.stdout).toMatch(/deduped 0/);
   });
 
+  test("the text line renders the recorded breakdown, field for field", async () => {
+    // A first yield, then a re-mine of the same payload where the only
+    // item dedups: the recorded outcome is written 0, staged 0, deduped 1,
+    // and the suppressed plan's text line must read exactly that - the
+    // same numbers the --json surface prints for the same record.
+    const hash = await surveyedHash();
+    await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [ITEM] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
+    await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [ITEM] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
+    const r = await run([SESSION]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain(
+      "yielded nothing (written 0, staged 0, deduped 1, durability-rejected 0)",
+    );
+  });
+
   test("--force bypasses the tombstone for exactly one plan call", async () => {
     const hash = await surveyedHash();
     await run([

@@ -160,9 +160,14 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       if (plan.skipped !== undefined) {
         if (plan.skipped.reason === EXTRACT_MINING_TOMBSTONE_SKIP_REASON) {
           const outcome = plan.skipped.miningOutcome!;
+          // The recorded breakdown is the evidence, so every field is
+          // rendered from the record, never asserted from a hardcoded
+          // zero: a hand-restored or future-written entry must read the
+          // same in text as the --json surface prints it.
           ok(
             `nothing to mine: this session was already mined at its current content and ` +
-              `yielded nothing (written 0, staged 0, deduped ${outcome.deduped}, ` +
+              `yielded nothing (written ${outcome.written}, staged ${outcome.staged}, ` +
+              `deduped ${outcome.deduped}, ` +
               `durability-rejected ${outcome.durabilityRejected}); ` +
               `re-run with --force to re-mine it`,
           );
