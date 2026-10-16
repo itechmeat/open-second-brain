@@ -80,6 +80,7 @@ import {
 } from "./extract-signals.ts";
 import type { NeedsLlmStep } from "./llm-step.ts";
 import { readMiningTombstone, type SessionMiningOutcome } from "./session-mining-ledger.ts";
+import { recordMiningSurvey } from "./session-mining-surveys.ts";
 import { listSessionRawTurns } from "./session-recall.ts";
 import { estimateTokens as estimateTextTokens } from "./text/tokenizer.ts";
 import { emitTokenImpact, TOKEN_COUNT_METHOD } from "./token-impact.ts";
@@ -124,6 +125,12 @@ export interface PrefilteredSignalExtractionPlan extends Omit<SignalExtractionPl
   };
   /** Present only when the use is not `off` and a request failed. */
   readonly decisionModel?: { readonly degraded: DecisionDegradeReason };
+  /**
+   * Present only when the plan handed out an envelope but could not record
+   * its survey: a barren commit answering it then needs the relayed
+   * `surveyed_turns_hash` to write its tombstone.
+   */
+  readonly surveyRecordFailure?: string;
 }
 
 export interface PrefilteredPlanOptions {
@@ -293,9 +300,35 @@ function miningTombstoneGate(
  * the pre-filter, because the spend it prevents is the caller's mining
  * round trip and not only this module's requests. Refusals
  * ({@link ExtractSignalsError}) are thrown as there, before the gate.
- * `opts.force` lifts the gate for this one call.
+ * `opts.force` lifts the gate for this one call. A plan that hands out an
+ * envelope records its surveyed-turns hash as a pending survey - the one
+ * write of the plan phase - so a commit that relays no hash can still
+ * withhold a tombstone over turns the plan never offered.
  */
 export async function planExtractSignalsPrefiltered(
+  vault: string,
+  sessionId: string,
+  opts: PrefilteredPlanOptions,
+): Promise<PrefilteredSignalExtractionPlan> {
+  const plan = await planPrefilteredEnvelope(vault, sessionId, opts);
+  // A plan that hands out an envelope records what it surveyed, so the
+  // commit that answers it without relaying the hash can still tell
+  // whether the session changed in between (session-mining-surveys.ts).
+  // A failed record never fails the plan - the plan is still right - and
+  // is named so the caller knows the commit will need the relay.
+  if (plan.llmStep === null) return plan;
+  try {
+    recordMiningSurvey(vault, plan.sessionId, plan.surveyedTurnsHash, opts.now);
+    return plan;
+  } catch (err) {
+    return Object.freeze({
+      ...plan,
+      surveyRecordFailure: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function planPrefilteredEnvelope(
   vault: string,
   sessionId: string,
   opts: PrefilteredPlanOptions,

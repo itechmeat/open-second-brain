@@ -188,6 +188,8 @@ To mine taste signals from an imported session afterwards, call
 `brain_extract_signals` `{session}` and answer its one envelope by calling
 it again with `{session, items}` (optionally citing each item's
 `source_turn`). Commit even when you found nothing - `items: []` records
-that the session had nothing new, so it is not offered to a model again. A
+that the session had nothing new, so it is not offered to a model again;
+if the commit names a `mining_ledger_failure` (the session changed since
+the plan), plan it again rather than retrying the commit. A
 plan with `llm_step: null` and `skipped` means there is nothing to mine, so
 commit nothing.

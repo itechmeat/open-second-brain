@@ -236,6 +236,16 @@ test("a relayed hash the session no longer matches records nothing and says so",
   expect(plan.skipped).toBeUndefined();
 });
 
+test("an empty relayed hash is refused as malformed, not read as absent", async () => {
+  await tool().handler(ctx, { session: SESSION });
+  await expect(
+    tool().handler(ctx, { session: SESSION, items: [], surveyed_turns_hash: "" }),
+  ).rejects.toThrow("surveyed_turns_hash must be the 64-character lowercase hex digest");
+  // The refusal came before any record, so the next plan still offers the turns.
+  const plan = (await tool().handler(ctx, { session: SESSION })) as { skipped?: unknown };
+  expect(plan.skipped).toBeUndefined();
+});
+
 test("force bypasses the tombstone for exactly one plan call and is declared", async () => {
   const hash = await surveyedHash();
   await tool().handler(ctx, { session: SESSION, items: [], surveyed_turns_hash: hash });

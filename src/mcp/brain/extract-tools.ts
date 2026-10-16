@@ -20,6 +20,7 @@ import { ResponseCheckError } from "../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName, resolveTokenImpactLedgerEnabled } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
@@ -67,9 +68,9 @@ async function toolBrainExtractSignals(
           text: t.text,
           timestamp: t.timestamp,
         })),
-        // The hash of the material this plan offered; the commit that
-        // answers it passes it back as `surveyed_turns_hash` so the mining
-        // tombstone keys on the surveyed material.
+        // The hash of the material this plan offered, also recorded as a
+        // pending survey; the commit that answers it may pass it back as
+        // `surveyed_turns_hash` to check the session did not change.
         surveyed_turns_hash: plan.surveyedTurnsHash,
         cap: plan.cap,
         confidence_floor: plan.confidenceFloor,
@@ -101,10 +102,21 @@ async function toolBrainExtractSignals(
         ...(plan.decisionModel !== undefined
           ? { decision_model: { degraded: plan.decisionModel.degraded } }
           : {}),
+        // Present only when the plan could not record its survey; a barren
+        // commit then needs `surveyed_turns_hash` to record its tombstone.
+        ...(plan.surveyRecordFailure !== undefined
+          ? { survey_record_failure: plan.surveyRecordFailure }
+          : {}),
       };
     }
     const now = new Date();
-    const surveyedTurnsHash = coerceStr(args, "surveyed_turns_hash", false);
+    // Read raw rather than through coerceStr, which maps "" to absent: an
+    // empty relay is a malformed hash, and the core refuses it by name.
+    const surveyedRaw = args["surveyed_turns_hash"];
+    if (surveyedRaw !== undefined && surveyedRaw !== null && typeof surveyedRaw !== "string") {
+      throw new MCPError(INVALID_PARAMS, "argument 'surveyed_turns_hash' must be a string");
+    }
+    const surveyedTurnsHash = typeof surveyedRaw === "string" ? surveyedRaw : undefined;
     const res = commitExtractedSignals(
       ctx.vault,
       session,
@@ -116,8 +128,8 @@ async function toolBrainExtractSignals(
         dedup: await loadDedupIndex(ctx.vault),
         // The answered plan's surveyed hash, when the caller echoes it: a
         // check that the session did not change since the plan. Absent,
-        // the commit records over the session's current mined turns.
-        ...(surveyedTurnsHash ? { surveyedTurnsHash } : {}),
+        // the commit checks the survey the plan recorded instead.
+        ...(surveyedTurnsHash !== undefined ? { surveyedTurnsHash } : {}),
       },
     );
     recordExtractPrefilterCommit(ctx.vault, decisionModel, res, now);

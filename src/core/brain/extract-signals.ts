@@ -31,14 +31,14 @@
  * route to a confirmed preference. Nothing here writes a preference.
  *
  * The commit is also the mining ledger's write side (session-mining-ledger.ts):
- * every successful commit that answers a plan records its outcome breakdown
- * over the turn material the PLAN surveyed - the plan carries the hash of
- * the turns it offered, and the surfaces pass it back with the answer. A
- * zero-yield record (nothing written, nothing staged) is the tombstone the
- * plan gate suppresses on; a yield record is the distilled state the mining
- * census reports. A commit that answers no plan of this module's attests
- * nothing and records nothing, and a partial write never records - a run
- * that FAILED did not end.
+ * every successful commit records its outcome breakdown over the session's
+ * current mined turns. A zero-yield record (nothing written, nothing
+ * staged) is the tombstone the plan gate suppresses on, so it is written
+ * only over material a plan put in front of a model: the hash the caller
+ * relays, or else the one survey the plan surfaces recorded
+ * (session-mining-surveys.ts). A yield record is the distilled state the
+ * mining census reports. A partial write never records - a run that FAILED
+ * did not end.
  *
  * Precision beats recall, as it does in `fact-extract.ts`: the cap and the
  * floor are refusals, not filters. A payload over either limit is rejected
@@ -75,6 +75,7 @@ import {
 } from "./response-shape.ts";
 import { listSessionRawTurns, type ExpandedRawTurn } from "./session-recall.ts";
 import { minedTurnsHash, recordSessionMiningOutcome } from "./session-mining-ledger.ts";
+import { consumeMiningSurvey } from "./session-mining-surveys.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE, type BrainSignalSign } from "./types.ts";
@@ -224,8 +225,9 @@ export interface SignalExtractionPlan {
    * {@link minedTurnsHash} of {@link turnsMined}: the material this plan
    * put in front of the caller. The commit that answers this plan may pass
    * it back as {@link CommitExtractedSignalsOptions.surveyedTurnsHash} to
-   * check the session did not change in between; the commit records over
-   * the current material either way.
+   * check the session did not change in between. Without the relay the
+   * commit reads the survey the plan surfaces recorded for the session
+   * instead.
    */
   readonly surveyedTurnsHash: string;
   /** The limits the payload will be held to, echoed so the caller can read them. */
@@ -327,15 +329,19 @@ export interface CommitExtractedSignalsOptions {
   /**
    * The answered plan's {@link SignalExtractionPlan.surveyedTurnsHash}: the
    * hash of the turns the caller was actually shown. Optional: the commit
-   * always recomputes the hash of the session's CURRENT mined turns and
-   * records the outcome over that, so the documented flow (plan, answer
-   * the envelope, commit the items) writes its record without relaying
-   * anything. When the hash IS relayed it is a check: it must be a SHA-256
-   * hex digest (anything else refuses the commit before a write), and when
-   * it differs from the current material - an import landed between plan
-   * and commit, or the hash came from another plan - nothing is recorded
-   * and the commit names that as its mining ledger failure, so a tombstone
-   * never lands on turns no model saw.
+   * records over the hash of the session's CURRENT mined turns, and a
+   * zero-yield record (the tombstone) additionally needs evidence that a
+   * model saw exactly that material - this relay, or else the single
+   * pending survey the plan surfaces recorded, so the documented flow
+   * (plan, answer the envelope, commit the items) writes its tombstone
+   * without relaying anything. When the hash IS relayed it is a check: it
+   * must be a SHA-256 hex digest (anything else refuses the commit before
+   * a write), and when it differs from the current material - an import
+   * landed between plan and commit, or the hash came from another plan -
+   * nothing is recorded and the commit names that as its mining ledger
+   * failure. Without a relay, a survey that differs from the current
+   * material, several pending surveys, or none withholds the tombstone and
+   * is named the same way; a yield record is recorded regardless.
    */
   readonly surveyedTurnsHash?: string;
 }
@@ -772,32 +778,49 @@ export function commitExtractedSignals(
   // Every commit is the ledger's write trigger: the outcome breakdown is
   // recorded over the hash of the session's current mined turns - the
   // material a plan issued now would offer, and the one the plan gate and
-  // the census compare against - whatever the yield was. The zero-yield
-  // record is the tombstone the plan gate suppresses on; a yield record is
-  // the distilled state the census reports, and it is NOT a tombstone -
-  // the session stays minable. A thrown ExtractSignalsWriteError never
+  // the census compare against. A yield record is the distilled state the
+  // census reports, and it is NOT a tombstone - the session stays minable.
+  // The zero-yield record IS the tombstone the plan gate suppresses on, so
+  // it is written only over material a model was shown: the relayed plan
+  // hash when there is one, else the one survey a plan recorded since the
+  // last commit (session-mining-surveys.ts) - and only while the session
+  // still holds that material. A thrown ExtractSignalsWriteError never
   // reaches here: a run that FAILED did not end, so it records nothing. A
-  // session with no mined material records nothing either, and a relayed
-  // plan hash that no longer matches the material records nothing and
-  // says so: failing open to a re-mine is the safe direction.
+  // session with no mined material records nothing either, and every
+  // withheld record says why: failing open to a re-mine is the safe
+  // direction.
   const staged = writeApprovalEnabled ? written.length : 0;
+  const zeroYield = written.length === 0;
   let miningLedgerFailure: string | undefined;
   let currentHash: string | null = null;
+  // Consumed first and on every commit, so a survey never outlives the
+  // commit that answered it.
+  let surveyed: ReadonlyArray<string> = [];
+  let surveyFailure: string | undefined;
+  try {
+    surveyed = consumeMiningSurvey(vault, trimmed);
+  } catch (err) {
+    surveyFailure = err instanceof Error ? err.message : String(err);
+  }
   try {
     const mined = selectMinedTurns(boundary, listSessionRawTurns(vault, trimmed));
     currentHash = mined.length === 0 ? null : minedTurnsHash(mined);
   } catch (err) {
     miningLedgerFailure = err instanceof Error ? err.message : String(err);
   }
-  if (
-    currentHash !== null &&
-    opts.surveyedTurnsHash !== undefined &&
-    opts.surveyedTurnsHash !== currentHash
-  ) {
-    miningLedgerFailure =
-      `the session's turns no longer match the surveyed_turns_hash this commit answers ` +
-      `(${opts.surveyedTurnsHash}); no mining record was written, so the session stays minable`;
-    currentHash = null;
+  if (currentHash !== null && opts.surveyedTurnsHash !== undefined) {
+    if (opts.surveyedTurnsHash !== currentHash) {
+      miningLedgerFailure =
+        `the session's turns no longer match the surveyed_turns_hash this commit answers ` +
+        `(${opts.surveyedTurnsHash}); no mining record was written, so the session stays minable`;
+      currentHash = null;
+    }
+  } else if (currentHash !== null && zeroYield) {
+    const withheld = withheldTombstoneReason(surveyed, surveyFailure, currentHash);
+    if (withheld !== null) {
+      miningLedgerFailure = withheld;
+      currentHash = null;
+    }
   }
   if (currentHash !== null) {
     try {
@@ -838,6 +861,36 @@ export function commitExtractedSignals(
     }),
     ...(miningLedgerFailure !== undefined ? { miningLedgerFailure } : {}),
   });
+}
+
+/**
+ * Why a zero-yield commit that relayed no plan hash may not write its
+ * tombstone, or `null` when it may: exactly one distinct material was
+ * surveyed since the last commit and the session still holds it. Anything
+ * else means the commit cannot attest that a model saw the turns it would
+ * suppress.
+ */
+function withheldTombstoneReason(
+  surveyed: ReadonlyArray<string>,
+  surveyFailure: string | undefined,
+  currentHash: string,
+): string | null {
+  const tail =
+    "no zero-yield record was written, so the session stays minable; re-plan it, or relay the " +
+    "plan's surveyed_turns_hash with the commit";
+  if (surveyFailure !== undefined) {
+    return `the plan survey of this session could not be read (${surveyFailure}); ${tail}`;
+  }
+  if (surveyed.length === 0) {
+    return `no plan of this session was recorded since its last commit, so this commit cannot attest which turns a model saw; ${tail}`;
+  }
+  if (surveyed.length > 1) {
+    return `${surveyed.length} plans over different turns of this session are pending, so this commit cannot tell which one it answers; ${tail}`;
+  }
+  if (surveyed[0] !== currentHash) {
+    return `the session's turns changed since the plan this commit answers (${surveyed[0]}); ${tail}`;
+  }
+  return null;
 }
 
 /**

@@ -9,12 +9,14 @@
  * OSB runs no model on either path.
  *
  * Every commit records its outcome in the session mining ledger over the
- * session's current mined turns, so a barren commit leaves the zero-yield
- * tombstone without any relay. `--surveyed-turns-hash` optionally passes
- * the answered plan's `surveyed_turns_hash` back as a check: a malformed
- * value refuses the commit, and a value the session no longer matches (it
- * changed since the plan) writes the signals but no mining record, and
- * says so.
+ * session's current mined turns. The plan records the hash of the turns it
+ * offered as a pending survey, so a barren commit leaves the zero-yield
+ * tombstone without any relay - but only while the session still holds
+ * the surveyed turns; turns imported after the plan withhold it, and the
+ * commit says so. `--surveyed-turns-hash` optionally passes the answered
+ * plan's `surveyed_turns_hash` back as a check: a malformed value refuses
+ * the commit, and a value the session no longer matches writes the
+ * signals but no mining record, and says so.
  *
  * A session already mined at its current content that yielded nothing
  * accepted carries a tombstone in the session mining ledger; its plan phase
@@ -154,6 +156,11 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
           ...(plan.decisionModel !== undefined
             ? { decision_model: { degraded: plan.decisionModel.degraded } }
             : {}),
+          // Present only when the plan could not record its survey; a
+          // barren commit then needs --surveyed-turns-hash to tombstone.
+          ...(plan.surveyRecordFailure !== undefined
+            ? { survey_record_failure: plan.surveyRecordFailure }
+            : {}),
         });
         return 0;
       }
@@ -188,6 +195,12 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       if (plan.llmStep !== null) {
         ok(`needs-llm-step: ${plan.llmStep.step} -> ${plan.llmStep.target_path}`);
         ok(`surveyed turns hash: ${plan.surveyedTurnsHash}`);
+        if (plan.surveyRecordFailure !== undefined) {
+          ok(
+            `survey not recorded (${plan.surveyRecordFailure}); pass --surveyed-turns-hash ` +
+              `with the commit so a barren answer still records its tombstone`,
+          );
+        }
       }
       return 0;
     }
@@ -218,8 +231,8 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       // commit's own fallback is the synchronous walk.
       dedup: await loadDedupIndex(vault),
       // The answered plan's surveyed hash, when relayed: a check that the
-      // session did not change since the plan. Absent, the commit records
-      // over the session's current mined turns.
+      // session did not change since the plan. Absent, the commit checks
+      // the survey the plan recorded instead.
       ...(surveyedTurnsHashRaw !== null ? { surveyedTurnsHash: surveyedTurnsHashRaw } : {}),
     });
     recordExtractPrefilterCommit(vault, decisionModel, res, now);

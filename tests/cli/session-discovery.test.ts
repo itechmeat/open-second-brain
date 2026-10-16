@@ -538,6 +538,24 @@ describe("--propose-backlog batches the distill proposals ask-once", () => {
     expect(after.mining_steps).toEqual([]);
   });
 
+  test("one session under two paths is one mining step with none remaining", async () => {
+    // The census counts import-ledger paths; the same basename imported
+    // from two project directories is one session identity, so it gets
+    // one step and leaves nothing behind it.
+    claudeLog("one.jsonl", "alpha");
+    const other = join(home, ".claude", "projects", "-srv-projects-other");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "one.jsonl"), claudeLine("alpha", "u-alpha"));
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+
+    const body = JSON.parse(
+      (await run(["--propose-backlog", "--json"])).stdout,
+    ) as ProposeBacklogJson;
+    expect(body.undistilled).toBe(2);
+    expect(body.mining_steps.map((s) => s.session_id)).toEqual(["one.jsonl"]);
+    expect(body.mining_steps_remaining).toBe(0);
+  });
+
   test("an empty backlog is an explicit empty envelope, not a failure", async () => {
     const res = await run(["--propose-backlog", "--json"]);
     expect(res.returncode).toBe(0);

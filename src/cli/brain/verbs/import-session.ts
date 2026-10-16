@@ -50,6 +50,7 @@ import {
   type SessionMiningCensus,
 } from "../../../core/brain/sessions/mining-census.ts";
 import { buildMiningStep } from "../../../core/brain/extract-signals.ts";
+import { recordMiningSurvey } from "../../../core/brain/session-mining-surveys.ts";
 import type { NeedsLlmStep } from "../../../core/brain/llm-step.ts";
 import { minedTurnsHash } from "../../../core/brain/session-mining-ledger.ts";
 import {
@@ -480,13 +481,22 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
     readonly turnsMined: number;
     readonly llmStep: NeedsLlmStep;
   }> = [];
+  // The census counts import-ledger PATHS, and one session identity can
+  // sit under several paths or runtimes; the steps are per identity, so
+  // the backlog walks each identity once and counts the minable ones
+  // itself - the number the remaining-steps figure is measured against.
+  const seen = new Set<string>();
+  let minable = 0;
   for (const row of census.byRuntime) {
     for (const sessionId of row.undistilledSessionIds) {
+      if (seen.has(sessionId)) continue;
+      seen.add(sessionId);
       const material = minedTurnMaterial(req.vault, sessionId, boundary, turnIndex);
       // A census undistilled row is minable by construction; the null arm
       // is the boundary changing between the two reads, and contributes
       // no candidates rather than a guess.
       if (material === null) continue;
+      minable += 1;
       if (miningSteps.length < BACKLOG_MINING_BATCH) {
         miningSteps.push({
           sessionId,
@@ -518,8 +528,21 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
   }
 
   const envelope = buildBacklogProposals(candidates, dedupIndex);
+  const remaining = Math.max(0, minable - miningSteps.length);
 
   if (req.asJson) {
+    // The JSON form hands out the envelopes, so each step records its
+    // survey the way an extract-signals plan does: a barren commit that
+    // answers it without relaying the hash can then still tell whether the
+    // session changed in between. A failed record is named on its step.
+    const surveyFailures = new Map<string, string>();
+    for (const step of miningSteps) {
+      try {
+        recordMiningSurvey(req.vault, step.sessionId, step.surveyedTurnsHash);
+      } catch (exc) {
+        surveyFailures.set(step.sessionId, (exc as Error).message ?? String(exc));
+      }
+    }
     okJson({
       undistilled: census.undistilled,
       proposals: envelope.proposals.map((p) => ({
@@ -541,8 +564,11 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
         surveyed_turns_hash: step.surveyedTurnsHash,
         turns_mined: step.turnsMined,
         llm_step: step.llmStep,
+        ...(surveyFailures.has(step.sessionId)
+          ? { survey_record_failure: surveyFailures.get(step.sessionId) }
+          : {}),
       })),
-      mining_steps_remaining: Math.max(0, census.undistilled - miningSteps.length),
+      mining_steps_remaining: remaining,
     });
     return 0;
   }
@@ -572,7 +598,6 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
         "(use --json here for the envelopes); an empty answer still drains the session",
     );
   }
-  const remaining = Math.max(0, census.undistilled - miningSteps.length);
   if (remaining > 0) ok(`undistilled sessions after this batch: ${remaining}`);
   return 0;
 }

@@ -2187,10 +2187,17 @@ format characters), when it contains NUL, or when it exceeds the cap.
   removed the downstream preference and wants the session re-proposed; a
   corrupt mining ledger refuses the plan by name rather than reading as
   empty. The commit keys its record on the session's turns as they stand
-  at commit time, so answering the envelope with `{session, items}` (an
-  empty `items` included) is all it takes; the optional
-  `surveyed_turns_hash` argument passes the plan's hash back as a check -
-  a value that is not a SHA-256 hex digest refuses the commit, and one the
+  at commit time. A plan that hands out an envelope records the hash of
+  the turns it offered as a pending survey, so answering the envelope with
+  `{session, items}` (an empty `items` included) is all it takes: the
+  barren commit writes its tombstone only while the session still holds
+  exactly the surveyed turns, and a turn imported after the plan, two
+  pending plans over different turns, or no plan since the last commit
+  withholds it and names why in `mining_ledger_failure` (a yield is
+  recorded either way). A plan whose survey could not be recorded carries
+  `survey_record_failure`. The optional `surveyed_turns_hash` argument
+  passes the plan's hash back as a check - a value that is not a SHA-256
+  hex digest (the empty string included) refuses the commit, and one the
   session no longer matches writes no mining record and names why. A
   commit that succeeds but cannot record its tombstone still succeeds and
   carries `mining_ledger_failure` by name.
