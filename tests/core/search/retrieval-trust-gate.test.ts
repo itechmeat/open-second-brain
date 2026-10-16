@@ -13,7 +13,7 @@
  * shadow: a vault must name `enforce` to exclude.
  */
 
-import { test, expect, beforeEach, afterEach, describe } from "bun:test";
+import { test, expect, beforeEach, afterEach, describe, spyOn } from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -70,9 +70,24 @@ describe("retrieval trust gate on the search path", () => {
     const enforce = withMode(off, "enforce");
 
     await indexVault(off);
-    const gateOff = await search(off, { query: "widget calibration", limit: 5 });
-    const gateShadow = await search(shadow, { query: "widget calibration", limit: 5 });
-    const gateEnforce = await search(enforce, { query: "widget calibration", limit: 5 });
+    // Freeze the clock across the three searches: recency decay is a
+    // continuous function of wall-clock time, so two real Date.now()
+    // reads even a millisecond apart would perturb the low-order digits
+    // of the compared scores (recency clock drift aside) for reasons
+    // that have nothing to do with the gate under test - the same spy
+    // the relational-arm byte-identity test carries.
+    const nowMs = Date.now();
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(nowMs);
+    let gateOff: Awaited<ReturnType<typeof search>>;
+    let gateShadow: Awaited<ReturnType<typeof search>>;
+    let gateEnforce: Awaited<ReturnType<typeof search>>;
+    try {
+      gateOff = await search(off, { query: "widget calibration", limit: 5 });
+      gateShadow = await search(shadow, { query: "widget calibration", limit: 5 });
+      gateEnforce = await search(enforce, { query: "widget calibration", limit: 5 });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
 
     // Off: both notes surface; no receipts on the outcome.
     expect(gateOff.results.map((r) => r.path).toSorted()).toEqual(["clean.md", "quarantined.md"]);
