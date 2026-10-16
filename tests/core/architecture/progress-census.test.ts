@@ -130,6 +130,10 @@ const DECLARED_EXEMPTIONS: ReadonlyMap<string, string> = new Map<string, string>
     "EmbeddingPhaseOptions",
     "A PHASE, not a run: called from indexInto and standalone by the vector backfill. Given a sink it would build a second counter, and a stream carrying two terminators cannot say which one ended the run - so it borrows the run owner's ProgressCounter instead, which is strictly more wiring than a sink, not less.",
   ],
+  [
+    "BuildMiningCensusOptions",
+    "A pure READ, not a run: the census opens no source log and writes nothing - it joins the two vault-side ledgers and classifies one imported session at a time, and the finished census IS the report. Both callers (the import-session verb and the backlog proposal) render one complete result and exit, so there is no stream to watch; the safeguard is what bounds the read inside a SessionStart hook's budget, and per-session events would report on a read whose every partial state is discarded.",
+  ],
 ]);
 
 /** A stage name, or a value on a frozen stage object, must look like this. */
