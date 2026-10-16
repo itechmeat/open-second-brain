@@ -248,7 +248,7 @@ function withCandidateCapNotice(
     severity: "warning" as const,
     title:
       `Document-dedup compared only the first ${DOCUMENT_DEDUP_CANDIDATE_CAP} of ` +
-      `${listed} listed summary-page candidates; duplicates past the cap were never read`,
+      `${listed} listed pages; duplicates past the cap were never read`,
     targets: Object.freeze([BRAIN_SOURCES_REL]),
     proposed_action: "review" as const,
     evidence: Object.freeze({

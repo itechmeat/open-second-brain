@@ -211,6 +211,12 @@ describe("detectDocumentDedup", () => {
     expect(evidence["scanned"]).toBe(200);
     expect(evidence["total"]).toBe(202);
     expect(evidence["cap"]).toBe(200);
+    // `listed` counts every readable .md under the reach - non-summary
+    // kinds and unparseable frontmatter included - so the row's only
+    // sentence about coverage must not call the skipped total
+    // summary-page candidates.
+    expect(notice!.title).toContain(`of 202 listed pages`);
+    expect(notice!.title).not.toContain("summary-page candidates");
   });
 
   test("a merge-resolved page inside the capped read set does not hide the truncation", () => {
