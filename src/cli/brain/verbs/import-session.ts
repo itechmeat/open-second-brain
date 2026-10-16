@@ -540,7 +540,7 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
       try {
         recordMiningSurvey(req.vault, step.sessionId, step.surveyedTurnsHash);
       } catch (exc) {
-        surveyFailures.set(step.sessionId, (exc as Error).message ?? String(exc));
+        surveyFailures.set(step.sessionId, exc instanceof Error ? exc.message : String(exc));
       }
     }
     okJson({
@@ -593,9 +593,11 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
     ok(`  mine: ${step.sessionId} (${step.turnsMined} user turn(s))`);
   }
   if (miningSteps.length > 0) {
+    // This form hands out no envelope, so it records no survey: a barren
+    // commit drains a session only over material a plan really offered.
     ok(
-      "  answer each with an extract-signals commit of its payload " +
-        "(use --json here for the envelopes); an empty answer still drains the session",
+      "  answer each with an extract-signals commit of its envelope's payload " +
+        "(--json here hands out the envelopes); an empty answer to an envelope drains the session",
     );
   }
   if (remaining > 0) ok(`undistilled sessions after this batch: ${remaining}`);

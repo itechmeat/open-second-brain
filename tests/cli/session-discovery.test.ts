@@ -38,6 +38,7 @@ import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { sessionLedgerPath } from "../../src/core/brain/sessions/discover.ts";
 import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
+import { sessionMiningSurveysPath } from "../../src/core/brain/session-mining-surveys.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
@@ -546,8 +547,13 @@ describe("--propose-backlog batches the distill proposals ask-once", () => {
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("mining steps: 1");
     expect(res.stdout).toContain("mine: one.jsonl");
-    expect(res.stdout).toContain("answer each with an extract-signals commit of its payload");
+    expect(res.stdout).toContain(
+      "an extract-signals commit of its envelope's payload (--json here hands out the envelopes)",
+    );
     expect(res.stdout).not.toContain("o2b brain extract-signals <session>");
+    // No envelope was handed out, so no survey is recorded that a barren
+    // commit could tombstone unseen turns against.
+    expect(existsSync(sessionMiningSurveysPath(vault))).toBe(false);
   });
 
   test("one session under two paths is one mining step with none remaining", async () => {
