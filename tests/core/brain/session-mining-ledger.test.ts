@@ -341,3 +341,24 @@ test("the tombstone read answers only while the hash still matches", () => {
   expect(readMiningTombstone(vault, SESSION, [turnMaterial({ text: "Edited turn." })])).toBeNull();
   expect(readMiningTombstone(vault, "sess-other", turns)).toBeNull();
 });
+
+test("a record with a yield is not a tombstone, but stays in the ledger", () => {
+  // The distilled state: the same record shape, read through two
+  // contracts. The gate must not suppress a session whose recorded mine
+  // produced accepted yield; the census reads the yield from the same
+  // entry.
+  seedTurns(SESSION);
+  const turns = [turnMaterial()];
+  recordSessionMiningOutcome(
+    vault,
+    {
+      sessionId: SESSION,
+      minedContentHash: minedTurnsHash(turns),
+      outcome: { written: 2, staged: 1, deduped: 0, durabilityRejected: 0 },
+    },
+    NOW,
+  );
+  expect(readMiningTombstone(vault, SESSION, turns)).toBeNull();
+  const entry = readSessionMiningLedger(vault).entries[SESSION]!;
+  expect(entry.outcome).toEqual({ written: 2, staged: 1, deduped: 0, durabilityRejected: 0 });
+});

@@ -17,7 +17,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -302,6 +302,39 @@ describe("mining tombstone", () => {
     const after = await run([SESSION, "--json"]);
     const afterPayload = JSON.parse(after.stdout) as { skipped?: { reason: string } };
     expect(afterPayload.skipped?.reason).toBe("mining_tombstone");
+  });
+
+  test("a yielding commit records its outcome and the session stays minable", async () => {
+    // The distilled state rides the same record the tombstone does: the
+    // yield is the census's evidence, not a suppression, so the next plan
+    // still offers the session.
+    const hash = await surveyedHash();
+    const mine = await run([
+      SESSION,
+      "--payload",
+      JSON.stringify({ items: [ITEM] }),
+      "--surveyed-turns-hash",
+      hash,
+      "--json",
+    ]);
+    expect(mine.returncode).toBe(0);
+    const ledger = JSON.parse(readFileSync(sessionMiningLedgerPath(vault), "utf8")) as {
+      entries: Record<
+        string,
+        {
+          outcome: { written: number; staged: number; deduped: number; durabilityRejected: number };
+        }
+      >;
+    };
+    expect(ledger.entries[SESSION]?.outcome).toEqual({
+      written: 1,
+      staged: 0,
+      deduped: 0,
+      durabilityRejected: 0,
+    });
+    const r = await run([SESSION, "--json"]);
+    expect(r.returncode).toBe(0);
+    expect((JSON.parse(r.stdout) as { skipped?: unknown }).skipped).toBeUndefined();
   });
 
   test("a ledger write failure on a successful commit exits 0 and names the failure", async () => {

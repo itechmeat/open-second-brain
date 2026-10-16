@@ -31,14 +31,14 @@
  * route to a confirmed preference. Nothing here writes a preference.
  *
  * The commit is also the mining ledger's write side (session-mining-ledger.ts):
- * a commit that ends with nothing written and nothing staged records a
- * zero-yield tombstone over the turn material the PLAN surveyed - the plan
- * carries the hash of the turns it offered, and the surfaces pass it back
- * with the answer - so the record describes the material the barren verdict
- * was actually earned over. The plan gate reads that record to stop
- * re-proposing a barren session on every re-scan. A commit that answers no
- * plan of this module's attests nothing and records nothing, and a yield -
- * staged or written - never tombstones; neither does a partial write.
+ * every successful commit that answers a plan records its outcome breakdown
+ * over the turn material the PLAN surveyed - the plan carries the hash of
+ * the turns it offered, and the surfaces pass it back with the answer. A
+ * zero-yield record (nothing written, nothing staged) is the tombstone the
+ * plan gate suppresses on; a yield record is the distilled state the mining
+ * census reports. A commit that answers no plan of this module's attests
+ * nothing and records nothing, and a partial write never records - a run
+ * that FAILED did not end.
  *
  * Precision beats recall, as it does in `fact-extract.ts`: the cap and the
  * floor are refusals, not filters. A payload over either limit is rejected
@@ -290,12 +290,12 @@ export interface CommitExtractedSignalsResult {
    */
   readonly reconciliation: ReconciliationReport;
   /**
-   * Present only when the commit itself SUCCEEDED but recording the
-   * zero-yield mining tombstone failed (session-mining-ledger.ts). The
-   * signals this result reports are already on disk, so throwing would
-   * misreport a successful write as a failed one - and swallowing the
-   * failure would hide a ledger that is no longer trustworthy, so the
-   * error message rides here by name, and on both surface outputs.
+   * Present only when the commit itself SUCCEEDED but recording the mining
+   * outcome failed (session-mining-ledger.ts). The signals this result
+   * reports are already on disk, so throwing would misreport a successful
+   * write as a failed one - and swallowing the failure would hide a ledger
+   * that is no longer trustworthy, so the error message rides here by
+   * name, and on both surface outputs.
    */
   readonly miningLedgerFailure?: string;
 }
@@ -751,39 +751,40 @@ export function commitExtractedSignals(
     );
   }
 
-  // A barren commit is the ledger's write trigger: nothing written and
-  // nothing staged means the mine ran to completion and produced nothing
-  // accepted - an empty answer, every item deduped, every item refused by
-  // the durability gate, or any mix. A yield, staged or written, is never
-  // barren, and a thrown ExtractSignalsWriteError never reaches here: a
-  // run that FAILED did not end, so it tombstones nothing.
+  // Every commit that answers a plan is the ledger's write trigger: the
+  // outcome breakdown is recorded over the hash the PLAN surveyed - the
+  // material the verdict was earned over - whatever the yield was. The
+  // zero-yield record is the tombstone the plan gate suppresses on; a
+  // yield record is the distilled state the census reports, and it is NOT
+  // a tombstone - the session stays minable. A thrown
+  // ExtractSignalsWriteError never reaches here: a run that FAILED did not
+  // end, so it records nothing. And a commit that answers no plan of this
+  // module's attests nothing, so it records nothing: without surveyed
+  // material there is nothing honest to key a record on, and failing open
+  // to a re-mine is the safe direction.
   const staged = writeApprovalEnabled ? written.length : 0;
   let miningLedgerFailure: string | undefined;
-  // The tombstone keys on the hash the PLAN surveyed - the material the
-  // barren verdict was earned over - not on whatever turns the session
-  // holds by commit time. An import landing between plan and commit
-  // changes the session's material without changing the answer, and a
-  // record over the new material would suppress turns no model ever saw.
-  // A commit that answers no plan of this module's attests nothing, so it
-  // records nothing: without surveyed material there is nothing honest to
-  // key a tombstone on, and failing open to a re-mine is the safe
-  // direction.
-  if (written.length === 0 && staged === 0 && opts.surveyedTurnsHash !== undefined) {
+  if (opts.surveyedTurnsHash !== undefined) {
     try {
       recordSessionMiningOutcome(
         vault,
         {
           sessionId: trimmed,
           minedContentHash: opts.surveyedTurnsHash,
-          outcome: { written: 0, staged: 0, deduped, durabilityRejected: rejected.length },
+          outcome: {
+            written: written.length,
+            staged,
+            deduped,
+            durabilityRejected: rejected.length,
+          },
         },
         opts.now,
       );
     } catch (err) {
-      // The accepted items (none here) and the signals already on disk are
-      // safe; throwing would misreport the commit as failed, and dropping
-      // the error would leave a ledger that silently stopped being
-      // written. Name it instead - the surfaces carry it verbatim.
+      // The signals already on disk are safe; throwing would misreport the
+      // commit as failed, and dropping the error would leave a ledger that
+      // silently stopped being written. Name it instead - the surfaces
+      // carry it verbatim.
       miningLedgerFailure = err instanceof Error ? err.message : String(err);
     }
   }

@@ -3,12 +3,14 @@
  * t_93617709).
  *
  * `planExtractSignals` is a pure read with no cross-run memory, so a
- * session that was mined once and legitimately yielded nothing accepted is
- * rebuilt and re-offered to the calling agent's model on every re-scan -
- * repeated model spend for zero yield. This ledger is the memory: when a
- * mining commit ends barren it records one tombstone entry for the session,
- * and the plan gate consults the entry before any decision-model work, so a
- * barren session is suppressed by name instead of re-proposed.
+ * session that was mined once is rebuilt and re-offered to the calling
+ * agent's model on every re-scan - repeated model spend, whether the mine
+ * would yield anything or not. This ledger is the memory: every commit that
+ * answers a plan records its outcome breakdown for the session, and the
+ * plan gate consults the record before any decision-model work. A zero-
+ * yield record (nothing written, nothing staged) is a tombstone that
+ * suppresses the session by name; a yield record is the distilled state the
+ * mining census reports, and suppresses nothing.
  *
  * ## The entry is keyed on content the mining lane actually holds
  *
@@ -98,7 +100,12 @@ export interface SessionMiningEntry {
   readonly sessionId: string;
   /** {@link minedTurnsHash} of the turn material the mine covered. */
   readonly minedContentHash: string;
-  /** The zero-yield breakdown this entry tombstones. */
+  /**
+   * The outcome breakdown the last commit over this material recorded.
+   * Zero written and zero staged makes the entry a tombstone (the plan
+   * gate's evidence); a yield makes it the distilled state the census
+   * reports - the same field, read through two contracts.
+   */
   readonly outcome: SessionMiningOutcome;
   /** When the commit recorded it, to the second. */
   readonly recordedAt: string;
@@ -217,7 +224,7 @@ function serializeLedger(entries: Record<string, SessionMiningEntry>): string {
   );
 }
 
-/** One zero-yield commit to record. */
+/** One commit's mining outcome to record. */
 export interface SessionMiningRecord {
   readonly sessionId: string;
   /** {@link minedTurnsHash} of the turn material the commit covered. */
@@ -312,12 +319,14 @@ export function minedTurnsHash(turns: ReadonlyArray<MinedTurnMaterial>): string 
 }
 
 /**
- * The plan gate's answer: the recorded entry whose hash still matches
+ * The plan gate's answer: the recorded TOMBSTONE whose hash still matches
  * `turns`, or `null`. `null` means no entry (never mined), a changed turn
- * list (re-mined material, re-opened) or a session id that has no record -
- * in every one of which the session is eligible to mine. A hit means the
- * session's CURRENT material was already mined and the outcome is on file;
- * the caller suppresses with {@link SessionMiningEntry.outcome} as evidence.
+ * list (re-mined material, re-opened), a session id that has no record - or
+ * an entry whose recorded outcome carried a yield: a yielding commit writes
+ * the distilled state the census reports, not a suppression, so the session
+ * stays minable and only the zero-yield record suppresses. A hit means the
+ * session's CURRENT material was mined to nothing accepted; the caller
+ * suppresses with {@link SessionMiningEntry.outcome} as evidence.
  *
  * A corrupt or unknown-schema ledger throws, by the read's contract: a gate
  * that could not verify the ledger must not wave the session through as if
@@ -331,5 +340,6 @@ export function readMiningTombstone(
   const hash = minedTurnsHash(turns);
   const entry = readSessionMiningLedger(vault).entries[sessionId.trim()];
   if (entry === undefined || entry.minedContentHash !== hash) return null;
+  if (entry.outcome.written + entry.outcome.staged > 0) return null;
   return entry;
 }

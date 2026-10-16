@@ -634,13 +634,11 @@ test("the session mining ledger schema version is pinned at 1", () => {
 
 // ----- Record-at-commit (session-mining-economy) ----------------------------
 //
-// 24. A successful commit with nothing written and nothing staged records
-//     the zero-yield tombstone with the outcome breakdown, whatever mix of
-//     empty answer, dedupes and durability refusals produced it - keyed on
-//     the hash the PLAN surveyed, which the caller passes back.
-// 25. A commit with a yield (written or staged nonzero) records nothing, and
-//     neither does a commit that ends in a partial-write error - a failed
-//     run is not a barren one.
+// 24. Every successful commit that answers a plan records its outcome
+//     breakdown over the surveyed hash: zero-yield as the tombstone's
+//     evidence, yield as the distilled state the census reports.
+// 25. A commit that ends in a partial-write error records nothing - a
+//     failed run is not an outcome.
 // 26. The tombstone keys on the material the model actually answered, so a
 //     turn imported between plan and commit is never suppressed unseen; a
 //     commit that answers no plan of this module's attests nothing and
@@ -714,15 +712,25 @@ test("a commit whose items all fail the durability gate records the refusals", (
   });
 });
 
-test("a commit with a yield records nothing", () => {
-  commitAnsweringPlan([item()]);
-  expect(readSessionMiningLedger(vault).entries).toEqual({});
+test("a yielding commit records its yield - the distilled state, not a tombstone", () => {
+  const { plan, res } = commitAnsweringPlan([item()]);
+  expect(res.written).toHaveLength(1);
+  expect(pendingFiles().length).toBe(0);
+  const entry = ledgerEntry();
+  expect(entry).toBeDefined();
+  expect(entry!.minedContentHash).toBe(plan.surveyedTurnsHash);
+  expect(entry!.outcome).toEqual({ written: 1, staged: 0, deduped: 0, durabilityRejected: 0 });
 });
 
-test("a staged yield records nothing either", () => {
-  commitAnsweringPlan([item()], { writeApprovalEnabled: true });
-  expect(pendingFiles().length).toBe(1);
-  expect(readSessionMiningLedger(vault).entries).toEqual({});
+test("a staged yield records itself the same way", () => {
+  const { res } = commitAnsweringPlan([item()], { writeApprovalEnabled: true });
+  expect(res.staged).toBe(1);
+  expect(ledgerEntry()!.outcome).toEqual({
+    written: 1,
+    staged: 1,
+    deduped: 0,
+    durabilityRejected: 0,
+  });
 });
 
 test("a partial-write failure records nothing - a failed run is not a barren one", () => {
@@ -816,7 +824,8 @@ test("a ledger write failure on a successful commit is named, never thrown", () 
   expect(inboxFiles()).toEqual([]);
 });
 
-test("a yield-bearing commit does not touch a corrupt ledger and names no failure", () => {
+test("a yield-bearing commit names a ledger failure too - it records like any other", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
   seedCorruptLedger();
   const res = commitExtractedSignals(
     vault,
@@ -825,10 +834,11 @@ test("a yield-bearing commit does not touch a corrupt ledger and names no failur
     {
       agent: "tester",
       now: NOW,
+      surveyedTurnsHash: plan.surveyedTurnsHash,
     },
   );
   expect(res.written).toHaveLength(1);
-  expect("miningLedgerFailure" in res).toBe(false);
+  expect(res.miningLedgerFailure).toContain("session mining ledger is corrupted JSON");
 });
 
 test("the ledger-failure field is absent when the record succeeded", () => {

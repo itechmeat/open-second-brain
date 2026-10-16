@@ -30,8 +30,11 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../../src/core/brain/paths.ts";
 import {
+  commitExtractedSignals,
+  planExtractSignals,
+} from "../../../../src/core/brain/extract-signals.ts";
+import {
   minedTurnsHash,
-  recordSessionMiningOutcome,
   sessionMiningLedgerPath,
 } from "../../../../src/core/brain/session-mining-ledger.ts";
 import { buildCaptureBoundary } from "../../../../src/core/brain/capture-boundary.ts";
@@ -110,15 +113,43 @@ function minedMaterial(sessionId: string): ReadonlyArray<{
     .filter((turn) => turn.text.length > 0);
 }
 
-/** Record a mining outcome over the session's CURRENT material. */
-async function recordOutcome(
-  sessionId: string,
-  outcome: { written: number; staged: number; deduped: number; durabilityRejected: number },
-): Promise<void> {
-  recordSessionMiningOutcome(
+/**
+ * Mine one session through the REAL writer - a plan, then the commit that
+ * answers it, attesting the plan's surveyed hash - with nothing accepted.
+ * The zero-yield record the census reads as known-nothing-new is what that
+ * commit actually writes.
+ */
+function mineBarren(sessionId: string): void {
+  const plan = planExtractSignals(vault, sessionId, { now: NOW });
+  commitExtractedSignals(
     vault,
-    { sessionId, minedContentHash: minedTurnsHash(minedMaterial(sessionId)), outcome },
-    NOW,
+    sessionId,
+    { items: [] },
+    { agent: "tester", now: NOW, surveyedTurnsHash: plan.surveyedTurnsHash },
+  );
+}
+
+/**
+ * Mine one session through the REAL writer to a written yield. The yield
+ * record the census reads as distilled is what that commit actually
+ * writes - no seeded hand-crafted ledger state.
+ */
+function mineYield(sessionId: string): void {
+  const plan = planExtractSignals(vault, sessionId, { now: NOW });
+  commitExtractedSignals(
+    vault,
+    sessionId,
+    {
+      items: [
+        {
+          topic: `rule-of-${sessionId.replace(/\.jsonl$/, "")}`,
+          signal: "positive",
+          principle: "Ship the parser before the next release.",
+          confidence: 0.9,
+        },
+      ],
+    },
+    { agent: "tester", now: NOW, surveyedTurnsHash: plan.surveyedTurnsHash },
   );
 }
 
@@ -147,12 +178,7 @@ describe("buildMiningCensus", () => {
 
   test("a mined session with accepted yield on current content is distilled", async () => {
     await importOne(writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]));
-    await recordOutcome("alpha.jsonl", {
-      written: 2,
-      staged: 1,
-      deduped: 0,
-      durabilityRejected: 0,
-    });
+    mineYield("alpha.jsonl");
     const census = buildMiningCensus(vault);
     expect(census.distilled).toBe(1);
     expect(census.undistilled).toBe(0);
@@ -161,12 +187,7 @@ describe("buildMiningCensus", () => {
 
   test("a mined session that yielded nothing accepted is known-nothing-new, not undistilled", async () => {
     await importOne(writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]));
-    await recordOutcome("alpha.jsonl", {
-      written: 0,
-      staged: 0,
-      deduped: 3,
-      durabilityRejected: 1,
-    });
+    mineBarren("alpha.jsonl");
     const census = buildMiningCensus(vault);
     expect(census.knownNothingNew).toBe(1);
     expect(census.undistilled).toBe(0);
@@ -176,12 +197,7 @@ describe("buildMiningCensus", () => {
   test("a re-import that changes the turns re-opens the session", async () => {
     const path = writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]);
     await importOne(path);
-    await recordOutcome("alpha.jsonl", {
-      written: 1,
-      staged: 0,
-      deduped: 0,
-      durabilityRejected: 0,
-    });
+    mineYield("alpha.jsonl");
     expect(buildMiningCensus(vault).distilled).toBe(1);
 
     // A second turn lands in the same log (an edit, or a resume), and the
@@ -255,20 +271,20 @@ describe("buildMiningCensus", () => {
         { role: "user", text: "noise-turn-present" },
       ]),
     );
-    // The outcome was earned by the reduced material; the census must hash
-    // the same reduced material the plan mines, so the session is distilled.
+    // The real writer plans over the reduced material (the boundary
+    // suppresses the noise turn before the plan embeds anything), attests
+    // that hash, and the commit records it - so the census must hash the
+    // same reduced material the plan mines for the session to be
+    // distilled.
+    mineYield("alpha.jsonl");
     const reduced = minedTurnsHash(
       minedMaterial("alpha.jsonl").filter((turn) => !turn.text.includes("noise-turn-present")),
     );
-    recordSessionMiningOutcome(
-      vault,
-      {
-        sessionId: "alpha.jsonl",
-        minedContentHash: reduced,
-        outcome: { written: 1, staged: 0, deduped: 0, durabilityRejected: 0 },
-      },
-      NOW,
-    );
+    expect(minedMaterial("alpha.jsonl").length).toBe(1);
+    const ledger = JSON.parse(
+      readFileSync(join(vault, DERIVED_STORE_DIR, "session-mining-ledger.json"), "utf8"),
+    ) as { entries: Record<string, { minedContentHash: string }> };
+    expect(ledger.entries["alpha.jsonl"]?.minedContentHash).toBe(reduced);
     expect(buildMiningCensus(vault).distilled).toBe(1);
   });
 
@@ -276,12 +292,7 @@ describe("buildMiningCensus", () => {
     const first = await importOne(
       writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]),
     );
-    await recordOutcome("alpha.jsonl", {
-      written: 1,
-      staged: 0,
-      deduped: 0,
-      durabilityRejected: 0,
-    });
+    mineYield("alpha.jsonl");
     expect(buildMiningCensus(vault).distilled).toBe(1);
 
     // The log moves (a rotated store, another machine's layout): the import
@@ -303,7 +314,7 @@ describe("buildMiningCensus", () => {
     await importOne(writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]));
     const beta = writeSession("beta.jsonl", [{ role: "user", text: "write the docs" }]);
     await importOne(beta);
-    await recordOutcome("beta.jsonl", { written: 1, staged: 0, deduped: 0, durabilityRejected: 0 });
+    mineYield("beta.jsonl");
     // The census trusts the runtime the import ledger recorded, the same
     // way `--status` reports per-runtime coverage; re-labelling the second
     // entry proves the rows split rather than merge.

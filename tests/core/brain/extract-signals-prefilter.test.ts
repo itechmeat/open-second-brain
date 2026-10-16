@@ -537,6 +537,32 @@ describe("mining tombstone", () => {
     expect(provider.requests).toHaveLength(0);
   });
 
+  test("a record with a yield does not suppress - the session stays minable", async () => {
+    // The distilled state: the commit recorded a yield over the current
+    // material. That is the census's distilled evidence, not a tombstone,
+    // so the plan still runs (and a re-mine re-records over the same
+    // hash).
+    const full = planExtractSignals(vault, SESSION, { now: NOW });
+    recordSessionMiningOutcome(
+      vault,
+      {
+        sessionId: SESSION,
+        minedContentHash: minedTurnsHash(full.turnsMined),
+        outcome: { written: 3, staged: 0, deduped: 1, durabilityRejected: 0 },
+      },
+      NOW,
+    );
+    const provider = new FakeDecisionProvider({ answer: () => 0.9 });
+    const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+      now: NOW,
+      decisionModel: config("enforce"),
+      provider,
+    });
+    expect(plan.skipped).toBeUndefined();
+    expect(plan.llmStep).not.toBeNull();
+    expect(provider.requests).toHaveLength(1);
+  });
+
   test("force bypasses the hit, never the read: a corrupt ledger refuses a forced plan", async () => {
     // The escape hatch's safety story, from the option's own contract:
     // `force` ignores a matching entry, never a corrupt file. Reordering
