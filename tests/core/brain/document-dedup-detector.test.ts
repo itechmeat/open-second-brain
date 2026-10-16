@@ -181,6 +181,47 @@ describe("detectDocumentDedup", () => {
     expect(detect()).toHaveLength(0);
   });
 
+  test("a reached candidate cap emits the coverage notice with scanned and total", () => {
+    // The review M9 shape: a long-lived vault whose duplicates sort AFTER
+    // the cap. 200 filler pages keep the first comparison slots (each with
+    // a distinct token payload, so no filler pairs with another), and the
+    // near-duplicate pair sorts last, so the cap never reads it. The scan
+    // must say its coverage was bounded instead of answering clean.
+    for (let i = 0; i < 200; i++) {
+      const tag = `p${String(i).padStart(4, "0")}`;
+      writeSourcePage(`filler-${String(i).padStart(4, "0")}`, {
+        body: `${UNRELATED}\n${tag}a ${tag}b ${tag}c ${tag}d ${tag}e ${tag}f ${tag}g ${tag}h`,
+        createdAt: "2026-01-01T00:00:00Z",
+      });
+    }
+    writeSourcePage("zz-dup-a", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
+    writeSourcePage("zz-dup-b", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
+
+    const findings = detect();
+
+    // The pair behind the cap was never read, so no retirement is claimed
+    // for it - that is the bound working. The truncation itself is named.
+    expect(findings.some((f) => f.proposed_action === "retire")).toBe(false);
+    const notice = findings.find(
+      (f) => (f.evidence as Record<string, unknown>)["candidate_cap_reached"] === true,
+    );
+    expect(notice).toBeDefined();
+    expect(notice!.proposed_action).toBe("review");
+    const evidence = notice!.evidence as Record<string, unknown>;
+    expect(evidence["scanned"]).toBe(200);
+    expect(evidence["total"]).toBe(202);
+    expect(evidence["cap"]).toBe(200);
+  });
+
+  test("no coverage notice while the cap does not bind", () => {
+    writeSourcePage("a", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
+    writeSourcePage("b", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });
+    const findings = detect();
+    expect(
+      findings.some((f) => (f.evidence as Record<string, unknown>)["candidate_cap_reached"]),
+    ).toBe(false);
+  });
+
   test("a member the caller cannot read is treated as absent", () => {
     writeSourcePage("visible", { body: NEAR_A, createdAt: "2026-01-01T00:00:00Z" });
     const hidden = writeSourcePage("hidden", { body: NEAR_B, createdAt: "2026-01-02T00:00:00Z" });

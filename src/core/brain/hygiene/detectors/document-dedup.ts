@@ -138,24 +138,41 @@ interface PairScore {
  * order, after the three admission filters:
  *
  *   - the caller's `readable` predicate (a refused page is absent - it
- *     is not scored, not grouped and not named);
- *   - the candidate cap, which bounds files READ and is applied before
- *     the merge-resolved filter so the bound stays a bound;
- *   - the merge-resolved predicate (GitHub #180), applied after the cap
- *     the same way the preference dedup detector applies it.
+ *     is not scored, not grouped, not named, and not read);
+ *   - the candidate cap, which bounds files READ: entries past the cap
+ *     are still COUNTED on {@link CollectedDocuments.listed}, never
+ *     opened;
+ *   - the merge-resolved predicate (GitHub #180), applied to the read
+ *     set the same way the preference dedup detector applies it.
  *
  * A page whose frontmatter does not parse is skipped, as in every other
- * detector; corruption is the doctor's job, not a scan abort.
+ * detector; corruption is the doctor's job, not a scan abort. The count
+ * of what the cap left unread is what lets both layers name their
+ * coverage ({@link withCandidateCapNotice}) instead of answering clean
+ * over a truncated scan (review M9).
  */
+interface CollectedDocuments {
+  readonly records: DocumentRecord[];
+  /** Every `.md` entry listed under the reach, read or not, sorted order. */
+  readonly listed: number;
+}
+
 function collectDocumentRecords(
   vault: string,
   readable?: (rel: string) => boolean,
-): DocumentRecord[] {
+): CollectedDocuments {
   const dir = join(vault, BRAIN_SOURCES_REL);
-  if (!existsSync(dir)) return [];
+  if (!existsSync(dir)) return { records: [], listed: 0 };
   const out: DocumentRecord[] = [];
+  let listed = 0;
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(".md")) continue;
+    const path = `${BRAIN_SOURCES_REL}/${name}`;
+    if (readable !== undefined && !readable(path)) continue;
+    listed += 1;
+    // The cap bounds files READ: past it the walk only counts, it never
+    // opens the page. The count is what the coverage notice reports.
+    if (out.length >= DOCUMENT_DEDUP_CANDIDATE_CAP) continue;
     const abs = join(dir, name);
     let meta: Record<string, unknown>;
     let body: string;
@@ -165,8 +182,6 @@ function collectDocumentRecords(
       continue;
     }
     if (meta["kind"] !== BRAIN_SOURCE_KIND) continue;
-    const path = `${BRAIN_SOURCES_REL}/${name}`;
-    if (readable !== undefined && !readable(path)) continue;
     const rawCreated = meta["created_at"];
     const createdAtIso =
       typeof rawCreated === "string" && Number.isFinite(Date.parse(rawCreated)) ? rawCreated : null;
@@ -177,10 +192,46 @@ function collectDocumentRecords(
       mergedInto: readMergedInto(meta),
       scopeKey: compositeScopeKey(scopeFromFrontmatter(meta)),
     });
-    if (out.length >= DOCUMENT_DEDUP_CANDIDATE_CAP) break;
   }
   const pointerOf = mergePointerLookup(out.map((r) => [r.path, r.mergedInto] as const));
-  return out.filter((r) => !isMergeResolved(r.path, pointerOf));
+  return { records: out.filter((r) => !isMergeResolved(r.path, pointerOf)), listed };
+}
+
+/**
+ * Append the coverage notice a reached cap owes the caller (review M9):
+ * only the first {@link DOCUMENT_DEDUP_CANDIDATE_CAP} summary pages in
+ * path order were compared, so duplicates sorting after it were never
+ * read, and without this row a truncated scan looks clean. The notice is
+ * review-only - it never retires anything - and it fires only when the
+ * cap actually bound the read set (`read` at the cap with pages left
+ * listed), so a small vault with a few non-summary `.md` files never
+ * sees it. Returned findings stay in the deterministic target order.
+ */
+function withCandidateCapNotice(
+  listed: number,
+  read: number,
+  findings: HygieneFinding[],
+): HygieneFinding[] {
+  if (read < DOCUMENT_DEDUP_CANDIDATE_CAP || listed <= DOCUMENT_DEDUP_CANDIDATE_CAP) {
+    return findings;
+  }
+  const notice = Object.freeze({
+    id: hygieneFindingId("document-dedup", [BRAIN_SOURCES_REL]),
+    detector: "document-dedup" as const,
+    severity: "warning" as const,
+    title:
+      `Document-dedup compared only the first ${DOCUMENT_DEDUP_CANDIDATE_CAP} of ` +
+      `${listed} listed summary-page candidates; duplicates past the cap were never read`,
+    targets: Object.freeze([BRAIN_SOURCES_REL]),
+    proposed_action: "review" as const,
+    evidence: Object.freeze({
+      candidate_cap_reached: true,
+      cap: DOCUMENT_DEDUP_CANDIDATE_CAP,
+      scanned: read,
+      total: listed,
+    }),
+  });
+  return [...findings, notice].toSorted((a, b) => (a.targets[0]! < b.targets[0]! ? -1 : 1));
 }
 
 /**
@@ -388,14 +439,17 @@ export function detectDocumentDedup(
   opts: DocumentDedupOptions = {},
 ): ReadonlyArray<HygieneFinding> {
   const threshold = opts.lexicalThreshold ?? DOCUMENT_DEDUP_LEXICAL_THRESHOLD;
-  const records = collectDocumentRecords(vault, ctx.readable).filter(
-    (r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS,
+  const { records, listed } = collectDocumentRecords(vault, ctx.readable);
+  const compared = records.filter((r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS);
+  if (compared.length < 2) return withCandidateCapNotice(listed, records.length, []);
+  return withCandidateCapNotice(
+    listed,
+    records.length,
+    findingsFromGroups(compared, lexicalPairs(compared, threshold), {
+      method: "lexical",
+      threshold,
+    }),
   );
-  if (records.length < 2) return [];
-  return findingsFromGroups(records, lexicalPairs(records, threshold), {
-    method: "lexical",
-    threshold,
-  });
 }
 
 function resolveConfiguredProvider(vault: string): EmbeddingProvider | null {
@@ -456,44 +510,50 @@ export async function detectSemanticDocumentDedup(
   // preference dedup detector applies.
   if (provider === null || !providerProducesVectors(provider)) return lexical();
 
-  const records = collectDocumentRecords(vault, opts.readable).filter(
-    (r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS,
-  );
-  if (records.length < 2) return lexical();
+  const { records, listed } = collectDocumentRecords(vault, opts.readable);
+  const compared = records.filter((r) => tokenise(r.body).size >= NEAR_DUPLICATE_MIN_TOKENS);
+  // The same coverage notice the lexical layer owes (review M9), wrapped
+  // around whichever result this run answers.
+  const withCap = (result: SemanticDocumentDedupResult): SemanticDocumentDedupResult =>
+    Object.freeze({
+      ...result,
+      findings: Object.freeze(withCandidateCapNotice(listed, records.length, [...result.findings])),
+    });
+  if (compared.length < 2) return withCap(lexical());
   const threshold = opts.threshold ?? DOCUMENT_DEDUP_EMBEDDING_THRESHOLD;
 
   let vectors: number[][];
   try {
-    vectors = await provider.embed(records.map((r) => r.body));
+    vectors = await provider.embed(compared.map((r) => r.body));
   } catch {
-    return lexical();
+    return withCap(lexical());
   }
-  if (vectors.length !== records.length) return lexical();
+  if (vectors.length !== compared.length) return withCap(lexical());
   // A ragged batch - vectors of differing dimensions - is the same
   // broken-provider shape as a count mismatch: the cosine below would
   // silently truncate to the shorter vector and fabricate a similarity
   // out of incomparable spaces, so the whole run answers lexical, labeled.
   const dimension = vectors[0]!.length;
-  if (vectors.some((v) => v.length !== dimension)) return lexical();
+  if (vectors.some((v) => v.length !== dimension)) return withCap(lexical());
 
   const pairs: PairScore[] = [];
-  for (let i = 0; i < records.length; i++) {
-    for (let j = i + 1; j < records.length; j++) {
+  for (let i = 0; i < compared.length; i++) {
+    for (let j = i + 1; j < compared.length; j++) {
       // Scope buckets fold here too: a similarity score must not
       // overrule the operator's scope boundary.
-      if (records[i]!.scopeKey !== records[j]!.scopeKey) continue;
+      if (compared[i]!.scopeKey !== compared[j]!.scopeKey) continue;
       const similarity = cosine(vectors[i]!, vectors[j]!);
       if (similarity < threshold) continue;
       pairs.push({
-        pair: [records[i]!.path, records[j]!.path],
+        pair: [compared[i]!.path, compared[j]!.path],
         similarity: roundScore(similarity),
       });
     }
   }
-  return Object.freeze({
+  return withCap({
     method: "embedding" as const,
     findings: Object.freeze(
-      findingsFromGroups(records, pairs, {
+      findingsFromGroups(compared, pairs, {
         method: "embedding",
         threshold,
         model: provider.model,
