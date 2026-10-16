@@ -118,16 +118,71 @@ export const RECEIPT_FOLD_SCHEMA = "o2b.receipt-fold.v1";
 export const RECEIPT_FOLD_DEFAULT_AGE_DAYS = 30;
 
 /**
- * The continuity kinds the fold must NEVER touch, whatever their age.
- * `source_invalidation` is the deleteBySource audit trail; the two
- * Hermes context-compaction kinds are that feature's own receipts and
- * folding them under a storage operation's name would corrupt the one
- * vocabulary by colliding with the other.
+ * The continuity kinds a fold may aggregate once they are past the age
+ * threshold: the PURE TELEMETRY kinds, whose readers derive aggregate
+ * statistics read-side (summarize/list/roll-up surfaces) and keep no
+ * per-record identity past the correlation window. The list is CLOSED on
+ * purpose - folding is opt-in per kind, and a kind that is not listed
+ * here fails closed to keep, including every kind a future build adds
+ * before it makes its fold decision. The census test
+ * (`tests/core/brain/receipts-scan.test.ts`) fails when a new continuity
+ * kind lands in the vocabulary without joining one of the two lists
+ * below.
  */
-export const PROTECTED_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
+export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
+  "recall_telemetry",
+  "gate_telemetry",
+  "negative_recall",
+  "ingest_dedup",
+  "mcp_route_latency",
+  "token_impact",
+  "token_impact_outcome",
+  "context_pack_outcome",
+  "context_pack_evidence",
+  "recall_observed_use",
+  "skill_invoked",
+  "decision_model_call",
+  "decision_model_extract_commit",
+]);
+
+/**
+ * The continuity kinds the fold must NEVER touch, whatever their age -
+ * every kind whose records are read back as data rather than aggregated
+ * as telemetry, each named beside the reader that would lose it:
+ *
+ *   - `source_invalidation` - the deleteBySource audit trail;
+ *   - `pre_compact_extract` / `post_compact_audit` - the Hermes
+ *     context-compaction receipts, which a storage fold must not rewrite
+ *     under a colliding name;
+ *   - `context_receipt` - looked up by id (`getContextReceipt`) and read
+ *     by the stale-dependency check;
+ *   - `session_turn` / `recent_turn` / `session_summary_node` /
+ *     `session_summary_digest` - the session read models; the
+ *     `recent_turn` sequence derives from the row count itself, so a
+ *     fold would restart it;
+ *   - `generation_report` - listed, filtered and joined as a read model;
+ *   - `host_memory_write` - the durable record of a host memory write;
+ *   - `session_entity_mention` - the cross-session entity index the
+ *     session-recall seed, the hallways pass and the mining dedupe seed
+ *     read back (its payload carries `session_ref`, so the clip-key rule
+ *     never protected it);
+ *   - `receipt_compaction` - the compaction audit trail itself; a fold
+ *     that removed the record of the run before it would erase the only
+ *     account of what the fold has already destroyed.
+ */
+export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
   "source_invalidation",
   "pre_compact_extract",
   "post_compact_audit",
+  "context_receipt",
+  "session_turn",
+  "recent_turn",
+  "session_summary_node",
+  "session_summary_digest",
+  "generation_report",
+  "host_memory_write",
+  "session_entity_mention",
+  "receipt_compaction",
 ]);
 
 /** One shard selected for compaction, as a scan reported it. */

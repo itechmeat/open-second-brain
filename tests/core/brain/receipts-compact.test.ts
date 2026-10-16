@@ -40,6 +40,7 @@ import {
 } from "../../../src/core/brain/receipts/compact.ts";
 import { RECEIPT_SHARD_UNREADABLE } from "../../../src/core/brain/receipts/scan.ts";
 import {
+  RECEIPT_COMPACTION_OPERATION,
   RECEIPT_FOLD_SCHEMA,
   RECEIPT_LEDGER_FAMILY,
 } from "../../../src/core/brain/receipts/types.ts";
@@ -407,6 +408,47 @@ describe("compactReceiptLedgers", () => {
     // The fold itself landed: the shard on disk holds the aggregate.
     expect(readShard(metricsDir(vault), "storage_usage.jsonl")).toContain(RECEIPT_FOLD_SCHEMA);
     expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(0);
+  });
+
+  test("the review probe: entity mentions and the audit trail survive two confirmed runs", () => {
+    // The H1 probe the external review ran: a 2026-08 shard holding 28
+    // session_entity_mention records and 28 receipt_compaction records
+    // ended 0 records / 4 aggregates after two confirmed runs - the
+    // cross-session entity index and the fold's own audit trail folded
+    // away, because folding used to be the default for every kind outside
+    // a short protected list. Folding is now opt-in per kind and both
+    // kinds are data, not telemetry: nothing here may fold, so two runs
+    // leave all 56 records in place and write no aggregate at all.
+    const lines: string[] = [];
+    for (let i = 0; i < 28; i += 1) {
+      const day = String((i % 25) + 1).padStart(2, "0");
+      lines.push(
+        continuityLine("session_entity_mention", `2026-08-${day}T12:00:00Z`, {
+          session_ref: "imports/a.md",
+          key: `sym:S${i}`,
+        }),
+      );
+      lines.push(
+        continuityLine("receipt_compaction", `2026-08-${day}T13:00:00Z`, {
+          operation: RECEIPT_COMPACTION_OPERATION,
+        }),
+      );
+    }
+    writeShard(continuityLogDir(vault), "2026-08.jsonl", lines);
+    for (let run = 0; run < 2; run += 1) {
+      const result = compactReceiptLedgers(vault, {
+        shards: [{ family: RECEIPT_LEDGER_FAMILY.continuity, name: "2026-08.jsonl" }],
+        now: NOW,
+        dryRun: false,
+      });
+      expect(result.totals.folded).toBe(0);
+      expect(result.failures).toEqual([]);
+    }
+    // The read model still sees every record, and no aggregate line was
+    // written. (Nothing folded, so the runs appended no audit either.)
+    expect(listContinuityRecords(vault, { kind: "session_entity_mention" })).toHaveLength(28);
+    expect(listContinuityRecords(vault, { kind: "receipt_compaction" })).toHaveLength(28);
+    expect(readShard(continuityLogDir(vault), "2026-08.jsonl")).not.toContain(RECEIPT_FOLD_SCHEMA);
   });
 
   test("a mixed selection reports a compacted shard as nothing-to-do, not a failure", () => {

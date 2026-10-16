@@ -11,15 +11,16 @@
  *
  * Protected classes, never foldable whatever their age:
  *
- *   - `source_invalidation` - the deleteBySource audit trail;
- *   - `pre_compact_extract` / `post_compact_audit` - the Hermes
- *     context-compaction receipts, which a storage fold must not
- *     rewrite under a colliding name;
+ *   - every continuity kind outside the closed
+ *     {@link FOLDABLE_CONTINUITY_KINDS} allowlist - folding is opt-in
+ *     per kind, and the functional kinds (the session read models, the
+ *     by-id lookups, the entity index, the audit trails) are read back
+ *     as data, not aggregated as telemetry. Unknown kinds fail closed to
+ *     keep the same way: a newer build's records are not this build's to
+ *     fold;
  *   - any record whose payload carries one of
  *     {@link CLIP_PROTECTED_PAYLOAD_KEYS} - folding would destroy the
  *     session/agent correlation the clip rule guarantees survives;
- *   - any continuity kind this build does not know - a newer build's
- *     records are not this build's to fold (fail closed to keep);
  *   - any record whose timestamp cannot be compared (fail closed).
  *
  * Ledger rewrites happen only in `compact.ts`; this module never binds a
@@ -40,7 +41,7 @@ import {
 import { metricsDir } from "../metrics.ts";
 import { toPosix } from "../../path-safety.ts";
 import {
-  PROTECTED_CONTINUITY_KINDS,
+  FOLDABLE_CONTINUITY_KINDS,
   RECEIPT_FOLD_DEFAULT_AGE_DAYS,
   RECEIPT_FOLD_SCHEMA,
   RECEIPT_LEDGER_FAMILIES,
@@ -96,18 +97,20 @@ export function payloadCarriesProtectedKey(payload: unknown): boolean {
 }
 
 /**
- * Classify one continuity record against the cutoff. Unknown kinds,
- * protected kinds, protected-key carriers and uncompared timestamps are
- * protected (fail closed); canonical timestamps at or after the cutoff
- * are young; everything else is foldable. Every field is optional: a
- * line missing one classifies through the same guards and fails closed.
+ * Classify one continuity record against the cutoff. Folding is opt-in
+ * per kind: an unknown kind, or any kind outside the closed
+ * {@link FOLDABLE_CONTINUITY_KINDS} allowlist, a protected-key carrier
+ * and an uncompared timestamp are all protected (fail closed); canonical
+ * timestamps at or after the cutoff are young; a listed telemetry kind
+ * older than that is foldable. Every field is optional: a line missing
+ * one classifies through the same guards and fails closed.
  */
 export function classifyContinuityRecord(
   record: { readonly kind?: unknown; readonly createdAt?: unknown; readonly payload?: unknown },
   cutoffMs: number,
 ): ReceiptLineClass {
   if (!isContinuityRecordKind(record.kind)) return "protected";
-  if ((PROTECTED_CONTINUITY_KINDS as ReadonlyArray<string>).includes(record.kind)) {
+  if (!(FOLDABLE_CONTINUITY_KINDS as ReadonlyArray<string>).includes(record.kind)) {
     return "protected";
   }
   if (payloadCarriesProtectedKey(record.payload)) return "protected";

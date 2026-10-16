@@ -22,13 +22,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { continuityLogDir } from "../../../src/core/brain/continuity/store.ts";
+import type { ContinuityRecordKind } from "../../../src/core/brain/continuity/types.ts";
+import { CONTINUITY_RECORD_KINDS } from "../../../src/core/brain/continuity/types.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
 import {
+  classifyContinuityRecord,
   RECEIPT_SHARD_UNREADABLE,
   scanReceiptLedgers,
 } from "../../../src/core/brain/receipts/scan.ts";
 import {
+  FOLDABLE_CONTINUITY_KINDS,
+  KEPT_CONTINUITY_KINDS,
   RECEIPT_FOLD_DEFAULT_AGE_DAYS,
   RECEIPT_LEDGER_FAMILY,
   type ReceiptScanReport,
@@ -167,6 +172,108 @@ describe("scanReceiptLedgers", () => {
       expect(report.totals.foldable).toBe(0);
     } finally {
       cleanup();
+    }
+  });
+
+  test("functional continuity kinds are never foldable, whatever their payload", () => {
+    // Folding is opt-in per kind: the kinds readers read back as data,
+    // not as telemetry, stay out of every aggregate even when their
+    // payload carries none of the clip-protected correlation keys.
+    // `session_entity_mention` is the case that forced the rule: its
+    // payload carries `session_ref`, so the clip-key rule never saw it,
+    // and folding it destroyed the cross-session entity index (the
+    // session-recall seed, the hallways pass and the mining dedupe seed
+    // read the rows back), the by-id `generation_report` lookups, the
+    // row-count-derived `recent_turn` sequence and the compaction audit
+    // trail of the run before this one.
+    vault = mintVault();
+    try {
+      const functional: ReadonlyArray<ContinuityRecordKind> = [
+        "session_entity_mention",
+        "generation_report",
+        "recent_turn",
+        "receipt_compaction",
+        "context_receipt",
+        "session_turn",
+        "session_summary_node",
+        "session_summary_digest",
+        "host_memory_write",
+      ];
+      const continuity = continuityLogDir(vault);
+      writeShard(
+        continuity,
+        "2026-08.jsonl",
+        functional.map((kind, index) =>
+          continuityLine(kind, `2026-08-1${index}T12:00:00Z`, {
+            session_ref: "imports/a.md",
+          }),
+        ),
+      );
+      const report = scanReceiptLedgers(vault, { now: NOW });
+      const shard = shardOf(report, RECEIPT_LEDGER_FAMILY.continuity, "2026-08.jsonl");
+      expect(shard.records).toBe(functional.length);
+      expect(shard.foldable).toBe(0);
+      expect(shard.protectedRecords).toBe(functional.length);
+      expect(report.totals.foldable).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("the pure telemetry kinds remain foldable past the age threshold", () => {
+    vault = mintVault();
+    try {
+      const telemetry: ReadonlyArray<ContinuityRecordKind> = FOLDABLE_CONTINUITY_KINDS;
+      const continuity = continuityLogDir(vault);
+      writeShard(
+        continuity,
+        "2026-08.jsonl",
+        telemetry.map((kind, index) =>
+          continuityLine(kind, `2026-08-01T12:00:${String(index % 60).padStart(2, "0")}Z`),
+        ),
+      );
+      const report = scanReceiptLedgers(vault, { now: NOW });
+      const shard = shardOf(report, RECEIPT_LEDGER_FAMILY.continuity, "2026-08.jsonl");
+      expect(shard.records).toBe(telemetry.length);
+      expect(shard.foldable).toBe(telemetry.length);
+      expect(shard.protectedRecords).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("the fold decision census covers every continuity kind in the vocabulary", () => {
+    // The census: a kind added to `CONTINUITY_RECORD_KINDS` without a
+    // fold decision - a row in the fold allowlist or a row in the
+    // explicit keep list - fails here, so the allowlist can never drift
+    // open behind the vocabulary. Exactly one decision per kind, and no
+    // decision for a kind the vocabulary does not know.
+    const kinds = new Set<string>(CONTINUITY_RECORD_KINDS);
+    expect(FOLDABLE_CONTINUITY_KINDS.length).toBeGreaterThan(0);
+    expect(KEPT_CONTINUITY_KINDS.length).toBeGreaterThan(0);
+    for (const kind of FOLDABLE_CONTINUITY_KINDS) {
+      expect(kinds.has(kind), `${kind} is foldable but unknown to the vocabulary`).toBe(true);
+    }
+    for (const kind of KEPT_CONTINUITY_KINDS) {
+      expect(kinds.has(kind), `${kind} is kept but unknown to the vocabulary`).toBe(true);
+    }
+    const decisions = new Set<string>([...FOLDABLE_CONTINUITY_KINDS, ...KEPT_CONTINUITY_KINDS]);
+    expect(decisions.size).toBe(FOLDABLE_CONTINUITY_KINDS.length + KEPT_CONTINUITY_KINDS.length);
+    for (const kind of CONTINUITY_RECORD_KINDS) {
+      expect(decisions.has(kind), `${kind} has no fold decision`).toBe(true);
+    }
+    // The classifier agrees with the lists it is built from: every
+    // foldable kind past the cutoff folds, every kept kind does not.
+    const cutoffMs = Date.parse("2026-09-01T00:00:00Z");
+    for (const kind of FOLDABLE_CONTINUITY_KINDS) {
+      expect(classifyContinuityRecord({ kind, createdAt: "2026-08-01T00:00:00Z" }, cutoffMs)).toBe(
+        "foldable",
+      );
+    }
+    for (const kind of KEPT_CONTINUITY_KINDS) {
+      expect(classifyContinuityRecord({ kind, createdAt: "2026-08-01T00:00:00Z" }, cutoffMs)).toBe(
+        "protected",
+      );
     }
   });
 
