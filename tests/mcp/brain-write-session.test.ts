@@ -127,3 +127,51 @@ test("the tool is advertised in full scope but not writer scope", () => {
   expect(() => findTool(buildToolTable("full"), "brain_write_session")).not.toThrow();
   expect(() => findTool(buildToolTable("writer"), "brain_write_session")).toThrow();
 });
+
+test("op=list declares a described cursor property", () => {
+  const schema = tool().inputSchema as {
+    properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+  };
+  expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+  expect(schema.properties["cursor"]?.description).toBeTruthy();
+});
+
+test("op=list walks by cursor: the pages reassemble every session, the last page is null", async () => {
+  const ids: string[] = [];
+  for (const name of ["walk-a", "walk-b", "walk-c"]) {
+    const opened = (await tool().handler(ctx(), {
+      op: "open",
+      kind: "artifact",
+      target: `Brain/notes/${name}.md`,
+    })) as Record<string, unknown>;
+    ids.push(opened["session_id"] as string);
+  }
+
+  const walked: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = (await tool().handler(ctx(), {
+      op: "list",
+      limit: 2,
+      ...(cursor !== null ? { cursor } : {}),
+    })) as Record<string, unknown>;
+    expect(page["total"]).toBe(3);
+    // Guard the walk protocol: an ignored cursor would loop forever.
+    const next = page["next_cursor"];
+    expect(next === null || typeof next === "string").toBe(true);
+    walked.push(
+      ...(page["sessions"] as ReadonlyArray<Record<string, unknown>>).map(
+        (s) => s["session_id"] as string,
+      ),
+    );
+    cursor = next as string | null;
+  } while (cursor !== null);
+  expect(walked.toSorted()).toEqual(ids.toSorted());
+  expect(new Set(walked).size).toBe(3);
+});
+
+test("op=list refuses a malformed cursor as invalid params", async () => {
+  await expect(tool().handler(ctx(), { op: "list", cursor: "!!!not-base64!!!" })).rejects.toThrow(
+    /malformed cursor/,
+  );
+});

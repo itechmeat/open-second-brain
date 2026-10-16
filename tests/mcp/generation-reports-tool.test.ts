@@ -179,3 +179,67 @@ describe("brain_generation_reports tool", () => {
     expect(badAction.error ?? badAction.result?.isError).toBeTruthy();
   });
 });
+
+describe("brain_generation_reports cursor pagination", () => {
+  test("list declares a described cursor property declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_generation_reports")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble every report", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const ids: string[] = [];
+    for (const [index, ref] of ["ws-r1", "ws-r2", "ws-r3"].entries()) {
+      const rec = await call(server, {
+        action: "record",
+        handoff_kind: "context_pack",
+        ref,
+        agent: "tester",
+        enable: true,
+        prompt: `page-walk prompt ${index}`,
+        created_at: `2026-06-15T08:0${index}:00Z`,
+      });
+      ids.push(rec["id"] as string);
+    }
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const list = await call(server, {
+        action: "list",
+        handoff_kind: "context_pack",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(list["total"]).toBe(3);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = list["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      walked.push(
+        ...(list["reports"] as ReadonlyArray<Record<string, unknown>>).map(
+          (r) => r["id"] as string,
+        ),
+      );
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(walked.toSorted()).toEqual(ids.toSorted());
+    expect(new Set(walked).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 12,
+      method: "tools/call",
+      params: { name: "brain_generation_reports", arguments: { action: "list", cursor: "!!!" } },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32602);
+  });
+});

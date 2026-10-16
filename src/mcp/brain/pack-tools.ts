@@ -73,6 +73,8 @@ import {
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
 import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
 import { gatedOwnerScopeView, ownerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -507,21 +509,26 @@ async function toolBrainContextReceipts(
     const host = optionalStringArg("brain_context_receipts", args, "host");
     const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
     const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
+    const offset = cursorOffsetArg("brain_context_receipts", args);
     const local = contextReach(ctx) === TRANSPORT_REACH.local;
+    // The full filtered set is read and one page is cut here, so `total`
+    // stays the exact count matching the filter across all pages and the
+    // walk continues through `next_cursor` (null when exhausted).
     const receipts = listContextReceipts(ctx.vault, {
       ...(trigger !== undefined ? { trigger } : {}),
       ...(host !== undefined ? { host } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
-      ...(limit !== undefined ? { limit } : {}),
       ...(local ? {} : { exclude: isRuleOnlyInjection }),
     });
     const summaries = receipts
       .map((receipt) => receiptAtReach(receipt, local))
       .map(summarizeContextReceipt);
+    const page = pageSlice(summaries, offset, limit ?? Math.max(summaries.length, 1));
     return {
       vault_path: vaultPathField(ctx),
-      total: summaries.length,
-      receipts: summaries,
+      total: page.total,
+      receipts: page.items,
+      next_cursor: page.next_cursor,
     };
   }
 
@@ -798,16 +805,19 @@ async function toolBrainEventTrace(
   const at = optionalStringArg("brain_event_trace", args, "at");
   const sessionId = optionalStringArg("brain_event_trace", args, "session_id");
   const limit = coercePositiveInteger("brain_event_trace", "limit", args["limit"]);
+  const offset = cursorOffsetArg("brain_event_trace", args);
   const keepPrivate = coerceBool(args, "keep_private");
 
   let events;
   try {
+    // The full day's matching set is resolved and one page is cut here, so
+    // `total`/`trace_total` stay exact across pages and the walk continues
+    // through `next_cursor` (null when exhausted).
     events = resolveLogEventTraces(ctx.vault, {
       ...(date !== undefined ? { date } : {}),
       ...(at !== undefined ? { at } : {}),
       ...(kind !== undefined ? { kind: kind as BrainLogEventKind } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
-      ...(limit !== undefined ? { limit } : {}),
       ...(keepPrivate === true ? { keepPrivate: true } : {}),
       // The event body is echoed verbatim and log payloads carry
       // artifact paths (a-label-is-not-a-boundary, U3).
@@ -828,11 +838,13 @@ async function toolBrainEventTrace(
     throw new MCPError(INTERNAL_ERROR, `brain_event_trace: ${(err as Error).message}`);
   }
 
+  const page = pageSlice(events, offset, limit ?? Math.max(events.length, 1));
   return {
     vault_path: vaultPathField(ctx),
-    total: events.length,
+    total: page.total,
     trace_total: events.reduce((sum, e) => sum + e.traceCount, 0),
-    events,
+    events: page.items,
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -1257,6 +1269,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "Maximum summaries to return (list) or item rows to return (summary; `distinct_items` still reports the full count).",
         },
+        cursor: CURSOR_SCHEMA,
       },
       required: ["operation"],
       additionalProperties: false,
@@ -1294,6 +1307,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description: "Optional maximum number of events to return.",
         },
+        cursor: CURSOR_SCHEMA,
         keep_private: {
           type: "boolean",
           description: "Keep continuity records flagged private (default: drop them).",

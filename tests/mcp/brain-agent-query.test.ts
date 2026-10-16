@@ -8,6 +8,7 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let tmp: string;
 let vault: string;
@@ -111,5 +112,70 @@ describe("brain_agent_query", () => {
       "pref-agent-query",
     ]);
     expect(content.summary).toBe("claude: 2 contributions across 1 topic (preference, signal).");
+  });
+});
+
+describe("brain_agent_query cursor pagination", () => {
+  test("the input schema declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_agent_query")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble the contributions", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const response = await call(server, "brain_agent_query", {
+        agents: ["claude"],
+        limit: 1,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(response.result.isError).toBe(false);
+      const content = response.result.structuredContent;
+      expect(content.total_matched).toBe(2);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(content.next_cursor === null || typeof content.next_cursor === "string").toBe(true);
+      ids.push(...content.contributions.map((c: any) => c.id));
+      cursor = content.next_cursor;
+    } while (cursor !== null);
+    expect(ids).toEqual(["sig-2026-05-20-agent-query", "pref-agent-query"]);
+  });
+
+  test("a page's summary describes the page it returned", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const page1 = await call(server, "brain_agent_query", { agents: ["claude"], limit: 1 });
+    const content1 = page1.result.structuredContent;
+    expect(content1.returned).toBe(1);
+    expect(content1.next_cursor).not.toBeNull();
+    expect(content1.summary).toBe("claude: 1 contributions across 1 topic (signal).");
+
+    const page2 = await call(server, "brain_agent_query", {
+      agents: ["claude"],
+      limit: 1,
+      cursor: content1.next_cursor,
+    });
+    const content2 = page2.result.structuredContent;
+    expect(content2.total_matched).toBe(2);
+    expect(content2.contributions.map((c: any) => c.id)).toEqual(["pref-agent-query"]);
+    expect(content2.summary).toBe("claude: 1 contributions across 1 topic (preference).");
+  });
+
+  test("a malformed cursor is invalid params", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = await call(server, "brain_agent_query", { agents: ["claude"], cursor: "!!!" });
+    expect(response.error?.code).toBe(-32602);
   });
 });

@@ -42,8 +42,8 @@ describe("pageSlice", () => {
     const pages: string[][] = [];
     let cursor: string | null = null;
     do {
-      const offset = cursor === null ? 0 : decodeOffsetCursor(cursor);
-      const page = pageSlice(items, offset, 2);
+      const offset: number = cursor === null ? 0 : decodeOffsetCursor(cursor);
+      const page: ReturnType<typeof pageSlice<string>> = pageSlice(items, offset, 2);
       pages.push([...page.items]);
       cursor = page.next_cursor;
     } while (cursor !== null);

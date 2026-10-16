@@ -71,6 +71,9 @@ import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
+import { summarizeAgentContributions } from "../../core/brain/agent-source/summary.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
 const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
@@ -295,7 +298,12 @@ async function toolBrainAgentQuery(
   // provenance view reads the same preference and retired pages the
   // delivery surfaces do, so it honours the same ownership rule.
   const ownerScope = coerceAgentScope(ctx, args, false);
-  return queryAgentSources(ctx.vault, {
+  const limit = coerceInt(args, "limit", 50, 1, 500);
+  const offset = cursorOffsetArg("brain_agent_query", args);
+  // Cursor paging is cut at this layer: the core query slices from the
+  // first match, so the full matched set is fetched (the collection pass
+  // already reads every page) and one offset window is taken here.
+  const full = queryAgentSources(ctx.vault, {
     agents: coerceStrList(args, "agents"),
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),
@@ -305,8 +313,22 @@ async function toolBrainAgentQuery(
     // the page's digest and size: a page the caller may not read at its
     // reach is withheld exactly as an absent one.
     view: reachView(ctx.vault, contextReach(ctx)),
-    limit: coerceInt(args, "limit", 50, 1, 500),
-  }) as unknown as Record<string, unknown>;
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const page = pageSlice(full.contributions, offset, limit);
+  return {
+    mode: full.mode,
+    // `filters.limit` echoes the PAGE size the caller asked for, not the
+    // internal fetch-all width the core query ran at.
+    filters: { ...full.filters, limit },
+    available_agents: full.available_agents,
+    unknown_agents: full.unknown_agents,
+    total_matched: full.total_matched,
+    returned: page.items.length,
+    contributions: page.items,
+    summary: summarizeAgentContributions(page.items, full.filters.agents),
+    next_cursor: page.next_cursor,
+  };
 }
 
 /**
@@ -359,6 +381,7 @@ async function toolBrainWrites(
   const since = coerceStr(args, "since", false);
   const until = coerceStr(args, "until", false);
   const limit = coerceInt(args, "limit", BRAIN_WRITES_DEFAULT_LIMIT, 1, BRAIN_WRITES_MAX_LIMIT);
+  const offset = cursorOffsetArg("brain_writes", args);
 
   const result = listNoteWrites(ctx.vault, {
     ...(agent !== null ? { agent } : {}),
@@ -379,17 +402,19 @@ async function toolBrainWrites(
     : result.writes.filter((w) => view.visible(w.target));
   // `total_matched` beside `returned` so a truncated answer is legible as
   // one: a list capped at the limit and a list that IS the whole history
-  // are otherwise the same shape.
+  // are otherwise the same shape. `next_cursor` continues the walk.
+  const page = pageSlice(writes, offset, limit);
   return {
     action: BRAIN_WRITES_ACTION.list,
-    total_matched: writes.length,
-    returned: Math.min(writes.length, limit),
-    writes: writes.slice(0, limit).map((w) => ({ ...w })),
+    total_matched: page.total,
+    returned: page.items.length,
+    writes: page.items.map((w) => ({ ...w })),
     warnings: result.warnings.map((w) => ({
       path: w.path,
       line: w.lineNumber,
       message: w.message,
     })),
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -882,6 +907,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           maximum: 500,
           description: "Maximum contributions returned. Defaults to 50.",
         },
+        cursor: CURSOR_SCHEMA,
         agent_scope: {
           type: "string",
           description:
@@ -937,6 +963,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           maximum: 500,
           description: "Maximum writes returned. Defaults to 50.",
         },
+        cursor: CURSOR_SCHEMA,
       },
       additionalProperties: false,
     },

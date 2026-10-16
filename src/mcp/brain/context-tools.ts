@@ -50,6 +50,8 @@ import {
 import { dispatchSubmit, openPanelSession } from "../../core/brain/write-session/panel.ts";
 import { listWriteSessions, readWriteSession } from "../../core/brain/write-session/store.ts";
 import type { WriteSessionEnvelope } from "../../core/brain/write-session/types.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import {
   PinnedBatchError,
   applyPinnedOperations,
@@ -167,10 +169,15 @@ async function toolBrainWriteSession(
       }
       case "list": {
         const limit = coerceInt(args, "limit", 100, 1, 500);
+        const offset = cursorOffsetArg("brain_write_session", args);
         const sessions = listWriteSessions(ctx.vault, new Date().toISOString());
+        const page = pageSlice(sessions, offset, limit);
         return {
-          total: sessions.length,
-          sessions: sessions.slice(0, limit).map((rec) => asRecord(sessionEnvelope(rec))),
+          // `total` counts every session in the list across pages; the
+          // page itself is `sessions`.
+          total: page.total,
+          sessions: page.items.map((rec) => asRecord(sessionEnvelope(rec))),
+          next_cursor: page.next_cursor,
         };
       }
       default:
@@ -820,6 +827,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "number",
           description: "Max sessions returned by op=list (default 100, cap 500).",
         },
+        cursor: CURSOR_SCHEMA,
         agent: { type: "string", description: "Agent identity override (open)." },
       },
       required: ["op"],

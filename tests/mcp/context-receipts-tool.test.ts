@@ -240,3 +240,76 @@ describe("brain_context_receipts tool", () => {
     expect(text).toContain("summary");
   });
 });
+
+describe("brain_context_receipts cursor pagination", () => {
+  test("operation=list declares a described cursor property declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_context_receipts")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble every receipt", async () => {
+    const ids: string[] = [];
+    for (const [index, createdAt] of [
+      "2026-05-20T14:00:00.000Z",
+      "2026-05-20T14:05:00.000Z",
+      "2026-05-20T14:10:00.000Z",
+    ].entries()) {
+      ids.push(
+        emitContextReceipt(vault, {
+          options: {
+            host: "mcp-test",
+            trigger: "context_pack",
+            createdAt,
+            sessionId: "session-walk",
+          },
+          finalText: "pack",
+          items: [{ id: `pref-${index}`, text: "Prefer crisp answers" }],
+        }).id,
+      );
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const list = await callReceipts(server, {
+        operation: "list",
+        session_id: "session-walk",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(list["total"]).toBe(3);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = list["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      walked.push(
+        ...(list["receipts"] as ReadonlyArray<Record<string, unknown>>).map(
+          (r) => r["id"] as string,
+        ),
+      );
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(walked.toSorted()).toEqual(ids.toSorted());
+    expect(new Set(walked).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "brain_context_receipts",
+        arguments: { operation: "list", cursor: "!!!" },
+      },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32602);
+  });
+});

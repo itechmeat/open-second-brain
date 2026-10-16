@@ -158,3 +158,64 @@ describe("brain_event_trace tool", () => {
     expect((await callEventTrace(local, { date: "2026-06-15" }))["total"]).toBe(1);
   });
 });
+
+describe("brain_event_trace cursor pagination", () => {
+  test("the input schema declares a described cursor property declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_event_trace")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble every event", async () => {
+    for (const [index, stamp] of ["10:00:00", "10:05:00", "10:10:00"].entries()) {
+      appendLogEvent(vault, {
+        timestamp: `2026-06-15T${stamp}Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.writeSession,
+        agent: "tester",
+        body: { session_id: `sess-walk-${index}`, kind: "note", status: "committed" },
+      });
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const stamps: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await callEventTrace(server, {
+        date: "2026-06-15",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(page["total"]).toBe(3);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = page["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      stamps.push(
+        ...(page["events"] as ReadonlyArray<Record<string, unknown>>).map(
+          (e) => (e["event"] as Record<string, unknown>)["timestamp"] as string,
+        ),
+      );
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(stamps).toHaveLength(3);
+    expect(new Set(stamps).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "brain_event_trace",
+        arguments: { date: "2026-06-15", cursor: "!!!" },
+      },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32602);
+  });
+});

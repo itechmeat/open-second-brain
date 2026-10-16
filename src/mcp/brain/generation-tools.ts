@@ -28,11 +28,13 @@ import {
 } from "../../core/brain/generation-reports.ts";
 import { isCanonicalUtcTimestamp } from "../../core/brain/continuity/store.ts";
 import type { ContinuitySourceRef } from "../../core/brain/continuity/types.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import { unknownOperationError } from "../coerce.ts";
 
 const TOOL = "brain_generation_reports";
@@ -44,8 +46,19 @@ async function toolBrainGenerationReports(
   const action = optionalStringArg(TOOL, args, "action");
   if (action === "record") return recordAction(ctx, args);
   if (action === "list") {
-    const reports = listGenerationReports(ctx.vault, readFilter(args));
-    return { vault_path: vaultPathField(ctx), total: reports.length, reports };
+    const filter = readFilter(args);
+    const offset = cursorOffsetArg(TOOL, args);
+    // The full filtered set is read and one page is cut here, so `total`
+    // stays the exact count matching the filter across all pages and the
+    // walk continues through `next_cursor` (null when exhausted).
+    const reports = listGenerationReports(ctx.vault, { ...filter, limit: undefined });
+    const page = pageSlice(reports, offset, filter.limit ?? Math.max(reports.length, 1));
+    return {
+      vault_path: vaultPathField(ctx),
+      total: page.total,
+      reports: page.items,
+      next_cursor: page.next_cursor,
+    };
   }
   if (action === "summary") {
     return { ...summarizeGenerationReports(ctx.vault, readFilter(args)) };
@@ -301,6 +314,7 @@ export const GENERATION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         since: { type: "string", description: "list/summary: inclusive ISO lower bound." },
         until: { type: "string", description: "list/summary: inclusive ISO upper bound." },
         limit: { type: "integer", minimum: 1, description: "list: maximum record count." },
+        cursor: CURSOR_SCHEMA,
       },
       required: ["action"],
       additionalProperties: false,
