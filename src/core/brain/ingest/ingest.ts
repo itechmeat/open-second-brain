@@ -271,6 +271,14 @@ export interface IngestSourceResult {
    * its text (review L3). The run stays a whole-source pass, so the stamp
    * still covered the full current file - the named outcome is the
    * difference from a rewrite, which reports no delta at all.
+   *
+   * Coverage (review L4): the watermark records what the CALLER
+   * summarized, under the trusted lane's whole-source contract - a caller
+   * the intake trusts has read the source it summarizes at its reach, so
+   * every stamped byte was covered by this run's extraction. The optional
+   * code-structure pre-extract pass is NOT that extraction; its skips
+   * (unsupported format, source past the pre-extract cap) never gate the
+   * stamp.
    */
   readonly extractionDelta?: AppendedDeltaOutcome;
 }
