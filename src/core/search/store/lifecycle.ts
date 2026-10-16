@@ -181,7 +181,7 @@ function busySwitchWarning(dbPath: string, journalMode: JournalMode): string {
 export function restoreFromBakIfMissing(dbPath: string): void {
   const bak = dbPath + ".bak";
   const old = dbPath + ".old";
-  if (existsSync(dbPath) ? !existsSync(old) : !existsSync(old) && !existsSync(bak)) return;
+  if (!existsSync(old) && (existsSync(dbPath) || !existsSync(bak))) return;
   let release: (() => void) | null = null;
   try {
     release = acquireWriterLockSync(dbPath);
@@ -197,7 +197,9 @@ export function restoreFromBakIfMissing(dbPath: string): void {
       if (existsSync(old)) unlinkSync(old);
       return;
     }
-    const source = existsSync(old) ? old : existsSync(bak) ? bak : null;
+    let source: string | null = null;
+    if (existsSync(old)) source = old;
+    else if (existsSync(bak)) source = bak;
     if (source === null) return;
     renameWithRetry(source, dbPath);
     // eslint-disable-next-line no-console
