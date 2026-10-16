@@ -35,6 +35,7 @@ import {
   shardedFileName,
 } from "../ledger-shards.ts";
 import { appendLogEvent } from "../log.ts";
+import { decodeOffsetCursor, encodeOffsetCursor } from "../offset-cursor.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -512,22 +513,18 @@ export interface DecisionHistoryPage {
   readonly nextCursor: string | null;
 }
 
-/** Encode a numeric offset as an opaque cursor. */
-function encodeCursor(offset: number): string {
-  return Buffer.from(`o:${offset}`, "utf8").toString("base64url");
-}
-
-/** Decode an opaque cursor to its offset; rejects a malformed cursor. */
-function decodeCursor(cursor: string): number {
-  let decoded: string;
+/**
+ * The decisions history speaks the canonical core offset-cursor encoding
+ * (src/core/brain/offset-cursor.ts); its wire form (`o:<offset>` base64url)
+ * is unchanged since this surface shipped it first. A malformed cursor is
+ * still a `ReceiptError` on this surface's contract.
+ */
+function decodeReceiptCursor(cursor: string): number {
   try {
-    decoded = Buffer.from(cursor, "base64url").toString("utf8");
+    return decodeOffsetCursor(cursor);
   } catch {
     throw new ReceiptError("receipt: malformed cursor");
   }
-  const m = /^o:(\d+)$/.exec(decoded);
-  if (!m) throw new ReceiptError("receipt: malformed cursor");
-  return Number.parseInt(m[1]!, 10);
 }
 
 /**
@@ -543,8 +540,7 @@ export function queryDecisionChangeHistory(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw new ReceiptError("receipt: limit must be a positive integer");
   }
-  const offset = query.cursor !== undefined ? decodeCursor(query.cursor) : 0;
-  if (offset < 0) throw new ReceiptError("receipt: malformed cursor");
+  const offset = query.cursor !== undefined ? decodeReceiptCursor(query.cursor) : 0;
 
   const read = readDecisionChangeReceipts(vault).receipts;
   const all = query.keep === undefined ? read : read.filter(query.keep);
@@ -559,6 +555,6 @@ export function queryDecisionChangeHistory(
   const total = matching.length;
   const page = matching.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
-  const nextCursor = nextOffset < total ? encodeCursor(nextOffset) : null;
+  const nextCursor = nextOffset < total ? encodeOffsetCursor(nextOffset) : null;
   return Object.freeze({ receipts: page, total, nextCursor });
 }
