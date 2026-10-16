@@ -117,16 +117,6 @@ export interface SessionMiningLedger {
 }
 
 /**
- * Read the ledger. A missing file is an empty ledger - no session is
- * tombstoned, which is the correct answer for a vault that has mined
- * nothing. A CORRUPT or unknown-schema file is a hard error: a silent reset
- * would unsuppress every barren session at once and re-offer all of them to
- * the model on the next scan. The entries container is held to the same
- * contract: a container that is absent, null, an array or a primitive is
- * file-level corruption and refuses by name, while damage to a SINGLE entry
- * drops that entry only.
- */
-/**
  * The remedy every file-level refusal names: the refusal stops every plan,
  * the census and the nudge, so the operator must learn what removing the
  * file costs (every session re-opens for mining) and that nothing else is
@@ -136,6 +126,16 @@ const CORRUPT_LEDGER_REMEDY =
   "; to recover, move the file aside or delete it - every imported session then becomes " +
   "eligible for mining again, and the next commits rebuild the ledger";
 
+/**
+ * Read the ledger. A missing file is an empty ledger - no session is
+ * tombstoned, which is the correct answer for a vault that has mined
+ * nothing. A CORRUPT or unknown-schema file is a hard error: a silent reset
+ * would unsuppress every barren session at once and re-offer all of them to
+ * the model on the next scan. The entries container is held to the same
+ * contract: a container that is absent, null, an array or a primitive is
+ * file-level corruption and refuses by name, while damage to a SINGLE entry
+ * drops that entry only.
+ */
 export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   const path = sessionMiningLedgerPath(vault);
   if (!existsSync(path)) {
