@@ -7,6 +7,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
 
 let tmp: string;
 let vault: string;
@@ -118,5 +119,58 @@ describe("brain_agent_diff", () => {
       claude: [],
       codex: ["codex-only"],
     });
+  });
+});
+
+describe("brain_agent_diff cursor pagination", () => {
+  test("the input schema declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_agent_diff")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble the contributions", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const response = await call(server, "brain_agent_diff", {
+        mode: "diff",
+        agents: ["claude", "codex"],
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(response.result.isError).toBe(false);
+      const content = response.result.structuredContent;
+      expect(content.total_matched).toBe(3);
+      // Aggregates are computed over the whole matched set, so they do
+      // not move between pages.
+      expect(content.shared_topics).toEqual(["shared-topic"]);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(content.next_cursor === null || typeof content.next_cursor === "string").toBe(true);
+      ids.push(...content.contributions.map((c: any) => c.id));
+      cursor = content.next_cursor;
+    } while (cursor !== null);
+    expect(ids).toEqual([
+      "sig-2026-05-20-shared-claude",
+      "sig-2026-05-21-shared-codex",
+      "sig-2026-05-22-codex-only",
+    ]);
+  });
+
+  test("a malformed cursor is invalid params", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = await call(server, "brain_agent_diff", {
+      agents: ["claude"],
+      cursor: "!!!",
+    });
+    expect(response.error?.code).toBe(-32602);
   });
 });

@@ -23,10 +23,12 @@ import {
   renderAttentionFlow,
 } from "../../core/brain/attention-flows.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import {
   coerceIsoTimestampOrDate,
   coercePositiveInteger,
@@ -91,12 +93,19 @@ async function toolBrainTimeline(
     requestRefView(ctx),
     view.keep(events, (ev) => [ev.source.path, ev.prefId, ev.artifact]),
   );
-  const sliced = limit !== undefined ? visible.slice(0, limit) : visible;
+  // The page is cut here over the full visible set, so `total` stays the
+  // exact count across pages and `next_cursor` continues the walk (null
+  // when exhausted). Absent `limit`, the whole window is one page.
+  const page = pageSlice(
+    visible,
+    cursorOffsetArg("brain_analytics", args),
+    limit ?? Math.max(visible.length, 1),
+  );
   return {
     vault_path: vaultPathField(ctx),
     window: index.window,
-    total: visible.length,
-    events: sliced.map((ev) => ({
+    total: page.total,
+    events: page.items.map((ev) => ({
       at: ev.at,
       kind: ev.kind,
       source: ev.source,
@@ -107,6 +116,7 @@ async function toolBrainTimeline(
       ...(ev.reason !== undefined ? { reason: ev.reason } : {}),
       ...(ev.text !== undefined ? { text: ev.text } : {}),
     })),
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -351,6 +361,7 @@ export const ANALYTICS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "view=dedup: restrict the trend to one ingest surface.",
         },
         limit: { type: "integer", minimum: 1, description: "view=timeline: max events returned." },
+        cursor: CURSOR_SCHEMA,
         id: { type: "string", description: "view=concept_synthesis: target id (e.g. pref-foo)." },
         include_unlinked: {
           type: "boolean",

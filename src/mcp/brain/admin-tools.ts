@@ -31,6 +31,8 @@ import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/e
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import {
   journalEntryWithoutCapacityReading,
@@ -382,15 +384,25 @@ async function toolBrainMaintenance(
     // local reach the rows lose their capacity reading: the whole-vault
     // byte figures are the same local-reach facts `brain_storage` gates
     // (`journalEntryWithoutCapacityReading`), and status - unlike run -
-    // answers at every reach.
+    // answers at every reach. `limit` is the page size: the full ring is
+    // read and one offset window is cut, so `journal_total` counts every
+    // journaled row across pages and `next_cursor` continues the walk.
     const local = contextReach(ctx) === TRANSPORT_REACH.local;
     const notice = customTasksOffNotice(resolveCustomTasks(ctx.configPath ?? undefined));
+    const journal = listJournal(ctx.vault, MAINTENANCE_JOURNAL_CAP);
+    const page = pageSlice(
+      journal,
+      cursorOffsetArg("brain_maintenance", args),
+      coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP),
+    );
     return {
       lease: currentLease(ctx.vault, { now }),
-      journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)).map(
-        (entry) => (local ? entry : journalEntryWithoutCapacityReading(entry)),
+      journal: page.items.map((entry) =>
+        local ? entry : journalEntryWithoutCapacityReading(entry),
       ),
+      journal_total: page.total,
       ...(notice !== null ? { notice } : {}),
+      next_cursor: page.next_cursor,
     };
   }
   // A run executes the whole lane - a real dream pass that moves records,
@@ -641,6 +653,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           maximum: MAINTENANCE_JOURNAL_CAP,
           description: "Journal rows to return, newest first (status; default 10).",
         },
+        cursor: CURSOR_SCHEMA,
         window_start_hour: {
           type: "integer",
           minimum: 0,

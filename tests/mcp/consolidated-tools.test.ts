@@ -12,6 +12,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+
 import { emitIngestDedupReport } from "../../src/core/brain/dedup-telemetry.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
@@ -268,5 +272,92 @@ describe("consolidated registration", () => {
     // The 1.0.0 sweep removed the alias layer entirely.
     expect(listed.has("brain_daily_brief")).toBe(false);
     expect(listed.has("schema_stats")).toBe(false);
+  });
+});
+
+describe("brain_analytics view=timeline cursor pagination", () => {
+  async function initialize(server: MCPServer): Promise<void> {
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "analytics-cursor-test", version: "0" },
+      },
+    });
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      method: "notifications/initialized",
+    });
+  }
+
+  test("the input schema declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_analytics")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble the events", async () => {
+    for (const [index, stamp] of ["10:00:00", "10:05:00", "10:10:00"].entries()) {
+      appendLogEvent(vault, {
+        timestamp: `2026-06-15T${stamp}Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.writeSession,
+        agent: "tester",
+        body: { session_id: `sess-tl-${index}`, kind: "note", status: "committed" },
+      });
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const stamps: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const response = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 60,
+        method: "tools/call",
+        params: {
+          name: "brain_analytics",
+          arguments: {
+            view: "timeline",
+            since: "2026-06-15",
+            until: "2026-06-16",
+            limit: 2,
+            ...(cursor !== null ? { cursor } : {}),
+          },
+        },
+      })) as { result?: { structuredContent?: Record<string, unknown> } };
+      const out = response.result!.structuredContent!;
+      expect(out["total"]).toBe(3);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = out["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      stamps.push(
+        ...(out["events"] as ReadonlyArray<Record<string, unknown>>).map((e) => e["at"] as string),
+      );
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(stamps).toHaveLength(3);
+    expect(new Set(stamps).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 61,
+      method: "tools/call",
+      params: {
+        name: "brain_analytics",
+        arguments: { view: "timeline", cursor: "!!!" },
+      },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32602);
   });
 });

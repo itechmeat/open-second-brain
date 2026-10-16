@@ -498,7 +498,14 @@ async function toolBrainAgentDiff(
   // identity, which is `null` unless the operator set
   // `integrity.owner_scope_delivery: fail` (a-label-is-not-a-boundary, U3).
   const ownerScope = gatedOwnerScopeView(ctx.vault, ctx.agentName).scope;
-  return diffAgentSources(ctx.vault, {
+  const limit = coerceInt(args, "limit", 50, 1, 500);
+  const offset = cursorOffsetArg("brain_agent_diff", args);
+  // Like `brain_agent_query`, the page is cut at this layer: the core
+  // fold slices from the first match, so the full matched set is fetched
+  // and one offset window is taken. The aggregates (per-agent rollup,
+  // topic map, shared/unique topics) are computed over the whole matched
+  // set, so they do not move between pages.
+  const result = diffAgentSources(ctx.vault, {
     ...(mode !== null ? { mode } : {}),
     ...(ownerScope !== null ? { ownerScope } : {}),
     view: reachView(ctx.vault, contextReach(ctx)),
@@ -506,8 +513,24 @@ async function toolBrainAgentDiff(
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),
     ...(kind !== null ? { kind } : {}),
-    limit: coerceInt(args, "limit", 50, 1, 500),
-  }) as unknown as Record<string, unknown>;
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const page = pageSlice(result.contributions, offset, limit);
+  return {
+    mode: result.mode,
+    diff_mode: result.diff_mode,
+    agents: result.agents,
+    unknown_agents: result.unknown_agents,
+    per_agent: result.per_agent,
+    shared_topics: result.shared_topics,
+    unique_topics: result.unique_topics,
+    topic_map: result.topic_map,
+    total_matched: result.total_matched,
+    returned: page.items.length,
+    contributions: page.items,
+    summary: result.summary,
+    next_cursor: page.next_cursor,
+  };
 }
 
 function coerceAgentContributionKind(
@@ -635,6 +658,11 @@ async function toolBrainSources(
   };
 }
 
+// ----- brain_unlinked_mentions ------------------------------------------------
+
+/** Page size when no `limit` is sent: the core scanner's own default. */
+const UNLINKED_MENTIONS_DEFAULT_LIMIT = 100;
+
 /**
  * Raw-text mentions of a target's title / aliases that are NOT
  * already inside `[[...]]` wikilinks. Read-only walker over
@@ -650,6 +678,7 @@ async function toolBrainUnlinkedMentions(
     throw new MCPError(INVALID_PARAMS, "brain_unlinked_mentions: id must be a non-empty string");
   }
   const targetId = normaliseWikilinkTarget(idRaw);
+  const offset = cursorOffsetArg("brain_unlinked_mentions", args);
   // Limit coercion mirrors the v0.10.16 `brain_operator_summary`
   // precedent: accept either a number or a strict integer-literal
   // string (`"5"` ok; `"abc"`, `"3abc"`, `"2.5"` rejected). This
@@ -690,20 +719,26 @@ async function toolBrainUnlinkedMentions(
   }
   // `context` is the source artifact's own line of prose, so an
   // unscoped scan republished an owner-private body (U3, recon C3).
+  // The page is cut at this layer over the full visible set, so `total`
+  // counts every mention across pages and `next_cursor` continues the
+  // walk (null when exhausted).
   const mentions = findUnlinkedMentions(ctx.vault, targetId, {
-    ...(limit !== undefined ? { limit } : {}),
+    limit: Number.MAX_SAFE_INTEGER,
     ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
     reachView: reachView(ctx.vault, contextReach(ctx)),
   });
+  const page = pageSlice(mentions, offset, limit ?? UNLINKED_MENTIONS_DEFAULT_LIMIT);
   return {
     vault_path: vaultPathField(ctx),
     target_id: targetId,
-    mentions: mentions.map((m) => ({
+    total: page.total,
+    mentions: page.items.map((m) => ({
       source: m.source,
       line: m.line,
       term: m.term,
       context: m.contextSnippet,
     })),
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -1007,6 +1042,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           maximum: 500,
           description: "Maximum contributions returned before comparison. Defaults to 50.",
         },
+        cursor: CURSOR_SCHEMA,
       },
       additionalProperties: false,
     },
@@ -1080,6 +1116,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "Maximum number of mentions to return. Defaults to 100; the scanner stops as soon as the cap is hit.",
         },
+        cursor: CURSOR_SCHEMA,
       },
       required: ["id"],
       additionalProperties: false,

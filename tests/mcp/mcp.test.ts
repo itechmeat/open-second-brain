@@ -554,6 +554,45 @@ describe("tool calls", () => {
     expect(s.pages.some((p: { title: string }) => p.title.includes("Sandbox"))).toBe(true);
   });
 
+  test("second_brain_query walks pages by cursor to exhaustion", async () => {
+    const vault = createSandboxVault(tmp);
+    for (const n of [1, 2, 3]) {
+      writeFileSync(
+        join(vault, `CursorPage${n}.md`),
+        `---\ntitle: Cursor Walk ${n}\n---\n\nbody\n`,
+      );
+    }
+    const server = new MCPServer({ vault });
+    await initialize(server);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let totalPages: number | null = null;
+    do {
+      const r = (await callTool(server, "second_brain_query", {
+        pattern: "Cursor Walk",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      })) as any;
+      const s = r.result.structuredContent;
+      // `total_pages` is the vault's whole page count, stable across the walk.
+      if (totalPages === null) totalPages = s.total_pages;
+      expect(s.total_pages).toBe(totalPages);
+      expect(s.returned).toBeLessThanOrEqual(2);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(s.next_cursor === null || typeof s.next_cursor === "string").toBe(true);
+      seen.push(...s.pages.map((p: { title: string }) => p.title));
+      cursor = s.next_cursor;
+    } while (cursor !== null);
+    // Path order, so the walk reads the pages back in the same order an
+    // unpaginated call lists them.
+    expect(seen).toEqual(["Cursor Walk 1", "Cursor Walk 2", "Cursor Walk 3"]);
+    const bad = (await callTool(server, "second_brain_query", {
+      pattern: "x",
+      cursor: "!!!",
+    })) as any;
+    expect(bad.error?.code).toBe(-32602);
+  });
+
   // `second_brain_capture` and `event_log_append` are no longer
   // advertised through MCP in v0.9.0 (design doc §11.1). The handler
   // functions remain in `src/mcp/tools.ts` for shell-side use

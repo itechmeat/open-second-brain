@@ -120,3 +120,48 @@ describe("write", () => {
     await expect(call({ action: "invent" })).rejects.toBeInstanceOf(MCPError);
   });
 });
+
+describe("list cursor pagination", () => {
+  test("the input schema declares a described cursor property", () => {
+    const properties = tool.inputSchema.properties as Record<
+      string,
+      { type?: string; maxLength?: number; description?: string }
+    >;
+    expect(properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("the targets walk by cursor to exhaustion", async () => {
+    note("One.md", "[[dangling-one]]\n");
+    note("Two.md", "[[dangling-two]]\n");
+    note("Three.md", "[[dangling-three]]\n");
+    const { indexVault, resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const res = await call({
+        action: "list",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(res["state"]).toBe("measured");
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = res["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      walked.push(...(res["targets"] as ReadonlyArray<{ target: string }>).map((t) => t.target));
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(walked.map((t) => t.replace(/^\[\[|\/.*$/g, "")).toSorted()).toEqual([
+      "dangling-one",
+      "dangling-three",
+      "dangling-two",
+    ]);
+    expect(new Set(walked).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    await expect(call({ action: "list", cursor: "!!!" })).rejects.toThrow(/malformed cursor/);
+  });
+});

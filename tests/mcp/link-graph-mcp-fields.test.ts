@@ -368,3 +368,62 @@ describe("brain_unlinked_mentions at remote reach", () => {
     expect(await mentionsAt("remote", "pref-zzsecrettarget")).toEqual([]);
   });
 });
+
+describe("brain_unlinked_mentions cursor pagination", () => {
+  test("the input schema declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_unlinked_mentions")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble every mention", async () => {
+    writePref("pref-target", {
+      kind: "preference",
+      topic: "t",
+      status: "confirmed",
+      principle: "p",
+      title: "Walk Target",
+    });
+    for (const slug of ["pref-w1", "pref-w2", "pref-w3"]) {
+      writePref(
+        slug,
+        { kind: "preference", topic: "w", status: "confirmed", principle: "p" },
+        "Still thinking about Walk Target here.",
+      );
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const sources: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const r = await callTool(server, "brain_unlinked_mentions", {
+        id: "pref-target",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      const out = JSON.parse(r.result!.content[0]!.text);
+      expect(out["total"]).toBe(3);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = out["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      sources.push(...out["mentions"].map((m: { source: string }) => m["source"]));
+      cursor = next;
+    } while (cursor !== null);
+    expect(sources.toSorted()).toEqual(["pref-w1", "pref-w2", "pref-w3"]);
+    expect(new Set(sources).size).toBe(3);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callTool(server, "brain_unlinked_mentions", {
+      id: "pref-x",
+      cursor: "!!!",
+    });
+    expect((r as { error?: { code: number } }).error?.code).toBe(-32602);
+  });
+});

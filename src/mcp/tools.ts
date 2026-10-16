@@ -33,6 +33,8 @@ import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
 import { probeVaultDirectory, type UnresolvedField } from "../core/vault-presence.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./brain/pagination.ts";
+import { pageSlice } from "../core/brain/offset-cursor.ts";
 import { WIRING_TOOLS } from "./wiring-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { SCHEMA_TOOLS } from "./schema-tools.ts";
@@ -215,6 +217,7 @@ async function toolQuery(
   }
   const pattern = coerceStr(args, "pattern", false);
   const limit = coerceInt(args, "limit", 50, 1, 500);
+  const offset = cursorOffsetArg("second_brain_query", args);
   // Owner-scope isolation (context-integrity-gates, Unit A). This
   // surface lists pages straight off the filesystem rather than through
   // search, so it applies the rule itself - over the frontmatter
@@ -251,6 +254,9 @@ async function toolQuery(
           (p) => !unreadable.has(p.path) && isOwnerVisible(pageOwner(p.metadata), scope),
         );
   const needle = pattern ? pattern.toLowerCase() : null;
+  // The whole matched set is collected (no early break) so the offset
+  // window cuts one page and `next_cursor` continues the walk; keeping
+  // the loop open is what makes a cursor past the first page work.
   const matched: Array<Record<string, unknown>> = [];
   for (const p of pages) {
     if (needle !== null && !p.title.toLowerCase().includes(needle)) continue;
@@ -259,15 +265,16 @@ async function toolQuery(
       path: vaultRelpath(p.path, ctx.vault),
       metadata: p.metadata,
     });
-    if (matched.length >= limit) break;
   }
+  const page = pageSlice(matched, offset, limit);
   return {
     vault_path: vaultPathField(ctx),
     total_pages: pages.length,
-    returned: matched.length,
+    returned: page.items.length,
     limit,
     pattern,
-    pages: matched,
+    pages: page.items,
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -514,6 +521,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
             maximum: 500,
             description: "Maximum number of matched pages to return (default 50).",
           },
+          cursor: CURSOR_SCHEMA,
           agent_scope: AGENT_SCOPE_SCHEMA,
         },
         additionalProperties: false,

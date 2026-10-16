@@ -133,6 +133,9 @@ const MCP_ONLY: Readonly<Record<string, string>> = Object.freeze({
   operation:
     "run|status arrives as a POSITIONAL on the CLI, which has no flag table entry to enumerate; " +
     "the verb reads it out of positional[0] and refuses anything else with its usage line.",
+  cursor:
+    "the MCP cursor pages the status journal for an agent walking it call by call; the CLI " +
+    "prints the journal in one pass for a human, who pages with their own tools.",
 });
 
 /**
@@ -327,7 +330,14 @@ describe("maintenance surface parity", () => {
 
     const handler = mcpHandlerSource();
     const unreadProperties = mcpPropertyNames()
-      .filter((property) => !handler.includes(`"${property}"`))
+      .filter(
+        (property) =>
+          !handler.includes(`"${property}"`) &&
+          // The pagination cursor is read through the shared MCP adapter
+          // (`cursorOffsetArg`), which consumes `args["cursor"]` on the
+          // tool's behalf; the call site names the tool, not the property.
+          !(property === "cursor" && handler.includes("cursorOffsetArg(")),
+      )
       .map((property) => `${TOOL_NAME}.${property}`);
     expect(unreadProperties.toSorted().join("\n")).toBe("");
   });
