@@ -447,6 +447,9 @@ function planShard(
         for (const pending of pendings) {
           group = mergePrior(group, pending.prior);
           mergedPriorLines.add(pending.index);
+          // Counted as kept when it was met; the rebuild now drops it in
+          // favour of the merged line, so it is no longer kept.
+          kept -= 1;
           emitIndex = Math.min(emitIndex, pending.index);
         }
       }

@@ -527,6 +527,8 @@ describe("compactReceiptLedgers", () => {
       dryRun: false,
     });
     expect(result.totals.folded).toBe(1);
+    // The prior aggregate was merged away, not kept verbatim.
+    expect(result.totals.kept).toBe(0);
     // The small fold merged instead of failing the strict-shrink guard.
     expect(result.failures).toEqual([]);
     const lines = readShard(continuityLogDir(vault), "2026-08.jsonl")
