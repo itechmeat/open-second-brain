@@ -182,9 +182,10 @@ function claudeLog(name: string, topic: string): string {
 /**
  * A log whose marker carries no credential-shaped value. The parity
  * fixture above deliberately carries one, but a redacted value mangles
- * the quoted principle - `token: "***REDACTED***"` - and a marker that no
- * longer re-parses from the imported turns raises no backlog candidate,
- * so the batching tests below use clean markers.
+ * the quoted principle (the redactor rewrites the quoted value that
+ * follows the credential key, so the principle no longer re-parses from
+ * the imported turns and raises no backlog candidate), so the batching
+ * tests below use clean markers.
  */
 function claudeMarkerLog(name: string, topic: string): string {
   const dir = join(home, ".claude", "projects", "-srv-projects-example");
