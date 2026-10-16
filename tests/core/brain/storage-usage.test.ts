@@ -254,6 +254,27 @@ describe("the configured store location", () => {
     expect(usage.complete).toBe(true);
   });
 
+  test("a search_db_path in an explicit config file is honoured through configPath", () => {
+    // A caller that resolved the search config through an explicit
+    // --config holds that path, and the store the indexer opens is the
+    // one THAT file names. Resolving through the default config file
+    // instead would measure whatever sits at the default location - on
+    // this fixture, nothing - while the real store grows elsewhere.
+    const configHome = mkdtempSync(join(tmpdir(), "o2b-store-cfgpath-"));
+    try {
+      const movedDb = join(configHome, "moved.sqlite");
+      writeFileSync(movedDb, "x".repeat(2500), "utf8");
+      const configPath = join(configHome, "config.yaml");
+      writeFileSync(configPath, `vault: ${vault}\nsearch_db_path: ${movedDb}\n`, "utf8");
+
+      const usage = measureStorageUsage(vault, { now: NOW, configPath });
+      expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStore)).toBe(2500);
+      expect(usage.complete).toBe(true);
+    } finally {
+      rmSync(configHome, { recursive: true, force: true });
+    }
+  });
+
   test("under an override the lane gate and the doctor check agree", () => {
     // The doctor measures the store the operator's searches actually use
     // (ctx.dbPath); pre-fix the lane gate measured the default location

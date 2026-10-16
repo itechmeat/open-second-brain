@@ -167,6 +167,15 @@ export interface MeasureStorageUsageOptions {
    * file the override left behind at the default location.
    */
   readonly storePath?: string;
+  /**
+   * The machine-config file the caller resolved the search config from,
+   * when it did so through an explicit `--config` path. Used for the
+   * configured resolution above, so a `search_db_path` override in THAT
+   * file moves the measured store the same way it moves the indexer;
+   * absent, the resolver reads its own default file, which is the same
+   * file an override-unaware caller would read.
+   */
+  readonly configPath?: string;
 }
 
 /** The tier each surface reports, named once beside the surface list. */
@@ -328,7 +337,7 @@ export function measureStorageUsage(
   for (const [dir, surface] of Object.entries(DOT_DIR_SURFACES)) {
     measureDirSurface(surface, join(brain, dir), [], readings, refusals);
   }
-  const storePath = opts.storePath ?? resolveConfiguredIndexPath(vault);
+  const storePath = opts.storePath ?? resolveConfiguredIndexPath(vault, opts.configPath);
   // The store's directory is a counted surface of its own, minus the
   // store files - they are the derived_store surface, and the skip list
   // is what keeps one byte from landing in two surfaces.
