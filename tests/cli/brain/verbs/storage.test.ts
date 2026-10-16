@@ -197,16 +197,18 @@ describe("o2b brain storage", () => {
     // census between the measure and the verb's own.
     configureCap(1_000_000);
     const total = measureStorageUsage(vault).totalBytes;
-    // Cap at 2.2x the stable total: the fresh reading sits around 45
-    // percent (never near the 80/95 percent bands), so the tier comes
-    // from the horizon. The two stored samples rise a tenth of the total
-    // per day and the verb's own sample continues that rise, so the cap
-    // lands inside the warn horizon - past critical's 7 days, inside
-    // warn's 30.
-    const cap = Math.floor(total * 2.2);
+    // Cap at twice the stable total: the fresh reading sits around half
+    // the cap (never near the 80/95 percent bands), so the tier comes
+    // from the horizon. A day-based trend needs three distinct days and
+    // the verb's own fresh census supersedes the newest seeded day inside
+    // the fit, which flattens the seeded rise to a fraction of the daily
+    // step; twice the cap keeps the resulting horizon a few days inside
+    // warn's 30 - and past critical's 7 - on every machine.
+    const cap = Math.floor(total * 2.0);
     configureCap(cap);
     seedSample("2026-10-14T00:00:00.000Z", total - total / 10, "seed-older");
     seedSample("2026-10-15T00:00:00.000Z", total, "seed-newer");
+    seedSample("2026-10-16T00:00:00.000Z", total + total / 20, "seed-newest");
 
     const { code, report } = await runJsonReport();
 
