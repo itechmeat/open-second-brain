@@ -81,7 +81,10 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // (write-side-trust Task 14), the same join install.lock.json made.
 // 24 -> 25: the session mining ledger joins the population with its row
 // (session-mining-economy), the same join the session import ledger made.
-const SWEPT_POPULATION_SIZE = 25;
+// 25 -> 26: the storage usage meter joins, excused (storage lifecycle
+// external review, M3): it joins the directory to MEASURE the store and the
+// state beside it as census surfaces, and writes nothing.
+const SWEPT_POPULATION_SIZE = 26;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,

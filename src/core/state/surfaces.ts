@@ -1162,6 +1162,13 @@ export const STATE_SURFACE_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new M
       "not a surface this module owns",
   ],
   [
+    "src/core/brain/storage/usage.ts",
+    "the capacity meter: it joins the store directory to MEASURE the store and the state beside " +
+      "it (the derived_store and derived_store_dir surfaces of the storage census), never to " +
+      "write one. It is the meter every row in this catalogue is charged by, and it creates " +
+      "nothing",
+  ],
+  [
     "src/cli/brain/verbs/bench.ts",
     "its `.open-second-brain/bench-runs` default is resolved against the WORKING DIRECTORY, not " +
       "against a vault, so it is not an in-vault surface at all. It is already enumerated as the " +
