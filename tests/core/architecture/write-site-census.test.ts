@@ -1420,8 +1420,14 @@ const DIRECT_WRITE_ROWS = 82;
  * the `expectBefore` compare-and-swap, under the shard's own lock - a
  * machine JSONL rewrite that carries no note content, so it arrives in
  * the shared class needing no exclusion.
+ *
+ * 120 -> 121, from the session-mining-economy wave and nothing else: the
+ * session mining ledger (`src/core/brain/session-mining-ledger.ts`)
+ * writes its tombstone JSON through `atomicWriteFileSync` under the
+ * ledger file's own lock - derived-store machine state, not a note, so
+ * it arrives in the shared class needing no exclusion.
  */
-const SHARED_HELPER_ROWS = 120;
+const SHARED_HELPER_ROWS = 121;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1537,9 +1543,12 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * state, not notes). 116 -> 117: the receipt fold engine
  * (`src/core/brain/receipts/compact.ts`) rewrites its named shards through
  * the shared atomic writer (machine JSONL ledger rows, not notes; no
- * origin stamp on a fold rewrite).
+ * origin stamp on a fold rewrite). 117 -> 118: the session mining ledger
+ * (`src/core/brain/session-mining-ledger.ts`) writes its tombstone JSON
+ * through the shared atomic writer (derived-store machine state, not
+ * notes; no origin stamp on machine state).
  */
-const UNSTAMPED_SHARED_ROWS = 117;
+const UNSTAMPED_SHARED_ROWS = 118;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

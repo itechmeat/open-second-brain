@@ -63,6 +63,7 @@ import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
 import { sessionCheckpointPath } from "../../../src/core/brain/sessions/checkpoint.ts";
 import { manifestPath as ingestManifestPath } from "../../../src/core/brain/ingest/content-manifest.ts";
 import { sessionLedgerPath } from "../../../src/core/brain/sessions/discover.ts";
+import { sessionMiningLedgerPath } from "../../../src/core/brain/session-mining-ledger.ts";
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
 import { manifestPath as installManifestPath } from "../../../src/core/install/manifest.ts";
 import { bootstrapReceiptPath } from "../../../src/cli/bootstrap/receipt.ts";
@@ -266,6 +267,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["session_import_checkpoints", (v) => dirname(sessionCheckpointPath(v, "0f1e2d3c"))],
     ["write_dead_letters", (v) => deadLetterDir(v)],
     ["session_import_ledger", (v) => sessionLedgerPath(v)],
+    ["session_mining_ledger", (v) => sessionMiningLedgerPath(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["bootstrap_receipt", (v) => bootstrapReceiptPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],
