@@ -398,3 +398,84 @@ describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
     expect("topic_report" in withoutTopics).toBe(false);
   });
 });
+
+describe("brain_session_grep cursor pagination", () => {
+  test("the input schema declares a described cursor property", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_session_grep")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
+    };
+    expect(schema.properties["cursor"]).toMatchObject({ type: "string", maxLength: 32 });
+    expect(schema.properties["cursor"]?.description).toBeTruthy();
+  });
+
+  test("each page's next_cursor leads to the next and the pages reassemble the hits", async () => {
+    const turns: SessionTurn[] = [
+      {
+        turnId: "w1",
+        role: "user",
+        timestamp: "2026-06-01T10:00:01.000Z",
+        text: "walrus fact one",
+      },
+      {
+        turnId: "w2",
+        role: "assistant",
+        timestamp: "2026-06-01T10:00:02.000Z",
+        text: "walrus fact two",
+      },
+      {
+        turnId: "w3",
+        role: "user",
+        timestamp: "2026-06-01T10:00:03.000Z",
+        text: "walrus fact three",
+      },
+    ];
+    importSessionRecall(vault, {
+      sessionId: "session-walk",
+      turns,
+      createdAt: "2026-06-01T10:00:00.000Z",
+    });
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+
+    const full = await callOn(server, "brain_session_grep", {
+      query: "walrus",
+      session_id: "session-walk",
+    });
+    const allIds = (full["hits"] as ReadonlyArray<{ id: string }>).map((h) => h.id);
+    expect(allIds.length).toBeGreaterThanOrEqual(3);
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await callOn(server, "brain_session_grep", {
+        query: "walrus",
+        session_id: "session-walk",
+        limit: 2,
+        ...(cursor !== null ? { cursor } : {}),
+      });
+      expect(page["total"]).toBe(allIds.length);
+      // Guard the walk protocol: an ignored cursor would loop forever.
+      const next = page["next_cursor"];
+      expect(next === null || typeof next === "string").toBe(true);
+      walked.push(...(page["hits"] as ReadonlyArray<{ id: string }>).map((h) => h.id));
+      cursor = next as string | null;
+    } while (cursor !== null);
+    expect(walked).toEqual(allIds);
+  });
+
+  test("a malformed cursor is refused as invalid params", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 30,
+      method: "tools/call",
+      params: {
+        name: "brain_session_grep",
+        arguments: { query: "x", cursor: "!!!" },
+      },
+    })) as { error?: { code: number } };
+    expect(response.error?.code).toBe(-32602);
+  });
+});

@@ -79,6 +79,7 @@ import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/bra
 import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { isPayloadRemotelyReadable } from "../../core/brain/payload-inventory.ts";
+import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import {
   DEFAULT_PAYLOAD_PAGE_CHARS,
   PayloadNotFoundError,
@@ -94,6 +95,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope, unknownOperationError } from "../coerce.ts";
 
 /** Recall-quality benchmark over an inline dataset. */
@@ -991,23 +993,28 @@ async function toolBrainSessionGrep(
     "raw_budget_chars",
     args["raw_budget_chars"],
   );
-  return {
-    ...searchSessionRecall(ctx.vault, {
-      query: requiredStringArg("brain_session_grep", args, "query"),
-      ...withheldAtRemoteReach(ctx),
-      ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
-        ? {
-            sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
-          }
-        : {}),
-      ...(limit !== undefined ? { limit } : {}),
-      ...(snippetChars !== undefined ? { snippetChars } : {}),
-      ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
-      ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
-      ...(includeRaw ? { includeRaw: true } : {}),
-      ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
-    }),
-  };
+  // The matches are a deterministic ranked walk (score, then id), so the
+  // page is cut here over the full hit set: `total` counts every match
+  // across pages and `next_cursor` continues the walk (null when
+  // exhausted). Absent `limit`, the whole match set is one page.
+  const offset = cursorOffsetArg("brain_session_grep", args);
+  const hits = searchSessionRecall(ctx.vault, {
+    query: requiredStringArg("brain_session_grep", args, "query"),
+    ...withheldAtRemoteReach(ctx),
+    ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
+      ? {
+          sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
+        }
+      : {}),
+    limit: Number.MAX_SAFE_INTEGER,
+    ...(snippetChars !== undefined ? { snippetChars } : {}),
+    ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
+    ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
+    ...(includeRaw ? { includeRaw: true } : {}),
+    ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
+  });
+  const page = pageSlice(hits.hits, offset, limit ?? Math.max(hits.hits.length, 1));
+  return { hits: page.items, total: page.total, next_cursor: page.next_cursor };
 }
 
 /**
@@ -1640,6 +1647,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description: "Maximum hits to return (operation=match).",
         },
+        cursor: CURSOR_SCHEMA,
         snippet_chars: {
           type: "integer",
           minimum: 1,
