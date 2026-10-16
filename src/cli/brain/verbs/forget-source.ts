@@ -8,7 +8,8 @@
  * shared-derivation pages and aggregate surfaces (logs, reports, MOCs) are
  * reported, never deleted. `--include-originals` additionally removes the
  * original source file(s) outside `Brain/`. Every confirmed cleanup writes
- * an auditable `source_invalidation` continuity record.
+ * an auditable `source_invalidation` continuity record; a confirmed run
+ * that could not remove an entry names it in both outputs and exits 1.
  */
 
 import { deleteBySource } from "../../../core/brain/source-cleanup.ts";
@@ -87,19 +88,30 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         mentions: plan.mentions.map((e) => ({ path: e.path, kind: e.kind, match: e.match })),
         originals: [...plan.originals],
         deleted: [...plan.deleted],
+        // The per-entry removal failures ride the JSON (review M8): a
+        // confirmed removal that could not delete a file must never read
+        // as a clean run with a smaller count.
+        failed: plan.failed.map((f) => ({ path: f.path, message: f.message })),
         manifest_entry_removed: plan.manifestEntryRemoved,
         audit_record_id: plan.auditRecordId,
         snapshot_run_id: plan.snapshotRunId,
         snapshot_path: plan.snapshotPath,
         recoverability: plan.recoverability,
       });
-      return 0;
+      // Collected failures are an honest non-zero exit, not a crash: the
+      // entries that could be removed were, and the JSON names what stayed.
+      return plan.failed.length > 0 ? 1 : 0;
     }
 
     if (plan.confirmed) {
       ok(`forget-source: ${plan.source}`);
       ok(`  deleted ${plan.deleted.length} file(s)`);
       for (const p of plan.deleted) ok(`    - ${p}`);
+      // The failed list reaches the text report too (review M8), with the
+      // same exit rule the JSON path answers: failures are a non-zero exit.
+      for (const f of plan.failed) {
+        process.stderr.write(`error: failed to remove ${f.path}: ${f.message}\n`);
+      }
       if (plan.manifestEntryRemoved) ok("  removed ingest manifest entry");
       if (plan.mentions.length > 0) {
         info(`  ${plan.mentions.length} protected mention(s) NOT deleted (edit by hand):`);
@@ -123,7 +135,7 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
           );
         }
       }
-      return 0;
+      return plan.failed.length > 0 ? 1 : 0;
     }
 
     // Dry-run report.

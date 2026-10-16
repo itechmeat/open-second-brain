@@ -457,6 +457,12 @@ function serializePlan(
     originals: [...plan.originals],
     manifest_entry: plan.manifestEntry,
     deleted: [...plan.deleted],
+    // The per-entry removal failures reach the tool answer (review M8): a
+    // confirmed removal that could not delete a file must never read as a
+    // clean run with a smaller count. Always carried (empty on a clean or
+    // dry run) so an automations can read the field unconditionally, like
+    // `deleted` beside it.
+    failed: plan.failed.map((f) => ({ path: f.path, message: f.message })),
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
     // The archive-entry cleanup kind (answer trust, Task C4), reported as
