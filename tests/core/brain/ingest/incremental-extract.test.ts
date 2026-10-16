@@ -31,7 +31,6 @@ import {
   classifyPaths,
   hashBytes,
   hashFile,
-  hashPath,
   readManifest,
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
@@ -266,13 +265,12 @@ describe("a source that changes kind mid-run degrades fail-safe", () => {
       // after the intake has already classified the source trusted (its stat
       // saw a regular file) and just before the manifest stamp, so swapping
       // the source for a directory inside the callback lands the change in
-      // the window between the classification stat and the pre-stamp reads.
-      // The stamp block then stats a directory whose size sits past the
-      // recorded watermark, and the append-proof read used to die on EISDIR -
-      // after the summary pages were written, losing the run's result. The
-      // sibling ENOENT window (the source deleted inside the same span,
-      // between the block's existsSync and the stat/hash reads) is answered
-      // by the same fail-safe catch; it has no deterministic public-API hook.
+      // the window between the classification stat and the single-pass
+      // append snapshot. Opening a directory refuses (EISDIR), and the ONE
+      // descriptor the pass reads answers for both the delta and the stamp:
+      // no provable append is reported, and no stamp lands that the pass
+      // could not also verify - the last good entry stands, and the source
+      // reprocesses when its real bytes return.
       let swapped = false;
       const second = ingestSource(vault, INPUT, {
         ...OPTS,
@@ -287,19 +285,18 @@ describe("a source that changes kind mid-run degrades fail-safe", () => {
       });
 
       expect(swapped).toBe(true);
-      // No crash: the run answers, and a source that cannot be read as a file
-      // reports no append.
+      // No crash: the run answers, and a source that cannot be read as a
+      // file reports no append.
       expect(second.summaryPath).toBe(first.summaryPath);
       expect(second.extractionDelta).toBeUndefined();
-      // The stamp that landed describes the directory as it now is, so the
-      // next classification sees a changed source and reprocesses fully
-      // rather than trusting a stale file digest.
+      // The manifest keeps describing the last read the pipeline could
+      // actually take - the file as it stood at the first ingest.
       const entry = readManifest(vault).entries[SOURCE]!;
-      expect(entry.sha256).toBe(hashPath(join(vault, SOURCE)));
-      expect(entry.extracted_bytes).toBeGreaterThan(0);
+      expect(entry.sha256).toBe(hashBytes(new Uint8Array(Buffer.from("one\ntwo\n", "utf8"))));
+      expect(entry.extracted_bytes).toBe(8);
 
-      // The restored file is not an append against that stamp: the source
-      // reprocesses fully, and the stamp lands on the real file again.
+      // The restored file is byte-identical to that standing stamp: it
+      // classifies unchanged, and no delta is reported.
       rmSync(join(vault, SOURCE), { recursive: true });
       writeSource("one\ntwo\n");
       const third = ingestSource(vault, INPUT, OPTS);

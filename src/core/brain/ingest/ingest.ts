@@ -22,13 +22,13 @@
 import {
   closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
-  statSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -81,9 +81,9 @@ import {
   type Provenance,
 } from "../provenance/provenance.ts";
 import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
-import { extractedBytesOf, hashPath, readManifest, updateManifest } from "./content-manifest.ts";
+import { extractedBytesOf, readManifest, updateManifest } from "./content-manifest.ts";
 import { computeExtractionContractFingerprint } from "./contract.ts";
-import { readTail } from "./tail-read.ts";
+import { cutAppendedDelta } from "./tail-read.ts";
 import {
   PRE_EXTRACT_MAX_SOURCE_BYTES,
   SOURCE_OPEN_FLAGS,
@@ -483,37 +483,58 @@ export function ingestSource(
     existsSync(join(vault, canonicalSource))
   ) {
     const sourceAbs = join(vault, canonicalSource);
-    // The source can still vanish (ENOENT) or change kind (a directory where
-    // the classified file stood) between the existsSync above and these
-    // reads - after the summary pages were written, where a throw would lose
-    // this run's result. The old updateManifest path answered both shapes by
-    // degrading (a vanished source dropped its entry), so both reads here
-    // degrade the same fail-safe way: a source that cannot be read reports
-    // no delta, and a stamp that cannot describe it is skipped - the source
-    // simply reprocesses fully next time. The ENOENT window and the EISDIR
-    // window are the same catch.
-    try {
-      extractionDelta = appendedExtractionDelta(vault, sourceAbs, canonicalSource);
-    } catch {
-      // No provable append can be reported for a source that cannot be read.
-    }
+    // The manifest read sits OUTSIDE the fs-race catch below: a corrupted or
+    // unsupported manifest is its own named hard error (`readManifest`'s
+    // contract), never a silently skipped stamp.
+    const entry = readManifest(vault).entries[canonicalSource];
+    const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
     // Record the source's state under the live contract, WITH the extraction
-    // watermark. The stamp covers exactly the prefix the reported delta
-    // announces (review M15): on a proven append the watermark advances to
-    // the delta's boundary-safe `toByte` and the recorded digest is the
-    // digest of exactly those leading bytes, so the next append's prefix
-    // proof verifies against the watermark the delta series actually
-    // announced, and an unterminated trailing fragment stays unstamped for
-    // the next delta to stitch in. On every other shape - a first ingest,
-    // a rewritten source, a shrink - this run is a whole-source pass and
-    // the stamp covers the full current file. Both arms keep ONE invariant:
-    // the recorded digest always describes exactly `extracted_bytes`
-    // leading bytes of the source.
+    // watermark, off ONE descriptor and ONE pass over the bytes (review L2):
+    // the prefix proof, the tail read and the stamp's digest all consume the
+    // same snapshot, so a file growing under the reader cannot produce a
+    // delta, a proof and a stamp that describe three different versions.
+    //
+    // The stamp covers exactly the prefix the reported delta announces
+    // (review M15): on a proven append the watermark advances to the delta's
+    // boundary-safe `toByte` and the recorded digest is the digest of
+    // exactly those leading bytes, so the next append's prefix proof
+    // verifies against the watermark the delta series actually announced,
+    // and an unterminated trailing fragment stays unstamped for the next
+    // delta to stitch in. On every other shape - a first ingest, a
+    // rewritten source, a shrink - this run is a whole-source pass and the
+    // stamp covers the full current file. Both arms keep ONE invariant: the
+    // recorded digest always describes exactly `extracted_bytes` leading
+    // bytes of the source.
+    //
+    // The source can still vanish (ENOENT) or change kind (a directory where
+    // the classified file stood) between the existsSync above and this read -
+    // after the summary pages were written, where a throw would lose this
+    // run's result. Such a read degrades the fail-safe way: no delta is
+    // reported and no stamp lands, so the source simply reprocesses fully
+    // next time. The ENOENT window and the EISDIR window are the same catch.
     let manifestStamp: { readonly digest: string; readonly bytes: number } | undefined;
     try {
-      manifestStamp = extractionWatermarkStamp(sourceAbs, extractionDelta);
+      const snapshot = readAppendSnapshot(
+        sourceAbs,
+        watermark,
+        entry === undefined ? "" : entry.sha256,
+      );
+      const delta = appendedDeltaFromSnapshot(watermark, snapshot);
+      if (delta !== undefined) {
+        extractionDelta = delta;
+        // The decision above already extended the through-watermark hash
+        // with exactly the announced bytes: its digest is the digest of the
+        // leading `toByte` bytes, computed with no second read.
+        manifestStamp = {
+          digest: snapshot.hashThroughWatermark.digest("hex"),
+          bytes: delta.toByte,
+        };
+      } else {
+        manifestStamp = { digest: snapshot.fullDigest, bytes: snapshot.size };
+      }
     } catch {
-      // Vanished or changed kind mid-flight: skip the stamp, reprocess fully.
+      // Vanished or changed kind mid-flight: no delta, no stamp - the source
+      // reprocesses fully next time.
     }
     if (manifestStamp !== undefined) {
       updateManifest(vault, [canonicalSource], {
@@ -682,89 +703,119 @@ export function appendedExtractionDelta(
   const entry = readManifest(vault).entries[canonicalSource];
   const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
   if (watermark <= 0) return undefined;
-  let size: number;
-  try {
-    size = statSync(sourceAbs).size;
-  } catch {
-    return undefined;
-  }
-  if (size <= watermark) return undefined;
-  if (entry === undefined || !prefixHashMatches(sourceAbs, watermark, entry.sha256)) {
-    return undefined;
-  }
-  const tail = readTail(sourceAbs, watermark, { maxBytes: EXTRACTION_DELTA_MAX_BYTES });
-  if (tail.kind !== "appended") return undefined;
-  return { fromByte: tail.fromByte, toByte: tail.toByte };
+  const snapshot = readAppendSnapshot(sourceAbs, watermark, entry.sha256);
+  return appendedDeltaFromSnapshot(watermark, snapshot);
+}
+
+/** What ONE descriptor and one sequential pass over the source answered. */
+interface AppendSnapshot {
+  /** File size at the read; every digest describes exactly this byteset. */
+  readonly size: number;
+  /** SHA-256 of the whole current file - the whole-source stamp's digest. */
+  readonly fullDigest: string;
+  /**
+   * True when the leading watermark bytes still hash to the recorded
+   * digest: the append the tail reports is a PROVEN pure append, not a
+   * rewrite that happens to have grown.
+   */
+  readonly prefixProven: boolean;
+  /**
+   * The bytes past the watermark. Within the delta cap the buffer is the
+   * COMPLETE tail; past it only the fact is recorded (`overCap`), the bytes
+   * never buffered.
+   */
+  readonly tail: { readonly overCap: true } | { readonly overCap: false; readonly bytes: Buffer };
+  /**
+   * Hash of exactly the leading watermark bytes. The caller extends it with
+   * the announced delta's leading bytes to reach a digest at any boundary
+   * the delta series names, computed with no second read (review L2).
+   */
+  readonly hashThroughWatermark: Hash;
 }
 
 /**
- * The manifest stamp this run's source state earns: the digest and byte
- * count the extraction watermark records. On a reported append the stamp
- * covers exactly the announced prefix - the digest of the leading `toByte`
- * bytes - so the recorded digest and the watermark never disagree about
- * where the delta series stands (review M15). On every other shape the run
- * is a whole-source pass and the stamp covers the full current file, whose
- * digest then also answers the `unchanged` classification; a fragment
- * stamp accepts one reclassification until the fragment is terminated and
- * the source re-ingested. A source that cannot be stated - vanished, a
- * directory in the file's place - throws, and the caller skips the stamp.
+ * Read `sourceAbs` once - one non-blocking descriptor, each byte read
+ * exactly once - and answer everything the delta pass and the watermark
+ * stamp need: the whole-file digest, the prefix proof against
+ * `expectedDigest`, and the appended tail. `watermark <= 0` skips the
+ * proof and the tail (no delta is possible), keeping a first ingest as
+ * cheap as the plain hash it replaced. A source that cannot be opened or
+ * is not a regular file throws; the caller answers that fail-safe way.
  */
-function extractionWatermarkStamp(
+function readAppendSnapshot(
   sourceAbs: string,
-  delta: IngestSourceResult["extractionDelta"],
-): { readonly digest: string; readonly bytes: number } {
-  if (delta !== undefined) {
-    // Positioned reads bounded at `toByte`: a file that grows while the
-    // prefix is hashed cannot leak past the announced boundary.
-    return { digest: hashPrefix(sourceAbs, delta.toByte), bytes: delta.toByte };
-  }
-  // One stat, taken BEFORE the digest: the stamp must describe one
-  // snapshot of the source, so the byte count it claims is the file it
-  // hashed, not a size re-read after the hashing walked a possibly grown
-  // file.
-  const size = statSync(sourceAbs).size;
-  return { digest: hashPath(sourceAbs), bytes: size };
-}
-
-/**
- * Does the SHA-256 of the first `watermark` bytes of `sourceAbs` equal
- * `expected`? An unreadable or too-short prefix cannot PROVE an append, so
- * it answers false - the modified classification and its full reprocess are
- * the safe direction, never a skipped stale delta.
- */
-function prefixHashMatches(sourceAbs: string, watermark: number, expected: string): boolean {
-  try {
-    return hashPrefix(sourceAbs, watermark) === expected;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The SHA-256 of exactly the first `bytes` leading bytes of `sourceAbs`,
- * read with positioned reads off the shared non-blocking open. A read that
- * comes up short of `bytes` (the file shrank below the prefix) hashes what
- * is there - a digest that can no longer match a recorded prefix, which is
- * the answer the proof needs. An unopenable source throws.
- */
-function hashPrefix(sourceAbs: string, bytes: number): string {
+  watermark: number,
+  expectedDigest: string,
+): AppendSnapshot {
   const fd = openSync(sourceAbs, SOURCE_OPEN_FLAGS);
   try {
-    const hash = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(Math.min(PREFIX_HASH_CHUNK_BYTES, bytes));
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`not a regular file: ${sourceAbs}`);
+    const size = stat.size;
+    const provePrefix = watermark > 0;
+    const hashPrefix = createHash("sha256");
+    const hashFull = createHash("sha256");
+    const hashThroughWatermark = createHash("sha256");
+    const tailParts: Buffer[] = [];
+    let tailFilled = 0;
+    const chunk = Buffer.allocUnsafe(PREFIX_HASH_CHUNK_BYTES);
     let position = 0;
-    let remaining = bytes;
-    while (remaining > 0) {
-      const count = readSync(fd, chunk, 0, Math.min(chunk.length, remaining), position);
+    for (;;) {
+      const count = readSync(fd, chunk, 0, chunk.length, position);
       if (count === 0) break;
-      hash.update(count === chunk.length ? chunk : chunk.subarray(0, count));
+      const buf = count === chunk.length ? chunk : chunk.subarray(0, count);
+      hashFull.update(buf);
+      const prefixEnd = Math.min(watermark - position, count);
+      if (prefixEnd > 0) {
+        const head = buf.subarray(0, prefixEnd);
+        hashPrefix.update(head);
+        hashThroughWatermark.update(head);
+      }
+      if (provePrefix && position + count > watermark && tailFilled <= EXTRACTION_DELTA_MAX_BYTES) {
+        const part = buf.subarray(Math.max(0, watermark - position));
+        tailParts.push(part);
+        tailFilled += part.length;
+      }
       position += count;
-      remaining -= count;
     }
-    return hash.digest("hex");
+    return {
+      size,
+      fullDigest: hashFull.digest("hex"),
+      prefixProven: provePrefix && hashPrefix.digest("hex") === expectedDigest,
+      tail:
+        tailFilled > EXTRACTION_DELTA_MAX_BYTES
+          ? { overCap: true }
+          : { overCap: false, bytes: Buffer.concat(tailParts) },
+      hashThroughWatermark,
+    };
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * The appended delta a snapshot proves, boundary-safe: a pure append within
+ * the delta cap cut at the last complete newline. Everything else - no
+ * watermark, a rewrite, a shrink, a tail past the cap - answers no delta;
+ * the modified classification and its full reprocess are the safe direction.
+ *
+ * On the proven shape this ALSO extends the snapshot's
+ * `hashThroughWatermark` with exactly the announced bytes, so the caller's
+ * next `digest()` is the digest of the leading `toByte` bytes - the stamp's
+ * prefix, computed with no second read (review L2). Calling it is therefore
+ * not idempotent on the snapshot; the CLI preview discards its snapshot and
+ * never digests.
+ */
+function appendedDeltaFromSnapshot(
+  watermark: number,
+  snapshot: AppendSnapshot,
+): { readonly fromByte: number; readonly toByte: number } | undefined {
+  if (watermark <= 0 || !snapshot.prefixProven || snapshot.size <= watermark) return undefined;
+  const tail = snapshot.tail;
+  if (tail.overCap) return undefined;
+  const cut = cutAppendedDelta(tail.bytes, watermark);
+  snapshot.hashThroughWatermark.update(tail.bytes.subarray(0, cut.toByte - watermark));
+  return { fromByte: cut.fromByte, toByte: cut.toByte };
 }
 
 /**
