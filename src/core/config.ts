@@ -1603,6 +1603,25 @@ export function resolveHookStrictEnabled(configPath?: string): boolean {
 }
 
 /**
+ * PreToolUse host-settings backup hook (t_f4555087). Default OFF: the
+ * opt-in hook stays a byte-identical no-op unless `host_settings_backup:
+ * "true"` (or the matching env override). Flag on, a file-tool call
+ * targeting a Claude settings file gets its current content backed up -
+ * into a timestamped folder beside the target, with one audit receipt -
+ * before the write is allowed; a backup that cannot be taken denies the
+ * call via stdout. The hook wrapper restates the flag read stdlib-only;
+ * this resolver is the canonical definition the wrapper's twin must
+ * agree with (pinned by the hook tests).
+ */
+export function resolveHostSettingsBackupEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP",
+    "host_settings_backup",
+    configPath,
+  );
+}
+
+/**
  * Env var and config key of the maintenance lane's embedding opt-in.
  * Named because the lane quotes them back: a run that skipped the
  * embedding phase says which switch would turn it on.
