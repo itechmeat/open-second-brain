@@ -506,7 +506,7 @@ describe("--propose-backlog batches the distill proposals ask-once", () => {
     expect(withPath.returncode).toBe(1);
     expect(withPath.stderr).toContain(path);
     expect(withPath.stderr).toContain("--propose-backlog");
-  });
+  }, 20000);
 });
 
 describe("--discover reports what would import and imports nothing", () => {

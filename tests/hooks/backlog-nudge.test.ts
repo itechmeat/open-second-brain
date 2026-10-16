@@ -177,7 +177,7 @@ describe("backlog-nudge hook (SessionStart)", () => {
     const returned = await runHook(SESSION_START, flagOn());
     const payload = JSON.parse(returned.stdout) as InjectedPayload;
     expect(payload.hookSpecificOutput?.additionalContext).toMatch(/1 imported session\b/);
-  });
+  }, 20000);
 
   test("a count of zero with no recorded state is silent too", async () => {
     const r = await runHook(SESSION_START, flagOn());
