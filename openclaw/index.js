@@ -2260,6 +2260,7 @@ __export(exports_config, {
   resolveAnswerQuoteCheckActive: () => resolveAnswerQuoteCheckActive,
   resolveAnswerQuoteCheckRecall: () => resolveAnswerQuoteCheckRecall,
   resolveAnswerQuoteCheckSubagent: () => resolveAnswerQuoteCheckSubagent,
+  resolveBacklogNudgeEnabled: () => resolveBacklogNudgeEnabled,
   resolveBenchJudgeCmd: () => resolveBenchJudgeCmd,
   resolveContextPackOutcomeEnabled: () => resolveContextPackOutcomeEnabled,
   resolveDecisionRecallMaxPerSession: () => resolveDecisionRecallMaxPerSession,
@@ -2873,6 +2874,9 @@ function resolvePartnerCodegraphDisabled(configPath) {
 }
 function resolveGapLoopEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_GAP_LOOP_ENABLED", "gap_loop_enabled", configPath);
+}
+function resolveBacklogNudgeEnabled(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED", "backlog_nudge_enabled", configPath);
 }
 function resolveGapLoopThreshold(configPath) {
   const env = process.env["OPEN_SECOND_BRAIN_GAP_LOOP_THRESHOLD"]?.trim();
