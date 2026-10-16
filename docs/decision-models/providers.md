@@ -22,6 +22,7 @@ for you, and no route is ever a fallback for another one.
 | `openjev` | `systemone` | `http://127.0.0.1:3000` | `openjev` | 4000 / 16384 | CC-BY-NC-4.0 | your own server; on loopback nothing leaves the machine |
 | `compatible` | `systemone` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the server |
 | `llm-emulation` | `llm-emulation` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the chat endpoint |
+| `converse` | `converse` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the gateway |
 
 "State tokens" is Open Second Brain's own conservative estimate (about two
 characters per token), used to keep a request within the route's context:
@@ -37,6 +38,7 @@ Other per-route limits:
 | `openjev` | optional on loopback | 52 | `openjev` | 0 |
 | `compatible` | required | 255 | none, unless `decision_model_threshold_profile` names one | unknown |
 | `llm-emulation` | required | 255 | `llm-emulation` | unknown unless both price keys are set |
+| `converse` | required | 255 | `converse` | unknown |
 
 A `choice` question above the route's option limit is never sent: a use that
 can split it does, and otherwise that request degrades with `budget`, like an
@@ -176,6 +178,45 @@ decision_model_output_price_usd_per_mtok: "0.40"
 decision_model_uses: "rerank:shadow"
 ```
 
+## `converse` (gateway)
+
+`converse` reaches a decision model through a bearer-authenticated gateway
+that speaks the Bedrock-style Converse protocol
+(`POST <base_url>/converse`). The base URL, the pinned model id and the key
+variable are yours to set; a key is required on every host, loopback
+included. The judgment travels the chat-shaped way: a system prompt and one
+user message carry the questions, the reply's JSON schema and the state,
+and the reply's message text holds one JSON object keyed by question id -
+validated item by item by the same rules as every route.
+
+- The route is declared calibrated: a Converse gateway fronts a judgment
+  model family, and its answers are validated as such - probabilities over
+  exactly the question's options, distributions that sum to 1, a reported
+  choice that is the most probable one. An item that fails that validation
+  is invalid; the rest of the batch stands.
+- It carries its own threshold profile, `converse`, and no use is tuned for
+  it yet: an `enforce` setting runs as `shadow` until the profile is tuned
+  from this route's own shadow data. It never borrows `jev-1.13`.
+- The state is vault content travelling inside a generated-text request, so
+  it is fenced as untrusted content and passes the same redaction as every
+  route (registry id `decision-model-converse`).
+- A reply whose `stopReason` arrived and is not `end_turn` was cut short
+  and is refused, never half-parsed. Error bodies (`{message, __type}`) are
+  never read or printed: the HTTP status alone decides.
+- Usage is camelCase (`inputTokens`, `outputTokens`). The gateway's pricing
+  is yours, so the cost is `unknown` until you set
+  `decision_model_input_price_usd_per_mtok`; a known cost still feeds the
+  daily cost gate.
+
+```yaml
+decision_model_enabled: "true"
+decision_model_provider: converse
+decision_model_base_url: https://gateway.example.com
+decision_model_id: gateway-jev-1
+decision_model_env_key: GATEWAY_DECISION_KEY   # the variable's name, not the key
+decision_model_uses: "rerank:shadow"
+```
+
 ## Threshold profiles
 
 Probabilities from different model families are not comparable, so every
@@ -184,7 +225,7 @@ preset names a threshold profile:
 
 - `jev-1.13`: every threshold Open Second Brain ships was set against this
   family, so every use may enforce on it;
-- `laya`, `openjev`, `llm-emulation`: no use is tuned yet;
+- `laya`, `openjev`, `llm-emulation`, `converse`: no use is tuned yet;
 - none (`compatible` without `decision_model_threshold_profile`).
 
 A use set to `enforce` on a profile without tuned thresholds for it runs as

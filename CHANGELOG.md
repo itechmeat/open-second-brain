@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A `converse` decision-model route for bearer-authenticated Converse-protocol (Bedrock-style) gateways.** The adapter union gains a fourth adapter beside `systemone`, `vercel-evaluate` and `llm-emulation`, with a `converse` preset (`decision_model_provider: converse`) whose base URL, pinned model id and key variable are the operator's. The judgment travels the chat-shaped way - a system prompt and one user message carry the questions, the reply's JSON schema and the state fenced as untrusted content, and the reply's message text holds one JSON object keyed by question id, validated item by item by the same rules as every route; a `stopReason` that is not `end_turn` refuses the reply rather than half-parsing it. The route is declared calibrated with its own `converse` threshold profile, and no use is tuned for it yet, so every `enforce` setting runs as `shadow` until tuned from this route's own shadow data. The request passes the shared egress guard under the new `decision-model-converse` registry id, the contract suite's fourth route applies the full failure matrix to the adapter, and `o2b decision-model check`, `doctor` and the setup skill name the new preset and profile.
+
 ## [1.86.2] - 2026-10-16
 
 Open Second Brain 1.86.2 closes a concurrency defect in the per-session hook-state lock: after a stale lock was taken over, two or more hook processes could hold the same scope at once, so a queued re-grounding part could be delivered more than once.

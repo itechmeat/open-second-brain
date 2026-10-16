@@ -266,6 +266,39 @@ export const DECISION_MODEL_PRESETS: Readonly<Record<string, DecisionModelPreset
       "the OpenAI-compatible chat endpoint at the configured base URL (a generative model); " +
       "its operator's terms apply",
   },
+  // Calibration decision, recorded: a Converse-protocol gateway fronts a
+  // JUDGMENT model family - that is what an operator points this route at -
+  // so the route is declared calibrated and its answers are validated as
+  // such, by the same per-item rules every decision route applies. The
+  // gateway is the operator's, so the base URL, the pinned model id and the
+  // key variable are configured, and the processor terms are the gateway
+  // operator's. The answers are NOT the hosted Jev 1.13 family's, so the
+  // preset does not borrow `jev-1.13`: it carries its own threshold
+  // profile, and nothing enforces on it until it is tuned from this route's
+  // own shadow data - an `enforce` setting runs as `shadow` until then.
+  converse: {
+    name: "converse",
+    adapter: "converse",
+    // The operator's bearer-authenticated gateway, such as
+    // https://gateway.example.com; requests go to <base>/converse.
+    baseUrl: null,
+    model: null,
+    envKey: null,
+    maxStateTokens: DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
+    maxChoiceOptions: DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
+    // A Converse gateway is bearer-authenticated: the key variable is
+    // required on every host, loopback included.
+    keyOptionalOnLoopback: false,
+    // The gateway's pricing is the operator's; a reported usage still feeds
+    // the daily cost gate once a price is configured.
+    inputPriceUsdPerMtok: null,
+    calibrated: true,
+    thresholdProfile: "converse",
+    licence: null,
+    licenceNote: null,
+    processor:
+      "the Converse-protocol gateway at the configured base URL; its operator's terms apply",
+  },
 });
 
 export const DECISION_MODEL_PRESET_NAMES: ReadonlyArray<string> = Object.freeze(

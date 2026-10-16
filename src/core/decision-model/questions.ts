@@ -117,6 +117,10 @@ export const DECISION_THRESHOLD_PROFILES: Readonly<Record<string, DecisionThresh
     openjev: { name: "openjev", tuned: Object.freeze([]) },
     // Self-reported probabilities of a generative model: none tuned.
     "llm-emulation": { name: "llm-emulation", tuned: Object.freeze([]) },
+    // A Converse-protocol gateway fronting the operator's own judgment
+    // model family: calibrated per that deployment, none tuned here, so an
+    // `enforce` setting runs as `shadow` until tuned from shadow data.
+    converse: { name: "converse", tuned: Object.freeze([]) },
   });
 
 export const DECISION_THRESHOLD_PROFILE_NAMES: ReadonlyArray<string> = Object.freeze(
