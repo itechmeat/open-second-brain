@@ -568,7 +568,7 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
   }
   if (miningSteps.length > 0) {
     ok(
-      "  answer each with 'o2b brain extract-signals <session> --payload <json>' " +
+      "  answer each with an extract-signals commit of its payload " +
         "(use --json here for the envelopes); an empty answer still drains the session",
     );
   }
