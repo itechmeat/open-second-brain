@@ -25,10 +25,10 @@ import { Database } from "bun:sqlite";
 
 import { closeDatabase } from "../sqlite-close.ts";
 import { CHUNKER_VERSION } from "./chunker.ts";
-import { reindexVault, type IndexVaultOptions } from "./indexer.ts";
+import { countStoredEmbeddings, reindexVaultUnless, type IndexVaultOptions } from "./indexer.ts";
 import { findSchemaGaps, LATEST_SCHEMA_VERSION, readSchemaVersion } from "./schema.ts";
 import { consolidateWal, openWriteDatabase } from "./store/lifecycle.ts";
-import { CHUNKER_VERSION_STATE_KEY } from "./store/state.ts";
+import { CHUNKER_VERSION_STATE_KEY, INTEGRITY_FAULT_STATE_KEY } from "./store/state.ts";
 import { SearchError, type IndexStats, type ResolvedSearchConfig } from "./types.ts";
 
 /**
@@ -36,7 +36,8 @@ import { SearchError, type IndexStats, type ResolvedSearchConfig } from "./types
  * - `current`: nothing to do.
  * - `older-schema`: a migratable older schema with current chunks.
  * - `rebuild`: absent, unreadable, newer than this build, chunked by
- *   older rules, or stamped current with tables or columns missing.
+ *   older rules, condemned by a recorded integrity fault, or stamped
+ *   current with tables or columns missing.
  */
 export type IndexCondition = "current" | "older-schema" | "rebuild";
 
@@ -54,6 +55,15 @@ function chunksAreStale(db: Database): boolean {
   return db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() !== null;
 }
 
+/** Whether a completed integrity check recorded a fault against the file. */
+function hasRecordedIntegrityFault(db: Database): boolean {
+  return (
+    db
+      .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ? LIMIT 1")
+      .get(INTEGRITY_FAULT_STATE_KEY) !== null
+  );
+}
+
 /** Classify the index at `config.dbPath` with read-only queries. */
 export function inspectIndex(config: ResolvedSearchConfig): IndexCondition {
   if (!existsSync(config.dbPath)) return "rebuild";
@@ -66,6 +76,9 @@ export function inspectIndex(config: ResolvedSearchConfig): IndexCondition {
   try {
     const version = readSchemaVersion(db);
     if (version > LATEST_SCHEMA_VERSION || chunksAreStale(db)) return "rebuild";
+    // A file a completed integrity check condemned refuses every open, so
+    // it is not current whatever its schema says; the rebuild is its exit.
+    if (hasRecordedIntegrityFault(db)) return "rebuild";
     if (version < LATEST_SCHEMA_VERSION) return "older-schema";
     return findSchemaGaps(db).length > 0 ? "rebuild" : "current";
   } catch {
@@ -93,24 +106,6 @@ export async function upgradeIndexInPlace(config: ResolvedSearchConfig): Promise
   }
 }
 
-/** Stored vectors in the index at `dbPath`; 0 when it cannot be read. */
-function countStoredEmbeddings(dbPath: string): number {
-  if (!existsSync(dbPath)) return 0;
-  let db: Database;
-  try {
-    db = new Database(dbPath, { readonly: true });
-  } catch {
-    return 0;
-  }
-  try {
-    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
-  } catch {
-    return 0;
-  } finally {
-    closeDatabase(db);
-  }
-}
-
 /**
  * The full rebuild a self-heal falls back to, which names the vectors it
  * could not carry over. A rebuild without `embeddings` computes none, so
@@ -118,13 +113,19 @@ function countStoredEmbeddings(dbPath: string): number {
  * once, with where the old index went and how to restore the vectors, is
  * the difference between a visible cost and a silent downgrade to
  * keyword-only search.
+ *
+ * The rebuild re-inspects the index once it holds the writer lock and
+ * returns `null` without building when the index is already current - a
+ * concurrent healer finished first - so two self-heals never rebuild in a
+ * row over each other's work.
  */
 export async function rebuildIndexForSelfHeal(
   config: ResolvedSearchConfig,
   opts?: IndexVaultOptions,
-): Promise<IndexStats> {
+): Promise<IndexStats | null> {
   const before = countStoredEmbeddings(config.dbPath);
-  const stats = await reindexVault(config, opts);
+  const stats = await reindexVaultUnless(config, () => inspectIndex(config) === "current", opts);
+  if (stats === null) return null;
   if (before > 0) {
     const dropped = before - countStoredEmbeddings(config.dbPath);
     if (dropped > 0) {
@@ -175,5 +176,6 @@ export async function healIndex(
     condition = inspectIndex(config);
     if (condition === "current") return { kind: "migrated" };
   }
-  return { kind: "rebuilt", stats: await rebuildIndexForSelfHeal(config, opts) };
+  const stats = await rebuildIndexForSelfHeal(config, opts);
+  return stats === null ? { kind: "current" } : { kind: "rebuilt", stats };
 }

@@ -16,6 +16,7 @@
 
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { Database } from "bun:sqlite";
 
 import {
   resolveSemanticCapability,
@@ -1285,6 +1286,24 @@ export async function reindexVault(
   config: ResolvedSearchConfig,
   opts?: IndexVaultOptions,
 ): Promise<IndexStats> {
+  const stats = await reindexVaultUnless(config, null, opts);
+  // No predicate, so the rebuild always runs.
+  return stats!;
+}
+
+/**
+ * {@link reindexVault} that re-checks, once it HOLDS the writer lock,
+ * whether the rebuild is still wanted: `stillCurrent` returning true
+ * abandons it before anything is built or swapped, and the call returns
+ * `null`. The self-heal paths pass their inspection here, so a second
+ * process that queued behind a rebuild another process just finished does
+ * not rebuild again over it (and over its `.bak`).
+ */
+export async function reindexVaultUnless(
+  config: ResolvedSearchConfig,
+  stillCurrent: (() => boolean) | null,
+  opts?: IndexVaultOptions,
+): Promise<IndexStats | null> {
   // The rebuild owns the run's counter from before the lock wait to after
   // the swap, and hands it to the staging build rather than letting that
   // build open one of its own. Two reasons, and they are the same reason
@@ -1296,14 +1315,15 @@ export async function reindexVault(
   // `dbPath`), the command exited non-zero after a terminator that said
   // the run had finished.
   const progress = progressCounter(OPERATION.reindex, opts?.onProgress);
-  return await withProgressAsync(progress, () => reindexInto(config, progress, opts));
+  return await withProgressAsync(progress, () => reindexInto(config, progress, stillCurrent, opts));
 }
 
 async function reindexInto(
   config: ResolvedSearchConfig,
   progress: ProgressCounter,
+  stillCurrent: (() => boolean) | null,
   opts?: IndexVaultOptions,
-): Promise<IndexStats> {
+): Promise<IndexStats | null> {
   const newPath = config.dbPath + ".new";
   const bakPath = config.dbPath + ".bak";
 
@@ -1327,6 +1347,7 @@ async function reindexInto(
   const release = await acquireWriterLock(config.dbPath);
   progress.advance(INDEX_STAGE.lock);
   try {
+    if (stillCurrent !== null && stillCurrent()) return null;
     // Build into the temp file with an override config.
     const tempConfig: ResolvedSearchConfig = Object.freeze({
       ...config,
@@ -1384,15 +1405,25 @@ async function reindexInto(
     // restoreFromBakIfMissing in store.ts), so it cannot restore the stale
     // `.bak` over the freshly built index; a genuine crash leaves the lock
     // stale and the .bak restore on the next Store.open recovers.
+    //
+    // A `.bak` holding more stored embeddings than the live index is kept:
+    // it is the only copy of vectors a keyword-only rebuild cannot
+    // recompute, and replacing it with a vector-less live index (two
+    // self-heal rebuilds in a row) would discard them while the rebuild
+    // notice still points at `.bak`. The live index is parked beside it
+    // for the swap and removed once the swap succeeds.
     progress.start(INDEX_STAGE.swap, 1);
-    tryUnlink(bakPath);
-    tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
+    const keepBak = countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath);
+    const parkPath = keepBak ? config.dbPath + ".old" : bakPath;
+    tryUnlink(parkPath);
+    tryRename(config.dbPath, parkPath); // no-op (ENOENT) on fresh reindex
     try {
       renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
     } catch (swapError) {
-      restoreLiveFromBak(bakPath, config.dbPath);
+      restoreLiveFromBak(parkPath, config.dbPath);
       throw swapError;
     }
+    if (keepBak) tryUnlink(parkPath);
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
@@ -1531,6 +1562,28 @@ async function withStagingStore(
     fn(store);
   } finally {
     await store.close();
+  }
+}
+
+/**
+ * Stored vectors in the index at `dbPath`; 0 when it is absent or cannot
+ * be read. A plain read-only open with no extension loaded: the count
+ * reads the embeddings table's rows, not the vectors.
+ */
+export function countStoredEmbeddings(dbPath: string): number {
+  if (!existsSync(dbPath)) return 0;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return 0;
+  }
+  try {
+    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
+  } catch {
+    return 0;
+  } finally {
+    closeDatabase(db);
   }
 }
 
@@ -1918,7 +1971,7 @@ export async function indexCheck(
   let vecVersion: string | null = null;
   try {
     // Use an in-memory DB so the check never touches the real index.
-    const { Database } = await import("bun:sqlite");
+    // bun:sqlite is imported statically; the open below is the probe.
     const db = new Database(":memory:");
     sqliteOk = true;
     try {

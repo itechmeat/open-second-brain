@@ -12,9 +12,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 
-import { indexVault } from "../../../src/core/search/indexer.ts";
+import { countStoredEmbeddings, indexVault } from "../../../src/core/search/indexer.ts";
 import { LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { rebuildIndexForSelfHeal } from "../../../src/core/search/self-heal.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
@@ -106,7 +107,9 @@ test.skipIf(!VEC)(
 );
 
 test.skipIf(!VEC)(
-  "two searches healing the same older-schema index at once both answer and keep the vectors",
+  // Issued together from one process; whether the two heals overlap is up
+  // to the scheduler, so the name claims only what the assertions show.
+  "two searches issued together over an older-schema index both answer and keep the vectors",
   async () => {
     await indexVault(semantic, { embeddings: true });
     const before = await embeddingIdentity();
@@ -158,6 +161,44 @@ test.skipIf(!VEC)(
     const notice = lines.find((l) => l.includes("not carried over"));
     expect(notice).toContain(`${vectors} stored embedding(s)`);
     expect(notice).toContain("o2b search index --embeddings");
+  },
+);
+
+test.skipIf(!VEC)(
+  "a self-heal rebuild that finds the index already current builds nothing",
+  async () => {
+    // The second of two healers decided to rebuild before the first one
+    // finished; by the time it holds the writer lock the index is current.
+    await indexVault(semantic, { embeddings: true });
+    const before = await embeddingIdentity();
+
+    expect(await rebuildIndexForSelfHeal(keywordOnly)).toBeNull();
+
+    expect(await embeddingIdentity()).toEqual(before);
+    expect(existsSync(`${v.dbPath}.bak`)).toBe(false);
+  },
+);
+
+test.skipIf(!VEC)(
+  "a second keyword-only rebuild keeps the .bak that still holds the vectors",
+  async () => {
+    await indexVault(semantic, { embeddings: true });
+    const { vectors } = await embeddingIdentity();
+    expect(vectors).toBeGreaterThan(0);
+
+    stampSchemaVersion(v.dbPath, LATEST_SCHEMA_VERSION + 1);
+    await captureStderr(() => search(keywordOnly, { query: "fox", recordAccess: false }));
+    expect(countStoredEmbeddings(`${v.dbPath}.bak`)).toBe(vectors);
+
+    // A second rebuild over the vector-less live index must not replace
+    // the only copy of the vectors the first rebuild's notice points at.
+    stampSchemaVersion(v.dbPath, LATEST_SCHEMA_VERSION + 1);
+    const { result } = await captureStderr(() =>
+      search(keywordOnly, { query: "fox", recordAccess: false }),
+    );
+    expect(result.results.length).toBeGreaterThan(0);
+    expect(countStoredEmbeddings(`${v.dbPath}.bak`)).toBe(vectors);
+    expect(existsSync(`${v.dbPath}.old`)).toBe(false);
   },
 );
 
