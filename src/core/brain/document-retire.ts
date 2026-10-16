@@ -39,11 +39,12 @@
  * collected as `{path, message}`, and the remaining copies still
  * retire. The message says WHERE the copy ended up: a failure BEFORE
  * the page's own removal (the existence, frontmatter or canonical
- * checks) leaves the copy on disk; a failure AFTER it - the manifest
- * drop, the continuity record - reports the page as REMOVED, because it
- * is, and names the step that lost it. Copy-level input mistakes (a
- * path equal to its own canonical) are caller bugs and refuse loudly
- * before any work.
+ * checks, the ambiguous-basename refusal, an inbound-link rewrite that
+ * could not land) leaves the copy on disk; a failure AFTER it - the
+ * manifest marker, the continuity record - reports the page as REMOVED,
+ * because it is, and names the step that lost it. Copy-level input
+ * mistakes (a path equal to its own canonical) are caller bugs and
+ * refuse loudly before any work.
  *
  * Dry runs never reach this module: the hygiene apply plan previews
  * retire findings without executing them, and the surfaces' count
@@ -85,16 +86,19 @@ function linkTarget(pagePath: string): string {
 }
 
 /**
- * Why a copy's inbound-link pass did not run: another page in the vault
+ * Why a copy whose inbound-link pass cannot run unambiguously is REFUSED
+ * (storage lifecycle, PR #257 review L5): another page in the vault
  * carries the retired copy's basename, so the bare `[[basename]]`
  * spelling resolves to more than one page and a retarget keyed on the
  * spelling alone would repoint links that meant the OTHER page - edits
  * to pages outside the detector's near-duplicate scope, made on a guess.
- * The copy still retires; the skipped pass leaves a stale link, which a
- * reader can discover, where a mis-pointed link misleads silently.
+ * Removing the page anyway is worse than skipping the rewrite: every
+ * leftover `[[basename]]` would then RESOLVE to the namesake, silently
+ * re-pointed by a deletion instead of left visibly stale. So the copy is
+ * refused and stays on disk; the finding comes back to the operator.
  */
-export const RETIRE_LINKS_SKIPPED_BASENAME_COLLISION =
-  "another page carries the same basename; the bare-basename link spelling is ambiguous";
+export const RETIRE_BASENAME_COLLISION_REFUSAL =
+  "another page carries the same basename, so the bare-basename link spelling is ambiguous";
 
 /** Frontmatter key carrying the digest of the archived source bytes. */
 const SOURCE_ARCHIVE_HASH_KEY = "source_archive_hash";
@@ -133,14 +137,12 @@ export interface RetiredDocumentCopy {
   /** True when the manifest was rewritten to carry the `retired_into` marker. */
   readonly manifestRetired: boolean;
   /**
-   * The full retarget report for this copy's inbound wikilinks, `null`
-   * when the pass was SKIPPED - {@link RetiredDocumentCopy.wikilinksSkipped}
-   * names why. `null` is never a silent zero: a skipped pass left every
-   * inbound link exactly as it was.
+   * The full retarget report for this copy's inbound wikilinks. A copy
+   * whose pass could not run unambiguously - the basename collision - is
+   * refused before any write and lands in {@link RetireDocumentsResult.failed}
+   * instead, so a report row always carries a pass that ran.
    */
-  readonly wikilinks: WikilinkRetargetReport | null;
-  /** Why the link pass did not run, `null` when it ran. */
-  readonly wikilinksSkipped: string | null;
+  readonly wikilinks: WikilinkRetargetReport;
   /** Digest named in the audit; from the page's frontmatter, or `null`. */
   readonly sourceArchiveHash: string | null;
   /** The id of the `source_invalidation` continuity record this retirement appended. */
@@ -300,17 +302,23 @@ function retireOneCopy(
   }
 
   // 1. Links first, so no reader between steps ever sees a stranded
-  // `[[stale-copy]]`. Failure to write a file is collected in the
-  // report, not thrown - the pass has already rewritten the files
-  // before it (the retargetWikilinks argument, verbatim). The pass
-  // keys on the bare basename, so when another page carries the same
-  // basename the spelling is ambiguous: rewriting it would repoint
-  // links that meant the other page. The copy then retires without its
-  // link pass and the report names why - a stale link is discoverable,
-  // a mis-pointed one misleads silently.
-  const wikilinks = basenameCollides(vault, linkTarget(copy.path), copy.path)
-    ? null
-    : retargetWikilinks(vault, [{ from: linkTarget(copy.path), to: linkTarget(copy.canonical) }]);
+  // `[[stale-copy]]`. The pass keys on the bare basename, so when another
+  // page carries the same basename the spelling is ambiguous: rewriting it
+  // would repoint links that meant the other page, and removing the page
+  // anyway would leave every leftover spelling resolving to the namesake
+  // silently (review L5). The copy is refused BEFORE any write and stays
+  // on disk - a refusal is one copy's collected failure.
+  if (basenameCollides(vault, linkTarget(copy.path), copy.path)) {
+    throw new Error(
+      `retirement refused, the copy stays in place: ${RETIRE_BASENAME_COLLISION_REFUSAL}: ${copy.path}`,
+    );
+  }
+  // Failure to write a file is collected in the report, not thrown - the
+  // pass has already rewritten the files before it (the retargetWikilinks
+  // argument, verbatim).
+  const wikilinks = retargetWikilinks(vault, [
+    { from: linkTarget(copy.path), to: linkTarget(copy.canonical) },
+  ]);
 
   // 2. Remove the stale page. `false` here means the page vanished
   // between the existence check and the unlink - that is a failure to
@@ -376,7 +384,6 @@ function retireOneCopy(
       manifestKey: facts.sourcePath,
       manifestRetired,
       wikilinks,
-      wikilinksSkipped: wikilinks === null ? RETIRE_LINKS_SKIPPED_BASENAME_COLLISION : null,
       sourceArchiveHash: facts.archiveHash,
       auditRecordId: record.id,
     });

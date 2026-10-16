@@ -39,7 +39,7 @@ import {
 } from "../../../src/core/brain/ingest/content-manifest.ts";
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import {
-  RETIRE_LINKS_SKIPPED_BASENAME_COLLISION,
+  RETIRE_BASENAME_COLLISION_REFUSAL,
   retireDocumentCopies,
 } from "../../../src/core/brain/document-retire.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -143,7 +143,6 @@ describe("retireDocumentCopies", () => {
 
     // The wikilink retarget report, asserted: the citing page matched,
     // was rewritten, and its [[src-b]] now names the canonical spelling.
-    expect(copy.wikilinksSkipped).toBeNull();
     expect(copy.wikilinks!.matched).toEqual([citing]);
     expect(copy.wikilinks!.rewritten).toEqual([citing]);
     expect(copy.wikilinks!.failed).toEqual([]);
@@ -268,12 +267,14 @@ describe("retireDocumentCopies", () => {
     expect(result.snapshotRunId).not.toBeNull();
   });
 
-  test("a basename collision skips the link pass and names why", () => {
+  test("a basename collision refuses the copy and keeps it on disk", () => {
     // An unrelated page in another namespace shares the retired copy's
     // basename, so the bare [[src-b]] spelling is ambiguous: rewriting it
-    // would repoint links that meant the namesake. The copy still retires;
-    // the pass is skipped by name and every link stays exactly as it was -
-    // a stale link is discoverable, a mis-pointed one misleads silently.
+    // would repoint links that meant the namesake, and removing the page
+    // anyway would re-point every leftover [[src-b]] at the namesake
+    // SILENTLY - resolved by a deletion, never confirmed by an editor.
+    // The copy is refused per copy and stays on disk instead (review L5);
+    // the stale link stays exactly as visible as it was.
     const { canonical, retired, citing } = seedPair();
     const namesake = "Brain/entities/src-b.md";
     mkdirSync(join(vault, "Brain", "entities"), { recursive: true });
@@ -284,16 +285,16 @@ describe("retireDocumentCopies", () => {
       now: NOW,
     });
 
-    expect(result.failed).toEqual([]);
-    const copy = result.retired[0]!;
-    expect(copy.path).toBe(retired);
-    expect(copy.wikilinks).toBeNull();
-    expect(copy.wikilinksSkipped).toBe(RETIRE_LINKS_SKIPPED_BASENAME_COLLISION);
-    // The citing page keeps its spelling, the namesake page is untouched,
-    // and the retired copy itself is still gone.
-    expect(readFileSync(join(vault, citing), "utf8")).toContain("[[src-b]]");
+    expect(result.retired).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.path).toBe(retired);
+    expect(result.failed[0]!.message).toContain(RETIRE_BASENAME_COLLISION_REFUSAL);
+    // Nothing moved: the retired page, the namesake page, the citing
+    // spelling, and the audit.
+    expect(existsSync(join(vault, retired))).toBe(true);
     expect(existsSync(join(vault, namesake))).toBe(true);
-    expect(existsSync(join(vault, retired))).toBe(false);
+    expect(readFileSync(join(vault, citing), "utf8")).toContain("[[src-b]]");
+    expect(listContinuityRecords(vault, { kind: "source_invalidation" })).toHaveLength(0);
   });
 
   test("a copy whose canonical page is missing is refused per copy", () => {
