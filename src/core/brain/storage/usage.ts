@@ -48,8 +48,8 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { BRAIN_ROOT_REL } from "../path-constants.ts";
-import { resolveIndexPath } from "../../search/paths.ts";
+import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "../path-constants.ts";
+import { resolveConfiguredIndexPath } from "../../search/paths.ts";
 
 /** Recoverability tiers, mirroring the state catalogue's vocabulary. */
 export const STORAGE_TIER = Object.freeze({
@@ -143,8 +143,11 @@ export interface MeasureStorageUsageOptions {
   readonly now?: Date;
   /**
    * The derived store's file path, when the caller has already resolved
-   * it (the doctor's context carries one). Defaults to the search
-   * layer's own resolution for this vault.
+   * it (the doctor's context carries one). Absent, the store resolves
+   * through the search layer's CONFIGURED resolution - the override
+   * (`search_db_path` / `OPEN_SECOND_BRAIN_SEARCH_DB`) included - so the
+   * census measures the store the indexer actually opens, never a stale
+   * file the override left behind at the default location.
    */
   readonly storePath?: string;
 }
@@ -300,7 +303,7 @@ export function measureStorageUsage(
   for (const [dir, surface] of Object.entries(DOT_DIR_SURFACES)) {
     measureDirSurface(surface, join(brain, dir), [], readings, refusals);
   }
-  const storePath = opts.storePath ?? resolveIndexPath(vault, null);
+  const storePath = opts.storePath ?? resolveConfiguredIndexPath(vault);
   measureStoreSurface(storePath, readings, refusals);
 
   const surfaces = STORAGE_SURFACES.filter((s) => readings.has(s)).map((s) => ({

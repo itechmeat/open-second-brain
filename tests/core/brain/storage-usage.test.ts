@@ -25,6 +25,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DERIVED_STORE_DIR, DERIVED_STORE_FILE } from "../../../src/core/brain/path-constants.ts";
+import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
 import {
   STORAGE_SURFACE,
@@ -33,6 +35,13 @@ import {
   measureStorageUsage,
   type StorageUsage,
 } from "../../../src/core/brain/storage/usage.ts";
+import { evaluateCapacityGate } from "../../../src/core/brain/storage/gate.ts";
+import {
+  STORAGE_CAPACITY_CRITICAL_CODE,
+  storageCapacityCheck,
+} from "../../../src/core/brain/doctor/storage-capacity.ts";
+import type { BrainConfig } from "../../../src/core/brain/types.ts";
+import type { DoctorFindings } from "../../../src/core/brain/doctor/check.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 let vault: string;
@@ -202,5 +211,78 @@ describe("measureStorageUsage", () => {
     expect(surfaceBytes(usage, STORAGE_SURFACE.brainTree)).toBe(
       FIXTURE_BYTES.page + FIXTURE_BYTES.config + FIXTURE_BYTES.ledger,
     );
+  });
+});
+
+describe("the configured store location", () => {
+  // The override the search layer honours: env first, then the machine
+  // config's search_db_path. The meter resolves through the search
+  // layer's own configured resolver, so the census can never disagree
+  // with the indexer about which file is the store.
+  const ENV_KEY = "OPEN_SECOND_BRAIN_SEARCH_DB";
+  let savedEnv: string | undefined;
+  let overrideHome: string;
+  let overridePath: string;
+
+  beforeEach(() => {
+    savedEnv = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+    overrideHome = mkdtempSync(join(tmpdir(), "o2b-store-override-"));
+    overridePath = join(overrideHome, "moved.sqlite");
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedEnv;
+    rmSync(overrideHome, { recursive: true, force: true });
+  });
+
+  test("the store is measured at the configured override, not the default location", () => {
+    mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "sources", "AA-page.md"), "x".repeat(1000), "utf8");
+    // A stale database left behind at the default location: bytes the
+    // search layer never reads. Pre-fix the meter counted THESE as the
+    // store, and the real store - the one every search opens - not at
+    // all.
+    mkdirSync(join(vault, DERIVED_STORE_DIR), { recursive: true });
+    writeFileSync(join(vault, DERIVED_STORE_DIR, DERIVED_STORE_FILE), "x".repeat(7000), "utf8");
+    process.env[ENV_KEY] = overridePath;
+    writeFileSync(overridePath, "x".repeat(3000), "utf8");
+    const usage = measureStorageUsage(vault, { now: NOW });
+    expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStore)).toBe(3000);
+    expect(usage.complete).toBe(true);
+  });
+
+  test("under an override the lane gate and the doctor check agree", () => {
+    // The doctor measures the store the operator's searches actually use
+    // (ctx.dbPath); pre-fix the lane gate measured the default location
+    // instead, so the doctor could report critical while the gate and
+    // every ingest ran on a stale file's numbers.
+    mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+    writeFileSync(brainConfigPath(vault), "schema_version: 1\n\nstorage:\n  cap_bytes: 10000\n");
+    writeFileSync(join(vault, "Brain", "sources", "AA-page.md"), "x".repeat(6000), "utf8");
+    process.env[ENV_KEY] = overridePath;
+    writeFileSync(overridePath, "x".repeat(3500), "utf8");
+
+    const decision = evaluateCapacityGate(vault, { capBytes: 10_000, now: NOW });
+    const out: DoctorFindings = { issues: [], uncertain: [] };
+    storageCapacityCheck.run(
+      {
+        vault,
+        now: NOW,
+        config: { schema_version: 1, storage: { cap_bytes: 10_000 } } as BrainConfig,
+        dbPath: overridePath,
+        configPath: undefined,
+      },
+      out,
+    );
+    const critical = out.issues.find((i) => i.code === STORAGE_CAPACITY_CRITICAL_CODE);
+    expect(critical).toBeDefined();
+    // The figures in the doctor's message are the figures the gate
+    // decided on: one store, one census.
+    const reported = /\((\d+) of \d+ bytes\)/u.exec(critical!.message);
+    expect(reported).not.toBeNull();
+    expect(Number(reported![1])).toBe(decision.reading!.measuredBytes);
+    expect(decision.reading!.measuredBytes).toBeGreaterThan(9_000);
   });
 });
