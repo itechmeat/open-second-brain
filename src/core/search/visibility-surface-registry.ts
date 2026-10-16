@@ -1458,4 +1458,16 @@ export const DIRECT_VAULT_READ_REGISTRY: ReadonlyArray<DirectVaultReadEntry> = O
       "own shell, so the reach question does not arise, and no page's reservation could " +
       "cover what it hands back.",
   },
+  {
+    file: "src/mcp/brain/ingest-tools.ts",
+    category: D.discloses_nothing,
+    reason:
+      "stampedArchiveHashes readFileSync+parseFrontmatter's the summary pages of the " +
+      "caller-named source's cleanup plan BEFORE a confirmed deletion erases the stamps " +
+      "with the pages (the archive-orphan decision needs them). The page set comes from " +
+      "the plan's own derived manifest - never from caller-supplied paths - and every " +
+      "path in it is already named by the preview the same run serialized. What crosses " +
+      "back is content hashes and orphan dispositions of that same set: no page title, " +
+      "body or frontmatter value, so no page's reservation could cover the answer.",
+  },
 ]);
