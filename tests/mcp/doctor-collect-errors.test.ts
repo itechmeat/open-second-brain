@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 const bases: string[] = [];
 
@@ -29,7 +30,7 @@ interface RpcResponse {
   };
 }
 
-function fixture(breakPreferences: boolean): MCPServer {
+function fixture(breakPreferences: boolean, reach?: TransportReach): MCPServer {
   const base = mkdtempSync(join(tmpdir(), "o2b-doctor-collect-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -44,7 +45,7 @@ function fixture(breakPreferences: boolean): MCPServer {
     rmSync(join(vault, "Brain", "preferences"), { recursive: true });
     writeFileSync(join(vault, "Brain", "preferences"), "not a directory", "utf8");
   }
-  return new MCPServer({ vault, configPath }, {});
+  return new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : {});
 }
 
 async function callDoctor(server: MCPServer): Promise<RpcResponse> {
@@ -57,7 +58,8 @@ async function callDoctor(server: MCPServer): Promise<RpcResponse> {
 }
 
 test("a refused scan is rendered as a named collect_errors row", async () => {
-  const res = await callDoctor(fixture(true));
+  // Local reach: the operator's own surface carries the raised message.
+  const res = await callDoctor(fixture(true, TRANSPORT_REACH.local));
   expect(res.error).toBeUndefined();
   const s = res.result?.structuredContent ?? {};
   // The break can refuse more than one scan on this surface; the row is
@@ -71,6 +73,20 @@ test("a refused scan is rendered as a named collect_errors row", async () => {
   expect(errors.some((e) => e.scan === "dedup")).toBe(true);
   for (const e of errors) {
     expect(e.message.replace(/\\/g, "/")).toContain("preferences");
+  }
+});
+
+test("below local reach the row names the scan and errno, never the host path", async () => {
+  const res = await callDoctor(fixture(true, TRANSPORT_REACH.remote));
+  expect(res.error).toBeUndefined();
+  const errors = (res.result?.structuredContent?.["collect_errors"] ?? []) as ReadonlyArray<{
+    scan: string;
+    message: string;
+  }>;
+  expect(errors.some((e) => e.scan === "dedup")).toBe(true);
+  for (const e of errors) {
+    expect(e.message).toMatch(new RegExp(`^${e.scan} scan failed \\(`));
+    expect(e.message).not.toContain(tmpdir());
   }
 });
 

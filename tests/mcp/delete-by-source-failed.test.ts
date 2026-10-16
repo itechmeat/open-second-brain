@@ -17,6 +17,7 @@ import { ingestSource } from "../../src/core/brain/ingest/ingest.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 const SOURCE = "imports/benchmark.md";
 const NOW = new Date("2026-06-01T00:00:00Z");
@@ -32,7 +33,7 @@ interface Fixture {
   readonly server: MCPServer;
 }
 
-function fixture(): Fixture {
+function fixture(reach?: TransportReach): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-dbs-failed-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -50,7 +51,10 @@ function fixture(): Fixture {
     },
     { agent: "tester", now: NOW },
   );
-  return { vault, server: new MCPServer({ vault, configPath }) };
+  return {
+    vault,
+    server: new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : {}),
+  };
 }
 
 /** The tool's structured answer, unwrapped from the MCP envelope. */
@@ -80,6 +84,26 @@ describe("brain_delete_by_source names what did not delete", () => {
       // The rest of the run still landed, and the answer says both sides.
       expect(answer.changed).toBeGreaterThan(0);
       expect(existsSync(join(f.vault, blockedPath))).toBe(true);
+    } finally {
+      chmodSync(blockedDir, 0o755);
+    }
+  });
+
+  test("below local reach a failure names the errno code, never the host path", async () => {
+    if (CHMOD_CANNOT_DENY) return;
+    const f = fixture(TRANSPORT_REACH.remote);
+    const preview = (await call(f, { source_file: SOURCE })) as {
+      derived: Array<{ path: string; kind: string }>;
+    };
+    const blockedPath = preview.derived.find((e) => e.kind === "summary")!.path;
+    const blockedDir = join(f.vault, dirname(blockedPath));
+    chmodSync(blockedDir, 0o555);
+    try {
+      const answer = (await call(f, { source_file: SOURCE, confirm: true })) as {
+        failed: ReadonlyArray<{ path: string; message: string }>;
+      };
+      expect(answer.failed[0]!.path).toBe(blockedPath);
+      expect(answer.failed[0]!.message).toBe("removal failed (EACCES)");
     } finally {
       chmodSync(blockedDir, 0o755);
     }

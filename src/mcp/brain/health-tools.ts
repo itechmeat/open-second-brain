@@ -8,10 +8,12 @@
 
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import {
+  closedCollectError,
   collectMaintenanceActions,
   type MaintenanceCollectError,
 } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { annotateEntityAliasIssues } from "../../core/brain/doctor/entity-alias-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import {
@@ -226,7 +228,13 @@ async function toolBrainDoctor(
     // Rendered only when a scan refused, so a clean payload is
     // byte-identical to the pre-row shape (review M10).
     ...(collectErrors.length > 0
-      ? { collect_errors: collectErrors.map((e) => ({ scan: e.signal, message: e.message })) }
+      ? {
+          collect_errors: collectErrors
+            // Below local reach the raised message, which can carry a
+            // host path, is replaced by the scan name and errno code.
+            .map((e) => (contextReach(ctx) === TRANSPORT_REACH.local ? e : closedCollectError(e)))
+            .map((e) => ({ scan: e.signal, message: e.message })),
+        }
       : {}),
     // v0.10.16: trust-layer fields. `trust_verdict` is always populated
     // by runDoctor; `verification_delta_summary` only when the caller

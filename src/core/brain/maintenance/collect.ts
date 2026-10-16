@@ -29,6 +29,22 @@ export type MaintenanceCollectSignal = "dedup" | "lint" | "token-footprint";
 export interface MaintenanceCollectError {
   readonly signal: MaintenanceCollectSignal;
   readonly message: string;
+  /** The errno code the scan failed with, when the error carried one. */
+  readonly code?: string;
+}
+
+/**
+ * The same failure with a closed message: the scan name plus the errno
+ * code, never the raised message, which can carry a host path (an
+ * `ENOENT: ... open '/home/...'`). For every surface that answers a
+ * caller below local reach.
+ */
+export function closedCollectError(error: MaintenanceCollectError): MaintenanceCollectError {
+  return {
+    signal: error.signal,
+    message: `${error.signal} scan failed (${error.code ?? "error"})`,
+    ...(error.code !== undefined ? { code: error.code } : {}),
+  };
 }
 
 export interface CollectMaintenanceActionsOptions {
@@ -56,7 +72,12 @@ function collectSignal<T>(
   try {
     return run();
   } catch (err) {
-    onError({ signal, message: (err as Error)?.message ?? String(err) });
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    onError({
+      signal,
+      message: (err as Error)?.message ?? String(err),
+      ...(typeof code === "string" ? { code } : {}),
+    });
     return undefined;
   }
 }

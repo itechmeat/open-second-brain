@@ -26,6 +26,7 @@ import { toPosix } from "../../path-safety.ts";
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
 import {
+  closedCollectError,
   collectMaintenanceActions,
   type MaintenanceCollectSignal,
 } from "../maintenance/collect.ts";
@@ -155,6 +156,7 @@ export function buildOperatorSummary(
     opts.topActionsN ?? DEFAULT_TOP_ACTIONS_N,
     opts.keepAction,
     collectErrors,
+    opts.readable !== undefined,
   );
 
   const trust = computeTrustVerdict({
@@ -346,10 +348,16 @@ function safeTopActions(
   topN: number,
   keepAction: BuildOperatorSummaryOptions["keepAction"],
   collectErrors: { scan: MaintenanceCollectSignal; message: string }[],
+  restricted: boolean,
 ): ReadonlyArray<ActionItem> {
   try {
     const all = collectMaintenanceActions(vault, {
-      onError: (e) => collectErrors.push({ scan: e.signal, message: e.message }),
+      // Below local reach the raised message (which can carry a host
+      // path) is replaced by the closed scan-and-code form.
+      onError: (e) => {
+        const shown = restricted ? closedCollectError(e) : e;
+        collectErrors.push({ scan: shown.signal, message: shown.message });
+      },
     });
     const kept = keepAction === undefined ? all : all.filter(keepAction);
     return Object.freeze(kept.slice(0, Math.max(0, topN)));

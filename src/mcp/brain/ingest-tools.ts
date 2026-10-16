@@ -480,6 +480,7 @@ function discardOrphanedArchiveEntry(vault: string, hash: string): boolean {
 function serializePlan(
   plan: SourceCleanupPlan,
   archiveEntries: ReadonlyArray<ArchiveCleanupEntry>,
+  local: boolean,
 ): Record<string, unknown> {
   return {
     source: plan.source,
@@ -500,7 +501,12 @@ function serializePlan(
     // clean run with a smaller count. Always carried (empty on a clean or
     // dry run) so an automations can read the field unconditionally, like
     // `deleted` beside it.
-    failed: plan.failed.map((f) => ({ path: f.path, message: f.message })),
+    // Below local reach the raised message, which can carry a host path,
+    // is replaced by the errno code; the vault-relative path stays.
+    failed: plan.failed.map((f) => ({
+      path: f.path,
+      message: local ? f.message : `removal failed (${f.code ?? "error"})`,
+    })),
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
     // The archive-entry cleanup kind (answer trust, Task C4), reported as
@@ -608,14 +614,14 @@ async function toolBrainDeleteBySource(
       archiveEntries = orphanedArchiveEntries(ctx.vault, stamped, new Set(plan.deleted)).filter(
         (entry) => discardOrphanedArchiveEntry(ctx.vault, entry.hash),
       );
-      return serializePlan(plan, archiveEntries);
+      return serializePlan(plan, archiveEntries, contextReach(ctx) === TRANSPORT_REACH.local);
     }
     archiveEntries = orphanedArchiveEntries(
       ctx.vault,
       stamped,
       new Set(preview.derived.map((entry) => entry.path)),
     );
-    return serializePlan(preview, archiveEntries);
+    return serializePlan(preview, archiveEntries, contextReach(ctx) === TRANSPORT_REACH.local);
   } catch (err) {
     // Write-side trust (Task 12): a permissions document rule denied the
     // confirmed cleanup. Named code, the rule that decided, and the

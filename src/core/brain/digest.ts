@@ -46,6 +46,7 @@ import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { BRAIN_RETIRED_REL, brainDirs, vaultRelative } from "./paths.ts";
 import {
+  closedCollectError,
   collectMaintenanceActions,
   type MaintenanceCollectError,
   type MaintenanceCollectSignal,
@@ -362,13 +363,20 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
     );
   }
 
-  const data = collectDigestData(
+  const collected = collectDigestData(
     vault,
     since,
     until,
     opts.agentScope,
     readerRefView(vault, opts.readable),
   );
+  // A digest rendered for a reader below local reach (a `readable`
+  // filter) names a failed scan without its raised message, which can
+  // carry a host path.
+  const data =
+    opts.readable === undefined
+      ? collected
+      : { ...collected, collect_errors: collected.collect_errors.map(closedCollectError) };
   const empty = isEmpty(data);
 
   if (format === "json") {

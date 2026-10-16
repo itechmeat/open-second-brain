@@ -142,6 +142,8 @@ export interface NoteDerivationEntry extends SourceCleanupEntry {
 export interface SourceCleanupFailure {
   readonly path: string;
   readonly message: string;
+  /** The errno code the removal failed with, when the error carried one. */
+  readonly code?: string;
 }
 
 export interface SourceCleanupPlan {
@@ -809,7 +811,12 @@ export function deleteBySource(
     try {
       if (removeFile(vault, relPath)) deleted.push(relPath);
     } catch (err) {
-      failed.push({ path: relPath, message: (err as Error)?.message ?? String(err) });
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      failed.push({
+        path: relPath,
+        message: (err as Error)?.message ?? String(err),
+        ...(typeof code === "string" ? { code } : {}),
+      });
     }
   };
 
