@@ -274,6 +274,10 @@ describe("the configured store location", () => {
         config: { schema_version: 1, storage: { cap_bytes: 10_000 } } as BrainConfig,
         dbPath: overridePath,
         configPath: undefined,
+        knownBasenames: new Set(),
+        idIndex: new Map(),
+        preferences: [],
+        logs: [],
       },
       out,
     );
