@@ -647,6 +647,38 @@ export function updateManifest(
   }
 }
 
+/** What {@link markManifestRetired} found and did. */
+export type ManifestRetireMark = "no-manifest" | "no-entry" | "already-marked" | "marked";
+
+/**
+ * Stamp `retired_into` on one entry under the manifest lock - the same
+ * critical section {@link updateManifest} takes - so a concurrent ingest
+ * can neither lose its own write to this one nor overwrite the entry and
+ * drop the marker. Every other field of the entry, and every other entry,
+ * is kept as read inside the lock.
+ */
+export function markManifestRetired(
+  vault: string,
+  key: string,
+  retiredInto: string,
+): ManifestRetireMark {
+  if (!existsSync(manifestPath(vault))) return "no-manifest";
+  const handle = acquireLockSyncWithRetry(manifestPath(vault), undefined, {
+    remedy: ingestLockRemedy,
+  });
+  try {
+    const manifest = readManifest(vault);
+    const existing = manifest.entries[key];
+    if (existing === undefined) return "no-entry";
+    if (existing.retired_into === retiredInto) return "already-marked";
+    const entries = { ...manifest.entries, [key]: { ...existing, retired_into: retiredInto } };
+    writeManifestAtomic(vault, entries, manifest.contract);
+    return "marked";
+  } finally {
+    handle.release();
+  }
+}
+
 /** Recursively collect regular-file relative paths under `dir` (POSIX slashes). */
 function collectFilesRel(dir: string, prefix: string, out: string[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

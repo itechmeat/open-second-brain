@@ -21,12 +21,14 @@ import {
   hashFile,
   hashTree,
   manifestPath,
+  markManifestRetired,
   readManifest,
   updateManifest,
   writeManifestAtomic,
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
 let configHome: string;
@@ -663,5 +665,35 @@ describe("ingestSource integration", () => {
       { agent: "claude", now: NOW },
     );
     expect(readManifest(vault).entries).toEqual({});
+  });
+});
+
+describe("markManifestRetired", () => {
+  test("marks the entry inside the manifest lock and keeps every other field", () => {
+    writeSource("imports/a.md", "alpha\n");
+    updateManifest(vault, ["imports/a.md"]);
+    const before = readManifest(vault).entries["imports/a.md"]!;
+
+    // While another writer holds the manifest lock, the mark waits for it
+    // (here with no budget, so it refuses) instead of writing past it.
+    const saved = process.env[LOCK_WAIT_BUDGET_ENV];
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    const held = acquireLockSync(manifestPath(vault));
+    try {
+      expect(() => markManifestRetired(vault, "imports/a.md", "Brain/sources/canon.md")).toThrow();
+      expect(readManifest(vault).entries["imports/a.md"]!.retired_into).toBeUndefined();
+    } finally {
+      held.release();
+      if (saved === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+      else process.env[LOCK_WAIT_BUDGET_ENV] = saved;
+    }
+
+    expect(markManifestRetired(vault, "imports/a.md", "Brain/sources/canon.md")).toBe("marked");
+    const after = readManifest(vault).entries["imports/a.md"]!;
+    expect(after).toEqual({ ...before, retired_into: "Brain/sources/canon.md" });
+    expect(markManifestRetired(vault, "imports/a.md", "Brain/sources/canon.md")).toBe(
+      "already-marked",
+    );
+    expect(markManifestRetired(vault, "imports/missing.md", "x.md")).toBe("no-entry");
   });
 });

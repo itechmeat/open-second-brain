@@ -60,7 +60,7 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../vault.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { isoSecond } from "./time.ts";
-import { readManifest, writeManifestAtomic, manifestPath } from "./ingest/content-manifest.ts";
+import { markManifestRetired } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { removeFile } from "./source-cleanup.ts";
 import { basenameCollides, retargetWikilinks } from "./page-dedup.ts";
@@ -405,22 +405,21 @@ function retireOneCopy(
     let manifestClause: string;
     if (facts.sourcePath === null) {
       manifestClause = "no manifest key recorded";
-    } else if (!existsSync(manifestPath(vault))) {
-      manifestClause = `manifest absent, nothing to mark for ${facts.sourcePath}`;
     } else {
-      const manifest = readManifest(vault);
-      const entries = { ...manifest.entries };
-      const existing = entries[facts.sourcePath];
-      if (existing === undefined) {
+      // One locked read-modify-write, so a concurrent ingest's manifest
+      // write can neither be lost to this one nor drop the marker.
+      const mark = markManifestRetired(vault, facts.sourcePath, copy.canonical);
+      if (mark === "no-manifest") {
+        manifestClause = `manifest absent, nothing to mark for ${facts.sourcePath}`;
+      } else if (mark === "no-entry") {
         manifestClause = `manifest key ${facts.sourcePath} absent, nothing to mark`;
-      } else if (existing.retired_into === copy.canonical) {
-        // The entry already carries THIS retirement's marker: the serialized
-        // bytes below would be identical, and the clause names that
-        // success-shaped fact - a concurrent retirer got there first.
+      } else if (mark === "already-marked") {
+        // The entry already carries THIS retirement's marker: the clause
+        // names that success-shaped fact - a concurrent retirer got there
+        // first.
         manifestClause = `manifest key ${facts.sourcePath} already marked retired`;
       } else {
-        entries[facts.sourcePath] = { ...existing, retired_into: copy.canonical };
-        manifestRetired = writeManifestAtomic(vault, entries, manifest.contract);
+        manifestRetired = true;
         manifestClause = `marked manifest key ${facts.sourcePath} retired into ${copy.canonical}`;
       }
     }
