@@ -95,6 +95,7 @@ export const storageCapacityCheck: DoctorCheck = {
     const usage = measureStorageUsage(ctx.vault, {
       now: ctx.now,
       ...(ctx.dbPath !== undefined ? { storePath: ctx.dbPath } : {}),
+      ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
     });
     if (!usage.complete) {
       pushUncertain(out.uncertain, {
