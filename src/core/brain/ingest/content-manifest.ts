@@ -128,13 +128,17 @@ export interface ManifestEntry {
 
 /**
  * The entry's extraction watermark, degraded the lazy way: an entry recorded
- * before watermarks existed - or with a malformed one on disk - answers
- * byte 0, "never extracted", so the source reprocesses fully instead of
- * skipping. Never an eager mass reprocess: the absence costs one pass, once,
- * per source that actually grows again.
+ * before watermarks existed - one with a malformed shape on disk - or a
+ * path with NO entry at all answers byte 0, "never extracted", so the
+ * source reprocesses fully instead of skipping. Never an eager mass
+ * reprocess: the absence costs one pass, once, per source that actually
+ * grows again. The `undefined` acceptance is deliberate: every caller reads
+ * the entry straight out of a manifest lookup (`entries[path]`), where a
+ * source that was never ingested is undefined and "never extracted" is the
+ * honest answer, not a crash.
  */
-export function extractedBytesOf(entry: ManifestEntry): number {
-  return entry.extracted_bytes ?? 0;
+export function extractedBytesOf(entry: ManifestEntry | undefined): number {
+  return entry?.extracted_bytes ?? 0;
 }
 
 /**
