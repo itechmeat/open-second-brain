@@ -475,8 +475,11 @@ function readItems(payload: unknown): ReadonlyArray<unknown> | null {
 /**
  * The user turns the prompt embeds, in record order: the import path's
  * role rule, the message-level capture boundary, and blank text dropped.
+ * Shared by the plan (which offers them) and the mining census (whose
+ * `minedTurnMaterial` must hash exactly what the plan would mine), so the
+ * two can never disagree on what a run covered.
  */
-function selectMinedTurns(
+export function selectMinedTurns(
   boundary: CaptureBoundary,
   turns: ReadonlyArray<ExpandedRawTurn>,
 ): MinedTurn[] {

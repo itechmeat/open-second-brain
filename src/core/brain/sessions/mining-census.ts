@@ -38,6 +38,7 @@
 
 import { basename } from "node:path";
 
+import { selectMinedTurns } from "../extract-signals.ts";
 import { buildCaptureBoundary, type CaptureBoundary } from "../capture-boundary.ts";
 import {
   minedTurnsHash,
@@ -49,14 +50,6 @@ import type { Safeguard } from "../safeguard.ts";
 import { listSessionRawTurns } from "../session-recall.ts";
 import { readSessionLedger } from "./discover.ts";
 import type { SessionRuntimeId } from "../../runtime/host-facts.ts";
-
-/**
- * The only turn role the mining plan embeds. Mirrors the private
- * `MINED_TURN_ROLE` of `extract-signals.ts` - the plan is the source of
- * truth for what counts as minable material, and this census must hash
- * exactly what the plan would mine.
- */
-const MINED_TURN_ROLE = "user";
 
 /** Where an imported session stands with respect to distillation. */
 export type SessionDistillationState = "distilled" | "known-nothing-new" | "undistilled";
@@ -149,6 +142,15 @@ export function buildMiningCensus(
 
   for (const [path, entry] of Object.entries(importedEntries)) {
     opts.safeguard?.checkpoint();
+    // The join identity is the portable sessionRefIdentity basename - what
+    // the mining lane keys its tombstone and every signal's session_ref on
+    // when the import pinned no explicit id. The import ledger's entry
+    // does not carry the RESOLVED identity (an explicit --recall-session-id
+    // import files its turns, tombstone and session_ref under the recall
+    // id, not the basename), so such an import's mining state is invisible
+    // to this join until the resolved id is recorded in the import ledger
+    // itself; classifying the basename as refused here stays factually
+    // right - the plan really would refuse it.
     const identity = basename(path);
     const state = stateOf(identity);
     const row = rowOf(entry.runtime);
@@ -189,11 +191,11 @@ export function buildMiningCensus(
 /**
  * The mined turn material the plan would embed for one session, or `null`
  * when the session is one the plan refuses (boundary, zero imported turns,
- * zero user turns). The derivation mirrors `planExtractSignals` field for
- * field - user role, unsuppressed text, trimmed and non-empty, the turn's
- * stored timestamp verbatim - so every consumer hashes exactly what the
- * plan would mine. `boundary` is injectable so a caller walking many
- * sessions builds it once.
+ * zero user turns). The selection is the plan's own shared
+ * {@link selectMinedTurns} - user role, unsuppressed text, trimmed and
+ * non-empty, the turn's stored timestamp verbatim - so this census hashes
+ * exactly what the plan would mine and cannot drift from it. `boundary` is
+ * injectable so a caller walking many sessions builds it once.
  */
 export function minedTurnMaterial(
   vault: string,
@@ -203,14 +205,7 @@ export function minedTurnMaterial(
   if (boundary.sessionDecision(sessionId) !== "capture") return null;
   const turns = listSessionRawTurns(vault, sessionId);
   if (turns.length === 0) return null;
-  const mined: MinedTurnMaterial[] = [];
-  for (const turn of turns) {
-    if (turn.role !== MINED_TURN_ROLE) continue;
-    if (boundary.suppressMessage(turn.text)) continue;
-    const text = turn.text.trim();
-    if (text.length === 0) continue;
-    mined.push({ turnId: turn.turn_id, text, timestamp: turn.timestamp });
-  }
+  const mined = selectMinedTurns(boundary, turns);
   return mined.length === 0 ? null : mined;
 }
 
