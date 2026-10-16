@@ -186,8 +186,9 @@ describe("buildBacklogProposals", () => {
       topic: "declare the roots",
       principle: "Declare the roots exactly once.",
     });
-    const expectStable = (pending: ReadonlyArray<BacklogCandidate>): BacklogProposal[] =>
-      buildBacklogProposals(pending, new Map()).proposals;
+    const expectStable = (
+      pending: ReadonlyArray<BacklogCandidate>,
+    ): ReadonlyArray<BacklogProposal> => buildBacklogProposals(pending, new Map()).proposals;
     const first = expectStable([loud, quiet]);
     const reversed = expectStable([quiet, loud]);
     expect(first).toEqual(reversed);
