@@ -138,6 +138,11 @@ describe("backlog-nudge hook (SessionStart)", () => {
     expect(payload.hookSpecificOutput?.hookEventName).toBe("SessionStart");
     expect(payload.hookSpecificOutput?.additionalContext).toMatch(/1 imported session\b/);
     expect(payload.hookSpecificOutput?.additionalContext).not.toMatch(/2 imported sessions/);
+    // The nudge points at the JSON form, the one that hands out the
+    // mining envelopes.
+    expect(payload.hookSpecificOutput?.additionalContext).toContain(
+      "o2b brain import-session --propose-backlog --json",
+    );
     // The state lands only after the emit, overwrite-only, size one.
     expect(readFileSync(statePath(), "utf8")).toBe("1\n");
   });

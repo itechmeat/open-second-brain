@@ -110,6 +110,19 @@ describe("buildOperatorSummary - collect_errors (review M10)", () => {
     }
   });
 
+  test("below local reach (a readable filter) each row is the closed form, never the host path", () => {
+    rmSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "preferences"), "not a directory", "utf8");
+
+    const r = buildOperatorSummary(vault, { readable: () => true });
+    const errors = r.collect_errors ?? [];
+    expect(errors.some((e) => e.scan === "dedup")).toBe(true);
+    for (const e of errors) {
+      expect(e.message).toMatch(new RegExp(`^${e.scan} scan failed \\(`));
+      expect(e.message).not.toContain(tmpdir());
+    }
+  });
+
   test("a healthy vault carries no collect_errors row", () => {
     const r = buildOperatorSummary(vault, {});
     expect(r.collect_errors).toBeUndefined();

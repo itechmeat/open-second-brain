@@ -413,6 +413,8 @@ describe("buildMiningCensus", () => {
         NOW,
       );
     };
+    // The spied reader is the continuity store's full listing - the one
+    // whole-store read the census is allowed to make, once per build.
     const storeReads = (): number => {
       const spy = spyOn(continuityStore, "listContinuityRecords");
       try {
@@ -425,6 +427,9 @@ describe("buildMiningCensus", () => {
 
     seed(3, 0);
     const small = storeReads();
+    // A census that stopped reading the store would pass the equality
+    // below vacuously at zero.
+    expect(small).toBeGreaterThan(0);
     expect(buildMiningCensus(vault).undistilled).toBe(3);
     seed(300, 3);
     const large = storeReads();

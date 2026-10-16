@@ -538,6 +538,18 @@ describe("--propose-backlog batches the distill proposals ask-once", () => {
     expect(after.mining_steps).toEqual([]);
   });
 
+  test("the text form lists the mining steps without a session-placeholder command", async () => {
+    claudeLog("one.jsonl", "alpha");
+    expect((await run(["--discover", "--all", "--recall", "--json"])).returncode).toBe(0);
+
+    const res = await run(["--propose-backlog"]);
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("mining steps: 1");
+    expect(res.stdout).toContain("mine: one.jsonl");
+    expect(res.stdout).toContain("answer each with an extract-signals commit of its payload");
+    expect(res.stdout).not.toContain("o2b brain extract-signals <session>");
+  });
+
   test("one session under two paths is one mining step with none remaining", async () => {
     // The census counts import-ledger paths; the same basename imported
     // from two project directories is one session identity, so it gets

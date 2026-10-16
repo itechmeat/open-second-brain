@@ -217,6 +217,20 @@ describe("brain_storage", () => {
     }
   });
 
+  test("a server's own config moves the measured store with its search_db_path", async () => {
+    // The process env still names the default config; only the server's
+    // configPath points the store elsewhere, so a census that ignored it
+    // would measure the absent default store as zero.
+    const altDb = join(configHome, "alt-index.sqlite");
+    writeFileSync(altDb, "x".repeat(12_345), "utf8");
+    const altConfig = join(configHome, "alt.yaml");
+    atomicWriteFileSync(altConfig, `vault: ${vault}\nsearch_db_path: ${altDb}\n`);
+    const res = (await storage({ ...ctx, configPath: altConfig }, {})) as ReportJson;
+    const surfaces = (res.usage as { surfaces: ReadonlyArray<{ surface: string; bytes: number }> })
+      .surfaces;
+    expect(surfaces.find((s) => s.surface === "derived_store")?.bytes).toBe(12_345);
+  });
+
   test("a vault with no brain config surfaces the named config error", async () => {
     const bare = mkdtempSync(join(tmpdir(), "o2b-mcp-storage-bare-"));
     try {

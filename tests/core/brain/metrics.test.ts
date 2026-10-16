@@ -45,20 +45,26 @@ describe("appendMetric", () => {
     appendMetric(vault, { surface: "recall_benchmark", runAt: NOW, payload: { n: 1 } });
     const file = join(metricsDir(vault), readdirSync(metricsDir(vault))[0]!);
     const marker = join(vault, "holder-ready");
+    const go = join(vault, "parent-appending");
     const child = join(vault, "holder.ts");
+    // The holder keeps the lock until the parent says it is about to
+    // append, and only then lets go after a short hold - so the append
+    // always starts against a held lock, however slowly either side runs.
     writeFileSync(
       child,
       [
         `import { acquireLockSync } from ${JSON.stringify(join(import.meta.dir, "../../../src/core/brain/sync-lockfile.ts"))};`,
-        "const [target, marker] = process.argv.slice(2);",
+        `const { existsSync, writeFileSync } = require("node:fs");`,
+        "const [target, marker, go] = process.argv.slice(2);",
         "const h = acquireLockSync(target);",
-        `require("node:fs").writeFileSync(marker, "held");`,
+        `writeFileSync(marker, "held");`,
+        "while (!existsSync(go)) Bun.sleepSync(5);",
         "Bun.sleepSync(250);",
         "h.release();",
       ].join("\n"),
       "utf8",
     );
-    const proc = Bun.spawn(["bun", child, file, marker], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["bun", child, file, marker, go], { stdout: "pipe", stderr: "pipe" });
     try {
       const until = Date.now() + 20_000;
       while (!existsSync(marker)) {
@@ -66,9 +72,12 @@ describe("appendMetric", () => {
         // oxlint-disable-next-line no-await-in-loop -- polling the child's progress
         await Bun.sleep(5);
       }
+      writeFileSync(go, "now");
       appendMetric(vault, { surface: "recall_benchmark", runAt: NOW, payload: { n: 2 } });
       expect(listMetrics(vault, { surface: "recall_benchmark" })).toHaveLength(2);
     } finally {
+      // Never leave the holder waiting on a marker an early failure skipped.
+      if (!existsSync(go)) writeFileSync(go, "abort");
       await proc.exited;
     }
   });

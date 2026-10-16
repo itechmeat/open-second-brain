@@ -23,7 +23,9 @@ let failDedup = false;
 mock.module("../../../src/core/brain/page-dedup.ts", () => ({
   ...pageDedupModule,
   findDuplicateCandidates: (vault: string) => {
-    if (failDedup) throw new Error("the dedup scan refused");
+    // The raised message carries a host path, as a real refusal's does.
+    if (failDedup)
+      throw new Error(`the dedup scan refused: ${join(vault, "Brain", "preferences")}`);
     return realFindDuplicateCandidates(vault);
   },
 }));
@@ -92,8 +94,32 @@ describe("brain_digest collect_errors surface (review M10)", () => {
         collect_errors?: ReadonlyArray<{ scan: string; message: string }>;
       };
       expect(payload.collect_errors).toEqual([
-        { scan: "dedup", message: "the dedup scan refused" },
+        {
+          scan: "dedup",
+          message: `the dedup scan refused: ${join(vault, "Brain", "preferences")}`,
+        },
       ]);
+    } finally {
+      failDedup = false;
+    }
+  });
+
+  test("below local reach (a readable filter) the row is the closed form, never the host path", () => {
+    failDedup = true;
+    try {
+      const res = renderDigest(vault, {
+        format: "json",
+        since: new Date("2026-05-24T00:00:00Z"),
+        until: new Date("2026-05-25T00:00:00Z"),
+        readable: () => true,
+      });
+      const payload = JSON.parse(res.content) as {
+        collect_errors?: ReadonlyArray<{ scan: string; message: string }>;
+      };
+      expect(payload.collect_errors).toEqual([
+        { scan: "dedup", message: "dedup scan failed (error)" },
+      ]);
+      expect(res.content).not.toContain(tmpdir());
     } finally {
       failDedup = false;
     }
