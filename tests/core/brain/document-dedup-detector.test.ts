@@ -429,6 +429,31 @@ describe("detectSemanticDocumentDedup", () => {
     expect(result.findings[0]!.evidence["method"]).toBe("lexical");
   });
 
+  test("a lexical fallback over a capped scan names the cap once", async () => {
+    // The lexical layer already carries its coverage notice; wrapping its
+    // result again added a second row with the same id.
+    for (let i = 0; i < 201; i++) {
+      const tag = `p${String(i).padStart(4, "0")}`;
+      writeSourcePage(`filler-${String(i).padStart(4, "0")}`, {
+        body: `${UNRELATED}\n${tag}a ${tag}b ${tag}c ${tag}d ${tag}e ${tag}f ${tag}g ${tag}h`,
+        createdAt: "2026-01-01T00:00:00Z",
+      });
+    }
+    const broken: EmbeddingProvider = {
+      name: "broken",
+      model: "broken",
+      dimension: 3,
+      embed: () => Promise.reject(new Error("provider down")),
+      ping: () => Promise.resolve({ ok: false as const, reason: "down" }),
+    };
+    const result = await detectSemanticDocumentDedup(vault, { provider: broken });
+    expect(result.method).toBe("lexical");
+    const notices = result.findings.filter(
+      (f) => (f.evidence as Record<string, unknown>)["candidate_cap_reached"] === true,
+    );
+    expect(notices).toHaveLength(1);
+  });
+
   test("no usable provider means the lexical layer", async () => {
     const result = await detectSemanticDocumentDedup(vault, { provider: null });
     expect(result.method).toBe("lexical");

@@ -546,22 +546,22 @@ export async function detectSemanticDocumentDedup(
       ...result,
       findings: Object.freeze(withCandidateCapNotice(listed, read, [...result.findings])),
     });
-  if (compared.length < 2) return withCap(lexical());
+  if (compared.length < 2) return lexical();
   const threshold = opts.threshold ?? DOCUMENT_DEDUP_EMBEDDING_THRESHOLD;
 
   let vectors: number[][];
   try {
     vectors = await provider.embed(compared.map((r) => r.body));
   } catch {
-    return withCap(lexical());
+    return lexical();
   }
-  if (vectors.length !== compared.length) return withCap(lexical());
+  if (vectors.length !== compared.length) return lexical();
   // A ragged batch - vectors of differing dimensions - is the same
   // broken-provider shape as a count mismatch: the cosine below would
   // silently truncate to the shorter vector and fabricate a similarity
   // out of incomparable spaces, so the whole run answers lexical, labeled.
   const dimension = vectors[0]!.length;
-  if (vectors.some((v) => v.length !== dimension)) return withCap(lexical());
+  if (vectors.some((v) => v.length !== dimension)) return lexical();
 
   const pairs: PairScore[] = [];
   for (let i = 0; i < compared.length; i++) {
