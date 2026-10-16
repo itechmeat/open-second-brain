@@ -22,8 +22,14 @@
  * exclusion counts - `excluded` keeps meaning actually dropped, and a
  * would-be refusal is counted with its structural reasons, reported per
  * lane (the rank-adjust pool and the relational arm separately) so
- * neither lane's numbers blur. Enforce receipts carry no refusal section:
- * they stay byte-identical to the pre-mode shape.
+ * neither lane's numbers blur. Enforce receipts carry no refusal section
+ * of their own for the pool lane - the pool's drops ARE the exclusions -
+ * but the relational arm's drops happen BEFORE the pool, where no
+ * exclusion can ever name them, so those ride the same refusal record:
+ * the gate's never-silently-dropped posture holds on both lanes. Every
+ * receipt an arm-less enforce run ever built stays byte-identical: the
+ * enforce section is present only when the arm actually dropped
+ * something - absent, never an empty placeholder.
  */
 
 import type { RankAdjustExclusion } from "../../search/rank-adjust.ts";
@@ -60,6 +66,16 @@ export interface RetrievalShadowRefusals {
   readonly refusals: ReadonlyArray<RetrievalTrustRefusal>;
 }
 
+/**
+ * The enforce-mode section: the relational arm's drops. The arm removes an
+ * ineligible node before the pool, so no pool exclusion can name it; these
+ * refusal records are the drop's only receipt. Mutually exclusive with the
+ * `shadow` section by construction - a run resolves exactly one mode.
+ */
+export interface RetrievalEnforcedRefusals {
+  readonly refusals: ReadonlyArray<RetrievalTrustRefusal>;
+}
+
 export interface RetrievalReceiptInput {
   /** Count of candidates that survived the gate into the pack. */
   readonly surfaced: number;
@@ -71,6 +87,13 @@ export interface RetrievalReceiptInput {
    * placeholder - under enforce, whose receipts keep today's shape.
    */
   readonly shadow?: RetrievalShadowRefusals;
+  /**
+   * Present only under enforce, and only when the relational arm actually
+   * dropped an arrival: the arm lane's refusal records, the drop's only
+   * receipt. Absent otherwise, so every enforce receipt an arm-less run
+   * ever built is byte-identical.
+   */
+  readonly enforce?: RetrievalEnforcedRefusals;
 }
 
 /** One excluded candidate as a compact reference (no body). */
@@ -88,9 +111,15 @@ export interface RetrievalDecisionTrace {
   readonly exclusions: ReadonlyArray<RetrievalDecisionTraceExclusion>;
   /** Present only under shadow: the mode the receipts were built under. */
   readonly mode?: "shadow";
-  /** Present only under shadow: total would-be refusals across lanes. */
+  /**
+   * Refusal records riding the trace: under shadow, every would-be
+   * refusal across both lanes (pool then arm); under enforce, the
+   * relational arm's drops - removed before the pool, where no exclusion
+   * can name them. Present only when there are records - never an empty
+   * placeholder.
+   */
   readonly refused?: number;
-  /** Present only under shadow: every would-be refusal, pool lane then arm lane. */
+  /** The refusal records themselves, same presence rule as `refused`. */
   readonly refusals?: ReadonlyArray<RetrievalTrustRefusal>;
 }
 
@@ -102,16 +131,23 @@ export interface MemoryTrustAssessment {
   readonly reason_counts: Readonly<Record<string, number>>;
   /** Present only under shadow: the mode the receipts were built under. */
   readonly mode?: "shadow";
-  /** Present only under shadow: total would-be refusals across lanes. */
+  /**
+   * Refusal aggregates for the records riding the receipts: under shadow,
+   * every would-be refusal across both lanes; under enforce, the
+   * relational arm's drops (the pool lane's drops are the exclusions
+   * above, counted in `quarantined`). Present only when there are
+   * records - never an empty placeholder.
+   */
   readonly refused?: number;
   /**
-   * Present only under shadow: would-be refusal count per lane. A lane
-   * with no refusals is present at 0 - a measured zero, not an absence.
+   * Present with the refusal records: would-be refusal count per lane. A
+   * lane with no refusals is present at 0 - a measured zero, not an
+   * absence.
    */
   readonly refusals_by_lane?: Readonly<Record<string, number>>;
   /**
-   * Present only under shadow: the refusal reason histogram per lane,
-   * keys sorted for a byte-stable serialization.
+   * Present with the refusal records: the refusal reason histogram per
+   * lane, keys sorted for a byte-stable serialization.
    */
   readonly refused_reason_counts?: Readonly<Record<string, Readonly<Record<string, number>>>>;
 }
@@ -164,8 +200,10 @@ function refusalAggregates(refusals: ReadonlyArray<RetrievalTrustRefusal>): {
  * Build the retrieval_decision_trace: every excluded candidate as a
  * compact reference (document / chunk id, path, reasons), plus the
  * evaluated / surfaced / excluded counts. Under shadow the would-be
- * refusals ride beside them with the mode named; enforce keeps the
- * pre-mode shape exactly.
+ * refusals ride beside them with the mode named; under enforce the
+ * relational arm's drops ride the same refusal record (no mode stamp -
+ * an enforce receipt never names itself shadow), and a run where the arm
+ * dropped nothing keeps the pre-mode shape exactly.
  */
 export function buildRetrievalDecisionTrace(input: RetrievalReceiptInput): RetrievalDecisionTrace {
   const exclusions = input.excluded.map((e) =>
@@ -188,6 +226,12 @@ export function buildRetrievalDecisionTrace(input: RetrievalReceiptInput): Retri
           refused: input.shadow.refusals.length,
           refusals: Object.freeze([...input.shadow.refusals]),
         }),
+    ...(input.enforce === undefined
+      ? {}
+      : {
+          refused: input.enforce.refusals.length,
+          refusals: Object.freeze([...input.enforce.refusals]),
+        }),
   });
 }
 
@@ -195,7 +239,9 @@ export function buildRetrievalDecisionTrace(input: RetrievalReceiptInput): Retri
  * Build the memory_trust_assessment: the pack's trust posture as counts
  * plus a deterministic histogram of the exclusion reasons. Under shadow
  * the would-be refusals are aggregated per lane beside them - never
- * folded into `quarantined`, which keeps meaning actually dropped.
+ * folded into `quarantined`, which keeps meaning actually dropped. Under
+ * enforce the arm's drops aggregate the same way; a run where the arm
+ * dropped nothing keeps the pre-mode shape exactly.
  */
 export function buildMemoryTrustAssessment(input: RetrievalReceiptInput): MemoryTrustAssessment {
   const reasonCounts: Record<string, number> = {};
@@ -212,5 +258,6 @@ export function buildMemoryTrustAssessment(input: RetrievalReceiptInput): Memory
     ...(input.shadow === undefined
       ? {}
       : { mode: "shadow", ...refusalAggregates(input.shadow.refusals) }),
+    ...(input.enforce === undefined ? {} : refusalAggregates(input.enforce.refusals)),
   });
 }

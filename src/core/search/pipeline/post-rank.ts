@@ -91,10 +91,13 @@ export interface PostRankInput {
   readonly nowMs: number;
   /**
    * The relational arm's lane-tagged eligibility refusals (session-mining-
-   * economy, t_05a0eaa4), threaded from the arm outcome so the shadow
-   * receipts carry the arm lane end to end. Present only when the arm ran
-   * and its resolved gate mode was active; under `enforce` the receipts
-   * keep the pre-mode shape and this input is not consulted.
+   * economy, t_05a0eaa4), threaded from the arm outcome so the receipts
+   * carry the arm lane end to end. Present only when the arm ran and its
+   * resolved gate mode was active. Under `shadow` they ride the shadow
+   * section beside the pool's; under `enforce` they are the arm lane's
+   * drops - removed before the pool, where no exclusion can name them -
+   * and ride the receipts' enforce section, so the gate's
+   * never-silently-dropped posture holds on both lanes.
    */
   readonly armRefusals?: ReadonlyArray<RetrievalTrustRefusal>;
 }
@@ -616,6 +619,7 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
     readCachedFrontmatter(frontmatterCache, config.vault, path);
   const rankAdjusters: RankAdjuster[] = [];
   let shadowRefusals: ReadonlyArray<RetrievalTrustRefusal> = [];
+  let enforcedArmRefusals: ReadonlyArray<RetrievalTrustRefusal> = [];
   if (trustGateMode !== "off") {
     rankAdjusters.push(trustGateAdjuster(readGateFrontmatter, trustGateMode));
     if (trustGateMode === "shadow") {
@@ -626,6 +630,12 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
         ...collectTrustGateRefusals(pinnedReranked, readGateFrontmatter),
         ...(input.armRefusals ?? []),
       ];
+    } else {
+      // Enforce: the pool's drops ARE the exclusions, but the arm's drops
+      // happen before the pool, where no exclusion can ever name them -
+      // they ride the receipts' enforce section instead, so a
+      // quarantined candidate is never silently dropped on either lane.
+      enforcedArmRefusals = input.armRefusals ?? [];
     }
   }
   if (config.recall.supersedeFadeEnabled) {
@@ -650,11 +660,17 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
             surfaced: adjusted.results.length,
             excluded: adjusted.excluded,
             ...(trustGateMode === "shadow" ? { shadow: { refusals: shadowRefusals } } : {}),
+            ...(enforcedArmRefusals.length > 0
+              ? { enforce: { refusals: enforcedArmRefusals } }
+              : {}),
           }),
           memoryTrustAssessment: buildMemoryTrustAssessment({
             surfaced: adjusted.results.length,
             excluded: adjusted.excluded,
             ...(trustGateMode === "shadow" ? { shadow: { refusals: shadowRefusals } } : {}),
+            ...(enforcedArmRefusals.length > 0
+              ? { enforce: { refusals: enforcedArmRefusals } }
+              : {}),
           }),
         };
 

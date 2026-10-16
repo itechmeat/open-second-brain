@@ -19,7 +19,11 @@
  *     marker ({@link ENTITY_CONTAMINATION_FRONTMATTER_KEY}).
  *
  * A quarantined candidate is never silently dropped: kernel 1 records it
- * with these reasons into the retrieval_decision_trace receipt.
+ * with these reasons into the retrieval_decision_trace receipt, and the
+ * relational arm's edge-level classification - which decides before the
+ * pool, where no pool exclusion could ever name its drops - records its
+ * arrivals on the arm lane of the same receipts, reach-filtered to pages
+ * the caller could read.
  *
  * The gate runs under a resolved tri-state mode
  * ({@link SEARCH_TRUST_GATE_MODE}, session-mining-economy t_05a0eaa4):

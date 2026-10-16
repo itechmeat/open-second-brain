@@ -169,3 +169,52 @@ describe("shadow refusals on the receipts", () => {
     ]);
   });
 });
+
+// ── Enforced arm drops on the receipts (session-mining-economy) ─────────────
+
+describe("enforced arm drops on the receipts", () => {
+  test("the trace carries the arm's drops without a shadow mode stamp", () => {
+    const trace = buildRetrievalDecisionTrace({
+      surfaced: 5,
+      excluded: exclusions,
+      enforce: { refusals: [armRefusal] },
+    });
+    expect(trace.refused).toBe(1);
+    expect(trace.refusals).toEqual([armRefusal]);
+    // The drop is receipted, but an enforce receipt never names itself
+    // shadow: the mode stamp stays shadow-only.
+    expect("mode" in trace).toBe(false);
+  });
+
+  test("the assessment aggregates the arm's drops per lane beside quarantined", () => {
+    const assessment = buildMemoryTrustAssessment({
+      surfaced: 5,
+      excluded: exclusions,
+      enforce: { refusals: [armRefusal] },
+    });
+    // `quarantined` keeps meaning the pool's actual drops; the arm's
+    // pre-pool drops ride beside them, split per lane.
+    expect(assessment.quarantined).toBe(2);
+    expect(assessment.refused).toBe(1);
+    expect(assessment.refusals_by_lane).toEqual({ arm: 1, pool: 0 });
+    expect(assessment.refused_reason_counts).toEqual({
+      arm: { "relational_arm:entity_contamination": 1 },
+      pool: {},
+    });
+    expect("mode" in assessment).toBe(false);
+  });
+
+  test("no enforce section keeps today's exact shape on both receipts", () => {
+    const trace = buildRetrievalDecisionTrace({ surfaced: 1, excluded: [] });
+    const assessment = buildMemoryTrustAssessment({ surfaced: 1, excluded: [] });
+    expect("refusals" in trace).toBe(false);
+    expect("refused" in trace).toBe(false);
+    expect("refusals_by_lane" in assessment).toBe(false);
+    expect(Object.keys(assessment)).toEqual([
+      "evaluated",
+      "surfaced",
+      "quarantined",
+      "reason_counts",
+    ]);
+  });
+});

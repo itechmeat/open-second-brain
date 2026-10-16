@@ -331,6 +331,67 @@ describe("retrieval trust gate on the search path", () => {
     );
   });
 
+  test("enforce records the arm lane's drops in the receipts (never silently dropped)", async () => {
+    // The arm's only route to `dirty.md` is the walk: under enforce the
+    // node is removed BEFORE the pool, so no pool exclusion can ever name
+    // it. The gate's never-silently-dropped posture holds only if the
+    // drop is receipted - on the arm lane, without a shadow mode stamp. A
+    // clean second walk target keeps the pool non-empty, so the receipts
+    // exist to be read.
+    writeMd(
+      vault,
+      "seed.md",
+      '---\nrelated: "[[dirty]]"\nextends: "[[clean2]]"\n---\n\nalpha topic seed document.',
+    );
+    writeMd(
+      vault,
+      "dirty.md",
+      `---\n${ENTITY_CONTAMINATION_FRONTMATTER_KEY}: true\n---\n\nbeta divergent content.`,
+    );
+    writeMd(vault, "clean2.md", "# Clean two\n\ngamma readable neighbor content.");
+    await indexVault(makeConfig({ vault, dbPath }));
+    const configPath = join(vault, "gate-mode.yaml");
+    writeFileSync(configPath, "search_trust_gate_mode: enforce\n");
+    const cfg = {
+      ...makeConfig({
+        vault,
+        dbPath,
+        fusionMode: "rrf",
+        relationalArmEnabled: true,
+        searchTrustGateMode: "enforce",
+      }),
+      configPath,
+    };
+
+    const out = await search(cfg, { query: "alpha [[seed]] related extends" });
+
+    // The excluding behavior is unchanged: the walked node never surfaces.
+    expect(out.results.some((r) => r.path === "dirty.md")).toBe(false);
+
+    const trace = out.retrievalDecisionTrace!;
+    expect(trace.refused).toBe(1);
+    expect(trace.refusals).toEqual([
+      {
+        document_id: expect.any(Number),
+        chunk_id: expect.any(Number),
+        path: "dirty.md",
+        reasons: ["relational_arm:entity_contamination"],
+        lane: "arm",
+      },
+    ]);
+    // Still not a shadow receipt: no mode stamp on an enforce run.
+    expect("mode" in trace).toBe(false);
+
+    const assessment = out.memoryTrustAssessment!;
+    expect(assessment.refused).toBe(1);
+    expect(assessment.refusals_by_lane).toEqual({ arm: 1, pool: 0 });
+    expect(assessment.refused_reason_counts).toEqual({
+      arm: { "relational_arm:entity_contamination": 1 },
+      pool: {},
+    });
+    expect("mode" in assessment).toBe(false);
+  });
+
   test("the explain envelope names the resolved mode under shadow and stays silent under enforce", async () => {
     writeMd(vault, "clean.md", CLEAN);
     writeMd(vault, "quarantined.md", QUARANTINED);
