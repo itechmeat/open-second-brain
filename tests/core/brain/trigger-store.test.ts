@@ -206,6 +206,91 @@ test("every blocked scan records one recurrence and the instant it fired", () =>
   expect(record.lastSeenAt).toBe(last.toISOString());
 });
 
+// ── Snooze plumbing (t_00e9de6a) ─────────────────────────────────────────────
+
+/**
+ * Rewrite a stored record's frontmatter into a hand-written snoozed one,
+ * exactly the bytes an operator or an older build could have left.
+ */
+function handSnooze(path: string, at: string, until: string, from = "pending"): void {
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(
+      /^status: .*$/mu,
+      `status: snoozed\nsnoozed_at: ${at}\nsnoozed_until: ${until}\nsnoozed_from: ${from}`,
+    ),
+    "utf8",
+  );
+}
+
+test("snoozed joins the terminal partition, not the open one", () => {
+  // Terminal, so the TTL expiry clock never governs the snooze wake: the
+  // snooze window is the wake clock, and the partition membership - not a
+  // branch - is what hides a snoozed record from `list` and shows it in
+  // `history`.
+  expect(TRIGGER_TERMINAL_STATUSES.has(TRIGGER_STATUS.snoozed)).toBe(true);
+  expect(TRIGGER_OPEN_STATUSES.has(TRIGGER_STATUS.snoozed)).toBe(false);
+});
+
+test("a snoozed record round-trips through the Markdown file with snoozed_at/snoozed_until/snoozed_from", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  const until = new Date(NOW.getTime() + 3 * DAY_MS).toISOString();
+  handSnooze(path, NOW.toISOString(), until);
+
+  const record = listTriggers(vault, { now: NOW })[0]!;
+  expect(record.status).toBe("snoozed");
+  expect(record.snoozedAt).toBe(NOW.toISOString());
+  expect(record.snoozedUntil).toBe(until);
+  expect(record.snoozedFrom).toBe("pending");
+
+  // The recurrence write renders the WHOLE record, so the snooze state
+  // has to survive a ledger stamp verbatim.
+  const next = recordRecurrence(record, new Date(NOW.getTime() + DAY_MS));
+  const raw = readFileSync(next.path, "utf8");
+  expect(raw).toContain("status: snoozed");
+  expect(raw).toContain(`snoozed_at: ${NOW.toISOString()}`);
+  expect(raw).toContain(`snoozed_until: ${until}`);
+  expect(raw).toContain("snoozed_from: pending");
+});
+
+test("a snoozed record without snooze fields reads with a null snooze state", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  rewriteLine(created[0]!.path, /^status: .*$/mu, "status: snoozed");
+  const record = listTriggers(vault, { now: NOW })[0]!;
+  expect(record.status).toBe("snoozed");
+  expect(record.snoozedAt).toBeNull();
+  expect(record.snoozedUntil).toBeNull();
+  expect(record.snoozedFrom).toBeNull();
+});
+
+test("an unreadable snoozed_at refuses instead of silently defaulting", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(path, NOW.toISOString(), new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
+  rewriteLine(path, /^snoozed_at: .*$/mu, "snoozed_at: whenever");
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_at");
+});
+
+test("an unreadable snoozed_until refuses instead of silently defaulting", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(path, NOW.toISOString(), new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
+  rewriteLine(path, /^snoozed_until: .*$/mu, "snoozed_until: whenever");
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_until");
+});
+
+test("an unreadable snoozed_from refuses instead of silently defaulting", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(path, NOW.toISOString(), new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
+  rewriteLine(path, /^snoozed_from: .*$/mu, "snoozed_from: forgot");
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_from");
+});
+
 test("a cooldown-blocked twin records a recurrence too, not only a suppressed one", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });

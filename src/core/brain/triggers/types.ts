@@ -16,6 +16,12 @@
  * it. It is a member of {@link TRIGGER_TERMINAL_STATUSES}, and that
  * membership - not a branch anywhere - is what hides it from `list` and
  * shows it in `history`.
+ *
+ * `snoozed` is the time-boxed sibling: a deferral that ends by itself
+ * when its window elapses or the finding fires again, whichever comes
+ * first. It is terminal too, so the same partition membership hides it
+ * from `list` - but its window, not the TTL expiry clock, is what wakes
+ * it.
  */
 export const TRIGGER_STATUS = Object.freeze({
   pending: "pending",
@@ -25,6 +31,7 @@ export const TRIGGER_STATUS = Object.freeze({
   dismissed: "dismissed",
   expired: "expired",
   suppressed: "suppressed",
+  snoozed: "snoozed",
 } as const);
 
 export type TriggerStatus = (typeof TRIGGER_STATUS)[keyof typeof TRIGGER_STATUS];
@@ -42,6 +49,7 @@ export const TRIGGER_STATUSES: ReadonlyArray<TriggerStatus> = Object.freeze([
   TRIGGER_STATUS.dismissed,
   TRIGGER_STATUS.expired,
   TRIGGER_STATUS.suppressed,
+  TRIGGER_STATUS.snoozed,
 ]);
 
 export function isTriggerStatus(value: unknown): value is TriggerStatus {
@@ -70,6 +78,7 @@ export const TRIGGER_TERMINAL_STATUSES: ReadonlySet<TriggerStatus> = new Set([
   TRIGGER_STATUS.dismissed,
   TRIGGER_STATUS.expired,
   TRIGGER_STATUS.suppressed,
+  TRIGGER_STATUS.snoozed,
 ]);
 
 export const TRIGGER_URGENCIES = ["low", "medium", "high"] as const;
@@ -138,6 +147,20 @@ export interface TriggerRecord extends InsightCandidate {
    * restore refuses rather than guessing a prior state.
    */
   readonly suppressedFrom: TriggerStatus | null;
+  /** When the trigger was snoozed, or `null` while it is not. */
+  readonly snoozedAt: string | null;
+  /**
+   * When the snooze window ends. The store always writes it alongside
+   * `snoozedAt`, so `null` means a hand-edited record - and one without
+   * a window never wakes by the clock, only by a refire.
+   */
+  readonly snoozedUntil: string | null;
+  /**
+   * The status the snooze interrupted, restored once the window ends or
+   * the finding fires again, whichever comes first. `null` while the
+   * trigger is not snoozed.
+   */
+  readonly snoozedFrom: TriggerStatus | null;
   /**
    * How many times this finding has been observed: once when the trigger
    * was created, plus once for every later SCAN in which the finding

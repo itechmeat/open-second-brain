@@ -100,6 +100,9 @@ const TRIGGER_KEY = Object.freeze({
   resolvedAt: "resolved_at",
   suppressedAt: "suppressed_at",
   suppressedFrom: "suppressed_from",
+  snoozedAt: "snoozed_at",
+  snoozedUntil: "snoozed_until",
+  snoozedFrom: "snoozed_from",
   occurrences: "occurrences",
   lastSeenAt: "last_seen_at",
   sourceArtifacts: "source_artifacts",
@@ -136,6 +139,11 @@ function renderTrigger(record: StoredTrigger): string {
     ...(record.suppressedFrom !== null
       ? [`${TRIGGER_KEY.suppressedFrom}: ${record.suppressedFrom}`]
       : []),
+    ...(record.snoozedAt !== null ? [`${TRIGGER_KEY.snoozedAt}: ${record.snoozedAt}`] : []),
+    ...(record.snoozedUntil !== null
+      ? [`${TRIGGER_KEY.snoozedUntil}: ${record.snoozedUntil}`]
+      : []),
+    ...(record.snoozedFrom !== null ? [`${TRIGGER_KEY.snoozedFrom}: ${record.snoozedFrom}`] : []),
     `${TRIGGER_KEY.occurrences}: ${record.occurrences}`,
     `${TRIGGER_KEY.lastSeenAt}: ${record.lastSeenAt}`,
     `${TRIGGER_KEY.sourceArtifacts}: ${JSON.stringify(record.sourceArtifacts)}`,
@@ -366,6 +374,44 @@ function parseLastSeenAt(raw: unknown, createdAt: string, path: string): string 
 }
 
 /**
+ * A recorded instant nobody was required to record, or `null`.
+ *
+ * The snooze instants are optional in the honest direction: absent means
+ * nobody ever snoozed this record, which every reader below handles. A
+ * PRESENT value that is not a readable instant refuses, exactly like
+ * `last_seen_at` - the wake arithmetic compares these instants against
+ * `now` and against each other, so a value it cannot read must stop the
+ * record, not silently read as "never", which would strand a snoozed
+ * finding forever while reporting it as merely deferred.
+ */
+function parseOptionalInstant(raw: unknown, key: string, path: string): string | null {
+  if (raw === undefined) return null;
+  const text = typeof raw === "string" ? raw : String(raw);
+  if (text.length === 0 || Number.isNaN(Date.parse(text))) {
+    throw new TriggerFieldError(path, key, presentButUnreadable("not a readable instant", raw));
+  }
+  return text;
+}
+
+/**
+ * The status a snooze interrupted, or `null` when nothing recorded one.
+ *
+ * Like {@link parseOptionalInstant}: absent is an honest `null`, present
+ * but not a status refuses. A snoozed record whose interrupted status
+ * cannot be read must not degrade to a snooze that can never wake into
+ * anything - the wake arm would have nothing to restore.
+ */
+function parseSnoozedFrom(raw: unknown, path: string): TriggerStatus | null {
+  if (raw === undefined) return null;
+  if (typeof raw === "string" && isTriggerStatus(raw)) return raw;
+  throw new TriggerFieldError(
+    path,
+    TRIGGER_KEY.snoozedFrom,
+    presentButUnreadable(`not one of ${TRIGGER_STATUSES.join(", ")}`, raw),
+  );
+}
+
+/**
  * A frontmatter value read as text, or "" when the key holds no string.
  * Used for the fields whose absence and whose emptiness are the same
  * claim to every reader below.
@@ -462,6 +508,13 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     resolvedAt: textOrNull(meta[TRIGGER_KEY.resolvedAt]),
     suppressedAt: textOrNull(meta[TRIGGER_KEY.suppressedAt]),
     suppressedFrom: isTriggerStatus(suppressedFrom) ? suppressedFrom : null,
+    snoozedAt: parseOptionalInstant(meta[TRIGGER_KEY.snoozedAt], TRIGGER_KEY.snoozedAt, path),
+    snoozedUntil: parseOptionalInstant(
+      meta[TRIGGER_KEY.snoozedUntil],
+      TRIGGER_KEY.snoozedUntil,
+      path,
+    ),
+    snoozedFrom: parseSnoozedFrom(meta[TRIGGER_KEY.snoozedFrom], path),
     occurrences: parseOccurrences(meta[TRIGGER_KEY.occurrences], path),
     lastSeenAt: parseLastSeenAt(meta[TRIGGER_KEY.lastSeenAt], createdAt, path),
     path,
@@ -854,6 +907,9 @@ function createTriggersLocked(
       resolvedAt: null,
       suppressedAt: null,
       suppressedFrom: null,
+      snoozedAt: null,
+      snoozedUntil: null,
+      snoozedFrom: null,
       // Creating the record IS the first recorded occurrence.
       occurrences: OCCURRENCES_WHEN_UNRECORDED,
       lastSeenAt: createdAt,
