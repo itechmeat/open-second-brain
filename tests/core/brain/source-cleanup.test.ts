@@ -366,6 +366,42 @@ describe("deleteBySource — per-entry failure collection", () => {
       chmodSync(blockedDir, 0o755);
     }
   });
+
+  test("an original whose removal failed keeps the manifest entry", () => {
+    if (CHMOD_CANNOT_DENY) return;
+    seedContaminatedVault();
+    // The original sits OUTSIDE Brain/; a read-only imports directory makes
+    // exactly that removal fail while every Brain-side entry still deletes.
+    const originalsDir = join(vault, dirname(SOURCE));
+    chmodSync(originalsDir, 0o555);
+    try {
+      const plan = deleteBySource(vault, SOURCE, {
+        confirm: true,
+        includeOriginals: true,
+        now: NOW,
+      });
+
+      expect(plan.failed.some((f) => f.path === SOURCE)).toBe(true);
+      expect(existsSync(join(vault, SOURCE))).toBe(true);
+      // The manifest entry STAYS (review L7): the source file is still on
+      // disk, so dropping the entry would classify it `new` and the next
+      // batch plan would rebuild the derived pages this run just removed.
+      expect(plan.manifestEntryRemoved).toBe(false);
+      expect(readManifest(vault).entries[SOURCE]).toBeDefined();
+      // The derived pages are still gone - the entry keeps them from being
+      // rebuilt, it does not bring them back.
+      const preview = deleteBySource(vault, SOURCE, { now: NOW });
+      expect(preview.derived.every((e) => !existsSync(join(vault, e.path)))).toBe(true);
+      // The audit says why the entry stayed.
+      const audit = listContinuityRecords(vault, { kind: "source_invalidation" });
+      expect(audit.length).toBe(1);
+      const reason = String(audit[0]!.payload["reason"]);
+      expect(reason).toContain("manifest entry kept");
+      expect(reason).toContain(SOURCE);
+    } finally {
+      chmodSync(originalsDir, 0o755);
+    }
+  });
 });
 
 describe("deleteBySource — shared preference via managed _evidenced_by (CR #127.7)", () => {

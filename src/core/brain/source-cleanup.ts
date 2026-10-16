@@ -794,6 +794,10 @@ export function deleteBySource(
   const deleted: string[] = [];
   const failed: SourceCleanupFailure[] = [];
   let manifestEntryRemoved = false;
+  // Set when the manifest entry deliberately STAYED because an original's
+  // removal failed (review L7) - the audit names the keep, and the result's
+  // `manifestEntryRemoved` stays false.
+  let manifestEntryKeptForFailure = false;
 
   /**
    * Attempt one removal, collecting a failure instead of throwing: one
@@ -813,11 +817,14 @@ export function deleteBySource(
   // no record (idempotent). Factored so both the success path AND a partial
   // failure can persist the record of what was already removed.
   const writeInvalidationAudit = (): string | null => {
-    if (deleted.length === 0 && !manifestEntryRemoved) return null;
+    if (deleted.length === 0 && !manifestEntryRemoved && !manifestEntryKeptForFailure) {
+      return null;
+    }
     const agent = opts.agent?.trim() ? opts.agent.trim() : "delete_by_source";
     const reason =
       `${agent}: removed ${deleted.length} derived/original entr${deleted.length === 1 ? "y" : "ies"}` +
       `${manifestEntryRemoved ? " and the ingest manifest entry" : ""}` +
+      `${manifestEntryKeptForFailure ? " (ingest manifest entry kept: an original's removal failed)" : ""}` +
       `${includeOriginals ? " (originals included)" : ""}` +
       (failed.length > 0
         ? `; failed to remove ${failed.length}: ${failed.map((f) => f.path).join(", ")}`
@@ -842,7 +849,15 @@ export function deleteBySource(
         for (const original of originals) removeCollecting(original);
       }
 
-      if (manifestKey !== null && existsSync(manifestPath(vault))) {
+      // An original whose removal FAILED keeps its manifest entry (review
+      // L7): the source file is still on disk, so dropping the entry would
+      // classify it `new` at the next batch plan and the planner would
+      // rebuild the very derived pages this run just removed. The audit
+      // names the keep.
+      const originalRemovalFailed =
+        includeOriginals && originals.some((o) => failed.some((f) => f.path === o));
+      manifestEntryKeptForFailure = originalRemovalFailed && manifestKey !== null;
+      if (manifestKey !== null && existsSync(manifestPath(vault)) && !originalRemovalFailed) {
         const manifest = readManifest(vault);
         const entries = { ...manifest.entries };
         if (entries[manifestKey] !== undefined) {
