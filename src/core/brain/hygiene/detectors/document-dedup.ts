@@ -16,7 +16,8 @@
  *   - Lexical: token jaccard over the page body at
  *     {@link DOCUMENT_DEDUP_LEXICAL_THRESHOLD}, bucketed by the folded
  *     composite scope key so identical text in two scopes never groups
- *     (per-scope keying, t_37c05a34).
+ *     (per-scope keying, t_37c05a34). This is the layer the hygiene scan
+ *     registry runs.
  *   - Embedding (`detectSemanticDocumentDedup`): cosine over a
  *     configured provider's vectors at
  *     {@link DOCUMENT_DEDUP_EMBEDDING_THRESHOLD}, crossing scope
@@ -24,12 +25,23 @@
  *     within scope only, because a scope boundary is an operator
  *     decision a similarity score must not overrule. Any provider
  *     problem falls back to the lexical layer, labeled as such.
+ *     WIRING STATUS (review L6): this layer is exported and tested but
+ *     NO scan path calls it yet - the scan registry is synchronous and
+ *     this layer is async, so reaching it needs the scan's signature to
+ *     go async across its callers first. Until that lands, the 0.97
+ *     embedding threshold is unreachable from every surface, and the
+ *     scan's similarity answers are lexical only; the CHANGELOG must not
+ *     claim the embedding layer for the wired detector.
  *
  * Canonical selection is keep-newest on `created_at`. A group holding
  * ANY member without `created_at` is ineligible: the page-dedup lane's
  * mtime fallback is merge-unstable (GitHub #180 - the merge itself
  * moves the mtime it falls back to), so such a group is reported for
  * review with the reason in evidence, never for retirement.
+ *
+ * The candidate cap bounds files READ; a cap that bound the read set
+ * emits the {@link withCandidateCapNotice} coverage row, so a truncated
+ * scan never answers clean (review M9).
  *
  * Union-find components can be CHAINS (A~B, B~C, A!~C): one group, but
  * not one similarity. A member therefore retires only on its OWN
