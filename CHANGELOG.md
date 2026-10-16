@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.86.1] - 2026-10-16
+
+Open Second Brain 1.86.1 repairs what the review of v1.86.0 found and closes two embedding-loss defects: a vault that had the retrieval trust gate on keeps excluding after the upgrade, a barren session mine records its tombstone in the documented flow, the undistilled census reads the session store once so the SessionStart nudge stays inside its budget, and a search index left on an older schema is upgraded in place with every stored embedding kept instead of being rebuilt keyword-only.
+
+### Fixed
+
+- **The legacy trust gate switch keeps excluding.** `search_trust_gate_enabled: true` (and its env var) maps to `enforce` again, as it did before 1.86.0; measure-only mode is reached only through an explicit `search_trust_gate_mode: shadow`. The explain envelope names the resolved mode under `enforce` as well as `shadow`, and a refused legacy value names the key or env var it actually came from.
+- **The relational arm and the bench follow the gate mode in force.** A relational query that names `contradicts` edges returns them under the enforcing gate instead of an empty answer, the arm takes its mode from the caller's effective config, the bench pin accepts `searchTrustGateMode` and refuses the obsolete `retrievalTrustGateEnabled` by name, and an invalid mode in an override is refused.
+- **A barren session mine records its zero-yield tombstone without a relayed hash.** The commit derives the surveyed-turns hash from the session's current turns, so the documented flow writes the tombstone; a relayed `surveyed_turns_hash` is validated, and one the session no longer matches writes no record and is named in `mining_ledger_failure`.
+- **The undistilled census reads the session store once.** The census and the mining ledger's prune share one session-turn index, so the SessionStart backlog nudge and `import-session --status` stay fast on vaults with thousands of imported sessions instead of growing with the square of the session count.
+- **The distill backlog drains.** `import-session --propose-backlog` hands out extract-signals mining steps for the next five undistilled sessions (`mining_steps`, with `mining_steps_remaining`), and answering a step records the session as mined. `--status` and `--discover` keep reporting coverage when the mining census fails, naming the census as unavailable. A session imported under `--recall-session-id` is counted correctly, and a corrupt session mining ledger names its remedy.
+- **An appended source whose last line has no newline is no longer re-queued by every batch plan**, and an appended tail longer than 64 KiB is hashed over its real bytes rather than a reused read buffer.
+- **Every capacity census honours an explicit config file.** The maintenance capacity gate, the ingest admission wall, the capture inbox drain, the storage sampler and the storage report measure the store named by `--config`; the capture inbox drain refuses ingest on an invalid `storage:` block, as `brain_ingest_source` does, and ignores errors in other blocks.
+- **Scan and removal failures no longer expose host paths** to callers below local reach in `brain_doctor`, the digest, the operator summary and `brain_delete_by_source`.
+- **Receipt compaction keeps `skill_invoked` records**, so usage-ordered skill offers stay stable, and no longer counts a merged-away prior aggregate as kept.
+- **The explorer console refuses cross-origin requests** before any route runs, so a web page can no longer make it run the dry-run dream through a blind request.
+- **Smaller fixes:** the semantic document dedup names the candidate cap once when it falls back to the lexical layer, the retirement marker in the content manifest is written under the manifest lock, and metric appends wait briefly for a busy surface lock instead of dropping the sample.
+- **A keyword-only write keeps the recorded embedding prefixes** of vectors it keeps, so the next semantic index run no longer clears compatible embeddings; a refused prefix-only change now names the prefix change instead of reporting a model change to the same model ([#255](https://github.com/itechmeat/open-second-brain/issues/255)).
+- **An older-schema search index is upgraded in place.** On the first search and at session start, an index left on an older schema by a previous release is migrated in place under the writer lock, keeping every stored embedding and its recorded model and prefixes, instead of being rebuilt keyword-only; the background self-heal run does the same and skips work when another process already brought the index current. When a full rebuild is unavoidable (newer schema, missing tables, a chunker change, a corrupt file), Open Second Brain reports how many stored embeddings it dropped, where the previous index is kept and how to restore them ([#256](https://github.com/itechmeat/open-second-brain/issues/256)).
+
+### Changed
+
+- The 1.86.0 entry's statement that the legacy boolean maps `true` to `shadow` no longer holds: it maps to `enforce`.
+
 ## [1.86.0] - 2026-10-16
 
 Open Second Brain 1.86.0 stops re-paying for sessions with nothing new to say and measures before it excludes: a session mine that ends with nothing written records a zero-yield tombstone that suppresses every later plan over the same transcript until the turn material changes, a distilled and undistilled census over the imported backlog feeds an ask-once distill envelope and an opt-in SessionStart nudge, the retrieval trust gate resolves an `off | shadow | enforce` mode where `shadow` measures every would-be refusal while excluding nothing, and the loopback explorer serves a live-counts console beside its graph. The release also repairs what the external review of v1.85.0 found in the shipped storage lifecycle: receipt compaction now folds only opt-in telemetry kinds, the capacity trend buckets its samples per day while the maintenance lane pauses a band before the wall, a retired document copy keeps its manifest marker, and the incremental extraction watermark stamps exactly the bytes the appended delta covered.
@@ -8567,6 +8591,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.86.1]: https://github.com/itechmeat/open-second-brain/compare/v1.86.0...v1.86.1
 [1.86.0]: https://github.com/itechmeat/open-second-brain/compare/v1.85.0...v1.86.0
 [1.85.0]: https://github.com/itechmeat/open-second-brain/compare/v1.84.1...v1.85.0
 [1.84.1]: https://github.com/itechmeat/open-second-brain/compare/v1.84.0...v1.84.1
