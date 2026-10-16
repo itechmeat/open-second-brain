@@ -81,7 +81,12 @@ import {
   type Provenance,
 } from "../provenance/provenance.ts";
 import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
-import { extractedBytesOf, readManifest, updateManifest } from "./content-manifest.ts";
+import {
+  extractedBytesOf,
+  extractedDigestOf,
+  readManifest,
+  updateManifest,
+} from "./content-manifest.ts";
 import { computeExtractionContractFingerprint } from "./contract.ts";
 import { cutAppendedDelta } from "./tail-read.ts";
 import {
@@ -526,13 +531,15 @@ export function ingestSource(
     // run's result. Such a read degrades the fail-safe way: no delta is
     // reported and no stamp lands, so the source simply reprocesses fully
     // next time. The ENOENT window and the EISDIR window are the same catch.
-    let manifestStamp: { readonly digest: string; readonly bytes: number } | undefined;
+    let manifestStamp:
+      | { readonly digest: string; readonly wholeDigest: string; readonly bytes: number }
+      | undefined;
     let stampFullSize = false;
     try {
       const snapshot = readAppendSnapshot(
         sourceAbs,
         watermark,
-        entry === undefined ? "" : entry.sha256,
+        entry === undefined ? "" : extractedDigestOf(entry),
       );
       const delta = appendedDeltaFromSnapshot(watermark, snapshot);
       if (delta !== undefined) extractionDelta = delta;
@@ -542,6 +549,7 @@ export function ingestSource(
         // leading `toByte` bytes, computed with no second read.
         manifestStamp = {
           digest: snapshot.hashThroughWatermark.digest("hex"),
+          wholeDigest: snapshot.wholeDigest,
           bytes: delta.toByte,
         };
       } else {
@@ -563,9 +571,15 @@ export function ingestSource(
       // fragment shape - two CONCURRENT ingests of one source, the later
       // snapshot taken before the earlier run's append landed - and the
       // recorded pair stays self-consistent either way.
+      // The whole-file digest stays what classification compares, so an
+      // unterminated fragment does not re-queue the source on every batch
+      // plan; the prefix digest rides beside it for the next append proof.
       updateManifest(vault, [canonicalSource], {
         [canonicalSource]: {
-          sha256: manifestStamp.digest,
+          sha256: manifestStamp.wholeDigest,
+          ...(manifestStamp.digest !== manifestStamp.wholeDigest
+            ? { extracted_sha256: manifestStamp.digest }
+            : {}),
           fingerprint: computeExtractionContractFingerprint(vault),
           extracted_bytes: manifestStamp.bytes,
           extracted_at: isoSecond(opts.now),
@@ -758,7 +772,7 @@ export function appendedExtractionDelta(
   if (entry === undefined) return undefined;
   const watermark = extractedBytesOf(entry);
   if (watermark <= 0) return undefined;
-  const snapshot = readAppendSnapshot(sourceAbs, watermark, entry.sha256);
+  const snapshot = readAppendSnapshot(sourceAbs, watermark, extractedDigestOf(entry));
   const delta = appendedDeltaFromSnapshot(watermark, snapshot);
   // The preview's contract is unchanged by the named over-cap outcome: a
   // tail past the cap answers without a section, exactly as before (the
@@ -790,6 +804,12 @@ interface AppendSnapshot {
    * the delta series names, computed with no second read (review L2).
    */
   readonly hashThroughWatermark: Hash;
+  /**
+   * SHA-256 hex of every byte this one pass read: the whole source as the
+   * snapshot saw it. Empty when `watermark <= 0` (no pass was made); only
+   * the appended arm, which requires a watermark, reads it.
+   */
+  readonly wholeDigest: string;
 }
 
 /**
@@ -827,8 +847,10 @@ function readAppendSnapshot(
         prefixProven: false,
         tail: { overCap: false, bytes: Buffer.alloc(0) },
         hashThroughWatermark: createHash("sha256"),
+        wholeDigest: "",
       };
     }
+    const hashWhole = createHash("sha256");
     const hashPrefix = createHash("sha256");
     const hashThroughWatermark = createHash("sha256");
     const tailParts: Buffer[] = [];
@@ -839,6 +861,7 @@ function readAppendSnapshot(
       const count = readSync(fd, chunk, 0, chunk.length, position);
       if (count === 0) break;
       const buf = count === chunk.length ? chunk : chunk.subarray(0, count);
+      hashWhole.update(buf);
       const prefixEnd = Math.min(watermark - position, count);
       if (prefixEnd > 0) {
         const head = buf.subarray(0, prefixEnd);
@@ -846,7 +869,9 @@ function readAppendSnapshot(
         hashThroughWatermark.update(head);
       }
       if (position + count > watermark && tailFilled <= EXTRACTION_DELTA_MAX_BYTES) {
-        const part = buf.subarray(Math.max(0, watermark - position));
+        // Copied: `chunk` is reused by the next read, so a view into it
+        // would be overwritten whenever the tail spans more than one chunk.
+        const part = Buffer.from(buf.subarray(Math.max(0, watermark - position)));
         tailParts.push(part);
         tailFilled += part.length;
       }
@@ -860,6 +885,7 @@ function readAppendSnapshot(
           ? { overCap: true }
           : { overCap: false, bytes: Buffer.concat(tailParts) },
       hashThroughWatermark,
+      wholeDigest: hashWhole.digest("hex"),
     };
   } finally {
     closeSync(fd);

@@ -211,7 +211,9 @@ describe("ingestSource watermark stamping", () => {
     // starts AT it instead of past it.
     const entry = readManifest(vault).entries[SOURCE]!;
     expect(entry.extracted_bytes).toBe(8);
-    expect(entry.sha256).toBe(hashBytes(new Uint8Array(Buffer.from("one\ntwo\n", "utf8"))));
+    expect(entry.extracted_sha256).toBe(
+      hashBytes(new Uint8Array(Buffer.from("one\ntwo\n", "utf8"))),
+    );
   });
 
   test("a fragment stamp keeps the prefix proof consistent and the next delta stitches the fragment", () => {
@@ -227,15 +229,20 @@ describe("ingestSource watermark stamping", () => {
     expect(second.extractionDelta).toEqual({ kind: "appended", fromByte: 5, toByte: 11 });
 
     // The stamp lands at the announced boundary (11), NOT at the file
-    // size (21), and the digest describes exactly those leading bytes.
+    // size (21), and the prefix digest describes exactly those leading
+    // bytes; the whole-file digest stays what classification compares.
     const stamped = readManifest(vault).entries[SOURCE]!;
     expect(stamped.extracted_bytes).toBe(11);
-    expect(stamped.sha256).toBe(hashBytes(new Uint8Array(Buffer.from("base\nline1\n", "utf8"))));
+    expect(stamped.extracted_sha256).toBe(
+      hashBytes(new Uint8Array(Buffer.from("base\nline1\n", "utf8"))),
+    );
+    expect(stamped.sha256).toBe(hashFile(join(vault, SOURCE)));
 
-    // Accepted consequence (review M15): with the stamp behind EOF the
-    // file classifies modified until the fragment is terminated - one
-    // reclassification, never a stale skip.
-    expect(classifyPaths(vault, [SOURCE], readManifest(vault)).modified).toEqual([SOURCE]);
+    // The unterminated fragment does not re-queue the source: unchanged
+    // bytes classify unchanged, so no batch plan pays for it again.
+    expect(classifyPaths(vault, [SOURCE], readManifest(vault)).unchanged).toEqual([SOURCE]);
+    const replan = planBatches(vault, "imports", { maxBatchBytes: 10_000, maxBatchFiles: 100 });
+    expect(replan.batches.flatMap((b) => b.files).map((f) => f.path)).toEqual([]);
 
     appendFileSync(join(vault, SOURCE), "-rest\nline3\n", "utf8");
     const third = ingestSource(vault, INPUT, OPTS);
@@ -244,10 +251,35 @@ describe("ingestSource watermark stamping", () => {
     expect(third.extractionDelta).toEqual({ kind: "appended", fromByte: 11, toByte: 33 });
     const healed = readManifest(vault).entries[SOURCE]!;
     expect(healed.extracted_bytes).toBe(33);
-    // The boundary is back at EOF, so the digest is a whole-file digest
-    // again and the unchanged classification holds.
+    // The boundary is back at EOF, so the one whole-file digest describes
+    // the extracted prefix too and no separate prefix digest is kept.
     expect(healed.sha256).toBe(hashFile(join(vault, SOURCE)));
+    expect(healed.extracted_sha256).toBeUndefined();
     expect(classifyPaths(vault, [SOURCE], readManifest(vault)).unchanged).toEqual([SOURCE]);
+  });
+});
+
+describe("an appended tail longer than one read chunk", () => {
+  test("the prefix digest covers the real appended bytes", () => {
+    writeSource("base\n");
+    ingestSource(vault, INPUT, OPTS);
+    // Distinct lines well past one 64 KiB read, ending in a fragment, so
+    // the stamp's prefix digest is computed over a multi-chunk tail.
+    const lines = Array.from({ length: 6000 }, (_, i) => `line ${i} of the appended tail\n`).join(
+      "",
+    );
+    appendFileSync(join(vault, SOURCE), `${lines}frag`, "utf8");
+
+    const res = ingestSource(vault, INPUT, OPTS);
+    const prefix = `base\n${lines}`;
+    expect(res.extractionDelta).toEqual({
+      kind: "appended",
+      fromByte: 5,
+      toByte: Buffer.byteLength(prefix, "utf8"),
+    });
+    expect(readManifest(vault).entries[SOURCE]!.extracted_sha256).toBe(
+      hashBytes(new Uint8Array(Buffer.from(prefix, "utf8"))),
+    );
   });
 });
 
