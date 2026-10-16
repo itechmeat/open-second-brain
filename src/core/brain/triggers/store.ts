@@ -5,14 +5,16 @@
  * Each trigger is one Markdown file under `Brain/triggers/` - operator
  * readable without tooling, frontmatter carries the machine state.
  * History is a status change, not a file move: terminal triggers
- * (acted / dismissed / expired / suppressed) stay in place so `history`
- * is just a status filter and the cooldown logic can see them.
+ * (acted / dismissed / expired / suppressed / snoozed) stay in place so
+ * `history` is just a status filter and the blocking logic can see them.
  *
  * Anti-nag invariants live here and only here:
  *   - cooldown-key dedup across ALL statuses makes repeated scans
  *     idempotent (a suppressed twin always blocks; an open twin always
- *     blocks; a dismissed or acted twin blocks for `cooldownDays` after
- *     its resolution; an expired twin allows);
+ *     blocks; a dismissed twin blocks while its grounding artifacts are
+ *     unchanged - movement, not the clock, is what resurrects it; an
+ *     acted twin blocks for `cooldownDays` after its resolution; an
+ *     expired twin allows);
  *   - lifecycle transitions: acknowledge / act / dismiss are allowed
  *     from ANY open state (an operator may act on a trigger they found
  *     via `list` before the brief ever delivered it - delivery is a
@@ -791,7 +793,12 @@ export function renderTriggerQueueFailures(failures: TriggerQueueFailures): stri
 
 export interface CreateTriggersOptions {
   readonly now: Date;
-  /** Days a terminal (dismissed/acted) twin blocks recreation. */
+  /**
+   * Days an acted twin blocks recreation. A DISMISSED twin is not on
+   * this clock: it blocks while its grounding artifacts are unchanged,
+   * however long, and moves aside the moment a re-fire arrives on
+   * changed ones (t_00e9de6a).
+   */
   readonly cooldownDays?: number;
   /** Days until a fresh trigger expires. */
   readonly ttlDays?: number;
@@ -806,8 +813,9 @@ export interface CreateTriggersOptions {
  * `duplicate` - a candidate earlier in the SAME scan already claimed
  *   this cooldown key; one scan seeing one finding twice is one
  *   occurrence, so this reason never writes to the ledger.
- * `active` / `cooldown` / `suppressed` / `snoozed` - an existing record
- *   blocked it, and that record's ledger records the recurrence.
+ * `active` / `cooldown` / `suppressed` / `snoozed` / `dismissed` - an
+ *   existing record blocked it, and that record's ledger records the
+ *   recurrence.
  * `kind-cap` - the per-kind budget for this scan was already spent.
  */
 export interface SkippedCandidate {
@@ -819,7 +827,8 @@ export interface SkippedCandidate {
     | "kind-cap"
     | "invalid"
     | "suppressed"
-    | "snoozed";
+    | "snoozed"
+    | "dismissed";
 }
 
 export interface CreateTriggersResult {
@@ -833,10 +842,39 @@ export interface CreateTriggersResult {
   readonly unreadable: ReadonlyArray<UnreadableTrigger>;
 }
 
+/**
+ * Whether a re-fire arrived on different grounding than a dismissed
+ * record is persisted against.
+ *
+ * The comparison is the `deriveDatasetHash` convention inlined
+ * (src/core/brain/derived-artifact.ts): both lists deduplicated and
+ * lexicographically sorted before comparing, so it is order-insensitive
+ * and duplicate-insensitive by construction - the detector firing on the
+ * same artifacts in a different walk order is not movement.
+ *
+ * An EMPTY persisted list never reads as moved, whatever the candidate
+ * names: absence of grounding is the neutral reading (the content-hash
+ * convention - absent reads as no-drift), so a record written before the
+ * key existed stays dismissed rather than resurrecting on a comparison
+ * it cannot support. The store always writes the list, so only a
+ * hand-edited or legacy record lacks it.
+ */
+function sourceArtifactsChanged(
+  persisted: ReadonlyArray<string>,
+  current: ReadonlyArray<string>,
+): boolean {
+  if (persisted.length === 0) return false;
+  const stable = [...new Set(persisted)].toSorted();
+  const moved = [...new Set(current)].toSorted();
+  if (stable.length !== moved.length) return true;
+  return stable.some((artifact, i) => artifact !== moved[i]);
+}
+
 function blockReason(
   twin: TriggerRecord,
   now: Date,
   cooldownDays: number,
+  candidateArtifacts: ReadonlyArray<string>,
 ): SkippedCandidate["reason"] | null {
   // Suppression comes first and carries no clock: the operator judged
   // this cooldown key structurally benign, so no arithmetic below can
@@ -849,7 +887,16 @@ function blockReason(
   if (twin.effectiveStatus === TRIGGER_STATUS.snoozed) return "snoozed";
   if (TRIGGER_OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
   if (twin.effectiveStatus === TRIGGER_STATUS.expired) return null;
-  // dismissed / acted: silent for the cooldown window after resolution.
+  // dismissed: movement-gated. The finding stays silent for however
+  // long its grounding is unchanged and is recreated - as a new record
+  // through the normal path - the moment a re-fire arrives on changed
+  // artifacts. No clock: the old cooldown window could resurrect an
+  // untouched finding and keep a moved one silent, which is exactly the
+  // nag this gate replaces.
+  if (twin.effectiveStatus === TRIGGER_STATUS.dismissed) {
+    return sourceArtifactsChanged(twin.sourceArtifacts, candidateArtifacts) ? null : "dismissed";
+  }
+  // acted: the plain cooldown window after the resolution instant.
   const resolved = twin.resolvedAt !== null ? Date.parse(twin.resolvedAt) : Number.NaN;
   if (!Number.isFinite(resolved)) return null;
   return now.getTime() < resolved + cooldownDays * DAY_MS ? "cooldown" : null;
@@ -957,7 +1004,7 @@ function createTriggersLocked(
     seenKeys.add(candidate.cooldownKey);
     const twin = byKey.get(candidate.cooldownKey);
     if (twin !== undefined) {
-      const reason = blockReason(twin, opts.now, cooldownDays);
+      const reason = blockReason(twin, opts.now, cooldownDays, candidate.sourceArtifacts);
       if (reason !== null) {
         recordRecurrence(twin, opts.now);
         skipped.push({ cooldownKey: candidate.cooldownKey, reason });

@@ -83,7 +83,7 @@ test("repeated scans are idempotent: an active twin blocks recreation", () => {
   expect(listTriggers(vault, { now: NOW })).toHaveLength(1);
 });
 
-test("a dismissed trigger stays silent during cooldown, recreatable after", () => {
+test("a dismissed trigger stays silent while its source artifacts are unchanged, however long", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
 
@@ -92,13 +92,66 @@ test("a dismissed trigger stays silent during cooldown, recreatable after", () =
     cooldownDays: 7,
   });
   expect(during.created).toHaveLength(0);
-  expect(during.skipped[0]!.reason).toBe("cooldown");
+  expect(during.skipped[0]!.reason).toBe("dismissed");
 
+  // Past the old cooldown window the twin is STILL skipped, not
+  // recreated: movement, not the clock, is what resurrects a dismissed
+  // finding.
   const after = createTriggers(vault, [candidate()], {
     now: new Date(NOW.getTime() + 8 * DAY_MS),
     cooldownDays: 7,
   });
-  expect(after.created).toHaveLength(1);
+  expect(after.created).toHaveLength(0);
+  expect(after.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a dismissed trigger is recreated when the finding re-fires on changed source artifacts", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // Same cooldown key, changed grounding: the finding moved, so the
+  // dismissal no longer covers it and a NEW pending record arrives
+  // through the normal creation path.
+  const moved = createTriggers(
+    vault,
+    [candidate({ sourceArtifacts: ["[[pref-a]]", "[[pref-c]]"] })],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(moved.created).toHaveLength(1);
+  expect(moved.created[0]!.id).not.toBe(created[0]!.id);
+  expect(moved.created[0]!.status).toBe("pending");
+  expect(moved.created[0]!.sourceArtifacts).toEqual(["[[pref-a]]", "[[pref-c]]"]);
+});
+
+test("the dismissed movement comparison is order-insensitive and duplicate-insensitive", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // Same set in a different order, with a duplicate: not movement.
+  const reordered = createTriggers(
+    vault,
+    [candidate({ sourceArtifacts: ["[[pref-b]]", "[[pref-a]]", "[[pref-b]]"] })],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(reordered.created).toHaveLength(0);
+  expect(reordered.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a dismissed record with no persisted artifacts is never read as moved", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+  // Hand-strip the persisted grounding, as a record written before the
+  // key existed would read: absence is the neutral reading, never a
+  // claim that the finding moved.
+  rewriteLine(path, /^source_artifacts: .*$\n/mu, "");
+
+  const later = createTriggers(vault, [candidate()], {
+    now: new Date(NOW.getTime() + 8 * DAY_MS),
+    cooldownDays: 7,
+  });
+  expect(later.created).toHaveLength(0);
+  expect(later.skipped[0]!.reason).toBe("dismissed");
 });
 
 test("lifecycle transitions are enforced", () => {
@@ -429,9 +482,11 @@ test("a snoozed trigger is hidden from the brief until its window ends", () => {
   ]);
 });
 
-test("a cooldown-blocked twin records a recurrence too, not only a suppressed one", () => {
+test("an acted trigger keeps the plain cooldown window and records its recurrences", () => {
+  // Movement gating is scoped to DISMISSED findings; acting on a
+  // trigger resolves the work, so the time window it always had stays.
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
-  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "act", { now: NOW });
   const during = new Date(NOW.getTime() + 3 * DAY_MS);
   const blocked = createTriggers(vault, [candidate()], { now: during, cooldownDays: 7 });
   expect(blocked.skipped[0]!.reason).toBe("cooldown");
@@ -448,7 +503,7 @@ test("a materially different cooldown key is created while the twin is suppresse
   expect(other.created[0]!.status).toBe("pending");
 });
 
-test("dismiss then suppress then unsuppress restores the state and its cooldown", () => {
+test("dismiss then suppress then unsuppress restores the state and its resolution instant", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
   const dismissed = transitionTrigger(vault, id, "dismiss", { now: NOW });
@@ -472,19 +527,21 @@ test("dismiss then suppress then unsuppress restores the state and its cooldown"
   expect(restored.suppressedAt).toBeNull();
   expect(restored.suppressedFrom).toBeNull();
 
-  // The original seven-day cooldown still measures from the original
-  // resolution instant, not from the unsuppress.
+  // The restore preserves the resolution instant, and the dismissed twin
+  // blocks on its unchanged grounding at any age - the suppression
+  // detour restarts neither.
   const during = createTriggers(vault, [candidate()], {
     now: new Date(NOW.getTime() + 3 * DAY_MS),
     cooldownDays: 7,
   });
   expect(during.created).toHaveLength(0);
-  expect(during.skipped[0]!.reason).toBe("cooldown");
+  expect(during.skipped[0]!.reason).toBe("dismissed");
   const after = createTriggers(vault, [candidate()], {
     now: new Date(NOW.getTime() + 8 * DAY_MS),
     cooldownDays: 7,
   });
-  expect(after.created).toHaveLength(1);
+  expect(after.created).toHaveLength(0);
+  expect(after.skipped[0]!.reason).toBe("dismissed");
 });
 
 test("suppress is legal from a terminal state and is idempotent", () => {
