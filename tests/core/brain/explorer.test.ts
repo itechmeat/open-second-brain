@@ -517,6 +517,31 @@ describe("buildLiveServer JSON routes", () => {
     }
   });
 
+  test("a cross-origin request is refused before any route runs", async () => {
+    // A web page's blind no-cors GET carries a loopback Host but names its
+    // own site in Sec-Fetch-Site and Origin; it must not make the server
+    // build the operator snapshot.
+    const server = buildLiveServer(vault, 0);
+    try {
+      const crossSite = await fetch(new URL("/status.json", server.url), {
+        headers: { "sec-fetch-site": "cross-site" },
+      });
+      expect(crossSite.status).toBe(403);
+      expect(((await crossSite.json()) as { error: string }).error).toContain("cross-origin");
+      const foreignOrigin = await fetch(new URL("/counts.json", server.url), {
+        headers: { origin: "https://attacker.example" },
+      });
+      expect(foreignOrigin.status).toBe(403);
+      // The console's own page fetching its routes is same-origin.
+      const own = await fetch(new URL("/counts.json", server.url), {
+        headers: { "sec-fetch-site": "same-origin", origin: `http://127.0.0.1:${server.port}` },
+      });
+      expect(own.ok).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
   test("a loopback Host name with any port is accepted", async () => {
     writePreference(vault, basePref("hosted"));
     const server = buildLiveServer(vault, 0);

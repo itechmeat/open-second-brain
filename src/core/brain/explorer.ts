@@ -431,6 +431,26 @@ export function buildLiveServer(
           403,
         );
       }
+      // A loopback Host does not make a request the operator's own: any
+      // web page can send a blind cross-origin GET to 127.0.0.1 and make
+      // the server run the operator snapshot (a dry-run dream) even though
+      // the page cannot read the answer. The browser names a cross-origin
+      // sender in Sec-Fetch-Site and Origin; only the console's own page
+      // (same-origin) and a typed URL (none) are served.
+      const fetchSite = req.headers.get("sec-fetch-site");
+      const origin = req.headers.get("origin");
+      const ownOrigin = `http://${req.headers.get("host")}`;
+      if (
+        (fetchSite !== null && fetchSite !== "same-origin" && fetchSite !== "none") ||
+        (origin !== null && origin !== ownOrigin)
+      ) {
+        return jsonResponse(
+          JSON.stringify({
+            error: "explorer: refusing a cross-origin request; open the console URL directly",
+          }),
+          403,
+        );
+      }
       const url = new URL(req.url);
       if (url.pathname === "/" || url.pathname === "/index.html") {
         const graph = collectExplorerData(vault);
