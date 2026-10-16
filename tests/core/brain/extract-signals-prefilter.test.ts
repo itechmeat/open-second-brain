@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,6 +36,7 @@ import {
 import {
   minedTurnsHash,
   recordSessionMiningOutcome,
+  sessionMiningLedgerPath,
 } from "../../../src/core/brain/session-mining-ledger.ts";
 import {
   importSessionRecall,
@@ -534,5 +535,26 @@ describe("mining tombstone", () => {
       }),
     ).rejects.toThrow(/user/);
     expect(provider.requests).toHaveLength(0);
+  });
+
+  test("force bypasses the hit, never the read: a corrupt ledger refuses a forced plan", async () => {
+    // The escape hatch's safety story, from the option's own contract:
+    // `force` ignores a matching entry, never a corrupt file. Reordering
+    // the read behind the force check would turn the escape into a ledger
+    // bypass; this pins the refusal on BOTH paths.
+    mkdirSync(dirname(sessionMiningLedgerPath(vault)), { recursive: true });
+    writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
+    for (const force of [false, true]) {
+      try {
+        await planExtractSignalsPrefiltered(vault, SESSION, {
+          now: NOW,
+          decisionModel: null,
+          force,
+        });
+        throw new Error(`expected the plan to refuse (force: ${String(force)})`);
+      } catch (err) {
+        expect((err as Error).message).toContain("session mining ledger is corrupted JSON");
+      }
+    }
   });
 });
