@@ -254,18 +254,25 @@ export interface IngestSourceResult {
    * first ingest, a rewritten source, or a source with no watermark reports
    * no delta and reprocesses fully.
    *
-   * The stamp below advances the watermark to exactly this range's `toByte`
-   * and records the digest of those leading bytes (review M15), so the next
-   * append's prefix proof verifies against the boundary the delta series
-   * announced. The range ends at the LAST COMPLETE newline, so an append
-   * with no complete line yet reports an EMPTY delta (`toByte ===
-   * fromByte`) and the watermark stays at `fromByte`: the unterminated
-   * fragment is extracted (extraction is whole-source) but announced by no
-   * delta, and the NEXT append's delta starts AT it, stitching the fragment
-   * in. A fragment only enters a reported delta when the append that
-   * carries it ends with a newline before this run reads.
+   * On the `appended` kind the stamp below advances the watermark to
+   * exactly this range's `toByte` and records the digest of those leading
+   * bytes (review M15), so the next append's prefix proof verifies against
+   * the boundary the delta series announced. The range ends at the LAST
+   * COMPLETE newline, so an append with no complete line yet reports an
+   * EMPTY delta (`toByte === fromByte`) and the watermark stays at
+   * `fromByte`: the unterminated fragment is extracted (extraction is
+   * whole-source) but announced by no delta, and the NEXT append's delta
+   * starts AT it, stitching the fragment in. A fragment only enters a
+   * reported delta when the append that carries it ends with a newline
+   * before this run reads.
+   *
+   * The `appended-over-cap` kind names a proven append whose tail passed
+   * the delta cap: the range is the whole appended span, reported without
+   * its text (review L3). The run stays a whole-source pass, so the stamp
+   * still covered the full current file - the named outcome is the
+   * difference from a rewrite, which reports no delta at all.
    */
-  readonly extractionDelta?: { readonly fromByte: number; readonly toByte: number };
+  readonly extractionDelta?: AppendedDeltaOutcome;
 }
 
 /**
@@ -520,18 +527,22 @@ export function ingestSource(
         entry === undefined ? "" : entry.sha256,
       );
       const delta = appendedDeltaFromSnapshot(watermark, snapshot);
-      if (delta !== undefined) {
-        extractionDelta = delta;
-        // The decision above already extended the through-watermark hash
-        // with exactly the announced bytes: its digest is the digest of the
-        // leading `toByte` bytes, computed with no second read.
-        manifestStamp = {
-          digest: snapshot.hashThroughWatermark.digest("hex"),
-          bytes: delta.toByte,
-        };
-      } else {
-        manifestStamp = { digest: snapshot.fullDigest, bytes: snapshot.size };
-      }
+      if (delta !== undefined) extractionDelta = delta;
+      // An over-cap append is a reprocess-scale change (review L3): the run
+      // stays a whole-source pass, so its stamp covers the full current
+      // file - only the delta TEXT was refused, and the named outcome on
+      // the result says so.
+      manifestStamp =
+        delta?.kind === "appended"
+          ? {
+              // The decision above already extended the through-watermark
+              // hash with exactly the announced bytes: its digest is the
+              // digest of the leading `toByte` bytes, computed with no
+              // second read.
+              digest: snapshot.hashThroughWatermark.digest("hex"),
+              bytes: delta.toByte,
+            }
+          : { digest: snapshot.fullDigest, bytes: snapshot.size };
     } catch {
       // Vanished or changed kind mid-flight: no delta, no stamp - the source
       // reprocesses fully next time.
@@ -669,6 +680,19 @@ function captureTrustedSourceArchive(
 }
 
 /**
+ * The appended delta an ingest result reports. `appended` is the proven,
+ * boundary-safe range whose text the delta pass read; `appended-over-cap`
+ * is a PROVEN append whose tail passed the delta cap - the whole appended
+ * range is reported without reading its text, so an append at reprocess
+ * scale never answers the same shape a rewrite gets (review L3). Absent
+ * for every shape that is not a proven append: a first ingest, a
+ * rewritten source, a source with no watermark.
+ */
+export type AppendedDeltaOutcome =
+  | { readonly kind: "appended"; readonly fromByte: number; readonly toByte: number }
+  | { readonly kind: "appended-over-cap"; readonly fromByte: number; readonly toByte: number };
+
+/**
  * The largest appended tail the extraction-delta pass reads ({@link ./tail-read.ts}):
  * a tail past this is a reprocess-scale change, not a delta. Starts from
  * {@link PRE_EXTRACT_MAX_SOURCE_BYTES} - the same scale rule the
@@ -704,7 +728,13 @@ export function appendedExtractionDelta(
   const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
   if (watermark <= 0) return undefined;
   const snapshot = readAppendSnapshot(sourceAbs, watermark, entry.sha256);
-  return appendedDeltaFromSnapshot(watermark, snapshot);
+  const delta = appendedDeltaFromSnapshot(watermark, snapshot);
+  // The preview's contract is unchanged by the named over-cap outcome: a
+  // tail past the cap answers without a section, exactly as before (the
+  // section's whole value is the text-able slice).
+  return delta !== undefined && delta.kind === "appended"
+    ? { fromByte: delta.fromByte, toByte: delta.toByte }
+    : undefined;
 }
 
 /** What ONE descriptor and one sequential pass over the source answered. */
@@ -809,13 +839,18 @@ function readAppendSnapshot(
 function appendedDeltaFromSnapshot(
   watermark: number,
   snapshot: AppendSnapshot,
-): { readonly fromByte: number; readonly toByte: number } | undefined {
+): AppendedDeltaOutcome | undefined {
   if (watermark <= 0 || !snapshot.prefixProven || snapshot.size <= watermark) return undefined;
   const tail = snapshot.tail;
-  if (tail.overCap) return undefined;
+  if (tail.overCap) {
+    // The append is proven but its text is reprocess-scale: name it, and
+    // report the whole appended range without reading it - only the range
+    // is consumed (review L3).
+    return { kind: "appended-over-cap", fromByte: watermark, toByte: snapshot.size };
+  }
   const cut = cutAppendedDelta(tail.bytes, watermark);
   snapshot.hashThroughWatermark.update(tail.bytes.subarray(0, cut.toByte - watermark));
-  return { fromByte: cut.fromByte, toByte: cut.toByte };
+  return { kind: "appended", fromByte: cut.fromByte, toByte: cut.toByte };
 }
 
 /**

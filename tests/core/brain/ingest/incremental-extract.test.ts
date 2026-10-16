@@ -14,12 +14,16 @@
  *   - a REWRITTEN source - even one that grew - classifies modified and
  *     reprocesses fully, resetting the watermark, because the recorded
  *     digest no longer describes the leading bytes;
+ *   - a PROVEN append whose tail passes the delta cap answers the named
+ *     `appended-over-cap` outcome carrying the whole appended range - never
+ *     silently the same answer as a rewrite (review L3); the run stays a
+ *     whole-source pass, so the stamp still covers the full current file;
  *   - EXTRACT_CONTRACT_VERSION stays at 2: the watermark changes what is
  *     REPORTED, not what extraction produces, so no contract bump and no
  *     one-time mass reprocess is owed.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, appendFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, appendFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,7 +84,7 @@ describe("ingestSource watermark stamping", () => {
     appendFileSync(join(vault, SOURCE), "three\n", "utf8");
     const res = ingestSource(vault, INPUT, OPTS);
 
-    expect(res.extractionDelta).toEqual({ fromByte: 8, toByte: 14 });
+    expect(res.extractionDelta).toEqual({ kind: "appended", fromByte: 8, toByte: 14 });
     const entry = readManifest(vault).entries[SOURCE]!;
     expect(entry.extracted_bytes).toBe(14);
     expect(entry.sha256).toBe(hashFile(join(vault, SOURCE)));
@@ -94,8 +98,8 @@ describe("ingestSource watermark stamping", () => {
     appendFileSync(join(vault, SOURCE), "four\n", "utf8");
     const third = ingestSource(vault, INPUT, OPTS);
 
-    expect(second.extractionDelta).toEqual({ fromByte: 8, toByte: 14 });
-    expect(third.extractionDelta).toEqual({ fromByte: 14, toByte: 19 });
+    expect(second.extractionDelta).toEqual({ kind: "appended", fromByte: 8, toByte: 14 });
+    expect(third.extractionDelta).toEqual({ kind: "appended", fromByte: 14, toByte: 19 });
     // The watermarks advanced stepwise; no delta covers another's bytes.
     expect(readManifest(vault).entries[SOURCE]!.extracted_bytes).toBe(19);
   });
@@ -124,7 +128,7 @@ describe("ingestSource watermark stamping", () => {
     appendFileSync(join(vault, SOURCE), "half a line", "utf8");
 
     const res = ingestSource(vault, INPUT, OPTS);
-    expect(res.extractionDelta).toEqual({ fromByte: 8, toByte: 8 });
+    expect(res.extractionDelta).toEqual({ kind: "appended", fromByte: 8, toByte: 8 });
     // The stamp covers exactly the announced prefix (review M15): the
     // unterminated fragment stays unstamped, and the next append's delta
     // starts AT it instead of past it.
@@ -143,7 +147,7 @@ describe("ingestSource watermark stamping", () => {
 
     appendFileSync(join(vault, SOURCE), "line1\nline2-part", "utf8");
     const second = ingestSource(vault, INPUT, OPTS);
-    expect(second.extractionDelta).toEqual({ fromByte: 5, toByte: 11 });
+    expect(second.extractionDelta).toEqual({ kind: "appended", fromByte: 5, toByte: 11 });
 
     // The stamp lands at the announced boundary (11), NOT at the file
     // size (21), and the digest describes exactly those leading bytes.
@@ -160,7 +164,7 @@ describe("ingestSource watermark stamping", () => {
     const third = ingestSource(vault, INPUT, OPTS);
     // The fragment rides the next delta instead of falling out of the
     // delta series for good.
-    expect(third.extractionDelta).toEqual({ fromByte: 11, toByte: 33 });
+    expect(third.extractionDelta).toEqual({ kind: "appended", fromByte: 11, toByte: 33 });
     const healed = readManifest(vault).entries[SOURCE]!;
     expect(healed.extracted_bytes).toBe(33);
     // The boundary is back at EOF, so the digest is a whole-file digest
@@ -228,11 +232,24 @@ describe("the CLI extract preview reports the appended slice", () => {
     const res = await runCli(["brain", "extract", join(vault, SOURCE), "--json", "--vault", vault]);
     expect(res.returncode).toBe(0);
     const payload = JSON.parse(res.stdout) as { appended?: unknown };
-    // The preview refuses exactly what the pipeline refuses: it must
-    // never report a slice the delta pass would not accept.
+    // The preview refuses exactly what the pipeline refuses to render: it
+    // must never report a slice the delta pass would not accept.
     expect(payload.appended).toBeUndefined();
     const second = ingestSource(vault, INPUT, OPTS);
-    expect(second.extractionDelta).toBeUndefined();
+    // The pipeline itself names the over-cap append instead of answering
+    // the same shape a rewrite gets (review L3): the whole appended range,
+    // no text.
+    const size = statSync(join(vault, SOURCE)).size;
+    expect(second.extractionDelta).toEqual({
+      kind: "appended-over-cap",
+      fromByte: 8,
+      toByte: size,
+    });
+    // The run stayed a whole-source pass: the stamp covers the full
+    // current file, digest included.
+    const entry = readManifest(vault).entries[SOURCE]!;
+    expect(entry.extracted_bytes).toBe(size);
+    expect(entry.sha256).toBe(hashFile(join(vault, SOURCE)));
   });
 
   test("a rewritten source that grew answers without a section, like the pipeline", async () => {
