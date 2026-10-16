@@ -75,7 +75,11 @@ import {
 } from "./response-shape.ts";
 import { listSessionRawTurns, type ExpandedRawTurn } from "./session-recall.ts";
 import { minedTurnsHash, recordSessionMiningOutcome } from "./session-mining-ledger.ts";
-import { consumeMiningSurvey } from "./session-mining-surveys.ts";
+import {
+  clearMiningSurvey,
+  closedSurveyFailure,
+  readMiningSurvey,
+} from "./session-mining-surveys.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE, type BrainSignalSign } from "./types.ts";
@@ -344,6 +348,13 @@ export interface CommitExtractedSignalsOptions {
    * is named the same way; a yield record is recorded regardless.
    */
   readonly surveyedTurnsHash?: string;
+  /**
+   * Name a pending-survey store failure in `miningLedgerFailure` by its
+   * store and errno code only, never by the raised message, which carries
+   * the absolute host path. Set by surfaces that answer a caller below
+   * local reach.
+   */
+  readonly closeHostErrors?: boolean;
 }
 
 // ----- Semantic rules the descriptor language cannot express ---------------
@@ -793,20 +804,26 @@ export function commitExtractedSignals(
   const zeroYield = written.length === 0;
   let miningLedgerFailure: string | undefined;
   let currentHash: string | null = null;
-  // Consumed first and on every commit, so a survey never outlives the
-  // commit that answered it.
+  const raw = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+  const surveyText = (err: unknown): string =>
+    opts.closeHostErrors === true ? closedSurveyFailure(err) : raw(err);
+  // Read, not consumed: the survey is cleared below only once this
+  // commit's outcome is final, so a commit that fails transiently (the
+  // turns unreadable, the ledger write refused) leaves it for the retry.
   let surveyed: ReadonlyArray<string> = [];
   let surveyFailure: string | undefined;
   try {
-    surveyed = consumeMiningSurvey(vault, trimmed);
+    surveyed = readMiningSurvey(vault, trimmed);
   } catch (err) {
-    surveyFailure = err instanceof Error ? err.message : String(err);
+    surveyFailure = surveyText(err);
   }
+  let outcomeFinal = true;
   try {
     const mined = selectMinedTurns(boundary, listSessionRawTurns(vault, trimmed));
     currentHash = mined.length === 0 ? null : minedTurnsHash(mined);
   } catch (err) {
-    miningLedgerFailure = err instanceof Error ? err.message : String(err);
+    miningLedgerFailure = raw(err);
+    outcomeFinal = false;
   }
   if (currentHash !== null && opts.surveyedTurnsHash !== undefined) {
     if (opts.surveyedTurnsHash !== currentHash) {
@@ -843,7 +860,17 @@ export function commitExtractedSignals(
       // commit as failed, and dropping the error would leave a ledger that
       // silently stopped being written. Name it instead - the surfaces
       // carry it verbatim.
-      miningLedgerFailure = err instanceof Error ? err.message : String(err);
+      miningLedgerFailure = raw(err);
+      outcomeFinal = false;
+    }
+  }
+  if (outcomeFinal && surveyFailure === undefined) {
+    try {
+      clearMiningSurvey(vault, trimmed, surveyed);
+    } catch (err) {
+      // The outcome stands; a survey left behind can only attest material
+      // a plan really offered, so it is named rather than thrown.
+      miningLedgerFailure ??= `the answered plan survey could not be cleared (${surveyText(err)})`;
     }
   }
 

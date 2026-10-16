@@ -962,3 +962,37 @@ test("the ledger-failure field is absent when the record succeeded", () => {
   expect(ledgerEntry()).toBeDefined();
   expect("miningLedgerFailure" in res).toBe(false);
 });
+
+test("a barren commit whose ledger record fails keeps the survey, so its retry tombstones", async () => {
+  const plan = await surfacePlan();
+  seedCorruptLedger();
+  expect(commitWithoutRelay([]).miningLedgerFailure).toContain(
+    "session mining ledger is corrupted JSON",
+  );
+  // The operator clears the damaged ledger and retries the same answer
+  // without a relay: the survey the failed commit read must still attest it.
+  rmSync(sessionMiningLedgerPath(vault));
+  const retry = commitWithoutRelay([]);
+  expect(retry.miningLedgerFailure).toBeUndefined();
+  expect(ledgerEntry()?.minedContentHash).toBe(plan.surveyedTurnsHash);
+});
+
+test("below local reach a survey store failure names no host path", async () => {
+  mkdirSync(dirname(sessionMiningSurveysPath(vault)), { recursive: true });
+  writeFileSync(sessionMiningSurveysPath(vault), "{ truncated");
+  const plan = await planExtractSignalsPrefiltered(vault, SESSION, {
+    now: NOW,
+    decisionModel: null,
+    closeHostErrors: true,
+  });
+  expect(plan.surveyRecordFailure).toBe("session mining surveys store failed (error)");
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [] },
+    { agent: "tester", now: NOW, closeHostErrors: true },
+  );
+  expect(res.miningLedgerFailure).toContain("session mining surveys store failed (error)");
+  expect(res.miningLedgerFailure).not.toContain(vault);
+  expect(res.miningLedgerFailure).not.toContain(tmpdir());
+});

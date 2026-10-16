@@ -80,7 +80,7 @@ import {
 } from "./extract-signals.ts";
 import type { NeedsLlmStep } from "./llm-step.ts";
 import { readMiningTombstone, type SessionMiningOutcome } from "./session-mining-ledger.ts";
-import { recordMiningSurvey } from "./session-mining-surveys.ts";
+import { closedSurveyFailure, recordMiningSurvey } from "./session-mining-surveys.ts";
 import { listSessionRawTurns } from "./session-recall.ts";
 import { estimateTokens as estimateTextTokens } from "./text/tokenizer.ts";
 import { emitTokenImpact, TOKEN_COUNT_METHOD } from "./token-impact.ts";
@@ -150,6 +150,12 @@ export interface PrefilteredPlanOptions {
    * file, and it changes nothing else about the plan.
    */
   readonly force?: boolean;
+  /**
+   * Name a survey-record failure by its store and errno code only, never
+   * by the raised message, which carries an absolute host path. Set by
+   * surfaces that answer a caller below local reach.
+   */
+  readonly closeHostErrors?: boolean;
 }
 
 /** Whether this configuration runs the pre-filter at all. */
@@ -321,9 +327,10 @@ export async function planExtractSignalsPrefiltered(
     recordMiningSurvey(vault, plan.sessionId, plan.surveyedTurnsHash, opts.now);
     return plan;
   } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
     return Object.freeze({
       ...plan,
-      surveyRecordFailure: err instanceof Error ? err.message : String(err),
+      surveyRecordFailure: opts.closeHostErrors === true ? closedSurveyFailure(err) : raw,
     });
   }
 }

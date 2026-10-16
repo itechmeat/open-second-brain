@@ -9,9 +9,12 @@
  * zero-yield commit tombstone turns no model had seen. This store closes
  * that gap without asking the caller for anything: every plan that hands
  * out a mining envelope records the hash of the material it offered, and
- * the commit consumes the record. A zero-yield commit without a relay
+ * the commit that answers it clears the record. A zero-yield commit without a relay
  * writes its tombstone only when exactly one distinct material was
- * surveyed since the last commit and the session still holds it.
+ * surveyed since the last commit and the session still holds it. The
+ * commit reads the survey first and clears what it read only once its
+ * outcome is final, so a commit that fails transiently (an unreadable
+ * session, a ledger write that refused) leaves the survey for its retry.
  *
  * Kept apart from the mining ledger on purpose. The ledger fails closed
  * because a silent reset would unsuppress every barren session; a lost
@@ -54,6 +57,17 @@ const CORRUPT_SURVEYS_REMEDY =
   "; to recover, move the file aside or delete it - only pending plan surveys are lost, so " +
   "the next barren commit of an affected session records no tombstone until it is planned again";
 
+/**
+ * A store failure in a closed form: the store name plus the errno code,
+ * never the raised message, which names the absolute host path. For every
+ * surface that answers a caller below local reach (the same form as
+ * `closedCollectError`).
+ */
+export function closedSurveyFailure(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return `session mining surveys store failed (${typeof code === "string" ? code : "error"})`;
+}
+
 /** Absolute path of the pending-survey store for a vault. */
 export function sessionMiningSurveysPath(vault: string): string {
   return join(vault, DERIVED_STORE_DIR, SESSION_MINING_SURVEYS_FILE);
@@ -64,9 +78,20 @@ interface SurveyRow {
   readonly surveyedAt: string;
 }
 
-function readSurveys(vault: string): Record<string, SurveyRow> {
+/**
+ * Session ids are caller data, so every map keyed by one is
+ * null-prototype: an id such as `__proto__` is an own key like any other
+ * instead of an assignment to the prototype.
+ */
+type SurveyMap = Record<string, SurveyRow>;
+
+function emptySurveyMap(): SurveyMap {
+  return Object.create(null) as SurveyMap;
+}
+
+function readSurveys(vault: string): SurveyMap {
   const path = sessionMiningSurveysPath(vault);
-  if (!existsSync(path)) return {};
+  if (!existsSync(path)) return emptySurveyMap();
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -96,7 +121,7 @@ function readSurveys(vault: string): Record<string, SurveyRow> {
       `session mining surveys container is not an object: ${path}${CORRUPT_SURVEYS_REMEDY}`,
     );
   }
-  const out: Record<string, SurveyRow> = {};
+  const out = emptySurveyMap();
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
     const row = value as Record<string, unknown>;
@@ -118,9 +143,9 @@ function readSurveys(vault: string): Record<string, SurveyRow> {
   return out;
 }
 
-function writeSurveys(vault: string, surveys: Record<string, SurveyRow>): void {
+function writeSurveys(vault: string, surveys: SurveyMap): void {
   const path = sessionMiningSurveysPath(vault);
-  const sorted: Record<string, SurveyRow> = {};
+  const sorted = emptySurveyMap();
   for (const key of Object.keys(surveys).toSorted()) sorted[key] = surveys[key]!;
   const next =
     JSON.stringify(
@@ -156,12 +181,12 @@ export function recordMiningSurvey(
     surveys[key] = { hashes, surveyedAt: isoSecond(now) };
     const keys = Object.keys(surveys);
     if (keys.length > MAX_SURVEYED_SESSIONS) {
-      const oldestFirst = keys.toSorted((a, b) =>
-        surveys[a]!.surveyedAt === surveys[b]!.surveyedAt
-          ? a.localeCompare(b)
-          : surveys[a]!.surveyedAt < surveys[b]!.surveyedAt
-            ? -1
-            : 1,
+      // A damaged row reads with an empty surveyedAt and so goes first.
+      // Evicting it is the safe direction: the session then reads as
+      // having no survey, which withholds a tombstone rather than writing one.
+      const oldestFirst = keys.toSorted(
+        (a, b) =>
+          surveys[a]!.surveyedAt.localeCompare(surveys[b]!.surveyedAt) || a.localeCompare(b),
       );
       for (const drop of oldestFirst.slice(0, keys.length - MAX_SURVEYED_SESSIONS)) {
         if (drop !== key) delete surveys[drop];
@@ -174,23 +199,41 @@ export function recordMiningSurvey(
 }
 
 /**
- * Read and remove the pending surveys of one session: the distinct hashes
- * plans offered since its last commit, oldest first, or `[]` when none was
- * recorded. Throws on a corrupt or unknown-schema store.
+ * The pending surveys of one session: the distinct hashes plans offered
+ * since its last commit, oldest first, or `[]` when none was recorded.
+ * Read-only - the commit clears them with {@link clearMiningSurvey} once
+ * its outcome is final. Throws on a corrupt or unknown-schema store.
  */
-export function consumeMiningSurvey(vault: string, sessionId: string): ReadonlyArray<string> {
+export function readMiningSurvey(vault: string, sessionId: string): ReadonlyArray<string> {
+  return readSurveys(vault)[sessionId.trim()]?.hashes ?? [];
+}
+
+/**
+ * Remove `hashes` from one session's pending surveys - the ones a commit
+ * read and answered. A hash a plan added after that read stays pending, so
+ * a plan racing the commit is not lost. The row goes once it is empty.
+ */
+export function clearMiningSurvey(
+  vault: string,
+  sessionId: string,
+  hashes: ReadonlyArray<string>,
+): void {
+  if (hashes.length === 0) return;
   const path = sessionMiningSurveysPath(vault);
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) return;
   assertVaultIdentityForWrite(vault);
   const key = sessionId.trim();
   const handle = acquireLockSyncWithRetry(path, undefined, { remedy: ingestLockRemedy });
   try {
     const surveys = readSurveys(vault);
     const row = surveys[key];
-    if (row === undefined) return [];
-    delete surveys[key];
+    if (row === undefined) return;
+    const answered = new Set(hashes);
+    const left = row.hashes.filter((h) => !answered.has(h));
+    if (left.length === row.hashes.length) return;
+    if (left.length === 0) delete surveys[key];
+    else surveys[key] = { hashes: left, surveyedAt: row.surveyedAt };
     writeSurveys(vault, surveys);
-    return row.hashes;
   } finally {
     handle.release();
   }

@@ -11,6 +11,7 @@
 
 import { commitExtractedSignals, ExtractSignalsError } from "../../core/brain/extract-signals.ts";
 import { loadDedupIndex } from "../../core/brain/dedup-hash.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import {
   planExtractSignalsPrefiltered,
   recordExtractPrefilterCommit,
@@ -22,7 +23,7 @@ import { resolveAgentName, resolveTokenImpactLedgerEnabled } from "../../core/co
 import { coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_extract_signals";
@@ -46,6 +47,9 @@ async function toolBrainExtractSignals(
     // answer claiming the session states nothing, and it goes through the
     // validators like any other so the caller gets one contract.
     const decisionModel = resolveExtractPrefilterConfig(ctx.vault, ctx.configPath ?? undefined);
+    // Below local reach a store failure is named without its raised
+    // message, which carries the absolute host path.
+    const closeHostErrors = contextReach(ctx) !== TRANSPORT_REACH.local;
     if (args["items"] === undefined) {
       const plan = await planExtractSignalsPrefiltered(ctx.vault, session, {
         now: new Date(),
@@ -56,6 +60,7 @@ async function toolBrainExtractSignals(
         // plan call, for "I removed the downstream item and want it
         // re-proposed".
         force: args["force"] === true,
+        closeHostErrors,
       });
       return {
         phase: "plan",
@@ -130,6 +135,7 @@ async function toolBrainExtractSignals(
         // check that the session did not change since the plan. Absent,
         // the commit checks the survey the plan recorded instead.
         ...(surveyedTurnsHash !== undefined ? { surveyedTurnsHash } : {}),
+        closeHostErrors,
       },
     );
     recordExtractPrefilterCommit(ctx.vault, decisionModel, res, now);

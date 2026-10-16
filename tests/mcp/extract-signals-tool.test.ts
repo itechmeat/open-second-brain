@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 
 import { AUTO_EXTRACT_PER_SESSION_CAP } from "../../src/core/brain/extract-signals.ts";
 import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
+import { sessionMiningSurveysPath } from "../../src/core/brain/session-mining-surveys.ts";
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -288,4 +289,19 @@ test("a ledger write failure on a successful commit rides the commit response by
   expect(res.phase).toBe("commit");
   expect(res.written).toEqual([]);
   expect(res.mining_ledger_failure).toContain("session mining ledger is corrupted JSON");
+});
+
+test("a survey store failure reaches a caller below local reach without the host path", async () => {
+  // This context minted no reach, so it answers fail-closed below local.
+  mkdirSync(dirname(sessionMiningSurveysPath(vault)), { recursive: true });
+  writeFileSync(sessionMiningSurveysPath(vault), "{ truncated");
+  const plan = (await tool().handler(ctx, { session: SESSION })) as {
+    survey_record_failure?: string;
+  };
+  expect(plan.survey_record_failure).toBe("session mining surveys store failed (error)");
+  const mine = (await tool().handler(ctx, { session: SESSION, items: [] })) as {
+    mining_ledger_failure?: string;
+  };
+  expect(mine.mining_ledger_failure).toContain("session mining surveys store failed (error)");
+  expect(mine.mining_ledger_failure).not.toContain(tmp);
 });
