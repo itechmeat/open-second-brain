@@ -382,6 +382,10 @@ export function pruneHookStateFiles(
   } catch {
     return 0;
   }
+  // Locks last: removing a lock also sweeps its old takeover claims, which
+  // this loop would then find gone and not count. Directory order differs
+  // between filesystems, so fix the order rather than depend on it.
+  names.sort((a, b) => Number(SCOPE_LOCK_RE.test(a)) - Number(SCOPE_LOCK_RE.test(b)));
   let removed = 0;
   for (const name of names) {
     if (removed >= maxFiles) break;

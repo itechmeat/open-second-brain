@@ -128,6 +128,28 @@ describe("acquireLockSync", () => {
   });
 });
 
+describe("exit sweep after a stale handle's release", () => {
+  test("a newer handle's lock is still removed at exit after an older handle released", () => {
+    // The older handle lost its lock to a takeover; the newer handle in the
+    // same process re-registered the path. The older release must not drop
+    // that registration, or the exit sweep would leave the newer lock behind.
+    const target = join(tmpRoot, "pref-exit.md");
+    const module = resolve(import.meta.dir, "../../../src/core/brain/sync-lockfile.ts");
+    const script = `
+      const { unlinkSync } = await import("node:fs");
+      const { acquireLockSync } = await import(${JSON.stringify(module)});
+      const target = ${JSON.stringify(target)};
+      const first = acquireLockSync(target);
+      unlinkSync(target + ".lock");
+      acquireLockSync(target);
+      first.release();
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", script]);
+    expect(child.exitCode).toBe(0);
+    expect(existsSync(target + ".lock")).toBe(false);
+  });
+});
+
 describe("isWindowsDeletePending", () => {
   const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" }) as NodeJS.ErrnoException;
   const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;

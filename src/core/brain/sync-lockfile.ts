@@ -255,7 +255,9 @@ export function acquireLockSync(target: string): LockHandle {
     release(): void {
       if (released) return;
       released = true;
-      heldLocks.delete(lockPath);
+      // A newer handle in this process may have re-registered the path; its
+      // registration is the one the exit sweep must still see.
+      if (heldLocks.get(lockPath) === identity) heldLocks.delete(lockPath);
       // The name no longer holds this holder's file: whoever holds it now
       // keeps it. Removing it would admit a second holder beside them.
       if (!ownsLockName(lockPath, identity)) return;
