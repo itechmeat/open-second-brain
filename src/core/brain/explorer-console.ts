@@ -15,9 +15,13 @@
  *     feature off the section reads as "disabled", never as empty data
  *     an operator could mistake for "enabled, nothing written yet".
  *
- * Output is deterministic given `opts.now` and frozen like
- * `collectExplorerData`, so the live HTTP handler cannot mutate it and
- * two GETs on a quiet vault agree byte for byte.
+ * Output is deterministic GIVEN the same `opts.now` and frozen like
+ * `collectExplorerData`, so the live HTTP handler cannot mutate it.
+ * The live route injects no clock: every GET stamps its own render
+ * time into `generated_at` and the histogram window rolls at the UTC
+ * day boundary, so two GETs agree on every recorded section but never
+ * on the stamp. Byte-for-byte reproducibility across calls holds only
+ * for callers that inject one `now`.
  *
  * Reads only. This module never appends a continuity record, never
  * captures a report delta, and never writes: a viewer must not fire the
