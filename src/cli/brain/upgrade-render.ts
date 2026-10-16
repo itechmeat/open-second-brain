@@ -9,6 +9,10 @@
 import type { UpgradeFilePlan, UpgradePlan } from "../../core/brain/upgrade.ts";
 import { info, ok } from "../output.ts";
 
+// The moved implementation keeps a local binding (printUpgradePlanText
+// calls it directly) and the re-export below keeps helpers.ts working.
+import { renderUnifiedDiff } from "../../core/diff.ts";
+
 export function renderUpgradePlanJson(plan: UpgradePlan): {
   pending: number;
   errors: number;
@@ -51,38 +55,15 @@ export function printUpgradePlanText(plan: UpgradePlan): void {
   if (plan.pending === 0 && plan.errors === 0) {
     ok("upgrade: all managed files match the current release.");
   } else if (plan.pending > 0) {
-    ok(`upgrade: ${plan.pending} pending update(s); ` + `re-run with --apply --yes when ready.`);
+    ok(`upgrade: ${plan.pending} pending update(s); re-run with --apply --yes when ready.`);
   }
 }
 
 /**
  * Minimal unified-diff renderer used by both `upgrade` (per-file diff)
- * and `rollback --dry-run` (snapshot vs live). The implementation
- * trims matching prefix / suffix and prints the changed window — it
- * is not a drop-in replacement for GNU diff, but it is deterministic
- * and dependency-free.
+ * and `rollback --dry-run` (snapshot vs live) — and, since t_b6bcd984,
+ * by every guarded write lane. The implementation moved to the core
+ * leaf src/core/diff.ts; the import above keeps the local caller here
+ * working and the re-export keeps helpers.ts working.
  */
-export function renderUnifiedDiff(before: string, after: string, label: string): string {
-  if (before === after) return "";
-  const a = before.split("\n");
-  const b = after.split("\n");
-  const lines: string[] = [`--- ${label} (live)`, `+++ ${label} (release)`];
-  let head = 0;
-  while (head < a.length && head < b.length && a[head] === b[head]) head++;
-  let tailA = a.length;
-  let tailB = b.length;
-  while (tailA > head && tailB > head && a[tailA - 1] === b[tailB - 1]) {
-    tailA--;
-    tailB--;
-  }
-  if (head > 0) {
-    lines.push(`@@ context: ${head} matching line(s) above @@`);
-  }
-  for (let i = head; i < tailA; i++) lines.push(`- ${a[i]}`);
-  for (let i = head; i < tailB; i++) lines.push(`+ ${b[i]}`);
-  if (tailA < a.length || tailB < b.length) {
-    const tailCount = Math.max(a.length - tailA, b.length - tailB);
-    lines.push(`@@ context: ${tailCount} matching line(s) below @@`);
-  }
-  return lines.join("\n");
-}
+export { renderUnifiedDiff };

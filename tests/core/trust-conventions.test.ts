@@ -1,0 +1,91 @@
+/**
+ * Fixture contract for Open Second Brain's guarded host writes
+ * (t_b6bcd984 + t_f4555087).
+ *
+ * Three agreements are pinned here so the guarded write lanes (install
+ * JSON-merge, protect, doctor repair) and the standalone PreToolUse
+ * host-backup hook cannot drift apart:
+ *
+ * 1. the consent vocabulary every guarded lane records:
+ *    `confirmed | refused | headless-refused`;
+ * 2. the receipt-line schema: actor, pid, before-hash, summary plus a
+ *    per-lane tail (consent verdict, backup path, ...);
+ * 3. the timestamped backup-folder layout: one stamp folder per target
+ *    under a sibling `.o2b-backups` root, stamp in UTC compact
+ *    `YYYY-MM-DD-HHMMSS` form.
+ *
+ * The conventions live in src/core/trust.ts so the CLI lanes import
+ * them directly. The hook wrapper stays stdlib-only and re-states the
+ * receipt shape; its compliance is pinned by its own fixture test
+ * (tests/hooks/pretool-host-backup.test.ts), not by an import.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import { compactRunStamp } from "../../src/core/brain/time.ts";
+import {
+  BACKUP_DIR_NAME,
+  backupFolderStamp,
+  backupRootFor,
+  CONSENT_VERDICTS,
+  type ConsentVerdict,
+  formatTrustReceiptLine,
+  type TrustReceipt,
+} from "../../src/core/trust.ts";
+
+const HEAD_FIELDS = ["actor", "pid", "before_hash", "summary"] as const;
+
+describe("trust conventions", () => {
+  test("consent vocabulary is exactly confirmed | refused | headless-refused", () => {
+    expect([...CONSENT_VERDICTS]).toEqual(["confirmed", "refused", "headless-refused"]);
+    // Every verdict is a valid ConsentVerdict and the type has no extras.
+    const drawn: readonly ConsentVerdict[] = ["confirmed", "refused", "headless-refused"];
+    for (const v of drawn) expect(CONSENT_VERDICTS).toContain(v);
+  });
+
+  test("receipt line carries actor, pid, before-hash, summary, then the lane tail", () => {
+    const receipt: TrustReceipt = {
+      actor: "hook:claudecode",
+      pid: 4242,
+      before_hash: `sha256:${"a".repeat(64)}`,
+      summary: "backed up settings.json before a Write",
+    };
+    const parsed = JSON.parse(
+      formatTrustReceiptLine(receipt, { consent: "confirmed", backup: "/b/2026-10-16-120000" }),
+    );
+    for (const field of HEAD_FIELDS) expect(parsed).toHaveProperty(field);
+    expect(parsed.actor).toBe("hook:claudecode");
+    expect(parsed.pid).toBe(4242);
+    expect(parsed.before_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(parsed.summary).toBe("backed up settings.json before a Write");
+    expect(parsed.consent).toBe("confirmed");
+    expect(parsed.backup).toBe("/b/2026-10-16-120000");
+  });
+
+  test("the lane tail cannot clobber the fixed receipt head", () => {
+    const receipt: TrustReceipt = {
+      actor: "cli",
+      pid: 7,
+      before_hash: `sha256:${"b".repeat(64)}`,
+      summary: "s",
+    };
+    const parsed = JSON.parse(formatTrustReceiptLine(receipt, { actor: "spoofed" }));
+    expect(parsed.actor).toBe("cli");
+  });
+
+  test("backup-folder layout: one UTC stamp folder per target under .o2b-backups", () => {
+    const stamp = backupFolderStamp(new Date("2026-10-16T12:34:56Z"));
+    expect(stamp).toBe("2026-10-16-123456");
+    expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2}-\d{6}$/);
+    // Same minting rule as every other run stamp in the repo.
+    expect(backupFolderStamp(new Date("2020-01-02T03:04:05Z"))).toBe(
+      compactRunStamp(new Date("2020-01-02T03:04:05Z")),
+    );
+    expect(BACKUP_DIR_NAME).toBe(".o2b-backups");
+    expect(backupRootFor("/home/u/.claude/settings.json")).toBe(
+      "/home/u/.claude/.o2b-backups/settings.json",
+    );
+    // The root sits beside the target, never inside the target file.
+    expect(backupRootFor("/x/settings.local.json")).toBe("/x/.o2b-backups/settings.local.json");
+  });
+});
