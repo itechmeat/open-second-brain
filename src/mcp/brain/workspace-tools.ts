@@ -143,6 +143,8 @@ const TRIGGER_TRANSITIONS: ReadonlyArray<TriggerAction> = Object.freeze([
   "act",
   "suppress",
   "unsuppress",
+  "snooze",
+  "unsnooze",
 ]);
 
 /**

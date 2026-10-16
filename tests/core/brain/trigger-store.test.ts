@@ -24,6 +24,7 @@ import {
   TriggerSourceArtifactsError,
   TriggerFieldError,
   TRIGGER_LOCK_STALE_MS,
+  TRIGGER_SNOOZE_DAYS,
   TRIGGER_TTL_DAYS,
 } from "../../../src/core/brain/triggers/store.ts";
 import {
@@ -289,6 +290,143 @@ test("an unreadable snoozed_from refuses instead of silently defaulting", () => 
   rewriteLine(path, /^snoozed_from: .*$/mu, "snoozed_from: forgot");
   expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
   expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_from");
+});
+
+// ── Snooze transition and wake (t_00e9de6a) ─────────────────────────────────
+
+test("snooze defers a trigger for a bounded window, then the original resurfaces with its ledger intact", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const snoozed = transitionTrigger(vault, created[0]!.id, "snooze", {
+    now: NOW,
+    snoozeDays: 3,
+  });
+  expect(snoozed.status).toBe("snoozed");
+  expect(snoozed.snoozedAt).toBe(NOW.toISOString());
+  expect(snoozed.snoozedUntil).toBe(new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
+  expect(snoozed.snoozedFrom).toBe("pending");
+  // A pause, not a resolution: the deferral writes no resolution instant.
+  expect(snoozed.resolvedAt).toBeNull();
+
+  // A scan during the window is blocked by the snooze and records the
+  // recurrence - the ledger is the refire detector.
+  const during = new Date(NOW.getTime() + DAY_MS);
+  const blocked = createTriggers(vault, [candidate()], { now: during });
+  expect(blocked.created).toHaveLength(0);
+  expect(blocked.skipped[0]!.reason).toBe("snoozed");
+
+  // After the window the ORIGINAL resurfaces, ledger intact - not a
+  // fresh record.
+  const after = new Date(NOW.getTime() + 4 * DAY_MS);
+  const resurfaced = listTriggers(vault, { now: after })[0]!;
+  expect(resurfaced.id).toBe(created[0]!.id);
+  expect(resurfaced.effectiveStatus).toBe("pending");
+  expect(resurfaced.occurrences).toBe(2);
+  expect(resurfaced.lastSeenAt).toBe(during.toISOString());
+
+  // And a scan after the wake meets an open twin, not a duplicate.
+  const laterScan = createTriggers(vault, [candidate()], { now: after });
+  expect(laterScan.created).toHaveLength(0);
+  expect(laterScan.skipped[0]!.reason).toBe("active");
+});
+
+test("a snoozed trigger wakes early when the finding fires again", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 30 });
+
+  // A refire inside the window stamps the ledger; the wake arm reads it.
+  const refire = new Date(NOW.getTime() + DAY_MS);
+  const blocked = createTriggers(vault, [candidate()], { now: refire });
+  expect(blocked.created).toHaveLength(0);
+  expect(blocked.skipped[0]!.reason).toBe("snoozed");
+
+  const woken = listTriggers(vault, { now: refire })[0]!;
+  expect(woken.id).toBe(created[0]!.id);
+  expect(woken.effectiveStatus).toBe("pending");
+  expect(woken.lastSeenAt).toBe(refire.toISOString());
+});
+
+test("snooze without an explicit window uses the bounded default", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const snoozed = transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
+  expect(snoozed.snoozedUntil).toBe(
+    new Date(NOW.getTime() + TRIGGER_SNOOZE_DAYS * DAY_MS).toISOString(),
+  );
+});
+
+test("snooze is refused on a terminal trigger and names its state", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "act", { now: NOW });
+  expect(() =>
+    transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 3 }),
+  ).toThrow("terminal (acted)");
+
+  // Snoozed is itself terminal: re-snoozing is refused naming snoozed,
+  // not silently treated as idempotent.
+  const { created: fresh } = createTriggers(
+    vault,
+    [candidate({ cooldownKey: "contradiction:pref-c:pref-d" })],
+    { now: NOW },
+  );
+  transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW, snoozeDays: 3 });
+  expect(() =>
+    transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW, snoozeDays: 3 }),
+  ).toThrow("terminal (snoozed)");
+});
+
+test("unsnooze restores the interrupted status before the window ends", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  transitionTrigger(vault, id, "acknowledge", { now: NOW });
+  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 30 });
+  const woken = transitionTrigger(vault, id, "unsnooze", {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(woken.status).toBe("acknowledged");
+  expect(woken.effectiveStatus).toBe("acknowledged");
+  expect(woken.snoozedAt).toBeNull();
+  expect(woken.snoozedUntil).toBeNull();
+  expect(woken.snoozedFrom).toBeNull();
+});
+
+test("unsnoozing a trigger that is not snoozed throws naming its status", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  expect(() => transitionTrigger(vault, id, "unsnooze", { now: NOW })).toThrow("pending");
+  transitionTrigger(vault, id, "dismiss", { now: NOW });
+  expect(() => transitionTrigger(vault, id, "unsnooze", { now: NOW })).toThrow("dismissed");
+});
+
+test("unsnoozing a hand-edited snoozed record with no prior status throws naming the field", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  const path = created[0]!.path;
+  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 3 });
+  rewriteLine(path, /^snoozed_from: .*$/mu, "");
+  expect(() => transitionTrigger(vault, id, "unsnooze", { now: NOW })).toThrow("snoozed_from");
+});
+
+test("suppressing a snoozed trigger and unsuppressing restores the snooze with its window still armed", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 30 });
+  transitionTrigger(vault, id, "suppress", { now: NOW });
+  const restored = transitionTrigger(vault, id, "unsuppress", {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(restored.status).toBe("snoozed");
+  expect(restored.effectiveStatus).toBe("snoozed");
+  expect(restored.snoozedUntil).toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
+});
+
+test("a snoozed trigger is hidden from the brief until its window ends", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 3 });
+  const during = new Date(NOW.getTime() + DAY_MS);
+  expect(briefTriggers(vault, { now: during, cap: 5, cooldownDays: 7 })).toHaveLength(0);
+  const after = new Date(NOW.getTime() + 4 * DAY_MS);
+  expect(briefTriggers(vault, { now: after, cap: 5, cooldownDays: 7 }).map((t) => t.id)).toEqual([
+    created[0]!.id,
+  ]);
 });
 
 test("a cooldown-blocked twin records a recurrence too, not only a suppressed one", () => {

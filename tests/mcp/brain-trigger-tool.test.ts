@@ -120,6 +120,8 @@ test("the tool's status enum is the shared status list, not a copy of it", () =>
   expect(schema.properties.status.enum).toEqual([...TRIGGER_STATUSES]);
   expect(schema.properties.operation.enum).toContain("suppress");
   expect(schema.properties.operation.enum).toContain("unsuppress");
+  expect(schema.properties.operation.enum).toContain("snooze");
+  expect(schema.properties.operation.enum).toContain("unsnooze");
 });
 
 test("brain_trigger suppress hides the trigger from list and shows it in history", async () => {
@@ -158,6 +160,44 @@ test("brain_trigger unsuppress on a trigger that is not suppressed is an invalid
   expect(() =>
     tool("brain_trigger").handler(ctx, { operation: "unsuppress", id: created[0]!.id }),
   ).toThrow("not suppressed");
+});
+
+test("brain_trigger snooze hides the trigger from list until unsnoozed", async () => {
+  // Seeded at the real clock, like the brief tests: the handler reads
+  // with `new Date()`, and a record created at the file's fixed 2099
+  // instant would read as refired the instant a 2026 snooze started.
+  const { created } = createTriggers(vault, [CANDIDATE], { now: new Date() });
+  const id = created[0]!.id;
+
+  const snoozed = (await tool("brain_trigger").handler(ctx, {
+    operation: "snooze",
+    id,
+  })) as { trigger: { status: string } };
+  expect(snoozed.trigger.status).toBe("snoozed");
+
+  const listed = (await tool("brain_trigger").handler(ctx, { operation: "list" })) as {
+    triggers: Array<{ id: string }>;
+  };
+  expect(listed.triggers).toHaveLength(0);
+
+  const history = (await tool("brain_trigger").handler(ctx, { operation: "history" })) as {
+    triggers: Array<{ id: string }>;
+  };
+  expect(history.triggers.map((t) => t.id)).toEqual([id]);
+
+  const woken = (await tool("brain_trigger").handler(ctx, {
+    operation: "unsnooze",
+    id,
+  })) as { trigger: { status: string } };
+  expect(woken.trigger.status).toBe("pending");
+});
+
+test("brain_trigger snooze on a terminal trigger is an invalid request naming the state", async () => {
+  const { created } = createTriggers(vault, [CANDIDATE], { now: NOW });
+  await tool("brain_trigger").handler(ctx, { operation: "dismiss", id: created[0]!.id });
+  expect(() =>
+    tool("brain_trigger").handler(ctx, { operation: "snooze", id: created[0]!.id }),
+  ).toThrow("terminal (dismissed)");
 });
 
 test("brain_trigger names every operation when it rejects one", async () => {

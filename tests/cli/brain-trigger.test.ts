@@ -108,6 +108,8 @@ describe("o2b brain trigger", () => {
       "act",
       "suppress",
       "unsuppress",
+      "snooze",
+      "unsnooze",
       "history",
     ]) {
       expect(usage).toContain(verb);
@@ -189,6 +191,33 @@ describe("o2b brain trigger", () => {
       transitioned.push((JSON.parse(out.stdout) as { trigger: TriggerJson }).trigger.status);
     }
     expect(transitioned).toEqual(["acknowledged", "dismissed", "acted"]);
+  });
+
+  test("snooze defers through the CLI and unsnooze restores it", async () => {
+    const id = seed();
+    const snoozed = await runCli(["brain", "trigger", "snooze", id, "--json"], { env: env() });
+    expect(snoozed.returncode).toBe(0);
+    expect((JSON.parse(snoozed.stdout) as { trigger: TriggerJson }).trigger.status).toBe("snoozed");
+
+    // Snoozed is terminal: hidden from `list`, shown in `history`.
+    expect((await listJson()).triggers.map((t) => t.id)).not.toContain(id);
+    const history = await runCli(["brain", "trigger", "history", "--json"], { env: env() });
+    expect(
+      (JSON.parse(history.stdout) as { triggers: TriggerJson[] }).triggers.map((t) => t.id),
+    ).toEqual([id]);
+
+    const woken = await runCli(["brain", "trigger", "unsnooze", id, "--json"], { env: env() });
+    expect(woken.returncode).toBe(0);
+    expect((JSON.parse(woken.stdout) as { trigger: TriggerJson }).trigger.status).toBe("pending");
+    expect((await listJson()).triggers.map((t) => t.id)).toEqual([id]);
+  });
+
+  test("snoozing an already-snoozed trigger fails naming its state", async () => {
+    const id = seed();
+    expect((await runCli(["brain", "trigger", "snooze", id], { env: env() })).returncode).toBe(0);
+    const again = await runCli(["brain", "trigger", "snooze", id], { env: env() });
+    expect(again.returncode).not.toBe(0);
+    expect(again.stdout + again.stderr).toContain("terminal (snoozed)");
   });
 
   test("a transition verb without an id is a usage error", async () => {

@@ -21,6 +21,12 @@
  *     from any status, it carries no clock, and {@link transitionTrigger}
  *     restores the interrupted status verbatim on `unsuppress` because
  *     suppressing leaves the delivery and resolution instants untouched;
+ *   - snooze is suppression's time-boxed sibling: it defers an open
+ *     trigger for a bounded window OR until the finding fires again,
+ *     whichever comes first (the refire read off the recurrence ledger),
+ *     and `unsnooze` wakes it by hand - the wake restores the
+ *     interrupted status verbatim because snoozing leaves the delivery
+ *     and resolution instants untouched;
  *   - the recurrence ledger records every silenced candidate that HAS a
  *     record to write to, so a suppressed finding that keeps firing is
  *     auditable rather than invisible ({@link recordRecurrence});
@@ -59,6 +65,13 @@ import {
 
 export const TRIGGER_TTL_DAYS = 14;
 export const TRIGGER_COOLDOWN_DAYS = 7;
+/**
+ * Default snooze window in days: how long the `snooze` action defers an
+ * open trigger when the caller gives no explicit window. A constant, not
+ * a config key - the snooze is the caller's estimate of "later", and a
+ * refire wakes the trigger early regardless of the window (t_00e9de6a).
+ */
+export const TRIGGER_SNOOZE_DAYS = 3;
 export const TRIGGER_MAX_PER_KIND = 10;
 
 /**
@@ -425,13 +438,66 @@ function textOrNull(raw: unknown): string | null {
   return typeof raw === "string" ? raw : null;
 }
 
-function effectiveStatus(status: TriggerStatus, expiresAt: string, now: Date): TriggerStatus {
+/**
+ * The fields the snooze wake arm reads: when the snooze started and ends,
+ * the status it interrupted, and the ledger instant a refire is read
+ * from. {@link TriggerRecord} satisfies it.
+ */
+interface SnoozeLedger {
+  readonly lastSeenAt: string;
+  readonly snoozedAt: string | null;
+  readonly snoozedUntil: string | null;
+  readonly snoozedFrom: TriggerStatus | null;
+}
+
+/**
+ * The status a finished snooze restores, or `null` while it still holds.
+ *
+ * The wake condition is the window end OR a refire, whichever comes
+ * first, and the refire half is read straight off the recurrence ledger:
+ * every scan of a snoozed twin stamps `lastSeenAt` ({@link blockReason}
+ * keeps reporting snoozed twins for exactly that reason), so "fired
+ * again since snoozing" is `lastSeenAt > snoozedAt`. A record missing
+ * either instant never wakes by that half - no window means no clock to
+ * elapse, and no start instant makes the refire comparison unreadable.
+ * That is the neutral-absence reading, not a defaulted one: the store
+ * always writes both instants, so only a hand-edited record lacks them.
+ */
+function snoozeWoken(ledger: SnoozeLedger, now: Date): TriggerStatus | null {
+  if (ledger.snoozedFrom === null) return null;
+  const until = ledger.snoozedUntil !== null ? Date.parse(ledger.snoozedUntil) : Number.NaN;
+  const at = ledger.snoozedAt !== null ? Date.parse(ledger.snoozedAt) : Number.NaN;
+  const seen = Date.parse(ledger.lastSeenAt);
+  const windowOver = Number.isFinite(until) && now.getTime() > until;
+  const refired = Number.isFinite(at) && Number.isFinite(seen) && seen > at;
+  return windowOver || refired ? ledger.snoozedFrom : null;
+}
+
+function effectiveStatus(
+  status: TriggerStatus,
+  expiresAt: string,
+  now: Date,
+  ledger: SnoozeLedger,
+): TriggerStatus {
+  // The snooze wake: a snoozed record reads as the status its snooze
+  // interrupted once the window ends or the finding fires again. Like
+  // expiry below this is a read-time computation - the file keeps its
+  // stored status - and the restored status is open by construction,
+  // because `snooze` is legal from open states only.
+  let current = status;
+  if (current === TRIGGER_STATUS.snoozed) {
+    const restored = snoozeWoken(ledger, now);
+    if (restored === null) return current;
+    current = restored;
+  }
   // Expiry applies to open statuses only, which is precisely what makes
-  // `suppressed` indefinite: it is terminal, so no clock reaches it.
-  if (!TRIGGER_OPEN_STATUSES.has(status)) return status;
+  // `suppressed` indefinite: it is terminal, so no clock reaches it -
+  // and a snoozed record is governed by its snooze window, not by the
+  // TTL clock, because the wake above runs first.
+  if (!TRIGGER_OPEN_STATUSES.has(current)) return current;
   const expiry = Date.parse(expiresAt);
   if (Number.isFinite(expiry) && now.getTime() > expiry) return "expired";
-  return status;
+  return current;
 }
 
 /**
@@ -485,11 +551,24 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
   const createdAt = parseCreatedAt(meta[TRIGGER_KEY.createdAt], path);
   const expiresAt = textOrEmpty(meta[TRIGGER_KEY.expiresAt]);
   const suppressedFrom = meta[TRIGGER_KEY.suppressedFrom];
+  const snoozedAt = parseOptionalInstant(meta[TRIGGER_KEY.snoozedAt], TRIGGER_KEY.snoozedAt, path);
+  const snoozedUntil = parseOptionalInstant(
+    meta[TRIGGER_KEY.snoozedUntil],
+    TRIGGER_KEY.snoozedUntil,
+    path,
+  );
+  const snoozedFrom = parseSnoozedFrom(meta[TRIGGER_KEY.snoozedFrom], path);
+  const lastSeenAt = parseLastSeenAt(meta[TRIGGER_KEY.lastSeenAt], createdAt, path);
   return Object.freeze({
     id,
     kind,
     status,
-    effectiveStatus: effectiveStatus(status, expiresAt, now),
+    effectiveStatus: effectiveStatus(status, expiresAt, now, {
+      lastSeenAt,
+      snoozedAt,
+      snoozedUntil,
+      snoozedFrom,
+    }),
     urgency,
     reason: sectionText(body, "Reason"),
     suggestedAction: sectionText(body, "Suggested action"),
@@ -508,15 +587,11 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     resolvedAt: textOrNull(meta[TRIGGER_KEY.resolvedAt]),
     suppressedAt: textOrNull(meta[TRIGGER_KEY.suppressedAt]),
     suppressedFrom: isTriggerStatus(suppressedFrom) ? suppressedFrom : null,
-    snoozedAt: parseOptionalInstant(meta[TRIGGER_KEY.snoozedAt], TRIGGER_KEY.snoozedAt, path),
-    snoozedUntil: parseOptionalInstant(
-      meta[TRIGGER_KEY.snoozedUntil],
-      TRIGGER_KEY.snoozedUntil,
-      path,
-    ),
-    snoozedFrom: parseSnoozedFrom(meta[TRIGGER_KEY.snoozedFrom], path),
+    snoozedAt,
+    snoozedUntil,
+    snoozedFrom,
     occurrences: parseOccurrences(meta[TRIGGER_KEY.occurrences], path),
-    lastSeenAt: parseLastSeenAt(meta[TRIGGER_KEY.lastSeenAt], createdAt, path),
+    lastSeenAt,
     path,
   });
 }
@@ -731,13 +806,20 @@ export interface CreateTriggersOptions {
  * `duplicate` - a candidate earlier in the SAME scan already claimed
  *   this cooldown key; one scan seeing one finding twice is one
  *   occurrence, so this reason never writes to the ledger.
- * `active` / `cooldown` / `suppressed` - an existing record blocked it,
- *   and that record's ledger records the recurrence.
+ * `active` / `cooldown` / `suppressed` / `snoozed` - an existing record
+ *   blocked it, and that record's ledger records the recurrence.
  * `kind-cap` - the per-kind budget for this scan was already spent.
  */
 export interface SkippedCandidate {
   readonly cooldownKey: string;
-  readonly reason: "active" | "cooldown" | "duplicate" | "kind-cap" | "invalid" | "suppressed";
+  readonly reason:
+    | "active"
+    | "cooldown"
+    | "duplicate"
+    | "kind-cap"
+    | "invalid"
+    | "suppressed"
+    | "snoozed";
 }
 
 export interface CreateTriggersResult {
@@ -760,6 +842,11 @@ function blockReason(
   // this cooldown key structurally benign, so no arithmetic below can
   // ever let it back through.
   if (twin.effectiveStatus === TRIGGER_STATUS.suppressed) return "suppressed";
+  // A snoozed twin blocks too, and MUST: the recurrence this write is
+  // what stamps `lastSeenAt`, and that stamp is the refire half of the
+  // wake condition. Stop reporting a reason here and a snoozed finding
+  // could never wake early again.
+  if (twin.effectiveStatus === TRIGGER_STATUS.snoozed) return "snoozed";
   if (TRIGGER_OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
   if (twin.effectiveStatus === TRIGGER_STATUS.expired) return null;
   // dismissed / acted: silent for the cooldown window after resolution.
@@ -928,16 +1015,33 @@ function createTriggersLocked(
 
 // ── Transitions ─────────────────────────────────────────────────────────────
 
-export type TriggerAction = "acknowledge" | "dismiss" | "act" | "suppress" | "unsuppress";
+/**
+ * Every lifecycle action, in one runtime list: the CLI verb map and the
+ * MCP transition list mirror it, and the surface-exhaustiveness test
+ * reads it, so a new action cannot land on one surface alone.
+ */
+export const TRIGGER_ACTIONS = Object.freeze([
+  "acknowledge",
+  "dismiss",
+  "act",
+  "suppress",
+  "unsuppress",
+  "snooze",
+  "unsnooze",
+] as const);
+
+export type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
 
 export interface TransitionOptions {
   readonly now: Date;
+  /** Days the `snooze` action defers the trigger. */
+  readonly snoozeDays?: number;
 }
 
 /**
- * Actions whose target status is fixed. `unsuppress` is absent because
- * its target is whatever status suppression interrupted, which is read
- * off the record rather than looked up here.
+ * Actions whose target status is fixed. `unsuppress` and `unsnooze` are
+ * absent because their targets are whatever status the silence
+ * interrupted, which is read off the record rather than looked up here.
  */
 /**
  * Refuse an id no readable record carries.
@@ -954,17 +1058,19 @@ function unknownTriggerError(id: string, unreadable: ReadonlyArray<UnreadableTri
   );
 }
 
-const ACTION_TO_STATUS: Record<Exclude<TriggerAction, "unsuppress">, TriggerStatus> = {
+const ACTION_TO_STATUS: Record<Exclude<TriggerAction, "unsuppress" | "unsnooze">, TriggerStatus> = {
   acknowledge: TRIGGER_STATUS.acknowledged,
   dismiss: TRIGGER_STATUS.dismissed,
   act: TRIGGER_STATUS.acted,
   suppress: TRIGGER_STATUS.suppressed,
+  snooze: TRIGGER_STATUS.snoozed,
 };
 
 /**
  * Apply one lifecycle transition. Throws on an unknown id, on a terminal
- * state for acknowledge / dismiss / act, and on `unsuppress` against
- * anything that is not suppressed.
+ * state for acknowledge / dismiss / act / snooze, on `unsuppress`
+ * against anything that is not suppressed, and on `unsnooze` against
+ * anything that is not snoozed.
  *
  * An unreadable sibling never blocks the transition: the operator's way
  * out of a broken queue is to dismiss or suppress the records that still
@@ -997,9 +1103,17 @@ function transitionTriggerLocked(
 
   if (action === "suppress") return suppress(record, nowIso);
   if (action === "unsuppress") return unsuppress(record, opts.now);
+  if (action === "unsnooze") return unsnooze(record, opts.now);
 
+  // Snooze is legal from open states only, so it sits behind the same
+  // terminal check as acknowledge / dismiss / act - which is also what
+  // makes the refusal text name a snoozed state correctly on a
+  // re-snooze instead of treating one as idempotent.
   if (TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus)) {
     throw new Error(`trigger ${id} is terminal (${record.effectiveStatus})`);
+  }
+  if (action === "snooze") {
+    return snooze(record, opts.now, opts.snoozeDays ?? TRIGGER_SNOOZE_DAYS);
   }
   if (action === "acknowledge" && record.effectiveStatus === TRIGGER_STATUS.acknowledged) {
     return record; // idempotent
@@ -1060,9 +1174,66 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
   const next: TriggerRecord = Object.freeze({
     ...record,
     status: restored,
-    effectiveStatus: effectiveStatus(restored, record.expiresAt, now),
+    effectiveStatus: effectiveStatus(restored, record.expiresAt, now, record),
     suppressedAt: null,
     suppressedFrom: null,
+  });
+  writeRecord(next);
+  return next;
+}
+
+/**
+ * Defer an open trigger for a bounded window, or until it fires again.
+ *
+ * The snooze is a pause, not a resolution: `resolvedAt` and the delivery
+ * ledger are untouched, so what the window ends - or a refire wakes
+ * early - is the exact status that was interrupted. Legal from open
+ * states only; the transition refuses it on anything terminal, snoozed
+ * included, so re-snoozing goes through an explicit {@link unsnooze} or
+ * a refire first.
+ */
+function snooze(record: TriggerRecord, now: Date, snoozeDays: number): TriggerRecord {
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    status: TRIGGER_STATUS.snoozed,
+    effectiveStatus: TRIGGER_STATUS.snoozed,
+    snoozedAt: now.toISOString(),
+    snoozedUntil: new Date(now.getTime() + snoozeDays * DAY_MS).toISOString(),
+    snoozedFrom: record.status,
+  });
+  writeRecord(next);
+  return next;
+}
+
+/**
+ * Wake a snoozed trigger by hand, restoring the status the snooze
+ * interrupted before its window ends.
+ *
+ * The stored status is restored, not the effective one, and expiry is
+ * re-applied on the next read - the {@link unsuppress} precedent, so a
+ * trigger snoozed past its TTL wakes reading as expired exactly as an
+ * unsuppressed one would.
+ */
+function unsnooze(record: TriggerRecord, now: Date): TriggerRecord {
+  if (record.effectiveStatus !== TRIGGER_STATUS.snoozed) {
+    throw new Error(`trigger ${record.id} is not snoozed (${record.effectiveStatus})`);
+  }
+  if (record.snoozedFrom === null) {
+    // Never default to pending: that would invent a lifecycle position
+    // the record does not carry.
+    throw new Error(
+      `trigger ${record.id} is snoozed but carries no snoozed_from; ` +
+        "restore the field or dismiss the trigger instead",
+    );
+  }
+  const restored = record.snoozedFrom;
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    status: restored,
+    effectiveStatus: effectiveStatus(restored, record.expiresAt, now, record),
+    snoozedAt: null,
+    snoozedUntil: null,
+    snoozedFrom: null,
   });
   writeRecord(next);
   return next;

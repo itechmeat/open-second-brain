@@ -1,5 +1,6 @@
 /**
- * `o2b brain trigger <scan|list|ack|dismiss|act|suppress|unsuppress|history>`
+ * `o2b brain trigger
+ * <scan|list|ack|dismiss|act|suppress|unsuppress|snooze|unsnooze|history>`
  * (Workspace Insight Suite, t_cd1fee79): the grounded proactive trigger
  * queue with its anti-nag lifecycle.
  */
@@ -36,6 +37,8 @@ const VERB_TO_ACTION: Readonly<Record<string, TriggerAction>> = Object.freeze({
   act: "act",
   suppress: "suppress",
   unsuppress: "unsuppress",
+  snooze: "snooze",
+  unsnooze: "unsnooze",
 });
 
 /**
