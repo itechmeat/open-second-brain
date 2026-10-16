@@ -444,11 +444,64 @@ export function listSessionRawTurns(
   vault: string,
   sessionId: string,
 ): ReadonlyArray<ExpandedRawTurn> {
-  return Object.freeze(
-    sessionRecallRecords(vault, sessionId)
-      .filter((record) => record.kind === "session_turn")
-      .map(expandedRawTurn),
+  return buildSessionTurnIndex(vault).turnsFor(sessionId);
+}
+
+/** Per-session raw turn lists over one read of the continuity store. */
+export interface SessionTurnIndex {
+  /** Exactly what {@link listSessionRawTurns} answers for `sessionId`. */
+  turnsFor(sessionId: string): ReadonlyArray<ExpandedRawTurn>;
+}
+
+/**
+ * One pass over the continuity store and one lineage build, then any
+ * number of per-session turn lists. A caller that walks many sessions
+ * (the mining census, the mining ledger's prune) pays the store read once
+ * instead of once per session, which is the difference between linear and
+ * quadratic in the number of imported sessions. The lineage scope is the
+ * one {@link listSessionRawTurns} applies - that function is this index
+ * over a single session - so the census and the plan cannot drift in how
+ * they scope a session.
+ */
+export function buildSessionTurnIndex(vault: string): SessionTurnIndex {
+  const records = listContinuityRecords(vault).filter(
+    (record) => record.kind === "session_turn" || record.kind === "session_summary_node",
   );
+  const links = lineageLinks(vault, records);
+  const rootMemo = new Map<string, string>();
+  const rootOf = (sid: string): string => {
+    let root = rootMemo.get(sid);
+    if (root === undefined) {
+      root = transitiveRootOf(sid, links);
+      rootMemo.set(sid, root);
+    }
+    return root;
+  };
+  const segmentsByRoot = new Map<string, string[]>();
+  for (const sid of links.keys()) {
+    const root = rootOf(sid);
+    const segments = segmentsByRoot.get(root);
+    if (segments === undefined) segmentsByRoot.set(root, [sid]);
+    else segments.push(sid);
+  }
+  const turnsBySession = new Map<string, ContinuityRecord[]>();
+  for (const record of records) {
+    if (record.kind !== "session_turn") continue;
+    const sid = sessionIdOf(record.payload);
+    if (sid === undefined) continue;
+    const list = turnsBySession.get(sid);
+    if (list === undefined) turnsBySession.set(sid, [record]);
+    else list.push(record);
+  }
+  return {
+    turnsFor(sessionId: string): ReadonlyArray<ExpandedRawTurn> {
+      const rootId = rootOf(sessionId);
+      const scope = new Set<string>([sessionId, rootId, ...(segmentsByRoot.get(rootId) ?? [])]);
+      const scoped: ContinuityRecord[] = [];
+      for (const sid of scope) scoped.push(...(turnsBySession.get(sid) ?? []));
+      return Object.freeze(scoped.sort(compareRecords).map(expandedRawTurn));
+    },
+  };
 }
 
 export function expandSessionRecall(

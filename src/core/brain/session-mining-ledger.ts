@@ -46,10 +46,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { listContinuityRecords } from "./continuity/store.ts";
 import { hashBytes } from "./ingest/content-manifest.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { listSessionRawTurns, sessionIdOf } from "./session-recall.ts";
+import { buildSessionTurnIndex } from "./session-recall.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -275,20 +274,12 @@ export function recordSessionMiningOutcome(
     // One store pass for the whole prune, mirroring the import ledger's
     // one-existsSync-per-entry idiom: a full turn listing per entry here
     // would be a whole-store read plus a lineage build per entry, growing
-    // with the ledger's history instead of with this record.
-    const sessionsWithTurns = new Set<string>();
-    for (const turnRecord of listContinuityRecords(vault)) {
-      if (turnRecord.kind !== "session_turn") continue;
-      const sid = sessionIdOf(turnRecord.payload);
-      if (sid !== undefined) sessionsWithTurns.add(sid);
-    }
+    // with the ledger's history instead of with this record. The index
+    // applies the lineage scope, so a root ref mined over segment-recorded
+    // turns keeps its entry.
+    const turns = buildSessionTurnIndex(vault);
     for (const key of Object.keys(entries)) {
-      if (sessionsWithTurns.has(key)) continue;
-      // A session holding no direct turn record may still have turns,
-      // reachable through the lineage scope (a root ref mined over
-      // segment-recorded turns); the exact read decides those, and only
-      // those.
-      if (listSessionRawTurns(vault, key).length === 0) delete entries[key];
+      if (turns.turnsFor(key).length === 0) delete entries[key];
     }
     const next = serializeLedger(entries);
     if (existsSync(path) && readFileSync(path, "utf8") === next) return false;

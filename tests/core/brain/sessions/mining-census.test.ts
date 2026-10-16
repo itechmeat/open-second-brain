@@ -22,7 +22,7 @@
  * Nothing here writes either.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +48,8 @@ import { importSession } from "../../../../src/core/brain/sessions/import.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { SESSION_RUNTIME_ID } from "../../../../src/core/runtime/host-facts.ts";
 import { DERIVED_STORE_DIR } from "../../../../src/core/brain/path-constants.ts";
+import * as continuityStore from "../../../../src/core/brain/continuity/store.ts";
+import type { AppendContinuityRecordInput } from "../../../../src/core/brain/continuity/types.ts";
 
 let tmp: string;
 let vault: string;
@@ -355,5 +357,58 @@ describe("buildMiningCensus", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(sessionLedgerPath(vault), "{ this is not json", "utf8");
     expect(() => buildMiningCensus(vault)).toThrow(/session import ledger is corrupted JSON/);
+  });
+
+  test("the census reads the continuity store a fixed number of times, whatever the backlog size", () => {
+    // A census that re-read the store once per imported session costs
+    // sessions x store - quadratic in the backlog - and spends the whole
+    // SessionStart hook budget on a realistic sweep. Seed a few sessions
+    // and a few hundred, and pin that the store reads do not grow.
+    const seed = (count: number, offset: number): void => {
+      const paths: string[] = [];
+      const turns: AppendContinuityRecordInput[] = [];
+      for (let i = offset; i < offset + count; i++) {
+        const name = `scale-${i}.jsonl`;
+        const path = join(sessionsDir, name);
+        writeFileSync(path, "{}\n", "utf8");
+        paths.push(path);
+        for (let t = 0; t < 3; t++) {
+          turns.push({
+            kind: "session_turn",
+            createdAt: "2026-09-18T09:00:00Z",
+            payload: {
+              session_id: name,
+              turn_id: `t-${t}`,
+              timestamp: "2026-09-18T09:00:00Z",
+              role: t % 2 === 0 ? "user" : "assistant",
+              text: `turn ${t} of session ${i}`,
+            },
+          });
+        }
+      }
+      continuityStore.appendContinuityRecords(vault, turns);
+      recordSessionImports(
+        vault,
+        paths.map((path) => ({ path, runtime: SESSION_RUNTIME_ID.claudeCode })),
+        NOW,
+      );
+    };
+    const storeReads = (): number => {
+      const spy = spyOn(continuityStore, "listContinuityRecords");
+      try {
+        buildMiningCensus(vault);
+        return spy.mock.calls.length;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    seed(3, 0);
+    const small = storeReads();
+    expect(buildMiningCensus(vault).undistilled).toBe(3);
+    seed(300, 3);
+    const large = storeReads();
+    expect(buildMiningCensus(vault).undistilled).toBe(303);
+    expect(large).toBe(small);
   });
 });

@@ -30,8 +30,11 @@
  * census joins on that basename, so a session whose log moved to another
  * absolute path (a rotated store, another machine's layout) still joins.
  * No source log is opened or re-hashed here: the mined-material hash runs
- * over the continuity turns the mining lane itself reads, which is what
- * makes the census answerable inside a SessionStart hook's budget. The
+ * over the continuity turns the mining lane itself reads, and the store is
+ * read ONCE for the whole census ({@link buildSessionTurnIndex}) - a
+ * per-session listing would re-read the whole store per session, which is
+ * quadratic in the imported backlog. That is what makes the census
+ * answerable inside a SessionStart hook's budget. The
  * census reads only - neither ledger is rewritten, and a report that
  * quietly rewrote the state it reports on would not be a report.
  */
@@ -47,7 +50,7 @@ import {
   type SessionMiningEntry,
 } from "../session-mining-ledger.ts";
 import type { Safeguard } from "../safeguard.ts";
-import { listSessionRawTurns } from "../session-recall.ts";
+import { buildSessionTurnIndex, type SessionTurnIndex } from "../session-recall.ts";
 import { readSessionLedger } from "./discover.ts";
 import type { SessionRuntimeId } from "../../runtime/host-facts.ts";
 
@@ -86,12 +89,16 @@ export interface SessionMiningCensus {
 export interface BuildMiningCensusOptions {
   /**
    * Cooperative deadline, checked once per imported session. The census is
-   * vault-side and never hashes a source log, but a vault with tens of
-   * thousands of imported sessions still spends one turn listing per
-   * session; a caller with a host deadline (the SessionStart hook) passes
-   * its ceiling here so the read stops in time.
+   * vault-side, never hashes a source log and reads the store once, but a
+   * caller with a host deadline (the SessionStart hook) still passes its
+   * ceiling here so the read stops in time on an outsized vault.
    */
   readonly safeguard?: Safeguard;
+  /**
+   * The store read to classify against. Default: one
+   * {@link buildSessionTurnIndex} pass for this census.
+   */
+  readonly turns?: SessionTurnIndex;
 }
 
 /**
@@ -107,6 +114,7 @@ export function buildMiningCensus(
   const importedEntries = readSessionLedger(vault).entries;
   const miningEntries = readSessionMiningLedger(vault).entries;
   const boundary = buildCaptureBoundary(vault);
+  const turns = opts.turns ?? buildSessionTurnIndex(vault);
 
   // One identity can sit under several absolute paths (the same basename
   // imported from two machines' layouts); its state is a fact about the
@@ -115,7 +123,7 @@ export function buildMiningCensus(
   const stateOf = (identity: string): SessionDistillationState | "refused" => {
     const cached = stateByIdentity.get(identity);
     if (cached !== undefined) return cached;
-    const state = classifySession(vault, boundary, miningEntries, identity);
+    const state = classifySession(vault, boundary, turns, miningEntries, identity);
     stateByIdentity.set(identity, state);
     return state;
   };
@@ -194,16 +202,17 @@ export function buildMiningCensus(
  * zero user turns). The selection is the plan's own shared
  * {@link selectMinedTurns} - user role, unsuppressed text, trimmed and
  * non-empty, the turn's stored timestamp verbatim - so this census hashes
- * exactly what the plan would mine and cannot drift from it. `boundary` is
- * injectable so a caller walking many sessions builds it once.
+ * exactly what the plan would mine and cannot drift from it. `boundary` and
+ * `index` are injectable so a caller walking many sessions builds each once.
  */
 export function minedTurnMaterial(
   vault: string,
   sessionId: string,
   boundary: CaptureBoundary = buildCaptureBoundary(vault),
+  index?: SessionTurnIndex,
 ): ReadonlyArray<MinedTurnMaterial> | null {
   if (boundary.sessionDecision(sessionId) !== "capture") return null;
-  const turns = listSessionRawTurns(vault, sessionId);
+  const turns = (index ?? buildSessionTurnIndex(vault)).turnsFor(sessionId);
   if (turns.length === 0) return null;
   const mined = selectMinedTurns(boundary, turns);
   return mined.length === 0 ? null : mined;
@@ -216,10 +225,11 @@ export function minedTurnMaterial(
 function classifySession(
   vault: string,
   boundary: ReturnType<typeof buildCaptureBoundary>,
+  turns: SessionTurnIndex,
   miningEntries: Readonly<Record<string, SessionMiningEntry>>,
   identity: string,
 ): SessionDistillationState | "refused" {
-  const material = minedTurnMaterial(vault, identity, boundary);
+  const material = minedTurnMaterial(vault, identity, boundary, turns);
   if (material === null) return "refused";
   const entry = miningEntries[identity];
   if (entry === undefined || entry.minedContentHash !== minedTurnsHash(material)) {
