@@ -156,4 +156,43 @@ describe("evaluateCapacityGate", () => {
     expect(skipped.decision).toBe("skip");
     expect(skipped.tier).toBe(STORAGE_FORECAST_TIER.critical);
   });
+
+  test("a pausePercent passed in closes the gate one band before the refuse line", () => {
+    // The bootstrapped skeleton sits in the warn band of a 30 KB cap.
+    // Without a pause line the gate RUNS there (the interactive wall's
+    // posture, pinned above); the lane hands its pause_percent in, and
+    // the same reading then skips - background work backs off before
+    // the wall, interactive ingest still works.
+    configureCap(30_000);
+    const decision = evaluateCapacityGate(vault, {
+      capBytes: resolvedCap(),
+      pausePercent: 80,
+    });
+    expect(decision.tier).toBe(STORAGE_FORECAST_TIER.warn);
+    expect(decision.decision).toBe("skip");
+    // The line rides the decision, so a report can show how far the
+    // vault was from the pause.
+    expect(decision.pausePercent).toBe(80);
+  });
+
+  test("a pausePercent below the tier line pauses an ok vault", () => {
+    configureCap(1_000_000);
+    writePages("AA-small.md", 100);
+    const decision = evaluateCapacityGate(vault, {
+      capBytes: resolvedCap(),
+      pausePercent: 1,
+    });
+    expect(decision.tier).toBe(STORAGE_FORECAST_TIER.ok);
+    expect(decision.decision).toBe("skip");
+  });
+
+  test("a pausePercent above the measured percent leaves the gate open", () => {
+    configureCap(10_000_000);
+    const decision = evaluateCapacityGate(vault, {
+      capBytes: resolvedCap(),
+      pausePercent: 50,
+    });
+    expect(decision.decision).toBe("run");
+    expect(decision.pausePercent).toBe(50);
+  });
 });

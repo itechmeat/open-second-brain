@@ -19,6 +19,12 @@
  * staged captures and is a no-op (the processed marker is the idempotency
  * key). Unroutable items are reported with a reason and left in place.
  *
+ * The source-reference route sits behind the same storage-capacity
+ * admission wall `brain_ingest_source` keeps: a vault measured at its
+ * critical tier refuses the ingest route in BOTH modes (a dry run
+ * previews the refusal faithfully), leaves the capture staged, and
+ * still drains its non-ingest routes.
+ *
  * ## The hub hook (t_23bd347d)
  *
  * An apply-mode idea route that succeeds stages its routed page's area-hub
@@ -39,6 +45,9 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { addObligation, obligationExists, parseCadence, ObligationError } from "../obligations.ts";
 import { ingestSource } from "../ingest/ingest.ts";
+import { CAPACITY_GATE_DECISION, evaluateIngestAdmission } from "../storage/gate.ts";
+import type { CapacityGateDecision } from "../storage/gate.ts";
+import { MAINTENANCE_CAPACITY_REMEDY } from "../maintenance/lane.ts";
 import { isoSecond } from "../time.ts";
 import {
   loadHubPagePool,
@@ -126,6 +135,7 @@ function classify(
   vault: string,
   note: CaptureNote,
   opts: DrainOptions,
+  admission: CapacityGateDecision | null,
 ): RoutePlan | UnroutableCapture {
   const body = note.body.trim();
   const firstLine = body.split("\n", 1)[0]!.trim();
@@ -134,7 +144,7 @@ function classify(
     return planObligation(vault, firstLine, opts);
   }
   if (URL_SHAPED_RE.test(body)) {
-    return planSource(vault, body, opts);
+    return planSource(vault, body, opts, admission);
   }
   return planIdea(vault, body, opts);
 }
@@ -174,7 +184,30 @@ function planObligation(
   };
 }
 
-function planSource(vault: string, url: string, opts: DrainOptions): RoutePlan {
+/**
+ * The source-reference route, behind the same admission wall
+ * `brain_ingest_source` keeps: only a MEASURED critical tier refuses, so
+ * a capture an agent could not ingest by hand is not sneaked in by a
+ * drain, and a capture the wall would admit is not refused by one. The
+ * refusal is decided at PLAN time (one admission evaluation per drain,
+ * never per capture - the census is a full vault walk) so a dry run is a
+ * faithful preview of it, the same posture as the declared-vocabulary
+ * gate below. The remedy is the lane's own sentence, quoted rather than
+ * restated, so every surface that refuses on capacity says the same
+ * thing.
+ */
+function planSource(
+  vault: string,
+  url: string,
+  opts: DrainOptions,
+  admission: CapacityGateDecision | null,
+): RoutePlan | UnroutableCapture {
+  if (admission?.decision === CAPACITY_GATE_DECISION.skip) {
+    return new UnroutableCapture(
+      `ingest refused (capacity_exhausted): the vault measured at the ${admission.tier} ` +
+        `storage tier. ${MAINTENANCE_CAPACITY_REMEDY}.`,
+    );
+  }
   return {
     classification: "source-reference",
     action: "ingest-source",
@@ -278,9 +311,19 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
   let skippedCorrupt = 0;
   // The hub page pool is a full-vault parse: loaded once, on the first idea.
   let hubPool: HubPagePool | undefined;
+  // One admission evaluation per drain, not per capture: the census is a
+  // full vault walk, and the answer cannot change between captures of
+  // the same run. A null decision means no wall stands this pass - no
+  // configured cap, or a storage block that could not be validated,
+  // which is named on the operator's stderr rather than wedging the
+  // inbox shut.
+  const admission = evaluateIngestAdmission(vault, { now: opts.now });
+  if (admission.reason !== undefined) {
+    process.stderr.write(`capture inbox drain: ${admission.reason}\n`);
+  }
 
   for (const note of listStagedCaptures(vault)) {
-    const plan = classify(vault, note, opts);
+    const plan = classify(vault, note, opts, admission.decision);
     if (plan instanceof UnroutableCapture) {
       unroutable += 1;
       items.push({

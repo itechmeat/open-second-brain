@@ -165,6 +165,57 @@ test("a route that succeeds but whose archive fails is a distinct state; a re-ru
   expect(noteBody.split(body).length - 1).toBe(1);
 });
 
+// ── capacity admission: the drain's ingest route walks the same wall as brain_ingest_source ──
+
+describe("the drain's ingest route under a capacity cap", () => {
+  function configureCriticalCap(): void {
+    // A cap everything clears: any capture makes the vault measure past
+    // the critical tier, which is the only tier that refuses ingest.
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\n\nstorage:\n  cap_bytes: 10\n",
+      "utf8",
+    );
+  }
+
+  test("a critical vault refuses the source-reference route by name, in both modes", () => {
+    configureCriticalCap();
+    writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });
+    for (const apply of [false, true]) {
+      const report = drainInbox(vault, { apply, agent: "tester", now: NOW });
+      expect(report.items).toHaveLength(1);
+      expect(report.items[0]!.action).toBe("skip");
+      expect(report.items[0]!.classification).toBe("unroutable");
+      expect(report.items[0]!.reason).toContain("capacity_exhausted");
+      expect(report.routed).toBe(0);
+      // Left staged: the route never ran, so a rerun after the operator
+      // reclaims space converges.
+      expect(listStagedCaptures(vault)).toHaveLength(1);
+      expect(listArchivedCaptures(vault)).toHaveLength(0);
+    }
+  });
+
+  test("the refusal never writes a summary page", () => {
+    configureCriticalCap();
+    writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });
+    drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(existsSync(join(vault, "Brain", "sources"))).toBe(false);
+  });
+
+  test("non-ingest routes still work while ingest is refused", () => {
+    // The admission wall gates INGEST, exactly like brain_ingest_source:
+    // an idea note writes no source bytes, so the capture inbox keeps
+    // moving while the wall is closed.
+    configureCriticalCap();
+    writeCaptureNote(vault, { body: "https://example.com/article", provenance: prov(1) });
+    writeCaptureNote(vault, { body: "a standalone atomic idea", provenance: prov(2) });
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.items.map((i) => i.classification).toSorted()).toEqual(["idea", "unroutable"]);
+    expect(report.routed).toBe(1);
+    expect(existsSync(join(vault, CAPTURED_NOTES_DIR_REL))).toBe(true);
+  });
+});
+
 test("an obligation marker defaults the cadence when none is given", () => {
   writeCaptureNote(vault, {
     body: `${CAPTURE_OBLIGATION_MARKER} tidy the desk`,

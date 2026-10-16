@@ -1639,6 +1639,13 @@ export interface BrainStorageConfig {
   readonly warn_percent?: number;
   /** Integer percent of the cap where the forecast goes critical. */
   readonly critical_percent?: number;
+  /**
+   * Integer percent of the cap where background production pauses (the
+   * maintenance lane skips). Absent = the warn band: the lane pauses
+   * where the forecast warns. Interactive ingest is never paused by
+   * this - only a critical tier refuses a write.
+   */
+  readonly pause_percent?: number;
   /** Days to the cap at trend where the forecast warns. */
   readonly warn_days?: number;
   /** Days to the cap at trend where the forecast goes critical. */
@@ -1651,6 +1658,13 @@ export interface ResolvedBrainStorageConfig {
   readonly cap_bytes: number | null;
   readonly warn_percent: number;
   readonly critical_percent: number;
+  /**
+   * The percent-of-cap line background work pauses at. Defaults to the
+   * warn band, and moves with `warn_percent` when that block key is set
+   * and `pause_percent` is not - the lane backs off where the forecast
+   * warns unless the operator names the line themselves.
+   */
+  readonly pause_percent: number;
   readonly warn_days: number;
   readonly critical_days: number;
 }

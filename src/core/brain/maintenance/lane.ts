@@ -16,11 +16,14 @@
  *                 like a quiet one.
  *   4. capacity - the vault's own storage forecast, from
  *                 `storage.cap_bytes`; unconfigured (the default) =
- *                 always open and never measured. A measured critical
- *                 tier skips the whole lane; where the census is
- *                 degenerate the gate stays open and journals WHY, on
- *                 its own line, for the same reason the pressure gate
- *                 does.
+ *                 always open and never measured. A measured tier at or
+ *                 past the pause line (`storage.pause_percent`, default
+ *                 the warn band) pauses the whole lane - background
+ *                 production backs off one band before the wall, while
+ *                 interactive ingest still works until the critical
+ *                 tier refuses it. Where the census is degenerate the
+ *                 gate stays open and journals WHY, on its own line,
+ *                 for the same reason the pressure gate does.
  *   5. lease    - the expiring SQLite lease; never bypassable, even
  *                 with --force, because two concurrent heavy passes on
  *                 one vault is the exact failure this lane exists to
@@ -337,6 +340,13 @@ export interface MaintenanceCapacityReport {
   readonly capacity_percent: number | null;
   readonly measured_bytes: number | null;
   readonly cap_bytes: number | null;
+  /**
+   * The pause line the lane decided on (`storage.pause_percent`), when
+   * the gate carried one. A tier of `ok` beside a skip names this line
+   * as what closed the lane; a null names a decision with no pause line
+   * in force, skipped on the critical tier alone.
+   */
+  readonly pause_percent: number | null;
 }
 
 /** The report for the gate decision that skipped a run. */
@@ -348,6 +358,7 @@ export function capacityReport(decision: CapacityGateDecision): MaintenanceCapac
     capacity_percent: reading?.percentUsed ?? null,
     measured_bytes: reading?.measuredBytes ?? null,
     cap_bytes: reading?.capBytes ?? null,
+    pause_percent: decision.pausePercent ?? null,
   };
 }
 
@@ -443,6 +454,9 @@ function evaluateStorageCapacityGate(
     capBytes: capacity.cap_bytes,
     warnPercent: capacity.warn_percent,
     criticalPercent: capacity.critical_percent,
+    // The lane's own pause line: background production backs off one
+    // band before the wall the ingest refusal keeps.
+    pausePercent: capacity.pause_percent,
     warnDays: capacity.warn_days,
     criticalDays: capacity.critical_days,
   });
@@ -507,6 +521,20 @@ export async function runMaintenance(
           : {}),
       });
     }
+    // The gate evaluated, so its census is a sample - on a SKIP and on a
+    // RUN alike. The M5 blind spot was sampling skips only: on a vault
+    // where nobody runs the storage report, no sample was ever recorded,
+    // no trend existed and the day-based tiers could never fire. The
+    // decision already walked the vault, so recording its census costs
+    // one walk and never two; day-bucketing in the forecast keeps the
+    // extra rows cheap. Fail-soft by contract; a sample that cannot be
+    // written never turns a run into a crash.
+    if (decision.capacity?.census !== undefined) {
+      sampleStorageUsage(vault, {
+        now: opts.now,
+        usage: decision.capacity.census,
+      });
+    }
     if (decision.verdict !== MAINTENANCE_VERDICT.run) {
       // One report serves every skip surface below: the journal row and
       // both front doors read the same numbers, so they cannot disagree
@@ -515,19 +543,6 @@ export async function runMaintenance(
         decision.verdict === MAINTENANCE_VERDICT.skippedCapacity && decision.capacity !== undefined
           ? capacityReport(decision.capacity)
           : undefined;
-      // Sample BEFORE the skip is recorded or returned: the forecast
-      // series must keep accumulating exactly while producers are paused,
-      // so a skipped run still appends its sample. The gate's own census
-      // is what is recorded - the decision already walked the vault, and
-      // sampling by re-measuring would tax every skipped run with a
-      // second full walk. Fail-soft by contract; a sample that cannot be
-      // written never turns a skip into a crash.
-      if (decision.verdict === MAINTENANCE_VERDICT.skippedCapacity) {
-        sampleStorageUsage(vault, {
-          now: opts.now,
-          ...(decision.capacity?.census !== undefined ? { usage: decision.capacity.census } : {}),
-        });
-      }
       appendJournal(vault, {
         ts: nowIso,
         holder: opts.holder,

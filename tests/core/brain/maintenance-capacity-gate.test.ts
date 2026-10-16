@@ -19,7 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,7 @@ import {
   STORAGE_FORECAST_TIER,
   STORAGE_USAGE_METRIC_SURFACE,
 } from "../../../src/core/brain/storage/forecast.ts";
+import { evaluateIngestAdmission } from "../../../src/core/brain/storage/gate.ts";
 import type { CapacityGateDecision } from "../../../src/core/brain/storage/gate.ts";
 import type { ResolvedBrainStorageConfig } from "../../../src/core/brain/types.ts";
 import { listMetrics } from "../../../src/core/brain/metrics.ts";
@@ -246,6 +247,37 @@ describe("the capacity gate through the lane", () => {
     expect(samples()).toBe(before + 1);
   });
 
+  test("a gated run that proceeds records the gate's census as its sample too", async () => {
+    // The M5 blind spot: the lane used to sample only on skips, so on a
+    // vault where nobody runs the storage report the trend never existed
+    // and the day-based tiers could never fire. Every run where the gate
+    // evaluated - skip or proceed - now records its census, one walk,
+    // never two.
+    configureCap(ROOMY_CAP_BYTES);
+    const before = samples();
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: "dream", run: async () => {} }],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.run);
+    expect(samples()).toBe(before + 1);
+    const recorded = listMetrics(vault, { surface: STORAGE_USAGE_SURFACE });
+    expect(recorded[recorded.length - 1]!.payload["measured"]).toBe(true);
+  });
+
+  test("a run where the capacity gate never evaluated samples nothing", async () => {
+    // No cap configured: the gate never measured, so there is no census
+    // to record and the lane must not invent one with a second walk.
+    const before = samples();
+    await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: "dream", run: async () => {} }],
+    });
+    expect(samples()).toBe(before);
+  });
+
   test("the skip's sample records the gate's census, not a second walk", async () => {
     configureCap(CRITICAL_CAP_BYTES);
     // A decision whose census names a byte total the real vault cannot
@@ -302,7 +334,7 @@ describe("the capacity gate through the lane", () => {
     expect(journalRows(MAINTENANCE_VERDICT.skippedLease)).toEqual([]);
   });
 
-  test("a sub-critical vault runs and samples nothing", async () => {
+  test("a sub-critical vault runs", async () => {
     configureCap(ROOMY_CAP_BYTES);
     const before = samples();
     const result = await runMaintenance(vault, {
@@ -312,7 +344,68 @@ describe("the capacity gate through the lane", () => {
     });
     expect(result.verdict).toBe(MAINTENANCE_VERDICT.run);
     expect(result.tasks[0]?.ok).toBe(true);
-    expect(samples()).toBe(before);
+    // The gate evaluated, so the census was recorded (the sample-every-
+    // gated-run rule above) - that is the ONE sample a proceeding run
+    // costs, and no skip row exists.
+    expect(samples()).toBe(before + 1);
+    expect(journalRows(MAINTENANCE_VERDICT.skippedCapacity)).toEqual([]);
+  });
+
+  test("the warn band pauses the lane, with the report and journal row to show it", async () => {
+    // The M5 backpressure band: background work pauses one band BEFORE
+    // the wall. The bootstrapped skeleton sits inside the warn band of a
+    // 30 KB cap - a tier the lane used to run straight through, because
+    // only critical skipped and critical was reserved for the ingest
+    // refusal.
+    configureCap(30_000);
+    const ran: string[] = [];
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: "dream", run: async () => void ran.push("dream") }],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
+    expect(ran).toEqual([]);
+    expect(result.capacity?.tier).toBe(STORAGE_FORECAST_TIER.warn);
+    expect(result.capacity?.capacity_percent).not.toBeNull();
+    expect(result.capacity?.pause_percent).toBe(BRAIN_STORAGE_DEFAULTS.warn_percent);
+    const row = journalRows(MAINTENANCE_VERDICT.skippedCapacity)[0];
+    expect(row?.capacity_tier).toBe(STORAGE_FORECAST_TIER.warn);
+    // The census a paused run recorded (measured: true) is what the
+    // trend fits while producers are backed off.
+    const recorded = listMetrics(vault, { surface: STORAGE_USAGE_SURFACE });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.payload["measured"]).toBe(true);
+  });
+
+  test("a configured pause_percent below the warn band pauses earlier", async () => {
+    // 20 percent of 100 KB measured: the tier is ok (far below the warn
+    // band) and the operator's pause_percent: 15 pauses the lane anyway
+    // - interactive ingest is untouched at this tier.
+    configureCap(100_000);
+    appendFileSync(brainConfigPath(vault), "  pause_percent: 15\n");
+    mkdirSync(join(vault, "Brain", "sources"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "sources", "AA-page.md"), "x".repeat(20_000), "utf8");
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: "dream", run: async () => {} }],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.skippedCapacity);
+    expect(result.capacity?.tier).toBe(STORAGE_FORECAST_TIER.ok);
+    expect(result.capacity?.pause_percent).toBe(15);
+    expect(result.capacity?.capacity_percent).toBeGreaterThan(15);
+  });
+
+  test("an ingest refusal stays critical-only while the lane pauses at warn", async () => {
+    // The two walls diverge on purpose: the SAME warn-band vault that
+    // pauses the lane (the test above) does not refuse an interactive
+    // write - evaluateIngestAdmission carries no pause line.
+    configureCap(30_000);
+    const admission = evaluateIngestAdmission(vault, { now: NOW });
+    expect(admission.decision).not.toBeNull();
+    expect(admission.decision!.tier).toBe(STORAGE_FORECAST_TIER.warn);
+    expect(admission.decision!.decision).toBe("run");
   });
 
   test("a vault without a cap never measures", async () => {
@@ -383,6 +476,7 @@ interface CapacityReportJson {
   readonly capacity_percent: number | null;
   readonly measured_bytes: number | null;
   readonly cap_bytes: number | null;
+  readonly pause_percent: number | null;
 }
 
 describe("lane surfaces carry the capacity verdict", () => {
@@ -423,6 +517,8 @@ describe("lane surfaces carry the capacity verdict", () => {
     expect(payload.capacity?.capacity_percent).toBe(
       (payload.capacity!.measured_bytes! / CRITICAL_CAP_BYTES) * 100,
     );
+    // The pause line the lane decided on rides beside the reading.
+    expect(payload.capacity?.pause_percent).toBe(BRAIN_STORAGE_DEFAULTS.warn_percent);
   });
 
   test("a skipped-capacity run reports the tier and the remedy over MCP", async () => {
@@ -455,5 +551,6 @@ describe("lane surfaces carry the capacity verdict", () => {
     expect(payload.capacity?.capacity_percent).toBe(
       (payload.capacity!.measured_bytes! / CRITICAL_CAP_BYTES) * 100,
     );
+    expect(payload.capacity?.pause_percent).toBe(BRAIN_STORAGE_DEFAULTS.warn_percent);
   });
 });

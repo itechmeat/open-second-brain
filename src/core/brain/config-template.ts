@@ -607,9 +607,9 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       "Storage capacity policy (`o2b brain storage`). An absent cap_bytes",
       "means the vault is unbounded: nothing pauses and nothing refuses.",
       "Setting a cap turns on the forecast tiers and the storage-capacity",
-      "doctor check; the four thresholds default to the constants the",
-      "forecast ships with, and the critical band must sit past the warn",
-      "band (a larger percent, a smaller day horizon).",
+      "doctor check; the thresholds default to the constants the forecast",
+      "ships with, and the critical band must sit past the warn band and",
+      "the pause line (a larger percent, a smaller day horizon).",
     ],
     emit: "commented-default",
     keys: [
@@ -624,6 +624,12 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("critical_percent", BRAIN_STORAGE_DEFAULTS.critical_percent, [
         "Percent of the cap where usage forecasts as critical. Must be",
         "greater than warn_percent.",
+      ]),
+      def("pause_percent", BRAIN_STORAGE_DEFAULTS.pause_percent, [
+        "Percent of the cap where background production pauses: the",
+        "maintenance lane skips, while interactive ingest still works.",
+        "Defaults to the warn band, and must stay below critical_percent,",
+        "which is where writes are refused outright.",
       ]),
       def("warn_days", BRAIN_STORAGE_DEFAULTS.warn_days, [
         "Days to the cap, at the measured trend, where usage forecasts as",
