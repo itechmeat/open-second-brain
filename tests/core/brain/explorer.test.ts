@@ -485,4 +485,57 @@ describe("buildLiveServer JSON routes", () => {
       await server.close();
     }
   });
+
+  test("a non-loopback Host header is refused with a named 403 on every route", async () => {
+    // The loopback BIND is not a browser boundary: a DNS-rebinding page
+    // resolves an attacker hostname to 127.0.0.1 and the request arrives
+    // carrying that hostname. The server itself must refuse it, on the
+    // graph route and the new JSON routes alike.
+    const server = buildLiveServer(vault, 0);
+    try {
+      const refusedOn = async (route: string): Promise<{ status: number; error: string }> => {
+        const res = await fetch(new URL(route, server.url), {
+          headers: { host: "attacker.example" },
+        });
+        const body = JSON.parse(await res.text()) as { error: string };
+        return { status: res.status, error: body.error };
+      };
+      const forHtml = await refusedOn("/");
+      expect(forHtml.status).toBe(403);
+      expect(forHtml.error).toContain("loopback");
+      const forGraph = await refusedOn("/data.json");
+      expect(forGraph.status).toBe(403);
+      expect(forGraph.error).toContain("loopback");
+      const forCounts = await refusedOn("/counts.json");
+      expect(forCounts.status).toBe(403);
+      expect(forCounts.error).toContain("loopback");
+      const forStatus = await refusedOn("/status.json");
+      expect(forStatus.status).toBe(403);
+      expect(forStatus.error).toContain("loopback");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a loopback Host name with any port is accepted", async () => {
+    writePreference(vault, basePref("hosted"));
+    const server = buildLiveServer(vault, 0);
+    try {
+      const servedWith = async (host: string): Promise<number> => {
+        const res = await fetch(new URL("/counts.json", server.url), {
+          headers: { host },
+        });
+        const body = JSON.parse(await res.text()) as { schema_version: number };
+        return res.ok ? body.schema_version : -1;
+      };
+      // The default request already carries 127.0.0.1:<port>.
+      const direct = await fetch(new URL("/counts.json", server.url));
+      expect(direct.ok).toBe(true);
+      // The other loopback spellings, port included, are the allowlist.
+      expect(await servedWith(`localhost:${server.port}`)).toBe(1);
+      expect(await servedWith(`[::1]:${server.port}`)).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
 });

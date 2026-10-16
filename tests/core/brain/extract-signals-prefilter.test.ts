@@ -20,9 +20,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { dirname, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { planExtractSignals } from "../../../src/core/brain/extract-signals.ts";
