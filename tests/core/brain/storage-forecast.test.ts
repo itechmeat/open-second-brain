@@ -297,6 +297,41 @@ describe("forecastStorageUsage", () => {
     expect(forecast.tier).toBe("ok");
   });
 
+  test("a partial census never enters the trend", () => {
+    // A sample recorded with measured: false carries a total that
+    // understates the vault by exactly the refused surfaces. Fed into the
+    // fit, the jump when the surface becomes readable again reads as
+    // growth; parseSamples skips it, so the three complete days fit the
+    // line and the partial day is evidence for no number at all.
+    seedSample(3, 100);
+    seedSample(2, 200);
+    seedSample(1, 300);
+    appendMetric(vault, {
+      surface: STORAGE_USAGE_METRIC_SURFACE,
+      runAt: "2026-10-15T12:00:00Z",
+      payload: { run_id: "partial", total_bytes: 999_999, measured: false },
+    });
+    const forecast = forecastStorageUsage(vault, { capBytes: 100_000 });
+    expect(forecast.slopeBytesPerDay).toBe(100);
+    expect(forecast.measuredBytes).toBe(300);
+  });
+
+  test("a sample without the measured flag is not trend evidence either", () => {
+    // The flag is the census's own claim of completeness, and absence is
+    // not a claim: an unflagged sample never completes the three-day
+    // minimum the slope needs.
+    seedSample(2, 100);
+    seedSample(1, 200);
+    appendMetric(vault, {
+      surface: STORAGE_USAGE_METRIC_SURFACE,
+      runAt: "2026-10-15T12:00:00Z",
+      payload: { run_id: "unflagged", total_bytes: 42 },
+    });
+    const forecast = forecastStorageUsage(vault, { capBytes: 100_000 });
+    expect(forecast.slopeBytesPerDay).toBe(null);
+    expect(forecast.daysToCap).toBe(null);
+  });
+
   test.skipIf(CHMOD_CANNOT_DENY)("an incomplete measurement is unmeasurable", () => {
     seedSample(1, 100);
     seedSample(0, 200);

@@ -194,14 +194,19 @@ function utcDay(day: number): number {
 }
 
 /**
- * Parse the `storage_usage` samples into trend points: torn records drop
- * out, the rest are bucketed to one point per UTC day - the day's LAST
- * sample, so a burst of intra-day readings is noise the fit never sees -
- * and the result is ordered oldest first.
+ * Parse the `storage_usage` samples into trend points: torn records and
+ * PARTIAL CENSUSES drop out (a sample is trend evidence only when its
+ * payload asserts `measured: true` - an incomplete census understates the
+ * vault by exactly the surfaces it could not read, and the jump when they
+ * become readable again would otherwise fit as growth), the rest are
+ * bucketed to one point per UTC day - the day's LAST sample, so a burst
+ * of intra-day readings is noise the fit never sees - and the result is
+ * ordered oldest first.
  */
 function parseSamples(samples: ReadonlyArray<MetricRecord>): TrendPoint[] {
   const byDay = new Map<number, TrendPoint>();
   for (const record of samples) {
+    if (record.payload["measured"] !== true) continue;
     const t = Date.parse(record.run_at);
     const bytes = record.payload["total_bytes"];
     if (!Number.isFinite(t) || typeof bytes !== "number" || !Number.isFinite(bytes)) continue;
