@@ -619,6 +619,13 @@ test("a corrupt mining ledger refuses the plan by name", async () => {
   }
   // The ledger was never reset by the refused read.
   expect(readFileSync(path, "utf8")).toBe("{ truncated");
+});
+
+test("the session mining ledger schema version is pinned at 1", () => {
+  // Its own test, not a stapled assertion inside the corrupt-ledger
+  // error path: the value is load-bearing (the ledger's unknown-schema
+  // refusal names it) but it is a constant of the read contract, not
+  // part of any error-path contract.
   expect(SESSION_MINING_LEDGER_SCHEMA_VERSION).toBe(1);
 });
 
