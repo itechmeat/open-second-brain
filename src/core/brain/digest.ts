@@ -45,7 +45,11 @@ import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summ
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
 import { BRAIN_RETIRED_REL, brainDirs, vaultRelative } from "./paths.ts";
-import { collectMaintenanceActions, type MaintenanceCollectError } from "./maintenance/collect.ts";
+import {
+  collectMaintenanceActions,
+  type MaintenanceCollectError,
+  type MaintenanceCollectSignal,
+} from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import { loadActiveMostAppliedSafe } from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
@@ -304,12 +308,16 @@ export interface DigestJson {
   readonly actions: ReadonlyArray<ActionItem>;
   /**
    * The maintenance scans that refused while the digest was collected
-   * (review M10), rendered as a named row - a thin `actions` list must be
+   * (review M10), rendered as `{scan, message}` rows - the same shape the
+   * operator-summary and doctor rows carry. A thin `actions` list must be
    * readable as healthy rather than indistinguishable from a scan that
    * failed. Present only when at least one scan refused, so a clean
    * payload stays byte-identical.
    */
-  readonly collect_errors?: ReadonlyArray<MaintenanceCollectError>;
+  readonly collect_errors?: ReadonlyArray<{
+    readonly scan: MaintenanceCollectSignal;
+    readonly message: string;
+  }>;
   /**
    * Aggregate vault trust verdict (v0.10.16). Absent when no
    * doctor input was threaded into the digest call; consumers that

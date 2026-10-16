@@ -733,7 +733,8 @@ export function appendedExtractionDelta(
   canonicalSource: string,
 ): { readonly fromByte: number; readonly toByte: number } | undefined {
   const entry = readManifest(vault).entries[canonicalSource];
-  const watermark = entry === undefined ? 0 : extractedBytesOf(entry);
+  if (entry === undefined) return undefined;
+  const watermark = extractedBytesOf(entry);
   if (watermark <= 0) return undefined;
   const snapshot = readAppendSnapshot(sourceAbs, watermark, entry.sha256);
   const delta = appendedDeltaFromSnapshot(watermark, snapshot);

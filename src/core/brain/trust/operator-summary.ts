@@ -25,7 +25,10 @@ import { toPosix } from "../../path-safety.ts";
 
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
-import { collectMaintenanceActions, type MaintenanceCollectError } from "../maintenance/collect.ts";
+import {
+  collectMaintenanceActions,
+  type MaintenanceCollectSignal,
+} from "../maintenance/collect.ts";
 import type { ActionItem } from "../maintenance/action-scorer.ts";
 import type { DoctorIssueNaming } from "../diagnostics.ts";
 import { brainDirs } from "../paths.ts";
@@ -342,7 +345,7 @@ function safeTopActions(
   vault: string,
   topN: number,
   keepAction: BuildOperatorSummaryOptions["keepAction"],
-  collectErrors: MaintenanceCollectError[],
+  collectErrors: { scan: MaintenanceCollectSignal; message: string }[],
 ): ReadonlyArray<ActionItem> {
   try {
     const all = collectMaintenanceActions(vault, {
