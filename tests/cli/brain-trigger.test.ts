@@ -38,6 +38,9 @@ interface TriggerJson {
   readonly last_seen_at: string;
   readonly suppressed_at: string | null;
   readonly suppressed_from: string | null;
+  readonly snoozed_at: string | null;
+  readonly snoozed_until: string | null;
+  readonly snoozed_from: string | null;
 }
 
 beforeEach(() => {
@@ -210,6 +213,42 @@ describe("o2b brain trigger", () => {
     expect(woken.returncode).toBe(0);
     expect((JSON.parse(woken.stdout) as { trigger: TriggerJson }).trigger.status).toBe("pending");
     expect((await listJson()).triggers.map((t) => t.id)).toEqual([id]);
+  });
+
+  test("the snooze fields round-trip through the trigger JSON projection", async () => {
+    const id = seed();
+    await runCli(["brain", "trigger", "snooze", id, "--json"], { env: env() });
+    const history = await runCli(["brain", "trigger", "history", "--json"], { env: env() });
+    const snoozed = (JSON.parse(history.stdout) as { triggers: TriggerJson[] }).triggers[0]!;
+    expect(snoozed.snoozed_at).toEqual(expect.any(String));
+    expect(snoozed.snoozed_until).toEqual(expect.any(String));
+    expect(snoozed.snoozed_from).toBe("pending");
+
+    const woken = await runCli(["brain", "trigger", "unsnooze", id, "--json"], { env: env() });
+    const wokenRecord = (JSON.parse(woken.stdout) as { trigger: TriggerJson }).trigger;
+    expect(wokenRecord.snoozed_at).toBeNull();
+    expect(wokenRecord.snoozed_until).toBeNull();
+    expect(wokenRecord.snoozed_from).toBeNull();
+
+    // A never-snoozed record carries the nulls too: the projection shape
+    // is the same for every record.
+    const fresh = seed({ cooldownKey: "contradiction:pref-c:pref-d" });
+    const listed = await runCli(["brain", "trigger", "list", "--json"], { env: env() });
+    const untouched = (JSON.parse(listed.stdout) as { triggers: TriggerJson[] }).triggers.find(
+      (t) => t.id === fresh,
+    )!;
+    expect(untouched.snoozed_at).toBeNull();
+    expect(untouched.snoozed_until).toBeNull();
+    expect(untouched.snoozed_from).toBeNull();
+  });
+
+  test("scan --json skip rows always name their cooldown key and reason", async () => {
+    const out = await runCli(["brain", "trigger", "scan", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const parsed = JSON.parse(out.stdout) as { skipped: Array<Record<string, unknown>> };
+    for (const row of parsed.skipped) {
+      expect(Object.keys(row).toSorted()).toEqual(["cooldown_key", "reason"]);
+    }
   });
 
   test("snoozing an already-snoozed trigger fails naming its state", async () => {

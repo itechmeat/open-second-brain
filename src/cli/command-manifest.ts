@@ -610,7 +610,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("panel", "Multi-persona decision panel riding the write-session kernel"),
         command(
           "trigger",
-          "Grounded proactive trigger queue (scan/list/ack/dismiss/act/suppress/unsuppress/history)",
+          "Grounded proactive trigger queue (scan/list/ack/dismiss/act/suppress/unsuppress/snooze/unsnooze/history)",
         ),
         command("deep-synthesis", "Topic dossier: agreements, contradictions, stale claims, gaps"),
         command("ideas", "Ranked next-direction candidates from open loops"),

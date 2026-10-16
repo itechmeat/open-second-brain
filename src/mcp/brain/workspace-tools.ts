@@ -131,6 +131,9 @@ function triggerToJson(record: TriggerRecord): Record<string, unknown> {
     resolved_at: record.resolvedAt,
     suppressed_at: record.suppressedAt,
     suppressed_from: record.suppressedFrom,
+    snoozed_at: record.snoozedAt,
+    snoozed_until: record.snoozedUntil,
+    snoozed_from: record.snoozedFrom,
     occurrences: record.occurrences,
     last_seen_at: record.lastSeenAt,
   };
@@ -319,11 +322,12 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_trigger",
     description:
-      // Within the registry guard's tool-description ceiling, which is why
-      // the wording is this tight: the unreadable partition has to be in
-      // here, because a caller that does not know to look at it will read
-      // an empty `triggers` list as an empty queue.
-      "Proactive trigger queue in Brain/triggers/: scan makes deduped triggers, list/history read by status, acknowledge/dismiss/act transition one. suppress silences a finding indefinitely; unsuppress restores the status it interrupted. Recurrences stay counted; unreadable records are named, not omitted.",
+      // Within the registry guard's tool-description ceiling (290 of the
+      // 300 characters), which is why the wording is this tight: the
+      // unreadable partition has to be in here, because a caller that
+      // does not know to look at it will read an empty `triggers` list
+      // as an empty queue.
+      "Proactive trigger queue in Brain/triggers/: scan makes deduped triggers, list/history read by status, transitions apply one. suppress silences indefinitely; snooze defers to window end or refire; unsuppress/unsnooze restore the interrupted status. Unreadable records are named, not omitted.",
     inputSchema: {
       type: "object",
       properties: {
@@ -336,7 +340,7 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           minLength: 1,
           maxLength: 128,
-          description: "Trigger id for acknowledge/dismiss/act/suppress/unsuppress.",
+          description: "Trigger id for the transition operations.",
         },
         status: {
           // Sourced from the shared list, never copied: a literal copy

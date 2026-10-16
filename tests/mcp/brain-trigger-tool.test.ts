@@ -200,6 +200,29 @@ test("brain_trigger snooze on a terminal trigger is an invalid request naming th
   ).toThrow("terminal (dismissed)");
 });
 
+test("brain_trigger projections carry the snooze fields", async () => {
+  // Real-clock seed, like the snooze test above: the handler reads with
+  // `new Date()`.
+  const { created } = createTriggers(vault, [CANDIDATE], { now: new Date() });
+  const id = created[0]!.id;
+
+  const snoozed = (await tool("brain_trigger").handler(ctx, {
+    operation: "snooze",
+    id,
+  })) as { trigger: Record<string, unknown> };
+  expect(snoozed.trigger["snoozed_at"]).toEqual(expect.any(String));
+  expect(snoozed.trigger["snoozed_until"]).toEqual(expect.any(String));
+  expect(snoozed.trigger["snoozed_from"]).toBe("pending");
+
+  const woken = (await tool("brain_trigger").handler(ctx, {
+    operation: "unsnooze",
+    id,
+  })) as { trigger: Record<string, unknown> };
+  expect(woken.trigger["snoozed_at"]).toBeNull();
+  expect(woken.trigger["snoozed_until"]).toBeNull();
+  expect(woken.trigger["snoozed_from"]).toBeNull();
+});
+
 test("brain_trigger names every operation when it rejects one", async () => {
   expect(() => tool("brain_trigger").handler(ctx, { operation: "explode" })).toThrow("unsuppress");
 });

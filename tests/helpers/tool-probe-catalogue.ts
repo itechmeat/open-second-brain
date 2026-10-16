@@ -297,7 +297,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 103;
-export const PROBE_RECIPE_COUNT = 238;
+export const PROBE_RECIPE_COUNT = 240;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -1066,6 +1066,8 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { operation: "act", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
       { args: { operation: "suppress", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
       { args: { operation: "unsuppress", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "snooze", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "unsnooze", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
     ],
   },
   {

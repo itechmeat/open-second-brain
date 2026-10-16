@@ -71,6 +71,9 @@ function triggerJson(record: TriggerRecord): Record<string, unknown> {
     resolved_at: record.resolvedAt,
     suppressed_at: record.suppressedAt,
     suppressed_from: record.suppressedFrom,
+    snoozed_at: record.snoozedAt,
+    snoozed_until: record.snoozedUntil,
+    snoozed_from: record.snoozedFrom,
     occurrences: record.occurrences,
     last_seen_at: record.lastSeenAt,
   };

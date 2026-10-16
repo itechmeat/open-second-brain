@@ -180,7 +180,7 @@ Brain verbs (observing memory):
   links               Normalize wikilink path format (preserve/full/short); dry-run by default
   profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
-  trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/suppress/unsuppress/history)
+  trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/suppress/unsuppress/snooze/unsnooze/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
   extract-signals     Mine taste signals from an imported session's user turns (two-phase, needs-llm-step)
@@ -1358,15 +1358,19 @@ export const VERB_HELP: Record<string, string> = {
     "Grep-shaped semantic Brain search: path:line: output lines, path\n" +
     "scoping, exit 1 on no matches (also in --json mode).\n",
   trigger:
-    "usage: o2b brain trigger <scan|list|ack|dismiss|act|suppress|unsuppress|history> [id] [--status <s>] [--vault <path>] [--json]\n" +
+    "usage: o2b brain trigger <scan|list|ack|dismiss|act|suppress|unsuppress|snooze|unsnooze|history> [id] [--status <s>] [--vault <path>] [--json]\n" +
     "Grounded proactive trigger queue under Brain/triggers/. scan generates\n" +
     "deduped triggers from health/retention data (cooldown via\n" +
     "trigger_cooldown_days, default 7); ack/dismiss/act transition one\n" +
     "trigger; history lists terminal ones. suppress silences a finding\n" +
     "indefinitely - no cooldown clock, so it never re-nags - and unsuppress\n" +
     "restores the status it interrupted along with its original cooldown.\n" +
-    "list prints how many triggers are currently suppressed; every silenced\n" +
-    "recurrence is counted on the record (occurrences, last_seen_at).\n",
+    "snooze defers a trigger until a bounded window ends or the finding\n" +
+    "fires again, whichever comes first; unsnooze wakes it by hand. A\n" +
+    "dismissed finding resurfaces only when it re-fires on changed\n" +
+    "source artifacts, not when a window elapses. list prints how many\n" +
+    "triggers are currently suppressed; every silenced recurrence is\n" +
+    "counted on the record (occurrences, last_seen_at).\n",
   "deep-synthesis":
     "usage: o2b brain deep-synthesis <topic> [--limit <n>] [--triggers] [--vault <path>] [--json]\n" +
     "Deterministic topic dossier: matched notes, agreements, contradictions,\n" +
