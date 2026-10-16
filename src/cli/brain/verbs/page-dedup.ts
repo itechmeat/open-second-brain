@@ -20,16 +20,20 @@ import {
 import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 /**
- * One merge attempt that refused to land: the cluster's dedup key and the
- * named error. A chain refusal (MergeChainError) writes nothing, so the
- * secondary is left exactly as it was. A link-pass refusal can arrive
- * AFTER the `merged_into:` stamp has landed on the secondary - by then
- * the merge is half-applied, and {@link DedupApplyFailure.wikilinksUpdated}
- * carries how many files the rewrite repointed before the write that
- * refused.
+ * One merge attempt that refused to land: the cluster's dedup key, the
+ * SECONDARY that refused (review L8 - a cluster can hold several, and a
+ * report that names only the cluster leaves the operator guessing which
+ * page is still awaiting a decision), and the named error. A chain refusal
+ * (MergeChainError) writes nothing, so the secondary is left exactly as it
+ * was. A link-pass refusal can arrive AFTER the `merged_into:` stamp has
+ * landed on the secondary - by then the merge is half-applied, and
+ * {@link DedupApplyFailure.wikilinksUpdated} carries how many files the
+ * rewrite repointed before the write that refused.
  */
 export interface DedupApplyFailure {
   readonly key: string;
+  /** The id of the secondary whose merge refused. */
+  readonly secondary: string;
   readonly message: string;
   /**
    * Files the link pass rewrote before the write that refused, present
@@ -76,6 +80,7 @@ export function applyDedupCandidates(
         if (partial !== undefined) wikilinksTouched += partial;
         failures.push({
           key: c.key,
+          secondary: s.id,
           message: (err as Error)?.message ?? String(err),
           ...(partial === undefined ? {} : { wikilinksUpdated: partial }),
         });
@@ -146,6 +151,7 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
       wikilinks_updated: applied.wikilinksUpdated,
       failures: applied.failures.map((f) => ({
         key: f.key,
+        secondary: f.secondary,
         message: f.message,
         ...(f.wikilinksUpdated === undefined ? {} : { wikilinks_updated: f.wikilinksUpdated }),
       })),
@@ -157,7 +163,9 @@ export async function cmdBrainPageDedup(argv: string[]): Promise<number> {
   for (const f of applied.failures) {
     const partial =
       f.wikilinksUpdated === undefined ? "" : ` (wikilinks updated first: ${f.wikilinksUpdated})`;
-    process.stdout.write(`failed cluster ${f.key}: ${f.message}${partial}\n`);
+    process.stdout.write(
+      `failed cluster ${f.key}, secondary ${f.secondary}: ${f.message}${partial}\n`,
+    );
   }
   return exitCode;
 }

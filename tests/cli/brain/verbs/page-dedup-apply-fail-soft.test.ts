@@ -100,9 +100,12 @@ describe("applyDedupCandidates", () => {
 
     const applied = applyDedupCandidates(vault, report.candidates);
 
-    // The failure is named by cluster key and message.
+    // The failure is named by cluster key, SECONDARY (review L8 - a cluster
+    // can hold several secondaries, and the report must say which one
+    // refused), and message.
     expect(applied.failures.length).toBe(1);
     expect(applied.failures[0]!.key).toBe(first.key);
+    expect(applied.failures[0]!.secondary).toBe(sabotaged.id);
     expect(applied.failures[0]!.message).toContain(`secondary page not found: ${sabotaged.id}`);
 
     // The later cluster still applied.
@@ -175,10 +178,12 @@ describe("cmdBrainPageDedup --apply with a failing cluster", () => {
       expect(exit.code).toBe(1);
       const payload = JSON.parse(exit.stdout) as {
         merged: number;
-        failures: Array<{ key: string; message: string }>;
+        failures: Array<{ key: string; secondary?: string; message: string }>;
       };
       expect(payload.failures.length).toBe(1);
       expect(payload.failures[0]!.message).toContain("EACCES");
+      // The wire names WHICH secondary refused (review L8).
+      expect(payload.failures[0]!.secondary).toBe("pref-b");
       expect(payload.merged).toBe(1);
       // The later cluster still applied, in its writable directory.
       expect(readFileSync(join(vault, "Brain", "retired", "ret-d.md"), "utf8")).toContain(
