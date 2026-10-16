@@ -32,7 +32,7 @@ import {
   shardedFileName,
   type LedgerShardGrammar,
 } from "./ledger-shards.ts";
-import { acquireLockSync } from "./sync-lockfile.ts";
+import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** On-disk schema version stamped on every metric record. */
@@ -123,6 +123,13 @@ function assertSurface(surface: string): void {
 }
 
 /**
+ * How long a metric append waits for its surface file's lock: long enough
+ * to ride out another append or a shard rewrite, short enough that a
+ * telemetry write never stalls the operation it measures.
+ */
+const METRIC_APPEND_LOCK_WAIT_MS = 1_000;
+
+/**
  * Append one run-level metric record to the surface's JSONL file.
  * Creates `Brain/metrics/` on first write.
  */
@@ -149,8 +156,10 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
   // append and the sample is silently lost. Under the lock the rewrite
   // either waits for this append to land (and then reports drift against
   // its recount) or fails its own lock acquisition - either way the sample
-  // is a named outcome, never a silent overwrite.
-  const handle = acquireLockSync(path);
+  // is a named outcome, never a silent overwrite. The acquisition waits a
+  // short budget: two appends to one surface are routine, and a lock that
+  // refused at once lost the second sample to a swallowing caller.
+  const handle = acquireLockSyncWithRetry(path, METRIC_APPEND_LOCK_WAIT_MS);
   try {
     appendFileSync(path, JSON.stringify(record) + "\n");
   } finally {

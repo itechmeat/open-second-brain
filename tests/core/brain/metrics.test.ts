@@ -8,7 +8,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +25,7 @@ import {
   listMetrics,
   METRICS_SCHEMA_VERSION,
   MetricSurfaceError,
+  metricsDir,
 } from "../../../src/core/brain/metrics.ts";
 
 const NOW = "2026-06-05T10:00:00Z";
@@ -32,6 +41,38 @@ afterEach(() => {
 });
 
 describe("appendMetric", () => {
+  test("waits out a lock another writer briefly holds instead of losing the sample", async () => {
+    appendMetric(vault, { surface: "recall_benchmark", runAt: NOW, payload: { n: 1 } });
+    const file = join(metricsDir(vault), readdirSync(metricsDir(vault))[0]!);
+    const marker = join(vault, "holder-ready");
+    const child = join(vault, "holder.ts");
+    writeFileSync(
+      child,
+      [
+        `import { acquireLockSync } from ${JSON.stringify(join(import.meta.dir, "../../../src/core/brain/sync-lockfile.ts"))};`,
+        "const [target, marker] = process.argv.slice(2);",
+        "const h = acquireLockSync(target);",
+        `require("node:fs").writeFileSync(marker, "held");`,
+        "Bun.sleepSync(250);",
+        "h.release();",
+      ].join("\n"),
+      "utf8",
+    );
+    const proc = Bun.spawn(["bun", child, file, marker], { stdout: "pipe", stderr: "pipe" });
+    try {
+      const until = Date.now() + 20_000;
+      while (!existsSync(marker)) {
+        if (Date.now() > until) throw new Error("the holder never took the lock");
+        // oxlint-disable-next-line no-await-in-loop -- polling the child's progress
+        await Bun.sleep(5);
+      }
+      appendMetric(vault, { surface: "recall_benchmark", runAt: NOW, payload: { n: 2 } });
+      expect(listMetrics(vault, { surface: "recall_benchmark" })).toHaveLength(2);
+    } finally {
+      await proc.exited;
+    }
+  });
+
   test("writes one schema-stamped line per call into the surface file", () => {
     appendMetric(vault, { surface: "recall_benchmark", runAt: NOW, payload: { mrr: 0.91 } });
     appendMetric(vault, {
