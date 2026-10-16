@@ -94,7 +94,19 @@ interface HookGroupSpec {
 const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupSpec> }> = [
   {
     event: "SessionStart",
-    groups: [{ hooks: ["active-inject", "gap-agenda", "session-capture"] }],
+    groups: [
+      {
+        hooks: [
+          "active-inject",
+          "gap-agenda",
+          // The opt-in undistilled-backlog nudge (session-mining-economy),
+          // in the position the plugin's own SessionStart group lists it:
+          // default-off like gap-agenda, fail-open, one context line.
+          "backlog-nudge",
+          "session-capture",
+        ],
+      },
+    ],
   },
   {
     event: "UserPromptSubmit",
