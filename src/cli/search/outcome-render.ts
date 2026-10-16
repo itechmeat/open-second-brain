@@ -205,11 +205,35 @@ function noResultsLine(o: SearchOutcome): string {
 }
 
 /**
+ * The transcript's refusal-count segment for the explain lead line, from
+ * the trust assessment's per-lane aggregates: `refused 2 (arm 1, pool 1)`.
+ * Present whenever refusal records ride the receipts - the shadow mode's
+ * would-be refusals and, since the arm lane receipts its drops, an
+ * enforce run's arm-lane drops alike - and absent otherwise, so a receipt
+ * without refusal records renders exactly as it always did.
+ */
+function refusalSummary(assessment: SearchOutcome["memoryTrustAssessment"]): string {
+  if (assessment?.refused === undefined) return "";
+  const lanes = Object.entries(assessment.refusals_by_lane ?? {})
+    .map(([lane, count]) => `${lane} ${count}`)
+    .join(", ");
+  return `${BULLET}refused ${assessment.refused}${lanes !== "" ? ` (${lanes})` : ""}`;
+}
+
+/**
  * The `--explain` block of the human transcript: the decision trace as
  * counts plus one line per excluded candidate, or the single line naming
  * why there is no trace to show. The trust assessment is the same
  * exclusion set folded into a reason histogram, so the transcript renders
  * the trace (the superset) and `--json` carries both receipts verbatim.
+ *
+ * When the gate is measuring - shadow, the mode the rollout recommends
+ * first - nothing is excluded, so the enforce-shaped lead line alone
+ * would read exactly like a clean run. The mode and the measured
+ * refusals (per lane) are therefore named on the lead line, and every
+ * refusal record prints as a row the way exclusions do; an enforce run
+ * whose arm dropped an arrival renders the same refusal rows without the
+ * mode stamp.
  */
 function explainLines(
   o: SearchOutcome,
@@ -228,11 +252,18 @@ function explainLines(
     return [`explain: ${why}`, ...overlap, ""];
   }
   const lines = [
-    `explain: evaluated ${trace.evaluated}${BULLET}surfaced ${trace.surfaced}${BULLET}excluded ${trace.excluded}`,
+    `explain: evaluated ${trace.evaluated}${BULLET}surfaced ${trace.surfaced}${BULLET}excluded ${trace.excluded}` +
+      (trace.mode !== undefined ? `${BULLET}mode ${trace.mode}` : "") +
+      refusalSummary(assessment),
     ...overlap,
   ];
   for (const exclusion of trace.exclusions) {
     lines.push(`    excluded: ${exclusion.path}${BULLET}${exclusion.reasons.join(", ")}`);
+  }
+  for (const refusal of trace.refusals ?? []) {
+    lines.push(
+      `    refused: ${refusal.path}${BULLET}${refusal.lane}${BULLET}${refusal.reasons.join(", ")}`,
+    );
   }
   lines.push("");
   return lines;

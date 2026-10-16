@@ -21,6 +21,10 @@ import {
   RETRIEVAL_TRACE_UNAVAILABLE,
   type ExplainRequest,
 } from "../../src/core/search/explain-envelope.ts";
+import {
+  RETRIEVAL_TRUST_REFUSAL_LANE,
+  type RetrievalTrustRefusal,
+} from "../../src/core/brain/trust/retrieval-receipts.ts";
 import type { BrainSearchResult, SearchOutcome } from "../../src/core/search/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -166,6 +170,90 @@ describe("o2b search --explain: retrieval receipts", () => {
 
     const unavailable = renderOutcomeHuman(outcome(false), false, QUERY, EXPLAIN_ON);
     expect(unavailable).toContain(RETRIEVAL_TRACE_UNAVAILABLE);
+  });
+
+  test("human: a shadow run names the mode and its measured refusals per lane", () => {
+    // Shadow's whole purpose is that the would-be refusals are visible to
+    // the operator deciding whether to promote the mode; the human
+    // transcript is that operator's default surface. With nothing
+    // excluded, the enforce-shaped lead line alone would read exactly
+    // like a clean run.
+    const poolRow: RetrievalTrustRefusal = Object.freeze({
+      document_id: 2,
+      chunk_id: 2,
+      path: "notes/quarantined.md",
+      reasons: Object.freeze(["trust_gate:self_approval_quarantine"]),
+      lane: RETRIEVAL_TRUST_REFUSAL_LANE.pool,
+    });
+    const armRow: RetrievalTrustRefusal = Object.freeze({
+      document_id: 6,
+      chunk_id: 6,
+      path: "notes/arm-reached.md",
+      reasons: Object.freeze(["relational_arm:entity_contamination"]),
+      lane: RETRIEVAL_TRUST_REFUSAL_LANE.arm,
+    });
+    const shadowTrace = {
+      ...TRACE,
+      excluded: 0,
+      exclusions: [],
+      mode: "shadow" as const,
+      refused: 2,
+      refusals: [poolRow, armRow],
+    };
+    const shadowAssessment = {
+      ...ASSESSMENT,
+      quarantined: 0,
+      mode: "shadow" as const,
+      refused: 2,
+      refusals_by_lane: { arm: 1, pool: 1 },
+      refused_reason_counts: {
+        arm: { "relational_arm:entity_contamination": 1 },
+        pool: { "trust_gate:self_approval_quarantine": 1 },
+      },
+    };
+    const o: SearchOutcome = Object.freeze({
+      results: Object.freeze([RESULT]),
+      warnings: Object.freeze([]),
+      total: 2,
+      idfWeightedCoverage: 1,
+      retrievalDecisionTrace: shadowTrace,
+      memoryTrustAssessment: shadowAssessment,
+    });
+    const rendered = renderOutcomeHuman(o, false, QUERY, EXPLAIN_ON);
+
+    // The mode, and the refusal counts split per lane, on the lead line.
+    expect(rendered).toContain("mode shadow");
+    expect(rendered).toContain("refused 2 (arm 1, pool 1)");
+    // Each refusal as a row, the way exclusions print.
+    expect(rendered).toContain("refused: notes/quarantined.md");
+    expect(rendered).toContain("refused: notes/arm-reached.md");
+    expect(rendered).toContain("relational_arm:entity_contamination");
+
+    // An enforce run with an arm drop renders the same refusal rows but
+    // no mode stamp.
+    const enforceTrace = {
+      ...TRACE,
+      refused: 1,
+      refusals: [armRow],
+    };
+    const enforceAssessment = {
+      ...ASSESSMENT,
+      refused: 1,
+      refusals_by_lane: { arm: 1, pool: 0 },
+      refused_reason_counts: { arm: { "relational_arm:entity_contamination": 1 }, pool: {} },
+    };
+    const enforceOutcome: SearchOutcome = Object.freeze({
+      results: Object.freeze([RESULT]),
+      warnings: Object.freeze([]),
+      total: 2,
+      idfWeightedCoverage: 1,
+      retrievalDecisionTrace: enforceTrace,
+      memoryTrustAssessment: enforceAssessment,
+    });
+    const enforceRendered = renderOutcomeHuman(enforceOutcome, false, QUERY, EXPLAIN_ON);
+    expect(enforceRendered).toContain("refused 1 (arm 1, pool 0)");
+    expect(enforceRendered).toContain("refused: notes/arm-reached.md");
+    expect(enforceRendered).not.toContain("mode");
   });
 });
 
