@@ -150,7 +150,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan. With `items` writes `source_type: auto_extract` signals to Brain/inbox/, passing the plan response's `surveyed_turns_hash` back so a barren commit records its tombstone against the material the verdict was earned over. Barren sessions skip with reason 'mining_tombstone'; `force` re-mines once. Refuses over-cap, under-floor, repeated-topic.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan; with `items` pass the plan's `surveyed_turns_hash` back so a barren commit records its tombstone. Barren sessions skip as 'mining_tombstone'; `force` re-mines once. Refuses caps, floors, repeats.",
     inputSchema: {
       type: "object",
       properties: {
