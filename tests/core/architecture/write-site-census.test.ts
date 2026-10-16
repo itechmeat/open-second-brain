@@ -588,11 +588,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "re-confirmed, then the source unlinked.",
   },
   "src/core/search/store/lifecycle.ts": {
-    categories: [C.lifecycleMove],
-    calls: ["renameSync"],
+    categories: [C.lifecycleMove, C.retentionDelete],
+    calls: ["renameSync", "unlinkSync"],
     reason:
-      "restores the `.bak` sqlite index over a missing database after a crashed " +
-      "reindex, re-checked under the lock. A database file has no text-writer form.",
+      "restores the parked `.old` (else the `.bak`) sqlite index over a missing database " +
+      "after a crashed reindex, re-checked under the lock, and deletes a `.old` a completed " +
+      "swap left beside the live index. A database file has no text-writer form.",
   },
 
   // --- Retention, reset and cleanup deletes ------------------------------
