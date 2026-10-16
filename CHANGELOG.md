@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.86.2] - 2026-10-16
+
+Open Second Brain 1.86.2 closes a concurrency defect in the per-session hook-state lock: after a stale lock was taken over, two or more hook processes could hold the same scope at once, so a queued re-grounding part could be delivered more than once.
+
+### Fixed
+
+- **A stale hook-state lock takeover can no longer admit a second holder.** A contender that judged an abandoned scope lock stale could act after another contender had already taken it over and re-acquired, move that live lock aside, and leave the lock name empty long enough for a third contender to acquire beside it; from then on each holder's release deleted the next holder's lock, and concurrent takers on the Windows runner each received every queued re-grounding part. A takeover now removes the judged file only for the one contender whose exclusive claim on that file's identity wins, and only while the name still holds that file, so a live holder's lock is never moved or removed.
+- **A lock release removes only the lock its holder created.** The release and the process-exit sweep of the shared lock primitive leave a lock file in place once its name holds another holder's file, so one lost lock can no longer cascade into several holders.
+- **The same claim guards the other stale-lock breakers.** The lineage gap-sidecar trim lock and the deferred session-capture worker lock break an abandoned lock through the same claim, and the capture worker's release removes only its own lock; the hook-state prune removes old scope locks through it too and sweeps old takeover claims.
+
 ## [1.86.1] - 2026-10-16
 
 Open Second Brain 1.86.1 repairs what the review of v1.86.0 found and closes two embedding-loss defects: a vault that had the retrieval trust gate on keeps excluding after the upgrade, a barren session mine records its tombstone in the documented flow, the undistilled census reads the session store once so the SessionStart nudge stays inside its budget, and a search index left on an older schema is upgraded in place with every stored embedding kept instead of being rebuilt keyword-only.
@@ -8591,6 +8601,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.86.2]: https://github.com/itechmeat/open-second-brain/compare/v1.86.1...v1.86.2
 [1.86.1]: https://github.com/itechmeat/open-second-brain/compare/v1.86.0...v1.86.1
 [1.86.0]: https://github.com/itechmeat/open-second-brain/compare/v1.85.0...v1.86.0
 [1.85.0]: https://github.com/itechmeat/open-second-brain/compare/v1.84.1...v1.85.0
