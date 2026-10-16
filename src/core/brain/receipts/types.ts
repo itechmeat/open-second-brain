@@ -132,14 +132,12 @@ export const RECEIPT_FOLD_DEFAULT_AGE_DAYS = 30;
 export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
   "recall_telemetry",
   "gate_telemetry",
-  "negative_recall",
   "ingest_dedup",
   "mcp_route_latency",
   "token_impact",
   "token_impact_outcome",
   "context_pack_outcome",
   "context_pack_evidence",
-  "recall_observed_use",
   "skill_invoked",
   "decision_model_call",
   "decision_model_extract_commit",
@@ -166,6 +164,18 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
  *     session-recall seed, the hallways pass and the mining dedupe seed
  *     read back (its payload carries `session_ref`, so the clip-key rule
  *     never protected it);
+ *   - `recall_observed_use` - read back as data, never aggregated: the
+ *     lifetime observed-reuse rate the search ranking consumes unfiltered
+ *     (`observedReuseRates`, folded per artifact by the candidate-signals
+ *     collector into every ranking that runs) and the dead-weight
+ *     report's per-source roll-up both read the rows; a fold past the
+ *     cutoff would replace old verdicts with an aggregate line every
+ *     reader drops, silently decaying a live ranking input;
+ *   - `negative_recall` - the answer-audit trail its own vocabulary entry
+ *     declares: the record exists so the corpus statement a "no" rested
+ *     on stays auditable after the answer has been given, which is
+ *     per-record identity past any correlation window; a fold would
+ *     destroy exactly that auditability;
  *   - `receipt_compaction` - the compaction audit trail itself; a fold
  *     that removed the record of the run before it would erase the only
  *     account of what the fold has already destroyed.
@@ -182,6 +192,8 @@ export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object
   "generation_report",
   "host_memory_write",
   "session_entity_mention",
+  "recall_observed_use",
+  "negative_recall",
   "receipt_compaction",
 ]);
 

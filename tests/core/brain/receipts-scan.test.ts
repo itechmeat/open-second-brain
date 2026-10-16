@@ -195,6 +195,8 @@ describe("scanReceiptLedgers", () => {
         "session_summary_node",
         "session_summary_digest",
         "host_memory_write",
+        "recall_observed_use",
+        "negative_recall",
       ];
       const continuity = continuityLogDir(vault);
       writeShard(
@@ -272,6 +274,20 @@ describe("scanReceiptLedgers", () => {
         "protected",
       );
     }
+    // The ranking-consumed and audit-trail kinds are read back as data,
+    // never aggregated as telemetry - the classification the allowlist's
+    // own criterion demands, pinned against drifting back onto the
+    // foldable side: `recall_observed_use` is the lifetime observed-reuse
+    // rate the search ranking consumes unfiltered (`observedReuseRates`
+    // via the candidate-signals collector, beside the dead-weight
+    // report's read-side fold), and `negative_recall` is the
+    // answer-audit trail its own vocabulary entry declares - the corpus
+    // statement a "no" rested on stays auditable after the answer has
+    // been given, which a fold past the cutoff would destroy.
+    expect(KEPT_CONTINUITY_KINDS).toContain("recall_observed_use");
+    expect(KEPT_CONTINUITY_KINDS).toContain("negative_recall");
+    expect(FOLDABLE_CONTINUITY_KINDS).not.toContain("recall_observed_use");
+    expect(FOLDABLE_CONTINUITY_KINDS).not.toContain("negative_recall");
   });
 
   test("inventories metrics shards with run_at-based ages and the same protected rule", () => {
