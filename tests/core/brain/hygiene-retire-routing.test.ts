@@ -155,6 +155,11 @@ describe("applyHygienePlan dispatches retire to the retirement core", () => {
     // The per-copy link counts ride the detail (review M7): the executor
     // used to report only "retired N", dropping what the link pass did.
     expect(result.applied[0]!.detail).toMatch(/links: \d+ rewritten, \d+ failed/);
+    // The disk accounting rides it too (review M6): snapshot bytes,
+    // removed bytes, and the signed net between them.
+    expect(result.applied[0]!.detail).toMatch(
+      /disk: snapshot \d+ bytes, removed \d+ bytes, net [+-]\d+ bytes/,
+    );
 
     expect(existsSync(join(vault, retired))).toBe(false);
     expect(existsSync(join(vault, canonical))).toBe(true);

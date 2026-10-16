@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -244,6 +245,26 @@ describe("retireDocumentCopies", () => {
     const { canonical, retired } = seedPair();
     retireDocumentCopies(vault, [{ path: retired, canonical }], { agent: "tester", now: NOW });
     expect(existsSync(join(vault, "Brain", ".archives", `${ARCHIVE_HASH}.txt`))).toBe(true);
+  });
+
+  test("the result reports the snapshot bytes and the net disk delta", () => {
+    // Review M6 (retire half): the destructive span archives Brain/ into a
+    // COUNTED surface (.snapshots) before it frees anything, so a result
+    // carrying only removal counts hides that the vault can GROW. The
+    // result carries the page bytes measured before the removal, the
+    // snapshot archive's bytes, and the net between them.
+    const { canonical, retired } = seedPair();
+    const pageBytes = statSync(join(vault, retired)).size;
+
+    const result = retireDocumentCopies(vault, [{ path: retired, canonical }], {
+      agent: "tester",
+      now: NOW,
+    });
+
+    expect(result.retired[0]!.pageBytes).toBe(pageBytes);
+    expect(result.disk.removedBytes).toBe(pageBytes);
+    expect(result.disk.snapshotBytes).toBe(statSync(result.snapshotPath!).size);
+    expect(result.disk.netBytes).toBe((result.disk.snapshotBytes ?? 0) - pageBytes);
   });
 
   test("a per-copy failure is collected, the copy stays on disk, and the run completes", () => {

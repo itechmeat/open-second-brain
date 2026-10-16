@@ -54,7 +54,7 @@
  * guard runs on the selected findings before this applier is called.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
@@ -140,6 +140,11 @@ export interface RetiredDocumentCopy {
   /** True when the manifest was rewritten to carry the `retired_into` marker. */
   readonly manifestRetired: boolean;
   /**
+   * The retired page's size in bytes, measured BEFORE its removal - the
+   * freed half of the run's disk accounting (review M6).
+   */
+  readonly pageBytes: number;
+  /**
    * The full retarget report for this copy's inbound wikilinks. A copy
    * whose pass could not run unambiguously - the basename collision - is
    * refused before any write and lands in {@link RetireDocumentsResult.failed}
@@ -150,6 +155,25 @@ export interface RetiredDocumentCopy {
   readonly sourceArchiveHash: string | null;
   /** The id of the `source_invalidation` continuity record this retirement appended. */
   readonly auditRecordId: string;
+}
+
+/**
+ * The run's disk accounting (review M6, retire half): the destructive span
+ * archives `Brain/` into `Brain/.snapshots/` - a surface the storage census
+ * counts - BEFORE it frees anything, so removal counts alone can read as a
+ * shrink on a run that actually grew the vault. The result carries both
+ * sides and the net between them.
+ */
+export interface RetireDiskAccounting {
+  /**
+   * Bytes of the snapshot archive the gate wrote for this run, or `null`
+   * when no snapshot was taken (a run with no copies).
+   */
+  readonly snapshotBytes: number | null;
+  /** Summed bytes of the pages the run removed, measured before removal. */
+  readonly removedBytes: number;
+  /** `snapshotBytes - removedBytes`; `null` beside a `null` snapshot size. */
+  readonly netBytes: number | null;
 }
 
 export interface RetireDocumentsResult {
@@ -215,6 +239,7 @@ export function retireDocumentCopies(
     return Object.freeze({
       retired: Object.freeze([]),
       failed: Object.freeze([]),
+      disk: Object.freeze({ snapshotBytes: null, removedBytes: 0, netBytes: null }),
       snapshotRunId: null,
       snapshotPath: null,
       // Nothing to destroy, so the classifier says so - neither the
@@ -264,9 +289,21 @@ export function retireDocumentCopies(
     },
   );
 
+  // The disk accounting (review M6, retire half): the archive sits in a
+  // counted surface, so the result states what the snapshot cost beside
+  // what the removals freed.
+  const removedBytes = retired.reduce((sum, copy) => sum + copy.pageBytes, 0);
+  const snapshotBytes = existsSync(gated.snapshot.path) ? statSync(gated.snapshot.path).size : null;
+  const disk: RetireDiskAccounting = Object.freeze({
+    snapshotBytes,
+    removedBytes,
+    netBytes: snapshotBytes === null ? null : snapshotBytes - removedBytes,
+  });
+
   return Object.freeze({
     retired: Object.freeze(retired),
     failed: Object.freeze(failed),
+    disk,
     snapshotRunId: gated.snapshot.runId,
     snapshotPath: gated.snapshot.path,
     recoverability: gated.recoverability,
@@ -293,6 +330,9 @@ function retireOneCopy(
   if (!existsSync(abs)) {
     throw new Error(`retired copy not found on disk: ${copy.path}`);
   }
+  // Measured before anything acts: the freed half of the run's disk
+  // accounting (review M6).
+  const pageBytes = statSync(abs).size;
   const facts = readCopyFacts(vault, copy.path);
   if (facts === null) {
     throw new Error(`retired copy frontmatter does not parse: ${copy.path}`);
@@ -400,6 +440,7 @@ function retireOneCopy(
       canonical: copy.canonical,
       manifestKey: facts.sourcePath,
       manifestRetired,
+      pageBytes,
       wikilinks,
       sourceArchiveHash: facts.archiveHash,
       auditRecordId: record.id,

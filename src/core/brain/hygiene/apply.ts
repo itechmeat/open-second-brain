@@ -189,12 +189,20 @@ async function executeFinding(
         }),
         { rewritten: 0, failed: 0 },
       );
+      // The disk accounting rides it too (review M6, retire half): the
+      // snapshot archive lands in a counted surface before the removals
+      // free anything, so the detail states the net, not only the shrink.
+      const disk = result.disk;
+      const net = disk.netBytes ?? 0;
       return Object.freeze({
         finding_id: finding.id,
         action: "retire",
-        detail: `retired ${result.retired.length} near-duplicate cop${
-          result.retired.length === 1 ? "y" : "ies"
-        } into ${canonical}; links: ${links.rewritten} rewritten, ${links.failed} failed`,
+        detail:
+          `retired ${result.retired.length} near-duplicate cop${
+            result.retired.length === 1 ? "y" : "ies"
+          } into ${canonical}; links: ${links.rewritten} rewritten, ${links.failed} failed; ` +
+          `disk: snapshot ${disk.snapshotBytes ?? 0} bytes, removed ${disk.removedBytes} bytes, ` +
+          `net ${net >= 0 ? "+" : ""}${net} bytes`,
       });
     }
     default:
