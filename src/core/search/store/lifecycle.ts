@@ -8,7 +8,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
@@ -170,10 +170,18 @@ function busySwitchWarning(dbPath: string, journalMode: JournalMode): string {
  * clobber; the caller's open path then re-evaluates existence and reports
  * honestly (INDEX_MISSING). The `.bak` restore of a genuine crash is
  * unaffected: with no live holder the lock is acquired immediately.
+ *
+ * A swap that keeps an embedding-richer `.bak` parks the live index at
+ * `.old` instead (reindexVault). A crash between its renames leaves the
+ * live index at `.old` and the OLDER index at `.bak`, so `.old` is
+ * restored first - restoring `.bak` would roll back past the live index.
+ * A `.old` beside a present live index is the leftover of a swap that
+ * completed but crashed before removing it, and is deleted.
  */
 export function restoreFromBakIfMissing(dbPath: string): void {
   const bak = dbPath + ".bak";
-  if (existsSync(dbPath) || !existsSync(bak)) return;
+  const old = dbPath + ".old";
+  if (existsSync(dbPath) ? !existsSync(old) : !existsSync(old) && !existsSync(bak)) return;
   let release: (() => void) | null = null;
   try {
     release = acquireWriterLockSync(dbPath);
@@ -185,10 +193,15 @@ export function restoreFromBakIfMissing(dbPath: string): void {
   try {
     // Re-check under the lock: the swap may have completed while we waited,
     // or another opener may have already restored.
-    if (existsSync(dbPath) || !existsSync(bak)) return;
-    renameWithRetry(bak, dbPath);
+    if (existsSync(dbPath)) {
+      if (existsSync(old)) unlinkSync(old);
+      return;
+    }
+    const source = existsSync(old) ? old : existsSync(bak) ? bak : null;
+    if (source === null) return;
+    renameWithRetry(source, dbPath);
     // eslint-disable-next-line no-console
-    console.error(`restored search index from ${bak} (previous reindex crash)`);
+    console.error(`restored search index from ${source} (previous reindex crash)`);
   } catch {
     /* fall through — open path below will report INDEX_MISSING */
   } finally {

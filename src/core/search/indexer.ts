@@ -1411,7 +1411,9 @@ async function reindexInto(
     // recompute, and replacing it with a vector-less live index (two
     // self-heal rebuilds in a row) would discard them while the rebuild
     // notice still points at `.bak`. The live index is parked beside it
-    // for the swap and removed once the swap succeeds.
+    // for the swap and removed once the swap succeeds; a crash between the
+    // renames leaves it at `.old`, which the next Store.open restores in
+    // preference to the older `.bak` (restoreFromBakIfMissing).
     progress.start(INDEX_STAGE.swap, 1);
     const keepBak = countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath);
     const parkPath = keepBak ? config.dbPath + ".old" : bakPath;

@@ -172,3 +172,41 @@ test("a failed final swap rename puts the previous index back live", async () =>
   expect(existsSync(`${dbPath}.bak`)).toBe(false);
   expect(readFileSync(dbPath).equals(liveBefore)).toBe(true);
 });
+
+test("a crash mid-swap with the live index parked at .old restores .old, not the older .bak", async () => {
+  // A swap that keeps an embedding-richer `.bak` parks the live index at
+  // `.old`. A crash between the renames leaves the live index there and an
+  // OLDER index at `.bak`; restoring `.bak` would roll back past it.
+  writeMd(vault, "a.md", "# A\n\nalpha content");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  cpSync(dbPath, `${dbPath}.bak`);
+  writeMd(vault, "b.md", "# B\n\nbeta content");
+  await indexVault(cfg);
+  cpSync(dbPath, `${dbPath}.old`);
+  rmSync(dbPath);
+
+  const store = await Store.open(cfg, { mode: "read" });
+  let paths: string[];
+  try {
+    paths = [...store.listDocuments().keys()].toSorted();
+  } finally {
+    await store.close();
+  }
+  // The live index (both notes) came back, not the older `.bak` (one note).
+  expect(paths).toEqual(["a.md", "b.md"]);
+  expect(existsSync(`${dbPath}.old`)).toBe(false);
+  expect(existsSync(`${dbPath}.bak`)).toBe(true);
+});
+
+test("a .old left beside a present live index by a crash after the swap is removed", async () => {
+  writeMd(vault, "a.md", "# A\n\nalpha content");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  cpSync(dbPath, `${dbPath}.old`);
+
+  const store = await Store.open(cfg, { mode: "read" });
+  await store.close();
+  expect(existsSync(dbPath)).toBe(true);
+  expect(existsSync(`${dbPath}.old`)).toBe(false);
+});
