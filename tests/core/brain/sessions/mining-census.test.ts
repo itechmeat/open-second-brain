@@ -312,6 +312,26 @@ describe("buildMiningCensus", () => {
     expect(census.distilled).toBe(1);
   });
 
+  test("an import under an explicit recall id joins on that id, not the basename", async () => {
+    // --recall-session-id files the turns and every mining record under
+    // the pinned id; the census must follow it rather than read the log's
+    // basename as a session the plan would refuse.
+    const path = writeSession("pinned.jsonl", [{ role: "user", text: "ship the parser" }]);
+    await importSession(vault, path, {
+      agent: "tester",
+      now: NOW,
+      recall: true,
+      recallSessionId: "pinned-session",
+    });
+    recordSessionImports(vault, [
+      { path, runtime: SESSION_RUNTIME_ID.claudeCode, sessionId: "pinned-session" },
+    ]);
+    expect(buildMiningCensus(vault)).toMatchObject({ undistilled: 1, refused: 0 });
+
+    mineYield("pinned-session");
+    expect(buildMiningCensus(vault)).toMatchObject({ distilled: 1, undistilled: 0, refused: 0 });
+  });
+
   test("counts are aggregated per runtime, by the ledger's own label", async () => {
     await importOne(writeSession("alpha.jsonl", [{ role: "user", text: "ship the parser" }]));
     const beta = writeSession("beta.jsonl", [{ role: "user", text: "write the docs" }]);

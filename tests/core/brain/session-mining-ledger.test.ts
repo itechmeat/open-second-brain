@@ -124,6 +124,11 @@ test("a corrupt ledger refuses by name and is never reset", () => {
   writeFileSync(path, "not json at all");
   expect(() => readSessionMiningLedger(vault)).toThrow(/session mining ledger is corrupted JSON/);
   expect(() => readSessionMiningLedger(vault)).toThrow(/session-mining-ledger\.json/);
+  // The refusal stops every plan and the census, so it names the remedy
+  // and what the remedy costs.
+  expect(() => readSessionMiningLedger(vault)).toThrow(
+    /delete it - every imported session then becomes eligible for mining again/,
+  );
   // The refused read rewrote nothing: the file is exactly as corrupt as before.
   expect(readFileSync(path, "utf8")).toBe("not json at all");
 });

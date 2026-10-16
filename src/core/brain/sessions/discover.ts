@@ -97,6 +97,14 @@ export interface SessionLedgerEntry {
   readonly runtime: SessionRuntimeId;
   /** When this build imported it, to the second. */
   readonly imported_at: string;
+  /**
+   * The portable session id the import filed its turns under, present
+   * only when the import pinned one explicitly (`--recall-session-id`);
+   * absent, the id is the log's basename, as `sessionRefIdentity` derives
+   * it. The mining census joins on this, so an explicitly-named import's
+   * mining state is not misread as a refused session.
+   */
+  readonly session_id?: string;
 }
 
 /** Absolute log path → what was recorded about it. */
@@ -163,6 +171,8 @@ export interface DiscoverSessionsOptions {
 export interface SessionImportRecord {
   readonly path: string;
   readonly runtime: SessionRuntimeId;
+  /** The explicit recall session id the import used, when one was pinned. */
+  readonly sessionId?: string;
 }
 
 /** The host this process is running on, when the caller named none. */
@@ -221,11 +231,13 @@ function readEntry(value: unknown): SessionLedgerEntry | null {
   const hash = row["hash"];
   const runtime = row["runtime"];
   const importedAt = row["imported_at"];
+  const sessionId = row["session_id"];
   if (typeof hash !== "string" || !isSessionRuntimeId(runtime)) return null;
   return {
     hash,
     runtime,
     imported_at: typeof importedAt === "string" ? importedAt : "",
+    ...(typeof sessionId === "string" && sessionId !== "" ? { session_id: sessionId } : {}),
   };
 }
 
@@ -280,6 +292,9 @@ export function recordSessionImports(
         hash: hashFile(record.path),
         runtime: record.runtime,
         imported_at: stamp,
+        ...(record.sessionId !== undefined && record.sessionId.trim() !== ""
+          ? { session_id: record.sessionId.trim() }
+          : {}),
       };
     }
     for (const path of Object.keys(entries)) {

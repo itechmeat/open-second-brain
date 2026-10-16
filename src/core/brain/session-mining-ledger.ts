@@ -126,6 +126,16 @@ export interface SessionMiningLedger {
  * file-level corruption and refuses by name, while damage to a SINGLE entry
  * drops that entry only.
  */
+/**
+ * The remedy every file-level refusal names: the refusal stops every plan,
+ * the census and the nudge, so the operator must learn what removing the
+ * file costs (every session re-opens for mining) and that nothing else is
+ * lost.
+ */
+const CORRUPT_LEDGER_REMEDY =
+  "; to recover, move the file aside or delete it - every imported session then becomes " +
+  "eligible for mining again, and the next commits rebuild the ledger";
+
 export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   const path = sessionMiningLedgerPath(vault);
   if (!existsSync(path)) {
@@ -135,16 +145,18 @@ export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
-    throw new Error(`session mining ledger is corrupted JSON: ${path}`, { cause: e });
+    throw new Error(`session mining ledger is corrupted JSON: ${path}${CORRUPT_LEDGER_REMEDY}`, {
+      cause: e,
+    });
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`session mining ledger is not an object: ${path}`);
+    throw new Error(`session mining ledger is not an object: ${path}${CORRUPT_LEDGER_REMEDY}`);
   }
   const obj = parsed as Record<string, unknown>;
   if (obj["schema_version"] !== SESSION_MINING_LEDGER_SCHEMA_VERSION) {
     throw new Error(
       `session mining ledger schema_version ${String(obj["schema_version"])} not supported ` +
-        `(expected ${SESSION_MINING_LEDGER_SCHEMA_VERSION}): ${path}`,
+        `(expected ${SESSION_MINING_LEDGER_SCHEMA_VERSION}): ${path}${CORRUPT_LEDGER_REMEDY}`,
     );
   }
   const entries: Record<string, SessionMiningEntry> = {};
@@ -156,7 +168,9 @@ export function readSessionMiningLedger(vault: string): SessionMiningLedger {
   // different from per-ENTRY damage, which is dropped rather than guessed
   // at, because a dropped entry can only re-open one session for mining.
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`session mining ledger entries is not an object: ${path}`);
+    throw new Error(
+      `session mining ledger entries is not an object: ${path}${CORRUPT_LEDGER_REMEDY}`,
+    );
   }
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const entry = readEntry(key, value);

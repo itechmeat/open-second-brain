@@ -419,6 +419,15 @@ describe("the mining census rides the coverage report", () => {
     expect(status.mining?.undistilled).toBe(0);
   });
 
+  test("an explicit recall id is recorded, so the census does not read the session as refused", async () => {
+    const path = claudeLog("one.jsonl", "alpha");
+    expect((await run([path, "--recall", "--recall-session-id", "pinned-one"])).returncode).toBe(0);
+
+    const status = JSON.parse((await run(["--status", "--json"])).stdout) as DiscoveryJson;
+    expect(status.mining?.undistilled).toBe(1);
+    expect(status.mining?.refused).toBe(0);
+  });
+
   test("a census failure leaves the coverage report standing and names the census unavailable", async () => {
     // A corrupt mining ledger is refused by the census by design; that is
     // a fact about the census, not about what was imported.

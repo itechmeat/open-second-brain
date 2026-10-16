@@ -232,6 +232,7 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
       recordUnderDeclaredRoots(
         vault,
         result.files.map((f) => f.file),
+        recallSessionId,
       );
     } catch (exc) {
       ledgerError = (exc as Error).message ?? String(exc);
@@ -383,7 +384,8 @@ async function sweep(req: SweepRequest): Promise<number> {
       // the other's writes.
       // oxlint-disable-next-line no-await-in-loop
       files.push(await importSession(req.vault, entry.path, req.importOptions));
-      imported.push(entry);
+      const pinned = req.importOptions.recallSessionId;
+      imported.push(pinned !== undefined ? { ...entry, sessionId: pinned } : entry);
     } catch (exc) {
       // One unreadable log must not lose the rest of the sweep; the
       // failure is named and the run carries on.
@@ -576,11 +578,21 @@ async function proposeBacklogEnvelope(req: ProposeBacklogRequest): Promise<numbe
 }
 
 /** `path -> the runtime whose declared root contains it`, recorded in the ledger. */
-function recordUnderDeclaredRoots(vault: string, paths: ReadonlyArray<string>): void {
+function recordUnderDeclaredRoots(
+  vault: string,
+  paths: ReadonlyArray<string>,
+  recallSessionId: string | null,
+): void {
   const records: SessionImportRecord[] = [];
   for (const path of paths) {
     const runtime = runtimeForPath(path);
-    if (runtime !== null) records.push({ path, runtime });
+    if (runtime !== null) {
+      records.push({
+        path,
+        runtime,
+        ...(recallSessionId !== null ? { sessionId: recallSessionId } : {}),
+      });
+    }
   }
   if (records.length > 0) recordSessionImports(vault, records);
 }

@@ -150,16 +150,11 @@ export function buildMiningCensus(
 
   for (const [path, entry] of Object.entries(importedEntries)) {
     opts.safeguard?.checkpoint();
-    // The join identity is the portable sessionRefIdentity basename - what
-    // the mining lane keys its tombstone and every signal's session_ref on
-    // when the import pinned no explicit id. The import ledger's entry
-    // does not carry the RESOLVED identity (an explicit --recall-session-id
-    // import files its turns, tombstone and session_ref under the recall
-    // id, not the basename), so such an import's mining state is invisible
-    // to this join until the resolved id is recorded in the import ledger
-    // itself; classifying the basename as refused here stays factually
-    // right - the plan really would refuse it.
-    const identity = basename(path);
+    // The join identity is the portable sessionRefIdentity - what the
+    // mining lane keys its tombstone and every signal's session_ref on:
+    // the explicit recall id the import recorded when it pinned one
+    // (--recall-session-id), else the log's basename.
+    const identity = entry.session_id ?? basename(path);
     const state = stateOf(identity);
     const row = rowOf(entry.runtime);
     row.imported += 1;
