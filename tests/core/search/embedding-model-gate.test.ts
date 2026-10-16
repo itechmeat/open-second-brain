@@ -258,8 +258,33 @@ test("a prefix change with a blocked capability tier refuses the clear", () => {
     ensureEmbeddingModel(db, NO_VEC, "m1", 4, { query: "q2", passage: "p2" }, DISABLED_GATE),
   );
   expect(outcome.refusal?.code).toBe("EMBEDDING_DISABLED");
+  // The refusal names the prefix change, not a "model change from m1/4 to m1/4".
+  expect(outcome.refusal?.message).toContain("[q1|p1] to [q2|p2]");
+  expect(outcome.refusal?.message).not.toContain("model change");
   expect(embeddingCount()).toBe(1);
   expect(getState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY)).toBe("q1");
+});
+
+test("a keyword-only open that keeps the vectors leaves their recorded prefixes alone (#255)", () => {
+  seedStoredEmbedding("m1", 4);
+  setState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY, "query: ");
+  setState(db, EMBEDDING_PREFIX_PASSAGE_STATE_KEY, "passage: ");
+  const embedded = { query: "query: ", passage: "passage: " };
+  ensureEmbeddingModel(db, NO_VEC, "m1", 4, embedded, CONFIGURED_GATE);
+
+  // A keyword-only writer: no model, empty prefixes.
+  captureErrors(() =>
+    ensureEmbeddingModel(db, NO_VEC, null, null, { query: "", passage: "" }, DISABLED_GATE),
+  );
+  expect(getState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY)).toBe("query: ");
+  expect(getState(db, EMBEDDING_PREFIX_PASSAGE_STATE_KEY)).toBe("passage: ");
+
+  // The unchanged semantic config opens again: nothing changed, nothing cleared.
+  const { errors } = captureErrors(() =>
+    ensureEmbeddingModel(db, NO_VEC, "m1", 4, embedded, CONFIGURED_GATE),
+  );
+  expect(embeddingCount()).toBe(1);
+  expect(errors.some((m) => m.includes("cleared"))).toBe(false);
 });
 
 test("a prefix change with a configured provider clears as today", () => {

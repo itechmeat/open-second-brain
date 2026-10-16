@@ -413,6 +413,15 @@ function rebuildRefusalBeforeClear(
     readonly previousDimension: number | null;
     readonly model: string | null;
     readonly dimension: number | null;
+    /**
+     * Set when the model and dimension are unchanged and only the prefix
+     * pair differs, so the refusal names what actually changed instead of
+     * a "model change from X to X" (#255).
+     */
+    readonly prefixChange?: {
+      readonly from: EmbeddingPrefixPair;
+      readonly to: EmbeddingPrefixPair;
+    };
   },
 ): EmbeddingRebuildRefusal | null {
   if (gate === undefined) return null;
@@ -421,14 +430,23 @@ function rebuildRefusalBeforeClear(
   const capability = resolveSemanticCapability(gate.semantic);
   if (!isBlockedCapability(capability)) return null;
   const material = hasChunkRows(db) ? "" : "; no chunk material remains to rebuild from";
+  const change =
+    context.prefixChange === undefined
+      ? `embedding model change from ${context.previousModel}/${context.previousDimension} to ` +
+        `${context.model}/${context.dimension}`
+      : `embedding prefix change from ` +
+        `[${context.prefixChange.from.query}|${context.prefixChange.from.passage}] to ` +
+        `[${context.prefixChange.to.query}|${context.prefixChange.to.passage}]`;
+  const restore =
+    context.prefixChange === undefined
+      ? "restore the previous model or the provider credential"
+      : "restore the previous prefixes or enable a provider that can re-embed";
   return {
     code: BLOCKED_TIER_ERROR_CODE[capability.tier],
     message:
-      `embedding model change from ${context.previousModel}/${context.previousDimension} to ` +
-      `${context.model}/${context.dimension} refused: ${stored} stored embedding(s) cannot be ` +
+      `${change} refused: ${stored} stored embedding(s) cannot be ` +
       `rebuilt while the semantic capability is ${capability.tier}${material}; the stored ` +
-      `embeddings and the recorded model are kept; restore the previous model or the provider ` +
-      `credential, then reindex`,
+      `embeddings and the recorded model are kept; ${restore}, then reindex`,
   };
 }
 
@@ -495,7 +513,21 @@ export function ensureEmbeddingModel(
     previousDimension: prevDim,
     model,
     dimension,
+    ...(!modelChanged && !dimChanged && prefixChanged
+      ? {
+          prefixChange: {
+            from: { query: effectivePrevQueryPrefix, passage: effectivePrevPassagePrefix },
+            to: prefixes,
+          },
+        }
+      : {}),
   };
+  // Vectors kept on a named-model -> null-model open (#255): this writer
+  // has no model, so it never embedded anything and its prefix pair says
+  // nothing about the stored vectors. Recording it would re-stamp them with
+  // a foreign identity, and the next semantic writer would then see a
+  // spurious prefix change and clear compatible vectors.
+  const keptUnverified = modelRemoved && countEmbeddings(db) > 0;
   const refusal =
     modelChanged || dimChanged || (!modelRemoved && prefixChanged)
       ? rebuildRefusalBeforeClear(db, gate, refusalContext)
@@ -525,7 +557,7 @@ export function ensureEmbeddingModel(
     // just cleared, so it must not outlive them: leaving it would
     // claim an ABI for storage that no longer holds any.
     deleteState(db, EMBEDDING_VEC_VERSION_STATE_KEY);
-  } else if (modelRemoved && countEmbeddings(db) > 0) {
+  } else if (keptUnverified) {
     // Named-model -> null-model: never a clear (see docblock), never silent.
     // This branch also deliberately precedes the prefix branch: with no
     // model configured there is nothing to verify a prefix clear against.
@@ -554,7 +586,9 @@ export function ensureEmbeddingModel(
   if (vec.version !== null) {
     setState(db, EMBEDDING_VEC_VERSION_STATE_KEY, vec.version);
   }
-  if (prefixes !== undefined) {
+  // Like the model and dimension: recorded only by a writer that owns the
+  // vectors' identity, never by one that kept them unverified.
+  if (prefixes !== undefined && !keptUnverified) {
     setState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
     setState(db, EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);
   }
