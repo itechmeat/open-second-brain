@@ -443,6 +443,18 @@ describe("removeStaleLockSync takeover claims", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
+  test("a lock whose every claim generation is stale is cleared for the next attempt", () => {
+    const { lock, claim } = plantLock("exhausted");
+    const generations = [claim, `${claim}-1`, `${claim}-2`, `${claim}-3`];
+    for (const path of generations) {
+      writeFileSync(path, "");
+      age(path, TAKEOVER_CLAIM_STALE_MS + 5_000);
+    }
+    expect(removeStaleLockSync(lock, abandoned)).toBe(false);
+    expect(generations.some((path) => existsSync(path))).toBe(false);
+    expect(removeStaleLockSync(lock, abandoned)).toBe(true);
+  });
+
   test("a successful takeover sweeps this lock's stale claims and keeps fresh ones", () => {
     const { lock } = plantLock("sweep");
     const oldClaim = `${lock}.takeover-1-2`;

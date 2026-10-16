@@ -332,7 +332,13 @@ export function removeStaleLockSync(
   } catch {
     return false;
   }
-  if (!claimTakeover(`${lockPath}.takeover-${seen.ino}-${seen.mtimeNs}`)) return false;
+  const claimed = claimTakeover(`${lockPath}.takeover-${seen.ino}-${seen.mtimeNs}`);
+  if (claimed === "exhausted") {
+    // Every generation is a dead claim: clear them so the next attempt can claim.
+    sweepTakeoverClaims(lockPath);
+    return false;
+  }
+  if (!claimed) return false;
   try {
     if (!sameLockFile(lstatSync(lockPath, { bigint: true }), seen)) return false;
     unlinkSync(lockPath);
@@ -365,9 +371,10 @@ function claimIsStale(path: string): boolean {
 /**
  * Exclusive-create the first free claim generation for one judged lock file.
  * An existing fresh claim means another contender won; an existing stale
- * claim sends every contender to the next generation.
+ * claim sends every contender to the next generation. `"exhausted"` means
+ * every generation holds a stale claim.
  */
-function claimTakeover(base: string): boolean {
+function claimTakeover(base: string): boolean | "exhausted" {
   for (let gen = 0; gen < TAKEOVER_CLAIM_GENERATIONS; gen++) {
     const claim = gen === 0 ? base : `${base}-${gen}`;
     try {
@@ -378,7 +385,7 @@ function claimTakeover(base: string): boolean {
       if (!claimIsStale(claim)) return false;
     }
   }
-  return false;
+  return "exhausted";
 }
 
 /** Remove this lock's takeover claims older than {@link TAKEOVER_CLAIM_STALE_MS}. Never throws. */
