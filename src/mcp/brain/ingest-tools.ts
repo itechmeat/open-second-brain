@@ -603,6 +603,11 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_files: plan.totalFiles,
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
+    // The H3 resurrect guard on the wire: sources whose manifest entry is
+    // marked retired and whose bytes are unchanged. Only emitted when
+    // non-empty, so a plan with no retired entry serializes byte-identically
+    // to before.
+    ...(plan.skippedRetired.length > 0 ? { skipped_retired: [...plan.skippedRetired] } : {}),
     // Only emitted when the manifest's recorded extraction contract differs
     // from the live one (t_586d5d8b), so a plan under an unchanged contract
     // serializes byte-identically to before. The count names how many files

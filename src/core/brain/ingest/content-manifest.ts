@@ -110,6 +110,20 @@ export interface ManifestEntry {
    * Absent together with the byte count on unwatermarked entries.
    */
   readonly extracted_at?: string;
+  /**
+   * The resurrect guard (storage lifecycle, PR #257 review H3): the vault
+   * path of the canonical summary page this source's near-duplicate copy
+   * was retired into. Set by the retirement core INSTEAD of dropping the
+   * entry - a dropped entry would classify the unchanged source `new`
+   * again and the next batch plan would re-ingest it, quietly undoing the
+   * retirement. While the marker stands and the bytes are unchanged the
+   * source classifies `retired` ({@link classifyPaths}) and no batch plan
+   * queues it; a real content change re-admits it as `modified`, and a
+   * deliberate re-ingest re-records the entry without the marker. ADDITIVE
+   * by design - schema_version stays 3, and a malformed shape on disk
+   * drops the FIELD, never the entry.
+   */
+  readonly retired_into?: string;
 }
 
 /**
@@ -166,6 +180,8 @@ export interface PathClassification {
   readonly modified: string[];
   /** On disk, present in the manifest, bytes identical. */
   readonly unchanged: string[];
+  /** On disk, bytes identical, and the entry is marked retired into a canonical page. */
+  readonly retired: string[];
   /** In the manifest (or requested) but no longer on disk. */
   readonly missing: string[];
 }
@@ -301,14 +317,19 @@ function parseEntryValue(value: unknown): ManifestEntry | null {
   // a malformed one drops JUST the field, which answers byte 0 and
   // reprocesses lazily - dropping the whole entry would forfeit the
   // fingerprint and force the eager contract-changed reprocess instead.
+  // The retired marker follows the same per-field rule (H3).
   const extractedBytes = record["extracted_bytes"];
   const extractedAt = record["extracted_at"];
+  const retiredInto = record["retired_into"];
   return {
     sha256: record["sha256"],
     ...(typeof fingerprint === "string" ? { fingerprint } : {}),
     ...(isByteOffset(extractedBytes) ? { extracted_bytes: extractedBytes } : {}),
     ...(typeof extractedAt === "string" && extractedAt.length > 0
       ? { extracted_at: extractedAt }
+      : {}),
+    ...(typeof retiredInto === "string" && retiredInto.length > 0
+      ? { retired_into: retiredInto }
       : {}),
   };
 }
@@ -320,12 +341,16 @@ function isByteOffset(value: unknown): value is number {
 
 /**
  * Does the entry carry recorded state the bare v1 digest shape cannot hold -
- * a per-entry fingerprint or an extraction watermark? Such an entry never
- * serializes down to v1: data a write could read back is data the write
- * must keep.
+ * a per-entry fingerprint, an extraction watermark, or the retired marker?
+ * Such an entry never serializes down to v1: data a write could read back is
+ * data the write must keep.
  */
 function hasRecordedState(entry: ManifestEntry): boolean {
-  return entry.fingerprint !== undefined || entry.extracted_bytes !== undefined;
+  return (
+    entry.fingerprint !== undefined ||
+    entry.extracted_bytes !== undefined ||
+    entry.retired_into !== undefined
+  );
 }
 
 /**
@@ -445,7 +470,15 @@ export function writeManifestAtomic(
  *   - not on disk            → `missing`,
  *   - on disk, not recorded  → `new`,
  *   - on disk, hash matches  → `unchanged`,
+ *   - on disk, hash matches and the entry is marked retired → `retired`,
  *   - on disk, hash differs  → `modified`.
+ * The `retired` bucket is the resurrect guard (storage lifecycle, review
+ * H3): a near-duplicate retirement marks the entry `retired_into` a
+ * canonical page instead of dropping it, and an unchanged source behind
+ * that marker classifies `retired` - never `new` - so no batch plan
+ * re-queues it. A hash DIFFERENCE still classifies `modified` whatever
+ * the marker says: the marker describes the bytes it was recorded under,
+ * and changed bytes are a real source again.
  * The buckets answer the BYTES question only - the extraction-contract
  * question is the manifest's derived `contract` field, kept deliberately
  * separate so a bytes-based read-back (the import census) is never affected
@@ -458,7 +491,13 @@ export function classifyPaths(
   paths: readonly string[],
   manifest: ContentManifest,
 ): PathClassification {
-  const result: PathClassification = { new: [], modified: [], unchanged: [], missing: [] };
+  const result: PathClassification = {
+    new: [],
+    modified: [],
+    unchanged: [],
+    retired: [],
+    missing: [],
+  };
   for (const path of paths) {
     const canonical = canonicalNotePath(path);
     const abs = join(vault, canonical);
@@ -470,10 +509,12 @@ export function classifyPaths(
     const live = hashPath(abs);
     if (recorded === undefined) {
       result.new.push(canonical);
-    } else if (recorded.sha256 === live) {
-      result.unchanged.push(canonical);
-    } else {
+    } else if (recorded.sha256 !== live) {
       result.modified.push(canonical);
+    } else if (recorded.retired_into !== undefined) {
+      result.retired.push(canonical);
+    } else {
+      result.unchanged.push(canonical);
     }
   }
   return result;

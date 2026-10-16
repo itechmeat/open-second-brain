@@ -116,6 +116,69 @@ describe("classifyPaths", () => {
     expect(res.unchanged).toEqual(["touched.md"]);
     expect(res.modified).toEqual([]);
   });
+
+  test("an entry marked retired_into classifies `retired` while its bytes are unchanged", () => {
+    // The resurrect guard (H3): a near-duplicate retirement marks the entry
+    // instead of dropping it, so the unchanged source never reads as `new`.
+    writeSource("dup.md", "duplicate bytes");
+    updateManifest(vault, ["dup.md"]);
+    const recorded = readManifest(vault).entries["dup.md"]!;
+    writeManifestAtomic(vault, {
+      "dup.md": { ...recorded, retired_into: "Brain/sources/src-canonical.md" },
+    });
+
+    const res = classifyPaths(vault, ["dup.md"], readManifest(vault));
+    expect(res.retired).toEqual(["dup.md"]);
+    expect(res.new).toEqual([]);
+    expect(res.unchanged).toEqual([]);
+    expect(res.modified).toEqual([]);
+  });
+
+  test("a retired entry whose bytes changed re-admits as `modified`", () => {
+    writeSource("dup.md", "duplicate bytes");
+    updateManifest(vault, ["dup.md"]);
+    const recorded = readManifest(vault).entries["dup.md"]!;
+    writeManifestAtomic(vault, {
+      "dup.md": { ...recorded, retired_into: "Brain/sources/src-canonical.md" },
+    });
+
+    writeSource("dup.md", "the duplicate grew");
+    const res = classifyPaths(vault, ["dup.md"], readManifest(vault));
+    expect(res.modified).toEqual(["dup.md"]);
+    expect(res.retired).toEqual([]);
+  });
+
+  test("a retired entry round-trips: it never serializes down to the v1 digest shape", () => {
+    writeSource("dup.md", "duplicate bytes");
+    updateManifest(vault, ["dup.md"]);
+    const recorded = readManifest(vault).entries["dup.md"]!;
+    writeManifestAtomic(vault, {
+      "dup.md": { ...recorded, retired_into: "Brain/sources/src-canonical.md" },
+    });
+
+    // Data a write could read back is data the write must keep: the marker
+    // survives a re-read and a re-write under the read-back contract.
+    const reread = readManifest(vault).entries["dup.md"]!;
+    expect(reread.retired_into).toBe("Brain/sources/src-canonical.md");
+    writeManifestAtomic(vault, { "dup.md": reread });
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      entries: Record<string, { retired_into?: string }>;
+    };
+    expect(onDisk.entries["dup.md"]?.retired_into).toBe("Brain/sources/src-canonical.md");
+  });
+
+  test("a malformed retired_into on disk drops the field, never the entry", () => {
+    writeManifestBytes(
+      JSON.stringify({
+        schema_version: 3,
+        contract: { fingerprint: computeExtractionContractFingerprint(vault) },
+        entries: { "dup.md": { sha256: "a".repeat(64), retired_into: 42 } },
+      }),
+    );
+    const entry = readManifest(vault).entries["dup.md"];
+    expect(entry?.sha256).toBe("a".repeat(64));
+    expect(entry?.retired_into).toBeUndefined();
+  });
 });
 
 describe("manifest persistence", () => {

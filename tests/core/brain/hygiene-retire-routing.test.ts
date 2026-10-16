@@ -155,10 +155,12 @@ describe("applyHygienePlan dispatches retire to the retirement core", () => {
 
     expect(existsSync(join(vault, retired))).toBe(false);
     expect(existsSync(join(vault, canonical))).toBe(true);
-    // The manifest entry dropped is the RETIRED copy's source; the
-    // canonical copy's source stays recorded.
-    expect(readManifest(vault).entries["imports/a.md"]).toBeUndefined();
+    // The manifest entry MARKED retired is the RETIRED copy's source; the
+    // canonical copy's source stays recorded without the marker (H3: the
+    // marker, not a drop, is what keeps the next batch plan honest).
+    expect(readManifest(vault).entries["imports/a.md"]?.retired_into).toBe(canonical);
     expect(readManifest(vault).entries["imports/b.md"]).toBeDefined();
+    expect(readManifest(vault).entries["imports/b.md"]?.retired_into).toBeUndefined();
     expect(
       listContinuityRecords(vault, { kind: "source_invalidation" }).some((r) => r.id !== null),
     ).toBe(true);

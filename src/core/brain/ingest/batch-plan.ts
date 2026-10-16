@@ -201,6 +201,17 @@ export interface BatchPlan {
   /** Canonical paths classified `unchanged` and therefore skipped, sorted. */
   readonly skipped: readonly string[];
   /**
+   * Canonical paths whose manifest entry is marked `retired_into` a
+   * canonical page (the resurrect guard, storage lifecycle review H3) and
+   * whose bytes are unchanged, sorted. They are never queued - re-ingesting
+   * one would quietly undo the retirement - while a real byte change
+   * re-admits the source as `modified` and drops it from this list. Unlike
+   * {@link BatchPlan.skipped} the skip survives a contract change: a
+   * retirement is not a content change, so the marked entry keeps its skip
+   * under the new contract too.
+   */
+  readonly skippedRetired: readonly string[];
+  /**
    * Files skipped before extraction: first every file whose format the
    * source format registry names with no extractor (`format-not-extractable`,
    * `detail` the format), sorted by path; then every page whose
@@ -266,7 +277,9 @@ export interface BatchPlan {
  * Plan the ingest of a source directory into bounded parallel batches.
  *
  * Discovers the ingestible files under `sourceDir` (a vault-relative path),
- * skips those the content-hash manifest classifies `unchanged`, and packs the
+ * skips those the content-hash manifest classifies `unchanged` (and those it
+ * classifies `retired` - the H3 resurrect guard, reported on
+ * {@link BatchPlan.skippedRetired} and never queued), and packs the
  * `new`/`modified` remainder greedily into batches that respect BOTH caps. A
  * single file larger than the byte cap cannot be split, so it forms its own
  * singleton batch (documented, honest - never silently dropped or truncated).
@@ -416,6 +429,11 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   if (contractChanged) {
     for (const p of classification.unchanged) status.set(p, PLANNED_FILE_STATUS.CONTRACT_CHANGED);
   }
+  // The resurrect guard (H3): a retired entry never enters the status map -
+  // not as new (its entry is recorded), not as contract-changed (a
+  // retirement is not a content change, so the marker outlives a contract
+  // move) - and therefore never lands in a batch.
+  const skippedRetired = [...classification.retired].toSorted();
   const planned: PlannedFile[] = [...status.keys()].toSorted().map((path) => {
     const format = sourceFormatOf(path);
     return {
@@ -434,8 +452,10 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     maxBatchFiles: opts.maxBatchFiles,
     batches,
     // Nothing skips under a changed contract: every unchanged source is in the
-    // reprocessing list above, so the skip list is empty by construction.
+    // reprocessing list above, so the skip list is empty by construction. The
+    // retired skip is independent of that rule - see {@link BatchPlan.skippedRetired}.
     skipped: contractChanged ? [] : [...classification.unchanged].toSorted(),
+    skippedRetired,
     skippedNonExtractable,
     skipReasonCounts: countSkipReasons(skippedNonExtractable),
     unclassifiable: aggregateUnclassifiable(unclassifiable),

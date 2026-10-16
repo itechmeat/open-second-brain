@@ -10,16 +10,19 @@
  *      canonical spelling (the report is carried, never swallowed);
  *   2. remove the stale page (per-file removal via the shared
  *      `removeFile`, so a failure is one copy's failure);
- *   3. drop the copy's content-manifest entry, round-tripping the
- *      contract the manifest was read under - the same t_586d5d8b rule
- *      deleteBySource applies: a removal never re-stamps the contract
- *      the surviving entries were recorded under. The drop is the
- *      resurrect guard: with the entry gone, the retired source
- *      classifies `new` again, so no later ingest can claim the
- *      retired page's records are current; the source can only return
- *      as a deliberate full re-ingest;
+ *   3. MARK the copy's source manifest entry `retired_into` the
+ *      canonical page, round-tripping the contract the manifest was
+ *      read under - the same t_586d5d8b rule deleteBySource applies: a
+ *      retirement never re-stamps the contract the surviving entries
+ *      were recorded under. The marker is the resurrect guard (review
+ *      H3): dropping the entry would classify the unchanged source
+ *      `new` again and the next batch plan would re-ingest it, quietly
+ *      undoing the retirement. With the marker, the unchanged source
+ *      classifies `retired` and no plan queues it; a real byte change
+ *      re-admits it as `modified`, and a deliberate re-ingest re-records
+ *      the entry without the marker;
  *   4. append one `source_invalidation` continuity record PER COPY
- *      naming canonical id, retired id, dropped manifest key and the
+ *      naming canonical id, retired id, marked manifest key and the
  *      retained source-archive hash - the audit the page-dedup merge
  *      never needed, because a merge keeps both pages and this
  *      operation deletes one.
@@ -127,8 +130,8 @@ export interface RetiredDocumentCopy {
   readonly canonical: string;
   /** The source path whose manifest entry was targeted, or `null`. */
   readonly manifestKey: string | null;
-  /** True when the manifest was rewritten without the entry. */
-  readonly manifestDropped: boolean;
+  /** True when the manifest was rewritten to carry the `retired_into` marker. */
+  readonly manifestRetired: boolean;
   /**
    * The full retarget report for this copy's inbound wikilinks, `null`
    * when the pass was SKIPPED - {@link RetiredDocumentCopy.wikilinksSkipped}
@@ -320,39 +323,39 @@ function retireOneCopy(
   // leave the copy on disk, so it is rethrown AS that fact - the report
   // must never send an operator looking for a page that is not there.
   try {
-    // 3. Drop the manifest entry for the copy's source, round-tripping
-    // the read contract (t_586d5d8b): the surviving entries keep the
-    // fingerprint they were recorded under, so the owed one-time
-    // reprocess is never forfeited by a removal. The per-copy reason is
-    // worded from what actually happened - a drop, a refusal, an entry
-    // already absent, or nothing to drop at all - never from the key's
-    // existence alone.
-    let manifestDropped = false;
+    // 3. Mark the manifest entry for the copy's source `retired_into` the
+    // canonical page, round-tripping the read contract (t_586d5d8b): the
+    // surviving entries keep the fingerprint they were recorded under, so
+    // the owed one-time reprocess is never forfeited by a retirement. The
+    // per-copy reason is worded from what actually happened - a mark, a
+    // refusal, an entry already marked, an entry absent, or no key
+    // recorded at all - never from the key's existence alone.
+    let manifestRetired = false;
     let manifestClause: string;
     if (facts.sourcePath === null) {
       manifestClause = "no manifest key recorded";
     } else if (!existsSync(manifestPath(vault))) {
-      manifestClause = `manifest absent, nothing to drop for ${facts.sourcePath}`;
+      manifestClause = `manifest absent, nothing to mark for ${facts.sourcePath}`;
     } else {
       const manifest = readManifest(vault);
       const entries = { ...manifest.entries };
-      if (entries[facts.sourcePath] === undefined) {
-        manifestClause = `manifest key ${facts.sourcePath} already absent`;
+      const existing = entries[facts.sourcePath];
+      if (existing === undefined) {
+        manifestClause = `manifest key ${facts.sourcePath} absent, nothing to mark`;
+      } else if (existing.retired_into === copy.canonical) {
+        // The entry already carries THIS retirement's marker: the serialized
+        // bytes below would be identical, and the clause names that
+        // success-shaped fact - a concurrent retirer got there first.
+        manifestClause = `manifest key ${facts.sourcePath} already marked retired`;
       } else {
-        delete entries[facts.sourcePath];
-        manifestDropped = writeManifestAtomic(vault, entries, manifest.contract);
-        // A `false` from the atomic write after deleting a PRESENT key means
-        // the serialized bytes were already identical - the key was already
-        // gone on disk, i.e. a concurrent retirer got there first. The
-        // reason names that success-shaped fact, not a failure to drop.
-        manifestClause = manifestDropped
-          ? `dropped manifest key ${facts.sourcePath}`
-          : `manifest already without key ${facts.sourcePath}`;
+        entries[facts.sourcePath] = { ...existing, retired_into: copy.canonical };
+        manifestRetired = writeManifestAtomic(vault, entries, manifest.contract);
+        manifestClause = `marked manifest key ${facts.sourcePath} retired into ${copy.canonical}`;
       }
     }
 
     // 4. The provenance record: one per copy, naming what survives, what
-    // went, what was dropped and what evidence is retained.
+    // went, what was marked and what evidence is retained.
     const agent = opts.agent?.trim() ? opts.agent.trim() : DEFAULT_AGENT;
     const record = appendContinuitySourceInvalidation(vault, {
       createdAt: isoSecond(opts.now ?? new Date()),
@@ -371,7 +374,7 @@ function retireOneCopy(
       path: copy.path,
       canonical: copy.canonical,
       manifestKey: facts.sourcePath,
-      manifestDropped,
+      manifestRetired,
       wikilinks,
       wikilinksSkipped: wikilinks === null ? RETIRE_LINKS_SKIPPED_BASENAME_COLLISION : null,
       sourceArchiveHash: facts.archiveHash,
@@ -382,6 +385,7 @@ function retireOneCopy(
     throw new Error(
       `retirement removed ${copy.path}, then a post-removal step failed ` +
         `(the copy is not on disk): ${detail}`,
+      { cause: error },
     );
   }
 }

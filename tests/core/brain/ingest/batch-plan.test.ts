@@ -14,7 +14,11 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
-import { hashFile, updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import {
+  hashFile,
+  readManifest,
+  updateManifest,
+} from "../../../../src/core/brain/ingest/content-manifest.ts";
 import {
   DEFAULT_INGESTIBLE_EXTENSIONS as PLANNER_DEFAULT_EXTENSIONS,
   planBatches,
@@ -54,6 +58,19 @@ function allPlannedPaths(plan: ReturnType<typeof planBatches>): string[] {
 
 const CAPS = { maxBatchBytes: 10_000, maxBatchFiles: 100 } as const;
 
+/**
+ * Mark one recorded manifest entry `retired_into` the given canonical page,
+ * the way the retirement core does: the pinned record keeps the digest and
+ * fingerprint it was recorded under and gains the marker.
+ */
+function markRetired(vaultDir: string, rel: string, canonicalPage: string): void {
+  const recorded = readManifest(vaultDir).entries[rel];
+  if (recorded === undefined) throw new Error(`fixture bug: ${rel} is not in the manifest`);
+  updateManifest(vaultDir, [rel], {
+    [rel]: { ...recorded, retired_into: canonicalPage },
+  });
+}
+
 /** Write a page carrying an optional `schema_type` frontmatter field. */
 function page(rel: string, schemaType?: string): void {
   const abs = join(vault, rel);
@@ -90,6 +107,60 @@ describe("planBatches — discovery + skip-unchanged", () => {
     expect(planned).toContain("Inbox/fresh.md"); // new
     expect(planned).not.toContain("Inbox/keep.md");
     expect(plan.totalFiles).toBe(2);
+  });
+
+  test("a retired source whose bytes are unchanged is never queued", () => {
+    // The resurrect guard (H3): a near-duplicate retirement marks the
+    // entry `retired_into` instead of dropping it, and the planner skips
+    // the marked entry while its bytes stay unchanged.
+    writeSized("Inbox/retired.md", 100);
+    writeSized("Inbox/live.md", 100);
+    updateManifest(vault, ["Inbox/retired.md", "Inbox/live.md"]);
+    markRetired(vault, "Inbox/retired.md", "Brain/sources/src-live.md");
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    // Both recorded sources are queued-out: the plain-unchanged one through
+    // the ordinary skip, the retired one through the resurrect guard.
+    expect(allPlannedPaths(plan)).toEqual([]);
+    expect(plan.skipped).toEqual(["Inbox/live.md"]);
+    expect(plan.skippedRetired).toEqual(["Inbox/retired.md"]);
+
+    // A content change re-admits the retired source as `modified`.
+    writeSized("Inbox/retired.md", 120);
+    const changed = planBatches(vault, "Inbox", CAPS);
+    expect(allPlannedPaths(changed)).toContain("Inbox/retired.md");
+    expect(changed.skippedRetired).toEqual([]);
+  });
+
+  test("a retired source stays queued-out even under a changed contract", () => {
+    // A contract change reprocesses `unchanged` sources; a retirement is
+    // not a content change, so the marked entry keeps its skip.
+    setExtractable(["paper"]);
+    writeSized("Inbox/retired.md", 100);
+    page("Inbox/retired.md", "paper");
+    updateManifest(vault, ["Inbox/retired.md"]);
+    markRetired(vault, "Inbox/retired.md", "Brain/sources/src-elsewhere.md");
+    // Widen the allowlist: the contract changes, the bytes do not.
+    setExtractable(["paper", "memo"]);
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    expect(plan.contractChanged).toBe(true);
+    expect(allPlannedPaths(plan)).toEqual([]);
+    expect(plan.skippedRetired).toEqual(["Inbox/retired.md"]);
+  });
+
+  test("the wire carries skipped_retired only when non-empty", () => {
+    writeSized("Docs/a.md", 50);
+    updateManifest(vault, ["Docs/a.md"]);
+
+    // No retired entry: byte-identical to the pre-H3 wire shape.
+    const plain = serializeBatchPlan(planBatches(vault, "Docs", CAPS));
+    expect(Object.keys(plain)).not.toContain("skipped_retired");
+
+    markRetired(vault, "Docs/a.md", "Brain/sources/src-a.md");
+    const wire = serializeBatchPlan(planBatches(vault, "Docs", CAPS));
+    expect(wire["skipped_retired"]).toEqual(["Docs/a.md"]);
+    expect(wire["total_files"]).toBe(0);
   });
 
   test("only ingestible (text-bearing) files are discovered; binaries/media ignored", () => {
