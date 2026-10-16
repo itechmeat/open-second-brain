@@ -44,9 +44,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { listContinuityRecords } from "./continuity/store.ts";
 import { hashBytes } from "./ingest/content-manifest.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { listSessionRawTurns } from "./session-recall.ts";
+import { listSessionRawTurns, sessionIdOf } from "./session-recall.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -239,9 +240,12 @@ export interface SessionMiningRecord {
  * to suppress, so its entry has no left reason to exist - and dropping only
  * never-mined-again sessions would have meant one pass that hears a
  * session's turn count and still leaves a dead key behind. The pruning
- * happens here and not in the read on purpose: the read stays a read, and
- * the cost is one turn listing per entry, on a write path the commit opened
- * once per barren session.
+ * happens here and not in the read on purpose: the read stays a read. The
+ * cost is one continuity-store pass per record building the set of sessions
+ * that hold turns directly, plus a full turn listing only for an entry
+ * whose session holds none of them - the rare root-ref-mined-over-segments
+ * case, where the turns are reachable only through the lineage scope the
+ * plan itself reads.
  */
 export function recordSessionMiningOutcome(
   vault: string,
@@ -261,7 +265,22 @@ export function recordSessionMiningOutcome(
       outcome: { ...record.outcome },
       recordedAt: isoSecond(now),
     };
+    // One store pass for the whole prune, mirroring the import ledger's
+    // one-existsSync-per-entry idiom: a full turn listing per entry here
+    // would be a whole-store read plus a lineage build per entry, growing
+    // with the ledger's history instead of with this record.
+    const sessionsWithTurns = new Set<string>();
+    for (const turnRecord of listContinuityRecords(vault)) {
+      if (turnRecord.kind !== "session_turn") continue;
+      const sid = sessionIdOf(turnRecord.payload);
+      if (sid !== undefined) sessionsWithTurns.add(sid);
+    }
     for (const key of Object.keys(entries)) {
+      if (sessionsWithTurns.has(key)) continue;
+      // A session holding no direct turn record may still have turns,
+      // reachable through the lineage scope (a root ref mined over
+      // segment-recorded turns); the exact read decides those, and only
+      // those.
       if (listSessionRawTurns(vault, key).length === 0) delete entries[key];
     }
     const next = serializeLedger(entries);

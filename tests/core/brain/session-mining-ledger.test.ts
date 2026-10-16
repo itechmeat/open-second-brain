@@ -31,7 +31,10 @@ import {
   type SessionMiningEntry,
 } from "../../../src/core/brain/session-mining-ledger.ts";
 import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
-import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
+import {
+  importSessionRecall,
+  listSessionRawTurns,
+} from "../../../src/core/brain/session-recall.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
 
@@ -236,6 +239,40 @@ test("a recorded session with no turns leaves nothing behind", () => {
   );
   expect(readSessionMiningLedger(vault).entries).toEqual({});
   expect(existsSync(sessionMiningLedgerPath(vault))).toBe(wrote);
+});
+
+test("a tombstone whose turns are visible only through lineage scope survives the prune", () => {
+  // A root ref mined over segment-recorded turns: the turn records carry
+  // the segment id, and the plan reaches them through the lineage scope.
+  // The prune must consult that same scope, so a cheap session-id set
+  // alone is not the whole answer - the entry is kept here.
+  importSessionRecall(vault, {
+    sessionId: "seg-b",
+    turns: [
+      {
+        turnId: "b1",
+        timestamp: "2026-10-15T07:00:00Z",
+        role: "user",
+        text: "Always name the release theme.",
+      },
+    ],
+    createdAt: NOW.toISOString(),
+    lineage: { rootId: "root-r", parentId: "seg-a", depth: 1, source: "payload" },
+  });
+  const scoped = listSessionRawTurns(vault, "root-r");
+  expect(scoped.length).toBe(1);
+  recordSessionMiningOutcome(
+    vault,
+    {
+      sessionId: "root-r",
+      minedContentHash: minedTurnsHash(
+        scoped.map((t) => ({ turnId: t.turn_id, text: t.text.trim(), timestamp: t.timestamp })),
+      ),
+      outcome: OUTCOME,
+    },
+    NOW,
+  );
+  expect(readSessionMiningLedger(vault).entries["root-r"]).toBeDefined();
 });
 
 test("a contended lock refuses by name instead of writing unlocked", () => {
