@@ -80,9 +80,13 @@ function renderScanText(vault: string, olderThanDays: number): number {
 }
 
 function renderCompact(result: ReceiptCompactResult, json: boolean): number {
+  // A lost audit record is a failure on every surface (L10): the shards
+  // above are folded but the ledger carries no receipt_compaction record
+  // for the run, and a silent exit 0 would read as a completed run.
+  const failed = result.failures.length > 0 || result.auditError !== undefined;
   if (json) {
     process.stdout.write(`${JSON.stringify(compactView(result), null, 2)}\n`);
-    return result.failures.length === 0 ? 0 : 1;
+    return failed ? 1 : 0;
   }
   process.stdout.write(
     `${RECEIPT_COMPACTION_OPERATION}${result.dryRun ? " preview" : ""} - cutoff ` +
@@ -97,13 +101,16 @@ function renderCompact(result: ReceiptCompactResult, json: boolean): number {
   for (const failure of result.failures) {
     process.stdout.write(`! ${failure.shard}: ${failure.message}\n`);
   }
+  if (result.auditError !== undefined) {
+    process.stdout.write(`! ${result.auditError}\n`);
+  }
   if (result.snapshotRunId !== undefined) {
     process.stdout.write(`recovery point: ${result.snapshotRunId}\n`);
   }
   if (result.dryRun) {
     process.stdout.write("preview only - pass --apply to fold these shards\n");
   }
-  return result.failures.length === 0 ? 0 : 1;
+  return failed ? 1 : 0;
 }
 
 export async function cmdBrainReceipts(argv: string[]): Promise<number> {
