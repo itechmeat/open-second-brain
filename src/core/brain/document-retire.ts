@@ -185,6 +185,12 @@ export interface RetireDocumentsResult {
    * lost it.
    */
   readonly failed: ReadonlyArray<SourceCleanupFailure>;
+  /**
+   * The run's disk accounting (review M6): both sides and the net
+   * between them, as the module header promises. Per-copy bytes ride
+   * {@link RetiredDocumentCopy.pageBytes}; this carries the run totals.
+   */
+  readonly disk: RetireDiskAccounting;
   readonly snapshotRunId: string | null;
   readonly snapshotPath: string | null;
   readonly recoverability: RecoverabilityVerdict;
