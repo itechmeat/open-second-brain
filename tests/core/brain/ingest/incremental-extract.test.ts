@@ -147,7 +147,19 @@ describe("ingestSource watermark stamping", () => {
     ingestSource(vault, INPUT, OPTS);
 
     appendFileSync(join(vault, SOURCE), "three\n", "utf8");
-    const res = ingestSource(vault, INPUT, OPTS);
+    // Positive control for the positioned-read counter the first-ingest
+    // test asserts against: the append path really does read the delta
+    // through a positioned read, so a silently broken mock shows up here
+    // instead of passing both tests vacuously.
+    const sourceStat = statSync(join(vault, SOURCE));
+    positionedReadTarget = { dev: sourceStat.dev, ino: sourceStat.ino };
+    let res: ReturnType<typeof ingestSource>;
+    try {
+      res = ingestSource(vault, INPUT, OPTS);
+    } finally {
+      positionedReadTarget = undefined;
+    }
+    expect(positionedReadBytes).toBeGreaterThan(0);
 
     expect(res.extractionDelta).toEqual({ kind: "appended", fromByte: 8, toByte: 14 });
     const entry = readManifest(vault).entries[SOURCE]!;
