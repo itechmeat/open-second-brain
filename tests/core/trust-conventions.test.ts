@@ -56,6 +56,9 @@ describe("trust conventions", () => {
       formatTrustReceiptLine(receipt, { consent: "confirmed", backup: "/b/2026-10-16-120000" }),
     );
     for (const field of HEAD_FIELDS) expect(parsed).toHaveProperty(field);
+    // The head is FIRST, not merely present: the receipt head keys lead
+    // the line and the lane tail follows.
+    expect(Object.keys(parsed).slice(0, 4)).toEqual([...HEAD_FIELDS]);
     expect(parsed.actor).toBe("hook:claudecode");
     expect(parsed.pid).toBe(4242);
     expect(parsed.before_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -73,6 +76,9 @@ describe("trust conventions", () => {
     };
     const parsed = JSON.parse(formatTrustReceiptLine(receipt, { actor: "spoofed" }));
     expect(parsed.actor).toBe("cli");
+    // The clobbered tail key is gone, not merely overridden: the head
+    // names its own fields and the tail carries only the rest.
+    expect(Object.keys(parsed)).toEqual([...HEAD_FIELDS]);
   });
 
   test("backup layout: one folder per target under .o2b-backups, each backup a UTC-stamp file", () => {

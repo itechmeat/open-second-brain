@@ -74,6 +74,13 @@ export interface TrustReceipt {
 }
 
 /**
+ * The receipt head's field names, in line order. A tail key carrying one
+ * of these names is dropped, not overridden, so a lane tail can never
+ * clobber the head - not even into a duplicate key.
+ */
+const TRUST_RECEIPT_HEAD_FIELDS: ReadonlyArray<string> = ["actor", "pid", "before_hash", "summary"];
+
+/**
  * Render one receipt line (JSONL) with the fixed head first and the
  * per-lane tail after; a tail key can never clobber a head field.
  *
@@ -87,7 +94,11 @@ export function formatTrustReceiptLine(
   receipt: TrustReceipt,
   tail: Readonly<Record<string, unknown>> = {},
 ): string {
-  return JSON.stringify({ ...tail, ...receipt });
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(tail)) {
+    if (!TRUST_RECEIPT_HEAD_FIELDS.includes(key)) rest[key] = value;
+  }
+  return JSON.stringify({ ...receipt, ...rest });
 }
 
 /**
