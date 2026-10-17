@@ -21,7 +21,7 @@
 
 import type { DataOwnership } from "../../core/install/ownership.ts";
 import type { FrictionDiff, FrictionMatrix } from "../../core/install/friction.ts";
-import type { ConsentVerdict } from "../../core/trust.ts";
+import type { LaneConsentVerdict } from "../../core/brain/diagnostics.ts";
 import type {
   ApplyResult,
   DetectResult,
@@ -147,7 +147,7 @@ export function renderPlan(plan: InstallPlan): string {
   return lines.join("\n");
 }
 
-export function renderApplyResult(result: ApplyResult, consent: ConsentVerdict): string {
+export function renderApplyResult(result: ApplyResult, consent: LaneConsentVerdict): string {
   const m = result.manifest;
   const lines: string[] = [];
   lines.push(`o2b install --target ${result.target} --apply — done`);
@@ -179,6 +179,10 @@ export function renderApplyResult(result: ApplyResult, consent: ConsentVerdict):
  *
  * `consent` (t_b6bcd984) rides the same envelope, additive under
  * schema_version 1: it records how the write was authorised. The verdict
+ * is the derived {@link LaneConsentVerdict} (M3) - `yes-flag` or
+ * `interactive-yes` for a real consent, in the one vocabulary every
+ * guarded lane records - not a hard-coded `confirmed`, which made an
+ * operator's yes and an automatic run indistinguishable. The verdict
  * deliberately does NOT go into the sidecar manifest - that is a
  * schema'd document with `applied_at` semantics; the receipt for consent
  * is this CLI payload.
@@ -186,7 +190,7 @@ export function renderApplyResult(result: ApplyResult, consent: ConsentVerdict):
 export function renderApplyJson(
   result: ApplyResult,
   ownership: DataOwnership,
-  consent: ConsentVerdict,
+  consent: LaneConsentVerdict,
 ): string {
   return installJson({ consent, ...result, [DATA_OWNERSHIP_KEY]: ownership });
 }

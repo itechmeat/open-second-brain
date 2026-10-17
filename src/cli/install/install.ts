@@ -32,6 +32,7 @@
 import { parseFlags } from "../argparse.ts";
 import { ok } from "../output.ts";
 import { readSingleLine } from "../brain/helpers.ts";
+import type { LaneConsentVerdict } from "../../core/brain/diagnostics.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../../core/install/env.ts";
@@ -420,17 +421,30 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
   // runs with --apply.
   if (!args.yes) {
     if (args.json || !process.stdin.isTTY) {
-      process.stderr.write(
+      const refusal =
         `error: o2b install --target ${args.target} --apply requires --yes in ` +
-          "non-interactive mode (--json or non-TTY stdin); nothing was written\n",
-      );
+        "non-interactive mode (--json or non-TTY stdin); nothing was written";
+      // M4: under --json the refusal is a JSON envelope on the payload
+      // stream carrying the reserved `headless-refused` verdict, so a
+      // headless consumer reads the answer from the channel it parses.
+      if (args.json) {
+        process.stdout.write(
+          JSON.stringify(
+            { consent: "headless-refused", written: false, error: refusal.replace(/^error: /, "") },
+            null,
+            2,
+          ) + "\n",
+        );
+      } else {
+        process.stderr.write(refusal + "\n");
+      }
       return INSTALL_EXIT.consentRefused;
     }
-    process.stdout.write(renderPlan(plan));
     // The prompt rides stderr, where every other consent ladder in the
     // CLI puts it (upgrade, protect, doctor, merge): stdout is the
     // payload stream, and a caller piping the plan must not catch the
     // question in it.
+    process.stdout.write(renderPlan(plan));
     process.stderr.write("Proceed? [y/N] ");
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
@@ -439,6 +453,11 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     }
   }
 
+  // M3: the verdict is derived from what happened, not hard-coded - a
+  // `--yes` consent and an interactive yes stay distinguishable, in the
+  // same vocabulary protect/unprotect/doctor record.
+  const consent: LaneConsentVerdict = args.yes ? "yes-flag" : "interactive-yes";
+
   try {
     const result = adapter.apply(plan, payload, env, opts);
     // An apply that returned changed the machine, so the close fires
@@ -446,9 +465,9 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     // runtime nobody installed.
     const ownership = ownershipFor(env, args.config);
     if (args.json) {
-      process.stdout.write(renderApplyJson(result, ownership, "confirmed"));
+      process.stdout.write(renderApplyJson(result, ownership, consent));
     } else {
-      process.stdout.write(renderApplyResult(result, "confirmed"));
+      process.stdout.write(renderApplyResult(result, consent));
       process.stdout.write(renderDataOwnership(ownership));
     }
     return INSTALL_EXIT.ok;

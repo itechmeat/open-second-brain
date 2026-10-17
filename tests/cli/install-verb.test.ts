@@ -169,12 +169,16 @@ describe("o2b install --target X --apply", () => {
 
       // Both non-interactive shapes refuse: an explicit --json call and a
       // bare call whose stdin is not a TTY (subprocess spawns never get one).
+      // M4: the --json refusal is a JSON envelope on stdout carrying the
+      // reserved `headless-refused` verdict, not bare stderr prose.
       const jsonRun = await runCli(["install", "--target", "gemini-cli", "--apply", "--json"], {
         env: envBase(),
       });
       expect(jsonRun.returncode).toBe(INSTALL_EXIT.consentRefused);
-      expect(jsonRun.stderr).toContain("--yes");
-      expect(jsonRun.stderr).toContain("non-interactive");
+      const envelope = JSON.parse(jsonRun.stdout) as Record<string, unknown>;
+      expect(envelope["consent"]).toBe("headless-refused");
+      expect(envelope["written"]).toBe(false);
+      expect(String(envelope["error"])).toContain("--yes");
       expect(readFileSync(cfgPath, "utf8")).toBe(original);
 
       const ttylessRun = await runCli(["install", "--target", "gemini-cli", "--apply"], {
@@ -194,7 +198,9 @@ describe("o2b install --target X --apply", () => {
     expect(r.returncode).toBe(0);
     expect(existsSync(join(home, ".gemini", "settings.json"))).toBe(true);
     const payload = JSON.parse(r.stdout) as Record<string, unknown>;
-    expect(payload["consent"]).toBe("confirmed");
+    // M3: the verdict is derived from what happened (a --yes consent),
+    // in the one vocabulary every guarded lane records.
+    expect(payload["consent"]).toBe("yes-flag");
   });
 
   test("--plan prints a unified diff of the settings file", async () => {

@@ -84,9 +84,17 @@ describe("brain_doctor repair consent provenance", () => {
     })) as RpcResponse;
     expect(res.error).toBeUndefined();
     const s = res.result?.structuredContent ?? {};
-    const repair = s["repair"] as { dryRun?: boolean; applied?: ReadonlyArray<unknown> };
+    const repair = s["repair"] as {
+      dryRun?: boolean;
+      applied?: ReadonlyArray<unknown>;
+      consent?: string;
+    };
     expect(repair.dryRun).toBe(false);
     expect((repair.applied ?? []).length).toBe(1);
+    // M4: every apply's JSON carries the consent verdict - the MCP
+    // surface's machine consent rides the outcome too, not just the
+    // per-fix event bodies.
+    expect(repair.consent).toBe("caller-apply");
     const bodies = repairEventBodies(vault);
     expect(bodies.length).toBe(1);
     expect(bodies[0]!["consent"]).toBe("caller-apply");

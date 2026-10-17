@@ -8,8 +8,48 @@ import {
   PROTECT_TARGETS,
   unprotect,
 } from "../../../core/brain/protect.ts";
+import type { LaneConsentVerdict } from "../../../core/brain/diagnostics.ts";
 import { renderUnifiedDiff } from "../../../core/diff.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse, readSingleLine } from "../helpers.ts";
+
+/**
+ * Derive the consent verdict the guarded host-write lanes record, from
+ * what actually happened (M3): a `--yes` flag that consented to a real
+ * write is `yes-flag`, an interactive yes is `interactive-yes`, and a
+ * no-op - nothing to change, so the gate never ran, nobody was asked and
+ * nothing was written - is `unchanged`. The hard-coded `confirmed` this
+ * replaces reported the same verdict for an operator's confirmed write
+ * and for an automatic run where no consent was ever asked.
+ *
+ * Shared with the install lane so the three receipts answer in one
+ * vocabulary; the doctor repair lane derives its verdict in the verb for
+ * the reason its own ladder spells out (the gate runs before the outcome
+ * exists).
+ */
+export function deriveConsentVerdict(changed: boolean, yesFlag: boolean): LaneConsentVerdict {
+  if (!changed) return "unchanged";
+  return yesFlag ? "yes-flag" : "interactive-yes";
+}
+
+/**
+ * The refusal end of the consent ladder (M4). A `--json` or non-TTY run
+ * without `--yes` refuses fail-closed; under `--json` the refusal is a
+ * JSON envelope on the payload stream carrying the verdict, so a headless
+ * consumer reads the answer from the channel it parses instead of
+ * scraping stderr prose. The reserved `headless-refused` verdict
+ * (CONSENT_VERDICTS in src/core/trust.ts) finally has an emitter; the
+ * plain-stderr refusal keeps its wording for humans.
+ */
+export function consentRefusal(json: boolean, message: string, exitCode = 1): number {
+  if (json) {
+    process.stdout.write(
+      JSON.stringify({ consent: "headless-refused", written: false, error: message }, null, 2) +
+        "\n",
+    );
+    return exitCode;
+  }
+  return fail(message);
+}
 
 export async function cmdBrainProtect(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -39,7 +79,8 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
       const compute = computeProtect({ target, vault });
       if (compute.changed && !flags["yes"]) {
         if (flags["json"] || !process.stdin.isTTY) {
-          return fail(
+          return consentRefusal(
+            flags["json"] === true,
             `brain protect --apply requires --yes in non-interactive mode ` +
               "(--json or non-TTY stdin); nothing was written",
           );
@@ -57,7 +98,7 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
       const result = applyProtect({ target, vault, approved: compute });
       if (flags["json"]) {
         okJson({
-          consent: "confirmed",
+          consent: deriveConsentVerdict(result.changed, flags["yes"] === true),
           target: result.target,
           destination: result.destination,
           changed: result.changed,
@@ -105,6 +146,19 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
   const target = rawTarget;
   const vault = brainVerbContext(flags).vault;
 
+  // H4: `--yes` without `--apply` used to fall through to the read-only
+  // preview and exit 0, so a script migrated per the documented ladder
+  // believed the rules were gone while the file kept every one of them.
+  // Unprotect writes only through the consent ladder's apply step; the
+  // refusal names that remedy instead of quietly previewing.
+  if (flags["yes"] && !flags["apply"]) {
+    return fail(
+      "brain unprotect --yes requires --apply to write; without --apply the verb is a " +
+        "read-only preview and nothing was changed. Re-run with --apply to remove the " +
+        "OSB-managed rules (--yes consents in a non-interactive run).",
+    );
+  }
+
   try {
     if (flags["apply"]) {
       // t_b6bcd984 sibling of the protect ladder, in the canonical
@@ -124,7 +178,8 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
       const compute = computeUnprotect({ target, vault });
       if (compute.changed && !flags["yes"]) {
         if (flags["json"] || !process.stdin.isTTY) {
-          return fail(
+          return consentRefusal(
+            flags["json"] === true,
             `brain unprotect --apply requires --yes in non-interactive mode ` +
               "(--json or non-TTY stdin); nothing was written",
           );
@@ -146,7 +201,7 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
       const result = unprotect({ target, vault, approved: compute });
       if (flags["json"]) {
         okJson({
-          consent: "confirmed",
+          consent: deriveConsentVerdict(result.changed, flags["yes"] === true),
           target: result.target,
           destination: result.destination,
           changed: result.changed,
@@ -163,9 +218,13 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
     }
     // Preview (no --apply): read-only, the same shape protect's print
     // mode keeps - a header and the would-be change, nothing written.
+    // The literal `preview` marker (H4) is what lets a headless consumer
+    // tell this answer from the apply envelope, which shares the target/
+    // destination/changed keys and carries no marker.
     const compute = computeUnprotect({ target, vault });
     if (flags["json"]) {
       okJson({
+        preview: true,
         target,
         destination: compute.destination,
         changed: compute.changed,

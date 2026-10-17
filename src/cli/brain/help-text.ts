@@ -71,7 +71,7 @@ Brain verbs (observing memory):
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply --yes])
-  unprotect        Remove OSB-managed deny rules (--target {claudecode|codex} [--apply --yes])
+  unprotect        Remove OSB-managed deny rules (preview; --apply writes, --yes consents) (--target {claudecode|codex})
   permissions      Show the trust policy document and query the decision ledger (show | ledger)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)

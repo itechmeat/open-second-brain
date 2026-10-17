@@ -166,39 +166,77 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     // non-TTY apply refuses before writing and logs no event; a TTY
     // run sees the dry-run preview (now with the per-file diffs) and is
     // asked once. A dry run never prompts and never gates.
-    let consent: RepairConsent | undefined;
-    if (!dryRun) {
-      if (flags["yes"]) {
-        consent = "yes-flag";
-      } else if (flags["json"] || !process.stdin.isTTY) {
-        return fail(
-          "brain doctor --repair --apply requires --yes in non-interactive mode " +
-            "(--json or non-TTY stdin); nothing was written",
-        );
-      } else {
-        const preview = applyRepair(vault, {
-          dryRun: true,
-          agent: resolveBrainAgent(flags, config),
-          configPath: config,
-          dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
-        });
-        renderRepair(preview, false);
-        process.stderr.write("Proceed? [y/N] ");
-        const ans = await readSingleLine();
-        if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
-          ok("repair cancelled");
-          return 0;
-        }
-        consent = "interactive-yes";
-      }
-    }
+    //
+    // M6: the preview, the prompt and the apply all sit inside the try -
+    // a preview-side failure (an unclassified repair code, a fixer that
+    // cannot derive its target) is a `repair failed:` answer, not an
+    // uncaught error. The apply is pinned to the approved preview: only
+    // the targets the preview showed may be written, so a finding that
+    // appears while the prompt waits stays for the next run instead of
+    // being written behind an approval it was never shown in.
     try {
+      let consent: RepairConsent | undefined;
+      let approvedTargets: ReadonlyArray<string> | undefined;
+      if (!dryRun) {
+        if (flags["yes"]) {
+          consent = "yes-flag";
+        } else if (flags["json"] || !process.stdin.isTTY) {
+          // M4: the refusal carries its verdict in a JSON envelope under
+          // --json, on the payload stream a headless consumer parses -
+          // the reserved `headless-refused` verdict, nothing written.
+          if (flags["json"]) {
+            process.stdout.write(
+              JSON.stringify(
+                {
+                  consent: "headless-refused",
+                  written: false,
+                  error:
+                    "brain doctor --repair --apply requires --yes in non-interactive mode " +
+                    "(--json or non-TTY stdin); nothing was written",
+                },
+                null,
+                2,
+              ) + "\n",
+            );
+            return 1;
+          }
+          return fail(
+            "brain doctor --repair --apply requires --yes in non-interactive mode " +
+              "(--json or non-TTY stdin); nothing was written",
+          );
+        } else {
+          const preview = applyRepair(vault, {
+            dryRun: true,
+            agent: resolveBrainAgent(flags, config),
+            configPath: config,
+            dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+          });
+          // M6: nothing to fix, nothing to approve - a prompt over an
+          // empty preview asks consent for a no-op. Skip straight to the
+          // apply, which reports the needs-review and unfixable classes
+          // honestly and records `unchanged` as the verdict.
+          if (preview.applied.length === 0) {
+            consent = "unchanged";
+          } else {
+            renderRepair(preview, false);
+            process.stderr.write("Proceed? [y/N] ");
+            const ans = await readSingleLine();
+            if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
+              ok("repair cancelled");
+              return 0;
+            }
+            consent = "interactive-yes";
+            approvedTargets = preview.applied.map((f) => f.target);
+          }
+        }
+      }
       const outcome = applyRepair(vault, {
         dryRun,
         agent: resolveBrainAgent(flags, config),
         configPath: config,
         dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
         ...(consent === undefined ? {} : { consent }),
+        ...(approvedTargets === undefined ? {} : { approvedTargets }),
       });
       return renderRepair(outcome, Boolean(flags["json"]));
     } catch (exc) {

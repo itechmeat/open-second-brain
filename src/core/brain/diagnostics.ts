@@ -1244,8 +1244,15 @@ const orphanedReferenceFixer: Fixer = {
     if (!existsSync(path)) return null;
     const derived = evidencePruneDerived(vault, path, dead);
     if (derived === null) return null;
+    // M5: `before` is the file's raw bytes, not a re-serialization of the
+    // parsed frontmatter. The write lands `formatFrontmatter(next)`, whose
+    // normalization (de-quoting scalars, the blank line after the closing
+    // fence) is invisible in a diff whose both sides were formatted - so
+    // the operator approved a two-line change and got a fourth one. The
+    // raw before against the formatted after shows every byte the write
+    // moves, which is the preview's contract.
     return {
-      before: formatFrontmatter(derived.meta, derived.body),
+      before: readFileSync(path, "utf8"),
       after: formatFrontmatter(derived.next, derived.nextBody),
     };
   },
@@ -1446,8 +1453,34 @@ export interface AppliedFix {
  * the MCP tool passes `caller-apply` - `apply: true` is the machine
  * consent, and no new required argument is added to the tool. A dry run
  * writes no event, so it records nothing.
+ *
+ * `unchanged` (M3) is the no-op verdict: the run had nothing to apply, so
+ * no gate ran, nobody was asked and nothing was written. It never reaches
+ * an event body - a no-op logs none - and rides only the run-level
+ * {@link RepairOutcome.consent}, where the hard-coded absence (or a
+ * stale carried verdict) would otherwise report a consent nobody gave.
  */
-export type RepairConsent = "yes-flag" | "interactive-yes" | "caller-apply";
+export type RepairConsent = "yes-flag" | "interactive-yes" | "caller-apply" | "unchanged";
+
+/**
+ * The two reserved refusal verdicts (CONSENT_VERDICTS in src/core/trust.ts):
+ * an interactive operator answered no (`refused`), and a `--json`/non-TTY
+ * run was refused fail-closed for want of `--yes` (`headless-refused`).
+ * Under `--json` the guarded CLI lanes emit their refusal as a JSON
+ * envelope `{ consent, written: false, error }` carrying one of these, so
+ * a headless consumer reads the verdict from the payload stream.
+ */
+export const REFUSAL_VERDICTS = ["refused", "headless-refused"] as const;
+
+export type RefusalVerdict = (typeof REFUSAL_VERDICTS)[number];
+
+/**
+ * Every verdict a guarded CLI lane's receipt may carry: the consent
+ * values ({@link RepairConsent}) plus the two refusal spellings. The
+ * vocabulary is one set across install, protect, unprotect and doctor so
+ * a receipt from any lane reads the same way.
+ */
+export type LaneConsentVerdict = RepairConsent | RefusalVerdict;
 
 export interface RepairOutcome {
   readonly dryRun: boolean;
@@ -1457,6 +1490,15 @@ export interface RepairOutcome {
   readonly needsReview: ReadonlyArray<RepairItem>;
   /** Detected classes no fixer addresses. */
   readonly unfixable: ReadonlyArray<UnfixableClass>;
+  /**
+   * How the write was authorised (M4): every apply's JSON carries the
+   * consent verdict, exactly as each fix's event body does. Absent on a
+   * dry run, which writes nothing and records nothing. A no-op apply -
+   * nothing to fix, so no consent was consumed - reports `unchanged`
+   * rather than the caller's verdict, keeping a confirmed write
+   * distinguishable from an automatic run.
+   */
+  readonly consent?: RepairConsent;
 }
 
 export interface ApplyRepairOptions {
@@ -1468,6 +1510,16 @@ export interface ApplyRepairOptions {
    * keeps the event's old shape.
    */
   readonly consent?: RepairConsent;
+  /**
+   * The targets the consent preview showed (t_b6bcd984; the CLI's pin
+   * between the approved preview and the write, M6 - the sibling of the
+   * protect/unprotect PREVIEW_DRIFT refusal). Present, the apply skips
+   * any applicable fix whose target the preview did not name: a finding
+   * that appears between the operator's preview and their yes stays for
+   * the next run instead of being written behind an approval that never
+   * showed it. Absent, every planned fix applies - the pre-pin callers.
+   */
+  readonly approvedTargets?: ReadonlyArray<string>;
   /** Wall clock for the typed event timestamps. Defaults to `new Date()`. */
   readonly now?: Date;
   /** Agent identity recorded on each event. Resolver default when blank. */
@@ -1624,8 +1676,15 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
 
   const agent = normalizeAgentArgument(opts.agent ?? null) ?? resolveAgentName(opts.configPath);
   const timestamp = isoSecond(opts.now ?? new Date());
+  const approved = opts.approvedTargets === undefined ? null : new Set(opts.approvedTargets);
   const applied: AppliedFix[] = [];
   for (const item of applicable) {
+    // The approved-preview pin (M6): a fix the consent preview did not
+    // show is skipped, never written. It stays a finding for the next
+    // run - skipping (rather than refusing the whole apply, as the
+    // protect/unprotect PREVIEW_DRIFT twin does) keeps the answers the
+    // operator DID see still landing when the vault merely moved.
+    if (approved !== null && !approved.has(item.target)) continue;
     // The capability table is the published statement that this code has
     // a mechanical repair; the registry is the thing that performs it.
     // Consulting the table first turns a disagreement between the two
@@ -1657,5 +1716,12 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
     applied: Object.freeze(applied),
     needsReview: Object.freeze(needsReview),
     unfixable: plan.unfixable,
+    // The run-level verdict (M4): every apply's JSON carries how the
+    // write was authorised, downgraded to `unchanged` when nothing was
+    // written - a no-op consumed no consent, and reporting the caller's
+    // verdict there would make an automatic run read as a confirmed one.
+    ...(opts.consent === undefined
+      ? {}
+      : { consent: applied.length === 0 ? "unchanged" : opts.consent }),
   });
 }
