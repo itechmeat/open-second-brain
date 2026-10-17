@@ -117,7 +117,7 @@ describe("gemini-cli plan diff — secrets from other servers never render", () 
   test("minified config: the token never reaches the rendered plan diff", () => {
     writeMinifiedConfig(["mcp", "--vault", "/old/vault"]);
     const plan = geminiCliAdapter.plan(payload(), env());
-    const step = plan.steps[0];
+    const step = plan.steps[0]!;
     expect(step.kind).toBe("json-merge");
     expect("diff" in step && typeof step.diff === "string").toBe(true);
     const diff = (step as { diff: string }).diff;

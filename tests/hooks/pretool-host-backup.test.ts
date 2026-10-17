@@ -85,7 +85,7 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
   return { stdout, stderr, exit };
 }
 
-function writePayload(filePath: string): unknown {
+function writePayload(filePath: string): Record<string, unknown> {
   return {
     hook_event_name: "PreToolUse",
     session_id: "s1",
@@ -325,10 +325,8 @@ describe("pretool-host-backup hook", () => {
     mkdirSync(join(proj, ".claude"), { recursive: true });
     const local = join(proj, ".claude", "settings.local.json");
     writeFileSync(local, '{"allow":["Bash"]}\n');
-    const r = await runHook(
-      { ...writePayload(local), cwd: proj },
-      { OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true" },
-    );
+    const payload = { ...writePayload(local), cwd: proj };
+    const r = await runHook(payload, { OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true" });
     expect(r.exit).toBe(0);
     expect(r.stdout).not.toContain('"deny"');
     const ignorePath = join(proj, ".claude", ".o2b-backups", ".gitignore");

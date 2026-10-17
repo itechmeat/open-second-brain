@@ -85,7 +85,7 @@ describe("decideHostBackup", () => {
     for (const d of [tilde, relative, symlinked]) {
       expect(d.kind).toBe("backup");
     }
-    const target = tilde.kind === "backup" ? tilde.targets[0] : "";
+    const target = tilde.kind === "backup" ? tilde.targets[0]! : "";
     expect(relative.kind === "backup" && relative.targets[0]).toBe(target);
     expect(symlinked.kind === "backup" && symlinked.targets[0]).toBe(target);
     expect(target.endsWith(".claude/settings.json")).toBe(true);
