@@ -1291,7 +1291,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_event_trace",
     description:
-      "Join logged Brain events to the continuity records (recall telemetry, context receipts, generation reports) attached to them by shared correlation ids (session_id, turn_id, artifact refs) — the integrated 'why did the agent do this?' reader. Defaults to today's log. Read-only.",
+      "Join logged Brain events to the continuity records (recall telemetry, context receipts, generation reports) attached to them by shared correlation ids (session_id, turn_id, artifact refs) — the integrated 'why did the agent do this?' reader. Defaults to today's log. `total` and `trace_total` are exact once the cursor walk exhausts; mid-walk they report the bound the fetched page reached, never a silent cap. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

@@ -1109,7 +1109,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_unlinked_mentions",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Raw-text mentions of a target's title / aliases that are NOT already inside `[[...]]`. Walks Brain/preferences and Brain/retired; match boundary is Unicode-aware (codepoint class), language-agnostic. Read-only.",
+      "Raw-text mentions of a target's title / aliases that are NOT already inside `[[...]]`. Walks Brain/preferences and Brain/retired; match boundary is Unicode-aware (codepoint class), language-agnostic. `total` is exact once the cursor walk exhausts; mid-walk it reports the bound the fetched page reached, never a silent cap. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

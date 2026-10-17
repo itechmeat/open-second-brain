@@ -31,6 +31,13 @@
  * may be persisted mid-walk. The two expand surfaces carry a cursor but
  * no `limit`, so they appear in the cursor equality but not the
  * limit-bearing population.
+ *
+ * Mid-walk totals, stated where the walk is bounded: brain_event_trace
+ * and brain_unlinked_mentions cut each page's scan one record past the
+ * page's reach (the lookahead proves `next_cursor` without rescanning),
+ * so their `total` (and brain_event_trace's `trace_total`) is exact once
+ * the walk exhausts and reports the bound the page reached mid-walk -
+ * a bound the tool descriptions name, never a silent cap.
  */
 
 import { describe, expect, test } from "bun:test";
