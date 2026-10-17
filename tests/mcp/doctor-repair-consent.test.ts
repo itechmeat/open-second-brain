@@ -16,9 +16,12 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
+import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const bases: string[] = [];
 
@@ -116,5 +119,55 @@ describe("brain_doctor repair consent provenance", () => {
     // No NEW required argument: the machine-consent contract is the
     // existing `apply` flag, exactly as agents already call it.
     expect(schema.required ?? []).toEqual([]);
+  });
+});
+
+describe("brain_doctor repair agent provenance", () => {
+  const doctor = HEALTH_TOOLS.find((tool) => tool.name === "brain_doctor")!.handler;
+
+  test("apply records the caller's agent name, not the config resolver default", async () => {
+    resetVaultIdentityPins();
+    try {
+      const base = mkdtempSync(join(tmpdir(), "o2b-doctor-agent-"));
+      bases.push(base);
+      const vault = join(base, "vault");
+      mkdirSync(join(vault, "notes"), { recursive: true });
+      writeFileSync(join(vault, "notes", "source.md"), "# Widget source\n\nBody text.\n");
+      const configPath = join(base, "config.yaml");
+      // The server-level identity and the caller identity disagree on
+      // purpose: a per-agent transport mints `caller-x`, while the
+      // machine config names `config-agent`. The event must say who
+      // APPLIED, not what the resolver would have guessed.
+      atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: config-agent\n`);
+      bootstrapBrain(vault, { configPath });
+      const runs = join(vault, "Brain", "log", "dream-runs");
+      mkdirSync(runs, { recursive: true });
+      writeFileSync(
+        join(runs, "run-agent.jsonl"),
+        JSON.stringify({ phase: "started", at: "2026-07-18T00:00:00.000Z", run_id: "run-agent" }) +
+          "\n",
+        "utf8",
+      );
+
+      const ctx = {
+        vault,
+        configPath,
+        repoRoot: null,
+        agentName: "caller-x",
+        reach: TRANSPORT_REACH.local,
+      } as ServerContext;
+      const res = (await doctor(ctx, { repair: true, apply: true })) as {
+        repair?: { dryRun?: boolean; applied?: ReadonlyArray<unknown> };
+      };
+      expect(res.repair?.dryRun).toBe(false);
+      expect((res.repair?.applied ?? []).length).toBe(1);
+
+      const bodies = repairEventBodies(vault);
+      expect(bodies.length).toBe(1);
+      expect(bodies[0]!["consent"]).toBe("caller-apply");
+      expect(bodies[0]!["agent"]).toBe("caller-x");
+    } finally {
+      resetVaultIdentityPins();
+    }
   });
 });
