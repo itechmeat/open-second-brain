@@ -218,17 +218,17 @@ export async function buildDecisionModelCheck(
   // The routes whose presets publish no price (see
   // DECISION_MODEL_UNPRICED_ADAPTERS): until the operator sets one, the
   // gate records nothing for the route's calls - a stronger under-count
-  // than the generic unknown-price warning below describes.
-  // `llm-emulation` keeps its exact warning: it is the one route whose
-  // config reads an output price, and its endpoint may volunteer a cost.
-  // `converse` never reports a cost (a gateway cost field is not
-  // trusted) and reads no output price.
+  // than the generic unknown-price warning below describes. Both
+  // chat-shaped routes read an output price too, so each warning names
+  // both settings; `llm-emulation` alone may still volunteer a cost, so
+  // its wording keeps the reported-cost escape hatch.
   const unpricedRoute = DECISION_MODEL_UNPRICED_ADAPTERS.includes(cfg.adapter);
   if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && unpricedRoute) {
     warnings.push(
       cfg.adapter === "converse"
-        ? "no price is set for converse, so the daily cost gate counts none of its calls " +
-            "(the gateway's cost field is not trusted); set decision_model_input_price_usd_per_mtok"
+        ? "the daily cost gate counts none of converse's calls (the gateway's cost field is not " +
+            "trusted) until both prices are set: decision_model_input_price_usd_per_mtok and " +
+            "decision_model_output_price_usd_per_mtok"
         : "no prices are set for llm-emulation, so the daily cost gate counts only requests whose " +
             "route reports a cost; set decision_model_input_price_usd_per_mtok and " +
             "decision_model_output_price_usd_per_mtok",

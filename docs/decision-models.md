@@ -120,7 +120,7 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_uses` | `use:mode` comma list, mode `off`, `shadow` or `enforce` | every use `off` |
 | `decision_model_cost_gate_usd` | stop sending once today's (UTC) spend reaches this; `0` turns the gate off. Named like `embedding_cost_gate_usd` | `0.50` |
 | `decision_model_input_price_usd_per_mtok` | price for routes that do not report cost | from preset |
-| `decision_model_output_price_usd_per_mtok` | output price, read only for `llm-emulation`, whose cost is `unknown` unless both prices are set | none |
+| `decision_model_output_price_usd_per_mtok` | output price, read only for the chat-shaped routes (`llm-emulation`, `converse`), whose cost is `unknown` unless both prices are set | none |
 | `decision_model_allow_uncalibrated` | allow an uncalibrated provider in `enforce` | `false` |
 | `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`, `converse`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
 

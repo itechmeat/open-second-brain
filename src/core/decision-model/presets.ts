@@ -333,6 +333,28 @@ export const DECISION_MODEL_UNPRICED_ADAPTERS: ReadonlyArray<DecisionModelAdapte
   ),
 );
 
+/**
+ * The adapters whose routes are chat-shaped: the answer is generated text
+ * in which the model wrote its own probabilities, so the request bills
+ * output tokens the same way it bills input ones, and the cost is only
+ * known once the operator sets both prices. Derived from the preset table
+ * like {@link DECISION_MODEL_UNPRICED_ADAPTERS}: a route is chat-shaped
+ * exactly when nothing about its wire protocol grounds a calibration
+ * claim, the grounds the table records as `calibrated: false`, so an
+ * adapter is here when every preset that speaks it is declared
+ * uncalibrated. A calibrated route (`systemone`, `vercel-evaluate`)
+ * serves a judgment model family whose published price covers the reply.
+ */
+export const DECISION_MODEL_CHAT_SHAPED_ADAPTERS: ReadonlyArray<DecisionModelAdapter> =
+  Object.freeze(
+    [...new Set(Object.values(DECISION_MODEL_PRESETS).map((preset) => preset.adapter))].filter(
+      (adapter) =>
+        Object.values(DECISION_MODEL_PRESETS)
+          .filter((preset) => preset.adapter === adapter)
+          .every((preset) => preset.calibrated === false),
+    ),
+  );
+
 export function decisionModelPreset(name: string): DecisionModelPreset | null {
   return Object.hasOwn(DECISION_MODEL_PRESETS, name) ? DECISION_MODEL_PRESETS[name]! : null;
 }

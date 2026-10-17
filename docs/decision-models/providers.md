@@ -38,7 +38,7 @@ Other per-route limits:
 | `openjev` | optional on loopback | 52 | `openjev` | 0 |
 | `compatible` | required | 255 | none, unless `decision_model_threshold_profile` names one | unknown |
 | `llm-emulation` | required | 255 | `llm-emulation` | unknown unless both price keys are set |
-| `converse` | required | 255 | `converse` | unknown |
+| `converse` | required | 255 | `converse` | unknown unless both price keys are set |
 
 A `choice` question above the route's option limit is never sent: a use that
 can split it does, and otherwise that request degrades with `budget`, like an
@@ -209,9 +209,11 @@ validated item by item by the same rules as every route.
   and is refused, never half-parsed. Error bodies (`{message, __type}`) are
   never read or printed: the HTTP status alone decides.
 - Usage is camelCase (`inputTokens`, `outputTokens`). The gateway's pricing
-  is yours, so the cost is `unknown` until you set
-  `decision_model_input_price_usd_per_mtok`; a known cost still feeds the
-  daily cost gate.
+  is yours, so the cost is `unknown` until you set both
+  `decision_model_input_price_usd_per_mtok` and
+  `decision_model_output_price_usd_per_mtok` - the chat-shaped request bills
+  output tokens the same way it bills input ones - and a known cost still
+  feeds the daily cost gate.
 
 ```yaml
 decision_model_enabled: "true"

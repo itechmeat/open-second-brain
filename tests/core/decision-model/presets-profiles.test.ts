@@ -442,15 +442,26 @@ describe("the converse preset", () => {
       vault: null,
       env: ENV,
     });
-    expect(report.warnings.join("\n")).toContain("no price is set for converse");
-    expect(report.warnings.join("\n")).toContain("set decision_model_input_price_usd_per_mtok");
-    // Priced, the unpriced-route warning goes.
-    const priced = await buildDecisionModelCheck({
+    expect(report.warnings.join("\n")).toContain("counts none of converse's calls");
+    expect(report.warnings.join("\n")).toContain("decision_model_output_price_usd_per_mtok");
+    // An input price alone still leaves the chat route's cost unknown:
+    // the warning holds until the output price joins it.
+    const inputOnly = await buildDecisionModelCheck({
       config: converseConfig({ decision_model_input_price_usd_per_mtok: "0.05" }),
       vault: null,
       env: ENV,
     });
-    expect(priced.warnings.join("\n")).not.toContain("no price is set for converse");
+    expect(inputOnly.warnings.join("\n")).toContain("counts none of converse's calls");
+    // Priced on both, the warning goes.
+    const priced = await buildDecisionModelCheck({
+      config: converseConfig({
+        decision_model_input_price_usd_per_mtok: "0.05",
+        decision_model_output_price_usd_per_mtok: "0.2",
+      }),
+      vault: null,
+      env: ENV,
+    });
+    expect(priced.warnings.join("\n")).not.toContain("counts none of converse's calls");
   });
 
   test("doctor resolves the preset and names the key variable it waits for", async () => {

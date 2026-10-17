@@ -45,6 +45,7 @@ import {
   type DecisionModelUse,
 } from "./contract.ts";
 import {
+  DECISION_MODEL_CHAT_SHAPED_ADAPTERS,
   DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
   DECISION_MODEL_PRESET_NAMES,
   DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
@@ -455,23 +456,29 @@ export function resolveDecisionModelConfig(
     "decision_model_output_price_usd_per_mtok",
     errors,
   );
-  const emulated = preset?.adapter === "llm-emulation";
-  if (!emulated && outputPriceRaw !== null) {
+  // A chat-shaped route (DECISION_MODEL_CHAT_SHAPED_ADAPTERS, derived from
+  // the preset table) asks a generative model to write the answer as text,
+  // so the request bills output tokens like input ones; any other route's
+  // published price covers the reply.
+  const chatShaped =
+    preset !== null && DECISION_MODEL_CHAT_SHAPED_ADAPTERS.includes(preset.adapter);
+  if (!chatShaped && outputPriceRaw !== null) {
     notes.push(
-      "decision_model_output_price_usd_per_mtok is read only for provider 'llm-emulation'; " +
-        "other routes do not bill output, so it is ignored",
+      "decision_model_output_price_usd_per_mtok is read only for chat-shaped routes, where a " +
+        "generative model bills output; other routes do not bill output, so it is ignored",
     );
   }
   // A chat model bills output too: with either price unknown, so is the cost.
   const inputPriceUsdPerMtok =
-    emulated && (inputPriceConfigured === null || outputPriceRaw === null)
+    chatShaped && (inputPriceConfigured === null || outputPriceRaw === null)
       ? null
       : inputPriceConfigured;
-  const outputPriceUsdPerMtok = emulated ? outputPriceRaw : null;
-  if (emulated && inputPriceUsdPerMtok === null) {
+  const outputPriceUsdPerMtok = chatShaped ? outputPriceRaw : null;
+  if (chatShaped && inputPriceUsdPerMtok === null) {
     notes.push(
-      "llm-emulation cost is unknown (cost_source: unknown) unless the route reports it or both " +
-        "decision_model_input_price_usd_per_mtok and decision_model_output_price_usd_per_mtok are set",
+      "this chat-shaped route's cost is unknown (cost_source: unknown) unless the route reports " +
+        "it or both decision_model_input_price_usd_per_mtok and " +
+        "decision_model_output_price_usd_per_mtok are set",
     );
   }
   const allowUncalibrated = parseBoolSetting(

@@ -434,10 +434,25 @@ describe("converse records and the daily cost gate", () => {
     expect(todaySpendUsd(vault)).toBe(0);
   });
 
-  test("with an input price the cost is estimated from input tokens and counted", async () => {
-    const payload = await runOnce({ decision_model_input_price_usd_per_mtok: "1" });
+  test("the output price is read here too: it needs both prices, then both count", async () => {
+    // Converse is chat-shaped: an input price alone stays unknown, and the
+    // note names the output setting the route is waiting on.
+    const inputOnly = resolveDecisionModelConfig({
+      env: ENV,
+      config: routeConfig({ decision_model_input_price_usd_per_mtok: "1" }),
+      vault,
+    });
+    expect(inputOnly.inputPriceUsdPerMtok).toBeNull();
+    expect(inputOnly.outputPriceUsdPerMtok).toBeNull();
+    expect(inputOnly.notes.join("\n")).toContain("decision_model_output_price_usd_per_mtok");
+    // A chat model bills output too: both prices estimate the cost, and
+    // the daily gate counts the whole of it.
+    const payload = await runOnce({
+      decision_model_input_price_usd_per_mtok: "1",
+      decision_model_output_price_usd_per_mtok: "4",
+    });
     expect(payload["cost_source"]).toBe("estimated");
-    expect(payload["cost_usd"] as number).toBeCloseTo(0.001, 12);
-    expect(todaySpendUsd(vault)).toBeCloseTo(0.001, 12);
+    expect(payload["cost_usd"] as number).toBeCloseTo((1000 * 1 + 200 * 4) / 1_000_000, 12);
+    expect(todaySpendUsd(vault)).toBeCloseTo(0.0018, 12);
   });
 });
