@@ -9,7 +9,7 @@ read-only context on every chat turn.
 ## Install
 
 ```bash
-o2b install --target aider --apply
+o2b install --target aider --apply --yes
 ```
 
 The command:

@@ -20,19 +20,22 @@ pattern that every install path ends with. On native Windows, read
 
 ## Quick install
 
-For these runtimes one `o2b install` command writes the integration:
+For these runtimes one `o2b install` command writes the integration
+(every apply is consent-gated: an interactive run asks once, and a
+headless run needs the shown `--yes` — see
+[`install/prerequisites.md`](install/prerequisites.md#consent-before-apply)):
 
 | Runtime              | Command                                            | Notes                                                                 |
 |----------------------|----------------------------------------------------|-----------------------------------------------------------------------|
-| Cursor               | `o2b install --target cursor --apply`              | `install/cursor.md` — JSON-merge; restart Cursor after apply         |
-| Aider                | `o2b install --target aider --apply`               | `install/aider.md` — managed block + sidecar context; no native MCP   |
-| opencode             | `o2b install --target opencode --apply`            | `install/opencode.md` — MCP servers + native plugin                                    |
-| Grok Build           | `o2b install --target grok --apply`                | `install/grok.md` — MCP in `~/.grok/config.toml` + native hooks (absolute command)     |
-| kiro                 | `o2b install --target kiro --apply`                | `install/kiro.md` — JSON-merge                                        |
-| GitHub Copilot CLI   | `o2b install --target copilot-cli --apply`         | `install/copilot-cli.md` — `copilot mcp add` with JSON fallback       |
-| Google Gemini CLI    | `o2b install --target gemini-cli --apply`          | `install/gemini-cli.md` — JSON-merge in `~/.gemini/settings.json`     |
-| Pi (pi.dev)          | `o2b install --target pi --apply`                  | `install/pi.md` — skill symlink, not MCP                              |
-| Generic / other      | `o2b install --target generic --apply --out -`     | `install/generic.md` — prints payload; never edits external config    |
+| Cursor               | `o2b install --target cursor --apply --yes`        | `install/cursor.md` — JSON-merge; restart Cursor after apply         |
+| Aider                | `o2b install --target aider --apply --yes`         | `install/aider.md` — managed block + sidecar context; no native MCP   |
+| opencode             | `o2b install --target opencode --apply --yes`      | `install/opencode.md` — MCP servers + native plugin                                    |
+| Grok Build           | `o2b install --target grok --apply --yes`          | `install/grok.md` — MCP in `~/.grok/config.toml` + native hooks (absolute command)     |
+| kiro                 | `o2b install --target kiro --apply --yes`          | `install/kiro.md` — JSON-merge                                        |
+| GitHub Copilot CLI   | `o2b install --target copilot-cli --apply --yes`   | `install/copilot-cli.md` — `copilot mcp add` with JSON fallback       |
+| Google Gemini CLI    | `o2b install --target gemini-cli --apply --yes`    | `install/gemini-cli.md` — JSON-merge in `~/.gemini/settings.json`     |
+| Pi (pi.dev)          | `o2b install --target pi --apply --yes`            | `install/pi.md` — skill symlink, not MCP                              |
+| Generic / other      | `o2b install --target generic --apply --yes --out -` | `install/generic.md` — prints payload; never edits external config    |
 
 ZCode has no install target yet: add the printed servers to its config
 by hand, see `install/zcode.md`.

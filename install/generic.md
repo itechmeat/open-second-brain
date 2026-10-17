@@ -8,8 +8,14 @@ operator to wire it into whatever the runtime expects.
 ## Print to stdout
 
 ```bash
-o2b install --target generic --apply --out -
+o2b install --target generic --apply --yes --out -
 ```
+
+`--apply` runs the same consent gate as every install lane: an
+interactive terminal is shown the payload and asked once, while a
+non-interactive run (`--json`, CI, no TTY) refuses without `--yes`
+(exit code 6) - see
+[prerequisites.md](prerequisites.md#consent-before-apply).
 
 Default format is JSON:
 
@@ -32,13 +38,13 @@ Default format is JSON:
 YAML is also available:
 
 ```bash
-o2b install --target generic --apply --out - --format yaml
+o2b install --target generic --apply --yes --out - --format yaml
 ```
 
 ## Write to a file
 
 ```bash
-o2b install --target generic --apply --out /path/to/snippet.json
+o2b install --target generic --apply --yes --out /path/to/snippet.json
 ```
 
 The path is recorded in the sidecar manifest so `o2b install

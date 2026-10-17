@@ -15,7 +15,7 @@ Open Second Brain servers are added by hand. Verified with the ZCode CLI
 Print the server entries for your vault:
 
 ```bash
-o2b install --target generic --apply --out - --vault /path/to/vault
+o2b install --target generic --apply --yes --out - --vault /path/to/vault
 ```
 
 The printout is keyed `mcpServers`. ZCode expects the same entries under

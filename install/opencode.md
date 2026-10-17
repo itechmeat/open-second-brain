@@ -28,7 +28,7 @@ in one pass:
 ## Install
 
 ```bash
-o2b install --target opencode --apply
+o2b install --target opencode --apply --yes
 ```
 
 Restart `opencode` to load the MCP servers and the plugin.
@@ -83,7 +83,7 @@ fresh install never reports drift against itself.
   (typically the host writing its own object during an upgrade), the
   first `o2b install --check --target opencode` reports drift once, and
   the first re-apply is refused through the hand-edited-file guard.
-  **Fix:** `o2b install --target opencode --apply --force` (or
+  **Fix:** `o2b install --target opencode --apply --force --yes` (or
   `o2b update --force`). That re-apply registers the servers at the
   native path and cleans the shadowed legacy copies of its own two keys
   from the top-level block; user keys are never touched.

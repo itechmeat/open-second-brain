@@ -7,7 +7,7 @@ verbs.
 ## Install
 
 ```bash
-o2b install --target pi --apply
+o2b install --target pi --apply --yes
 ```
 
 Creates a symlink at `${PI_HOME:-$HOME/.pi}/skills/brain-memory`

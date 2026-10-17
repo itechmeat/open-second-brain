@@ -122,7 +122,7 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_input_price_usd_per_mtok` | price for routes that do not report cost | from preset |
 | `decision_model_output_price_usd_per_mtok` | output price, read only for `llm-emulation`, whose cost is `unknown` unless both prices are set | none |
 | `decision_model_allow_uncalibrated` | allow an uncalibrated provider in `enforce` | `false` |
-| `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
+| `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`, `converse`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
 
 Uses: `rerank`, `answerable`, `skills`, `extract_prefilter`, `dedup`,
 `tension`, `labels`, `recall_inject`. Every use is implemented; each one is
@@ -136,8 +136,9 @@ Modes:
 - `enforce`: the use applies the answer within its own limits.
 
 Presets (the hosted and `compatible` ones speak `POST <base>/v1/systemone`
-and are calibrated; `vercel-evaluate`, the self-hosted `laya` and `openjev`
-and the uncalibrated `llm-emulation` are described with every route's limits,
+and are calibrated; `vercel-evaluate`, the self-hosted `laya` and `openjev`,
+the uncalibrated `llm-emulation` and the gateway-routed `converse` are
+described with every route's limits,
 licence and data handling in [providers](decision-models/providers.md)):
 
 | Preset | Base URL | Model id | Default key variable | Input price (USD / M tokens) |
@@ -151,6 +152,7 @@ licence and data handling in [providers](decision-models/providers.md)):
 | `laya` | `http://127.0.0.1:8000` | `english` | none needed on loopback | 0 |
 | `openjev` | `http://127.0.0.1:3000` | `openjev` | none needed on loopback | 0 |
 | `llm-emulation` | must be set | must be set | must be set | unknown |
+| `converse` | must be set | must be set | must be set | unknown |
 
 `decision_model_base_url` must not carry `user:password@` credentials: the key
 travels in a header, and a URL with credentials is an invalid config.

@@ -1287,8 +1287,9 @@ missing index degrades to a per-origin warning.
 generates deduped triggers from semantic-health and retention data,
 `list` / `history` read by effective lifecycle status,
 `acknowledge` / `dismiss` / `act` transition one trigger. Cooldown keys
-keep the same issue from reappearing while an earlier trigger is open
-or cooling down; `brain_brief` `view="morning"` surfaces capped pending
+keep the same issue from reappearing while an earlier trigger is open,
+snoozed, or cooling down after an acted twin; `brain_brief`
+`view="morning"` surfaces capped pending
 triggers and marks them delivered (once per `trigger_cooldown_days`) for
 a caller at local reach; below local reach it shows no trigger section
 and marks nothing delivered, because the queue is the operator's own.
@@ -1296,10 +1297,27 @@ and marks nothing delivered, because the queue is the operator's own.
 status and carries no clock, so the finding never re-nags - and
 `unsuppress` restores the status suppression interrupted along with its
 original cooldown arithmetic. Suppressed triggers are terminal: hidden
-from `list`, present in `history`, never in the brief. A candidate an
+from `list`, present in `history`, never in the brief. `snooze` is
+suppression's time-boxed sibling: it defers an open trigger for a
+bounded window (three days when the caller names none) or until the
+finding fires again, whichever comes first, and `unsnooze` wakes it by
+hand. The wake (the window's end, a refire, or an explicit `unsnooze`)
+restores the exact status the snooze interrupted. A snoozed trigger
+is terminal like a suppressed one: hidden from `list`, present in
+`history`, never in the brief, and governed by its snooze window rather
+than the TTL expiry clock, so a long snooze cannot be cut short by
+expiry. Dismissal carries no clock: a dismissed finding stays dismissed
+for however long every re-fire rests on artifacts the dismissal already
+covers, and returns - as a new record through the normal creation path,
+never as a status flip of the resolved one - only when a scan fires it
+on a source artifact the dismissed record does not name. That
+comparison is set-based and order-insensitive, so a narrower sighting
+of the same grounding is not movement; an acted twin keeps the plain
+cooldown window after its resolution. A candidate an
 existing record silenced increments `occurrences` and stamps
 `last_seen_at` on that record, whatever silenced it - suppression, an
-open twin, a cooldown window, or the per-kind cap - so silence is
+open twin, a snooze, a dismissal, a cooldown window, or the per-kind
+cap - so silence is
 auditable. Two limits are exact rather than implied: one scan seeing the
 same finding twice counts once, so `occurrences` counts scans and not
 candidates, and a candidate silenced before any record for its cooldown

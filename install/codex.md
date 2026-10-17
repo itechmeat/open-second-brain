@@ -45,7 +45,7 @@ o2b brain init --vault /path/to/vault
 
 ```bash
 o2b install --target codex --vault /path/to/vault
-o2b install --target codex --vault /path/to/vault --apply
+o2b install --target codex --vault /path/to/vault --apply --yes
 ```
 
 The first command plans and writes nothing; the second applies. With the

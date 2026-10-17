@@ -1,6 +1,6 @@
 # Guarded host writes and surface sweep - consent ladders and a backup hook for host-config writes, cursor pagination for MCP list tools, a Converse decision-model route, and snooze for the trigger queue
 
-**Status:** draft
+**Status:** implemented
 **Author:** feature-release orchestrator (via feature-release-playbook)
 **Audience:** implementation
 
@@ -197,4 +197,4 @@ Note on help-text.ts and command-manifest.ts: both lanes A and D add lines to th
 - hooks.json and deny-channel composition: Claude Code runs all matching PreToolUse hooks and any deny wins; neither the consent work nor the hook may assume sole custody of the deny channel. Both lanes' tests assert their own entries only.
 - Census-test cadence: any commit that changes a censused surface (tool table, store read paths, maintenance surfaces, visibility vocabulary) updates the matching census in the same commit. This is the single most likely CI failure mode of the wave.
 - Bundle drift: openclaw/index.js embeds `EGRESS_SITES` text; the integrator rebuilds it as the last commit. If a lane forgets, the CI bundle diff catches it - after the fact.
-- Open questions carried to implementation: the exact install consent-refusal exit code (pinned by test against the `INSTALL_EXIT` table, decision left to the lane); whether the dismissed-twin comparison uses the direct set comparison or a persisted `deriveDatasetHash` fingerprint (direct comparison is the default; the fingerprint is the fallback if history display wants it); whether `unsnooze` ships (parity with `unsuppress` suggests yes; the settled semantics only require window-or-refire wake - decide in the lane, default is to add it).
+- Open questions carried to implementation, answered where the branch settled them: the install consent-refusal exit is `6` (`INSTALL_EXIT.consentRefused`, named on stderr and in the CLI reference); the dismissed-twin comparison is the direct order-insensitive set comparison over `sourceArtifacts`, surfaced as the new `dismissed` skip reason (no persisted fingerprint); `unsnooze` shipped, mirroring `unsuppress` - it restores the status the snooze interrupted verbatim and refuses a record that lost its `snoozed_from` rather than inventing one.

@@ -10,7 +10,7 @@ Most verbs accept `--vault <path>` and `--config <path>`; the values default to 
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
-o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes, --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one
+o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes (consent-gated), --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one
 o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
 o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
@@ -67,6 +67,7 @@ table:
 | `3`  | `--check` found drift in at least one target |
 | `4`  | `--apply` hit a user-modified managed block; re-run with `--force` to overwrite it |
 | `5`  | `--check` found a runtime it proved unreachable (since v1.46.0) |
+| `6`  | `--apply` refused for want of consent in a non-interactive run (`--json`, CI, no TTY); nothing was written, and the refusal names `--yes` on stderr |
 
 Code `5` is a behaviour change, and a breaking one for any script that
 treated a zero exit as "everything is fine". Before v1.46.0 a
@@ -74,6 +75,11 @@ treated a zero exit as "everything is fine". Before v1.46.0 a
 `o2b install --check` reported success for a runtime whose own adapter had
 just failed to reach it - the one verify state backed by a live query
 rather than a file read. The two answers no longer share a code.
+
+Code `6` is a behaviour change too, and breaking for headless scripts:
+`--apply` writes nothing until something consents - a `--yes` flag, or a
+human answering the one prompt on an interactive terminal. `--check`,
+`--plan` and dry runs never prompt and never gate.
 
 Drift outranks unreachable when both are present, and the order is the
 operator's repair order rather than a severity ranking: a runtime can be
@@ -554,7 +560,7 @@ o2b brain source              add <vault> --alias <name> | list | remove <alias>
 o2b brain links               normalize [path-prefix] [--mode preserve|full|short] [--write] [--json] - wikilink path format rewrite; dry-run by default; config key wiki_link_format
 o2b brain profile             [--stale-seconds N] [--force] [--json] - materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
 o2b brain sgrep               <query> [path-prefix] [--limit N] [--keyword-only] [--json] - grep-shaped semantic search; path:line: lines; exit 1 on no matches
-o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | suppress <id> | unsuppress <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7); suppress silences a finding indefinitely and unsuppress restores the status it interrupted; list reports the suppressed count; scan, list and history all print `unreadable: <n>` followed by one line per record the store could not parse - printed at zero too, so an omitted line can never read as a clean queue, and printed BEFORE "no open triggers" so that line is never the only thing said about a queue holding something unparseable
+o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | suppress <id> | unsuppress <id> | snooze <id> | unsnooze <id> | history [--json] - grounded trigger queue; acted findings cool down via trigger_cooldown_days (default 7); suppress silences a finding indefinitely and unsuppress restores the status it interrupted; snooze defers a trigger until a bounded window ends or the finding fires again, whichever comes first, and unsnooze wakes it by hand; a dismissed finding resurfaces only when it re-fires on changed source artifacts, not when a window elapses; list reports the suppressed count; scan, list and history all print `unreadable: <n>` followed by one line per record the store could not parse - printed at zero too, so an omitted line can never read as a clean queue, and printed BEFORE "no open triggers" so that line is never the only thing said about a queue holding something unparseable
 o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps, plus a strongest-objection steelman
 o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
 o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)

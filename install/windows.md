@@ -75,7 +75,7 @@ carries the host.
   parse there and are skipped (exit 1, non-blocking) - the MCP tools still
   work. Install Git for Windows to get the hooks.
 - **opencode, Cursor, Gemini CLI, Copilot CLI, kiro, Codex** -
-  `o2b install --target <name> --apply` writes the MCP entry as
+  `o2b install --target <name> --apply --yes` writes the MCP entry as
   `cmd /d /c o2b mcp ...`, the `cmd /c <name>` form several hosts document
   for `npx` on Windows (`/d` skips cmd's AutoRun, whose output would corrupt
   the JSON-RPC stream). The entry also sets

@@ -10,7 +10,7 @@ directly and prints a stderr note.
 ## Install
 
 ```bash
-o2b install --target copilot-cli --apply
+o2b install --target copilot-cli --apply --yes
 ```
 
 The adapter records which mode it used (`subprocess` or

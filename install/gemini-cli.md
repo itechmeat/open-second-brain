@@ -9,7 +9,7 @@ Existing entries are preserved.
 ## Install
 
 ```bash
-o2b install --target gemini-cli --apply
+o2b install --target gemini-cli --apply --yes
 ```
 
 ## Verify

@@ -55,7 +55,7 @@ MCP servers will pick up at spawn time.
 ## Install
 
 ```bash
-o2b install --target cursor --apply
+o2b install --target cursor --apply --yes
 ```
 
 This preserves any pre-existing `mcpServers.*` keys; only
@@ -104,7 +104,7 @@ which keys to remove). User-authored entries stay intact.
   user-scope path.
 - An install written before the profile existed reports `drift` on the
   next `--check`: its `args` carry no `--tool-profile`. Re-run
-  `o2b install --target cursor --apply` to regenerate it.
+  `o2b install --target cursor --apply --yes` to regenerate it.
 - If a previous OSB version wrote to `.cursor/mcp.json` without
   recording a manifest entry, use
   `o2b uninstall --target cursor --apply --force-from-snippet`

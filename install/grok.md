@@ -20,7 +20,7 @@ launches and handshakes in a session (71 + 5 tools registered, hooks dispatched)
 ## Install
 
 ```bash
-o2b install --target grok --apply
+o2b install --target grok --apply --yes
 ```
 
 Start grok (or press `r` in the `/mcps` and `/hooks` modals) to load them.
@@ -123,6 +123,6 @@ the `~/.claude/` namespace.
 - `GROK_HOME` overrides the `~/.grok` base directory; the adapter honors it.
 - The absolute `bun`/repo paths are resolved at install time. If you move the
   Open Second Brain checkout or change the `bun` binary, re-run
-  `o2b install --target grok --apply`.
+  `o2b install --target grok --apply --yes`.
 - Rules: grok reads `AGENTS.md` and `CLAUDE.md` natively, so vault-level rules
   can travel as project instructions without any Open Second Brain involvement.

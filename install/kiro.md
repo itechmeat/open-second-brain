@@ -7,7 +7,7 @@ are preserved.
 ## Install
 
 ```bash
-o2b install --target kiro --apply
+o2b install --target kiro --apply --yes
 ```
 
 Restart kiro to load the new servers.
