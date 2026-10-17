@@ -53,7 +53,7 @@ Sequencing rules:
 
 ### Task 6: Hook wrapper and opt-in flag
 - **Files**: hooks/pretool-host-backup.ts (new, copied structurally from hooks/pretool-orient.ts: flag check first, `armProcessCeiling`, `readHookInput`/`asHookPayload`, `decideHostBackup`, deny via `emitPermission` at pretool-orient.ts:127-136; stdlib-only - no core imports), src/core/config.ts (resolver `resolveConfigFlag("OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP", "host_settings_backup", configPath)` beside `resolveHookStrictEnabled` at 1597-1603; default OFF), tests/hooks/pretool-host-backup.test.ts (new; spawn pattern of tests/hooks/pretool-orient.test.ts:44-58 with `homeEnv` from tests/helpers/platform.ts:45).
-- **Acceptance**: failing spawn tests: flag off emits nothing and exits 0 for a settings-targeting Write (byte-identical no-op, no ceiling armed); flag on plus a Write to `<tempHome>/.claude/settings.json` produces a backup file on disk, one receipt line, and allows the call; flag on plus a backup made to fail (target dir read-only) emits stdout `hookSpecificOutput.permissionDecision: "deny"` naming the path; a missing vault skips the receipt without denying.
+- **Acceptance**: failing spawn tests: flag off emits nothing and exits 0 for a settings-targeting Write (byte-identical no-op, no ceiling armed); flag on plus a Write to `<tempHome>`/`.claude/settings.json` produces a backup file on disk, one receipt line, and allows the call; flag on plus a backup made to fail (target dir read-only) emits stdout `hookSpecificOutput.permissionDecision: "deny"` naming the path; a missing vault skips the receipt without denying.
 - **Depends on**: Task 5.
 
 ### Task 7: Hook registration, mirror, docs, and CHANGELOG
