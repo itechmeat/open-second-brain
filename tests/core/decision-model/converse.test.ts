@@ -84,7 +84,8 @@ function provider(apiKey: string = FAKE_DECISION_KEY): ConverseDecisionProvider 
     model: "gateway-jev-1",
     envKey: KEY_VAR,
     apiKey,
-    calibrated: true,
+    // A generative model behind the gateway writes its own probabilities.
+    calibrated: false,
     timeoutMs: 2000,
   });
 }
@@ -143,7 +144,7 @@ describe("converse request mapping", () => {
       model: "family/jev 1",
       envKey: KEY_VAR,
       apiKey: FAKE_DECISION_KEY,
-      calibrated: true,
+      calibrated: false,
       timeoutMs: 2000,
     });
     await wide.decide(
@@ -220,7 +221,7 @@ describe("converse response mapping", () => {
       { use: "rerank", state: "The support agent issued a full refund.", questions: QUESTIONS },
       { timeoutMs: 2000 },
     );
-    expect(res.calibrated).toBe(true);
+    expect(res.calibrated).toBe(false);
     expect(res.answers["refunded"]).toEqual({ type: "noul", value: 0.98, valid: true });
     expect(res.answers["route"]!.value).toBe("billing");
     expect(res.answers["route"]!.confidence!).toBeCloseTo(0.8, 9);
@@ -245,7 +246,7 @@ describe("converse response mapping", () => {
     );
     expect(res.answers["refunded"]!.valid).toBe(false);
     // A distribution that does not sum to 1 is invalid, not renormalised:
-    // this route is validated as calibrated, never trusted loosely.
+    // the same per-item rules hold on every route, calibrated or not.
     expect(res.answers["route"]!.valid).toBe(false);
     expect(res.answers["urgency"]!.valid).toBe(true);
   });

@@ -27,12 +27,14 @@
  *   errors    `{message, __type}` bodies are never read: the status alone
  *             decides, as on every other route.
  *
- * The gateway fronts a judgment (decision) model family, so the route is
- * declared calibrated and the answers are validated as such; the preset
- * carries its own threshold profile, and nothing enforces on it before it
- * is tuned from shadow data (`questions.ts`). The state is vault content
- * travelling inside a generated-text request, so it is wrapped with
- * `fenceUntrustedContent`, as on the other chat-shaped route.
+ * The gateway fronts a generative chat model that writes its own
+ * probabilities as text, so the route is declared uncalibrated, exactly
+ * like `llm-emulation`; the answers still clear the same per-item rules
+ * every route validates, and the preset carries its own threshold profile,
+ * with nothing enforcing on it before it is tuned from shadow data
+ * (`questions.ts`). The state is vault content travelling inside a
+ * generated-text request, so it is wrapped with `fenceUntrustedContent`,
+ * as on the other chat-shaped route.
  *
  * Network rules match every adapter: the endpoint is validated with
  * `assertHttpEgressEndpoint`, `redirect: "error"`, the state and questions

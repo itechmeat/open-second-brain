@@ -267,16 +267,20 @@ export const DECISION_MODEL_PRESETS: Readonly<Record<string, DecisionModelPreset
       "the OpenAI-compatible chat endpoint at the configured base URL (a generative model); " +
       "its operator's terms apply",
   },
-  // Calibration decision, recorded: a Converse-protocol gateway fronts a
-  // JUDGMENT model family - that is what an operator points this route at -
-  // so the route is declared calibrated and its answers are validated as
-  // such, by the same per-item rules every decision route applies. The
-  // gateway is the operator's, so the base URL, the pinned model id and the
-  // key variable are configured, and the processor terms are the gateway
-  // operator's. The answers are NOT the hosted Jev 1.13 family's, so the
-  // preset does not borrow `jev-1.13`: it carries its own threshold
-  // profile, and nothing enforces on it until it is tuned from this route's
-  // own shadow data - an `enforce` setting runs as `shadow` until then.
+  // Calibration decision, recorded: a Converse gateway is chat-shaped -
+  // the answers are generated text in which the model wrote its own
+  // probabilities, exactly the grounds `llm-emulation` is declared
+  // uncalibrated on - and nothing in the Converse protocol implies a
+  // calibrated judgment model behind it, so the route is declared
+  // uncalibrated too. The per-item answer rules are identical on every
+  // route; `enforce` additionally needs
+  // `decision_model_allow_uncalibrated`. The gateway is the operator's,
+  // so the base URL, the pinned model id and the key variable are
+  // configured, and the processor terms are the gateway operator's. The
+  // answers are NOT the hosted Jev 1.13 family's, so the preset does not
+  // borrow `jev-1.13`: it carries its own threshold profile, and nothing
+  // enforces on it until it is tuned from this route's own shadow data -
+  // an `enforce` setting runs as `shadow` until then.
   converse: {
     name: "converse",
     adapter: "converse",
@@ -294,7 +298,7 @@ export const DECISION_MODEL_PRESETS: Readonly<Record<string, DecisionModelPreset
     // The gateway's pricing is the operator's; a reported usage still feeds
     // the daily cost gate once a price is configured.
     inputPriceUsdPerMtok: null,
-    calibrated: true,
+    calibrated: false,
     thresholdProfile: "converse",
     licence: null,
     licenceNote: null,

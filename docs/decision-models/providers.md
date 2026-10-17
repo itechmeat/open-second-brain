@@ -190,11 +190,15 @@ user message carry the questions, the reply's JSON schema and the state,
 and the reply's message text holds one JSON object keyed by question id -
 validated item by item by the same rules as every route.
 
-- The route is declared calibrated: a Converse gateway fronts a judgment
-  model family, and its answers are validated as such - probabilities over
-  exactly the question's options, distributions that sum to 1, a reported
-  choice that is the most probable one. An item that fails that validation
-  is invalid; the rest of the batch stands.
+- The route is uncalibrated, like `llm-emulation`: the gateway answers with
+  generated text in which the model wrote its own probabilities, and nothing
+  in the Converse protocol implies a calibrated judgment model behind it.
+  The answers still clear the same per-item validation as every route -
+  probabilities over exactly the question's options, distributions that sum
+  to 1, a reported choice that is the most probable one - and an item that
+  fails that validation is invalid while the rest of the batch stands.
+  Records carry `calibrated: false`, and an `enforce` setting additionally
+  needs `decision_model_allow_uncalibrated: "true"`.
 - It carries its own threshold profile, `converse`, and no use is tuned for
   it yet: an `enforce` setting runs as `shadow` until the profile is tuned
   from this route's own shadow data. It never borrows `jev-1.13`.

@@ -137,8 +137,8 @@ Modes:
 
 Presets (the hosted and `compatible` ones speak `POST <base>/v1/systemone`
 and are calibrated; `vercel-evaluate`, the self-hosted `laya` and `openjev`,
-the uncalibrated `llm-emulation` and the gateway-routed `converse` are
-described with every route's limits,
+and the two uncalibrated chat-shaped routes `llm-emulation` and `converse`
+are described with every route's limits,
 licence and data handling in [providers](decision-models/providers.md)):
 
 | Preset | Base URL | Model id | Default key variable | Input price (USD / M tokens) |

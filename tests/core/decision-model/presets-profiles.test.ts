@@ -352,12 +352,33 @@ describe("the converse preset", () => {
     expect(cfg.status).toBe("active");
     expect(cfg.errors).toEqual([]);
     expect(cfg.adapter).toBe("converse");
-    expect(cfg.calibrated).toBe(true);
+    // A generative model behind the gateway writes its own probabilities,
+    // so the route is uncalibrated exactly like llm-emulation.
+    expect(cfg.calibrated).toBe(false);
     expect(cfg.thresholdProfile).toBe("converse");
     expect(cfg.envKey).toBe("O2B_TEST_CONVERSE_KEY");
     const provider = makeDecisionProvider(cfg, ENV);
     expect(provider).toBeInstanceOf(ConverseDecisionProvider);
-    expect(provider!.calibrated).toBe(true);
+    expect(provider!.calibrated).toBe(false);
+  });
+
+  test("enforce is refused without allow_uncalibrated, and stays shadow once allowed", () => {
+    const enforcing = converseConfig({ decision_model_uses: "rerank:enforce" });
+    const refused = resolveDecisionModelConfig({ env: ENV, config: enforcing, vault: null });
+    expect(refused.status).toBe("invalid");
+    expect(refused.errors.join("\n")).toContain("decision_model_allow_uncalibrated");
+    const allowed = resolveDecisionModelConfig({
+      env: ENV,
+      config: converseConfig({
+        decision_model_uses: "rerank:enforce",
+        decision_model_allow_uncalibrated: "true",
+      }),
+      vault: null,
+    });
+    expect(allowed.status).toBe("active");
+    // No use is tuned for the converse profile yet: enforce runs as shadow.
+    expect(decisionModelModeFor(allowed, "rerank")).toBe("shadow");
+    expect(allowed.shadowOnlyUses).toEqual(["rerank"]);
   });
 
   test("a key is required everywhere; the gateway is bearer-authenticated", () => {
@@ -386,6 +407,7 @@ describe("the converse preset", () => {
       env: ENV,
       config: converseConfig({
         decision_model_uses: "rerank:enforce",
+        decision_model_allow_uncalibrated: "true",
         decision_model_threshold_profile: "jev-1.13",
       }),
       vault: null,
@@ -405,10 +427,11 @@ describe("the converse preset", () => {
     });
     expect(report.status).toBe("active");
     expect(report.adapter).toBe("converse");
+    expect(report.calibrated).toBe(false);
     expect(report.threshold_profile).toBe("converse");
     expect(report.key_required).toBe(true);
     const text = renderDecisionModelCheck(report);
-    expect(text).toContain("adapter converse");
+    expect(text).toContain("adapter converse, uncalibrated");
     expect(text).toContain("threshold profile: converse");
     expect(JSON.stringify(report)).not.toContain(FAKE_DECISION_KEY);
   });

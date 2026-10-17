@@ -226,7 +226,9 @@ const ROUTES: ReadonlyArray<Route> = [
     // The Converse protocol names the model in the path, and the shared
     // config below pins `fake-model-1`.
     path: "/model/fake-model-1/converse",
-    calibrated: true,
+    // A generative model behind the gateway writes its own probabilities:
+    // uncalibrated, like llm-emulation.
+    calibrated: false,
     // A Converse gateway answers with generated text carrying the same
     // answer JSON a decision server returns, wrapped in the Bedrock-style
     // reply shape: `output.message.content` text blocks, a `stopReason`,
