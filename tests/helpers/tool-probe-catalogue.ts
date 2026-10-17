@@ -296,8 +296,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 103;
-export const PROBE_RECIPE_COUNT = 240;
+export const PROBE_ENTRY_COUNT = 104;
+export const PROBE_RECIPE_COUNT = 241;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -363,6 +363,10 @@ export const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
         reason: REASON.noteRevertPlan,
       },
     ],
+  },
+  {
+    name: "brain_write_destinations",
+    calls: [{ args: { until: "2026-05-04" }, reason: REASON.noteWriteLedger }],
   },
   {
     name: "brain_session_grep",

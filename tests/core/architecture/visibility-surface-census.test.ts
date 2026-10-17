@@ -604,8 +604,12 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * `brain_ingest_source`, `brain_search_by_source`, `brain_delete_by_source`
  * and `brain_ingest_batch_plan`; each was already asking a read root at its
  * read site, so all four classify as covered.
+ *
+ * 84 -> 85: brain_write_destinations (actionable-now batch, t_69fec179)
+ * joins beside brain_writes, reach-filtered the same way, and classifies
+ * as covered.
  */
-const MCP_TOOL_POPULATION_SIZE = 84;
+const MCP_TOOL_POPULATION_SIZE = 85;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -716,6 +720,7 @@ describe("visibility surface census", () => {
         "brain_unlinked_mentions",
         "brain_update_note",
         "brain_write_batch",
+        "brain_write_destinations",
         "brain_writes",
         "schema_inspect",
         "second_brain_query",

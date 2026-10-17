@@ -506,6 +506,18 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "`plan_revert`, and `total_matched` counts only what the caller may see.",
   },
   {
+    surface: "brain_write_destinations",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "toolBrainWriteDestinations (query-tools.ts) folds the write ledger into per-destination " +
+      "rows and asks reachView(ctx.vault, contextReach(ctx)) over every row's target before " +
+      "counting, exactly as brain_writes does: at remote reach a destination whose page is " +
+      "reserved against remote reads - or whose file can no longer be read, which fails " +
+      "closed - is dropped from the rows and from total_matched, so a withheld page moves no " +
+      "count. The coverage note states the derived-site gap rather than implying completeness.",
+  },
+  {
     surface: "brain_agent_diff",
     kind: K.mcpTool,
     category: C.covered,

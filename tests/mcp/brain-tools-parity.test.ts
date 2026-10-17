@@ -175,6 +175,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_unlinked_mentions",
   "brain_update_note",
   "brain_write_batch",
+  "brain_write_destinations",
   "brain_write_session",
   "brain_writes",
 ] as const;

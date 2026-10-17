@@ -74,8 +74,12 @@ const AGENT_ARG_NAME = "agent";
  * in - it FILTERS by the identity rather than stamping it, because the
  * identity on a note-write record came from `resolveAgentName` at the
  * moment of the write and no caller can supply one after the fact.
+ *
+ * 25 -> 26: `brain_write_destinations` (actionable-now batch) joins the
+ * same filtering minority - it reads the identity off recorded events and
+ * narrows on it, stamping nothing.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 25;
+const AGENT_ARGUMENT_TOOL_COUNT = 26;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;

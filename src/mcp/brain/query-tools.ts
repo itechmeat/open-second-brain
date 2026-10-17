@@ -28,6 +28,7 @@ import {
   type NoteRevertSelector,
 } from "../../core/brain/notes/revert.ts";
 import { listNoteWrites } from "../../core/brain/notes/write-log.ts";
+import { listWriteDestinations } from "../../core/brain/notes/write-destinations.ts";
 import {
   NOTE_WRITE_OP,
   NOTE_WRITE_OPS,
@@ -473,6 +474,74 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
       line: w.lineNumber,
       message: w.message,
     })),
+  };
+}
+
+/**
+ * Default and maximum rows one `brain_write_destinations` call returns.
+ */
+const BRAIN_WRITE_DESTINATIONS_DEFAULT_LIMIT = 50;
+const BRAIN_WRITE_DESTINATIONS_MAX_LIMIT = 500;
+
+/**
+ * The destination-keyed aggregate over the write ledger (actionable-now
+ * batch, A4): one row per vault-relative target the recorded write
+ * events name, across BOTH the note-write and the write-session kinds,
+ * with the kinds coverage field stating honestly which kinds spoke. The
+ * log never opens the pages it names, so the reach rule is asked per row
+ * here exactly as `brain_writes` asks it: at remote reach a destination
+ * whose page is reserved against remote reads - or unreadable, which
+ * fails closed - is dropped from the rows AND from `total_matched`, so a
+ * withheld page moves no count. Read-only.
+ */
+async function toolBrainWriteDestinations(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const agent = coerceStr(args, "agent", false);
+  const device = coerceStr(args, "device", false);
+  const path = coerceStr(args, "path", false);
+  const since = coerceStr(args, "since", false);
+  const until = coerceStr(args, "until", false);
+  const limit = coerceInt(
+    args,
+    "limit",
+    BRAIN_WRITE_DESTINATIONS_DEFAULT_LIMIT,
+    1,
+    BRAIN_WRITE_DESTINATIONS_MAX_LIMIT,
+  );
+  const offset = cursorOffsetArg("brain_write_destinations", args);
+
+  const result = listWriteDestinations(ctx.vault, {
+    ...(agent !== null ? { agent } : {}),
+    ...(device !== null ? { device } : {}),
+    ...(path !== null ? { path } : {}),
+    ...(since !== null ? { since } : {}),
+    ...(until !== null ? { until } : {}),
+  });
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const rows = view.filtersNothing
+    ? result.destinations
+    : result.destinations.filter((d) => view.visible(d.target));
+  // `total_matched` beside `returned`, and `next_cursor` continuing the
+  // walk, so a truncated answer is legible as one.
+  const page = pageSlice(rows, offset, limit);
+  return {
+    total_matched: page.total,
+    returned: page.items.length,
+    destinations: page.items.map((d) => ({
+      ...d,
+      kinds: [...d.kinds],
+      agents: [...d.agents],
+      devices: [...d.devices],
+    })),
+    coverage_note: result.coverage_note,
+    warnings: result.warnings.map((w) => ({
+      path: w.path,
+      line: w.lineNumber,
+      message: w.message,
+    })),
+    next_cursor: page.next_cursor,
   };
 }
 
@@ -1014,6 +1083,50 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainWrites,
+  },
+  {
+    name: "brain_write_destinations",
+    description:
+      "Aggregate the recorded write ledger by DESTINATION: one row per vault-relative target " +
+      "the note-write and write-session events name, with per-kind counts, the contributing " +
+      "agents and devices, the newest touch, and a kinds coverage field that honestly names " +
+      "which kinds spoke (derived write sites emit neither kind). Filters by agent, device, " +
+      "path and time window over a default 7-day lookback. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent: {
+          type: "string",
+          description: "Exact agent identity that recorded the write.",
+        },
+        device: {
+          type: "string",
+          description: "Exact device id; the empty string is the legacy un-sharded log.",
+        },
+        path: {
+          type: "string",
+          description: "Exact vault-relative target path of the note.",
+        },
+        since: {
+          type: "string",
+          description:
+            "Inclusive lower bound: YYYY-MM-DD or an ISO-8601 UTC timestamp. Default window is the last 7 days.",
+        },
+        until: {
+          type: "string",
+          description: "Inclusive upper bound, same two spellings; a bare date covers its day.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          description: "Maximum destination rows returned. Defaults to 50.",
+        },
+        cursor: CURSOR_SCHEMA,
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainWriteDestinations,
   },
   {
     name: "brain_agent_diff",

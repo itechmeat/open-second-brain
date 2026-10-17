@@ -227,6 +227,8 @@ describe("tool listing", () => {
         // Recorded note writes: who wrote what, and what it replaced
         // (who-wrote-what Task A).
         "brain_writes",
+        // Destination-keyed fold over the same ledger (actionable-now batch).
+        "brain_write_destinations",
         "brain_doctor",
         "brain_health",
         // Unified operator status snapshot (source-pipeline-integrity O3).

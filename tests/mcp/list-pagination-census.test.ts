@@ -82,6 +82,7 @@ const EXPECTED_CURSORED: ReadonlyArray<string> = [
   "brain_session_expand",
   "brain_session_grep",
   "brain_unlinked_mentions",
+  "brain_write_destinations",
   "brain_write_session",
   "brain_writes",
   "second_brain_query",
@@ -164,10 +165,10 @@ describe("list-pagination census", () => {
   });
 
   test("the populations are pinned as equalities", () => {
-    // 24 limit-bearing tools: the card's 23 censused limit-only tools
-    // plus brain_decision, which carried both limit and cursor before
-    // this sweep. A moved number is a finding to name.
-    expect(pagingTools().filter((tool) => tool.hasLimit)).toHaveLength(24);
+    // 24 -> 25: brain_write_destinations (actionable-now batch) carries
+    // limit + cursor beside brain_writes, so the limit-bearing population
+    // grows by one.
+    expect(pagingTools().filter((tool) => tool.hasLimit)).toHaveLength(25);
     // 10 recorded caps: eight Tier-B report/window caps and the two
     // Tier-C ranked-retrieval non-goals.
     expect(Object.keys(REPORT_CAPS)).toHaveLength(10);
