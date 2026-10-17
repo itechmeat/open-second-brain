@@ -1087,11 +1087,10 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_write_destinations",
     description:
-      "Aggregate the recorded write ledger by DESTINATION: one row per vault-relative target " +
-      "the note-write and write-session events name, with per-kind counts, the contributing " +
-      "agents and devices, the newest touch, and a kinds coverage field that honestly names " +
-      "which kinds spoke (derived write sites emit neither kind). Filters by agent, device, " +
-      "path and time window over a default 7-day lookback. Read-only.",
+      "One row per vault-relative destination the note-write and write-session events " +
+      "name, with per-kind counts, contributing agents and devices, newest touch, and a " +
+      "kinds coverage field (derived write sites emit neither kind). Filters: agent, " +
+      "device, path, since/until; default 7-day window. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
