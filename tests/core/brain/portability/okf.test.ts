@@ -145,12 +145,23 @@ describe("buildOkfBundle", () => {
     expect(paths.some((p) => p.startsWith("Brain/inbox"))).toBe(false);
   });
 
-  test("content is deterministic across two builds (only generated_at varies)", () => {
+  test("content is deterministic across two builds (one shared generated instant)", () => {
     note("Notes/B.md", "---\ntitle: B\n---\nsee [[A]].\n");
     note("Notes/A.md", "---\ntitle: A\n---\nleaf.\n");
     const first = buildOkfBundle(vault);
     const second = buildOkfBundle(vault);
-    expect(JSON.stringify(first.files)).toBe(JSON.stringify(second.files));
+    // Every nondeterministic byte in the bundle flows from ONE generated
+    // instant: the manifest's `generated_at` and every page's
+    // `generated.at` (the two normalized fields) share the single bundle
+    // value. Substituting the first build's instant into the second must
+    // therefore make the two builds byte-identical - a timestamp that did
+    // not share would survive the substitution and fail the comparison.
+    const instant = second.manifest.generated_at;
+    const normalized = second.files.map((f) => ({
+      path: f.path,
+      contents: f.contents.split(instant).join(first.manifest.generated_at),
+    }));
+    expect(JSON.stringify(normalized)).toBe(JSON.stringify(first.files));
     expect(JSON.stringify(first.manifest.pages)).toBe(JSON.stringify(second.manifest.pages));
   });
 
@@ -160,6 +171,105 @@ describe("buildOkfBundle", () => {
     const bundle = buildOkfBundle(vault);
     const bundlePaths = bundle.manifest.pages.map((p) => p.bundle_path).toSorted();
     expect(bundlePaths).toEqual(["concepts/Dup-2.md", "concepts/Dup.md"]);
+  });
+});
+
+/**
+ * OKF v0.2 emission (t_ffdb4fac): the bundle-root index declares
+ * `okf_version: "0.2"` (the only frontmatter an index file may carry),
+ * every page frontmatter carries the spec's per-concept keys -
+ * `sources:` translated from citations with a REQUIRED `resource`, and
+ * `generated: {by, at}` sharing the one bundle instant - and the open
+ * status vocabulary lands on the spec's closed draft|stable|deprecated
+ * enum conservatively.
+ */
+describe("v0.2 emission", () => {
+  test("the bundle-root index declares okf_version and the manifest keeps the dialect schema", () => {
+    note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nbody.\n");
+    const bundle = buildOkfBundle(vault);
+    const index = fileOf(bundle.files, "index.md");
+    expect(index.startsWith('---\nokf_version: "0.2"\n---\n')).toBe(true);
+    // The dialect manifest field is untouched: `schema` stays "1".
+    expect(bundle.manifest.schema).toBe(OKF_SCHEMA_VERSION);
+  });
+
+  test("every page carries a generated block sharing the bundle instant", () => {
+    note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nsee [[Beta]].\n");
+    note("Notes/Beta.md", "---\ntitle: Beta\n---\nleaf.\n");
+    const bundle = buildOkfBundle(vault);
+    const ats = bundle.manifest.pages.map((p) => {
+      const page = fileOf(bundle.files, p.bundle_path);
+      const m = page.match(/generated: \{by: open-second-brain\/\S+, at: "([^"]+)"\}/);
+      expect(m).not.toBeNull();
+      return m![1]!;
+    });
+    expect(ats.length).toBe(bundle.manifest.pages.length);
+    expect(new Set(ats).size).toBe(1);
+    expect(ats[0]).toBe(bundle.manifest.generated_at);
+  });
+
+  test("citations translate into sources with a required resource", () => {
+    note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nsee [[Beta]], [[Deep/Gamma]].\n");
+    note("Notes/Beta.md", "---\ntitle: Beta\n---\nleaf.\n");
+    note("Deep/Gamma.md", "---\ntitle: Gamma\n---\nleaf.\n");
+    note("Notes/Url.md", "---\ntitle: Url\n---\ncited [[https://example.com/paper]].\n");
+    const bundle = buildOkfBundle(vault);
+    const alpha = fileOf(bundle.files, "concepts/Alpha.md");
+    expect(alpha).toContain("sources:");
+    expect(alpha).toContain("- {resource: concepts/Beta.md, id: Beta}");
+    expect(alpha).toContain("- {resource: concepts/Gamma.md, id: Gamma}");
+    // A URL target is carried as-is; the manifest mirrors the entries.
+    const url = fileOf(bundle.files, "concepts/Url.md");
+    expect(url).toContain("- {resource: https://example.com/paper}");
+    const alphaEntry = bundle.manifest.pages.find((p) => p.path === "Notes/Alpha.md");
+    expect(alphaEntry?.sources).toEqual([
+      { resource: "concepts/Beta.md", id: "Beta" },
+      { resource: "concepts/Gamma.md", id: "Gamma" },
+    ]);
+  });
+
+  test("a dangling citation is dropped, not guessed", () => {
+    note(
+      "Notes/Lonely.md",
+      "---\ntitle: Lonely\n---\nsee [[Ghost]] and [[https://example.com/real]].\n",
+    );
+    const bundle = buildOkfBundle(vault);
+    const page = fileOf(bundle.files, "concepts/Lonely.md");
+    // The URL source survives; the unresolvable wikilink never becomes a
+    // source entry (the body keeps its verbatim link either way).
+    expect(page).toContain("- {resource: https://example.com/real}");
+    expect(page).not.toContain("{resource: Ghost");
+    expect(page).not.toContain("id: Ghost");
+  });
+
+  test("an ambiguous basename citation is dropped rather than guessed", () => {
+    note("A/Dup.md", "---\ntitle: one\n---\nx\n");
+    note("B/Dup.md", "---\ntitle: two\n---\ny\n");
+    note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[Dup]].\n");
+    const bundle = buildOkfBundle(vault);
+    const citer = fileOf(bundle.files, "concepts/Citer.md");
+    expect(citer).not.toContain("sources:");
+    expect(citer).not.toContain("resource:");
+  });
+
+  test("lifecycle maps conservatively onto draft | stable | deprecated", () => {
+    note("Notes/Done.md", "---\ntitle: Done\nstatus: done\n---\nx\n");
+    note("Notes/Archived.md", "---\ntitle: Archived\nstatus: archived\n---\nx\n");
+    note("Notes/Draft.md", "---\ntitle: Draft\nstatus: draft\n---\nx\n");
+    note("Notes/Plain.md", "---\ntitle: Plain\n---\nx\n");
+    const bundle = buildOkfBundle(vault);
+    const pageOf = (rel: string): string => fileOf(bundle.files, `concepts/${rel}.md`);
+    // Completion is never mapped to deprecation.
+    expect(pageOf("Done")).toContain("status: stable");
+    expect(pageOf("Done")).not.toContain("status: done");
+    expect(pageOf("Archived")).toContain("status: deprecated");
+    expect(pageOf("Draft")).toContain("status: draft");
+    expect(pageOf("Plain")).toContain("status: stable");
+    const byPath = new Map(bundle.manifest.pages.map((p) => [p.path, p]));
+    expect(byPath.get("Notes/Done.md")?.status).toBe("stable");
+    expect(byPath.get("Notes/Archived.md")?.status).toBe("deprecated");
+    expect(byPath.get("Notes/Draft.md")?.status).toBe("draft");
+    expect(byPath.get("Notes/Plain.md")?.status).toBe("stable");
   });
 });
 

@@ -21,9 +21,10 @@
  * Page class is derived *structurally* from the frontmatter `kind:`
  * field — never from natural-language heuristics — so the split is
  * deterministic and language-agnostic. Each bundle page file carries the
- * page's frontmatter and body **verbatim**, so a re-import is lossless;
+ * page's frontmatter and body **verbatim** plus the OKF v0.2 derived
+ * keys (`status`, `sources`, `generated` — recomputed on every export);
  * the manifest carries the *derived* standard fields (kind, citations,
- * freshness) computed from current page state.
+ * status, sources, freshness) computed from current page state.
  *
  * Re-export honesty: when OSB imported a page from a *foreign* producer,
  * the page keeps that producer's raw type value (`okf_type:`) and any
@@ -75,9 +76,22 @@ import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { KNOWLEDGE_PACK_FIELD, KNOWLEDGE_PACK_SHA_FIELD } from "./pack-stamp.ts";
+import { OPEN_SECOND_BRAIN_VERSION } from "../../version.ts";
 
 export const OKF_SCHEMA_VERSION = "1";
 export const OKF_PRODUCER = "open-second-brain";
+
+/**
+ * The OKF spec version this export emits, declared as
+ * `okf_version: "0.2"` in the bundle-root `index.md` frontmatter (a MAY
+ * per the spec, and the only frontmatter an index file may carry). This
+ * is the INTERCHANGE version, not the manifest dialect: Open Second
+ * Brain's own `okf.json` keeps its `schema: "1"` field beside it.
+ */
+export const OKF_VERSION = "0.2";
+
+/** The OKF v0.2 `generated.by` actor string for pages this system exports. */
+const OKF_GENERATED_BY = `${OKF_PRODUCER}/${OPEN_SECOND_BRAIN_VERSION}`;
 
 /**
  * Bundle-relative filename of the machine-readable manifest. Named
@@ -122,6 +136,28 @@ const FRESHNESS_FIELDS = ["updated_at", "updated"] as const;
 
 // ----- Export ---------------------------------------------------------------
 
+/**
+ * The OKF v0.2 concept lifecycle enum - the spec's CLOSED status
+ * vocabulary (`draft | stable | deprecated`; an absent status means
+ * stable). Open Second Brain's own page statuses land on it through the
+ * conservative map in {@link okfStatusOf}.
+ */
+export type OkfStatus = "draft" | "stable" | "deprecated";
+
+/** One OKF v0.2 per-page source (a frontmatter `sources:` entry). */
+export interface OkfSource {
+  /**
+   * REQUIRED per the spec: a path or URL identifying the source. A
+   * citation that resolves to neither is dropped rather than guessed.
+   */
+  readonly resource: string;
+  /**
+   * Optional stable key. Carried when the citation resolves to a bundle
+   * page, whose id is that stable key.
+   */
+  readonly id?: string;
+}
+
 /** A page collected for OKF export, with derived + preserved metadata. */
 export interface OkfPage {
   /** Stable id (the file basename stem). */
@@ -136,6 +172,8 @@ export interface OkfPage {
   readonly kind: string;
   /** Sorted-unique body wikilink + typed-relation targets. */
   readonly citations: ReadonlyArray<string>;
+  /** Mapped OKF v0.2 lifecycle (`draft` | `stable` | `deprecated`). */
+  readonly status: OkfStatus;
   /** Frontmatter `aliases`, else empty. */
   readonly aliases: ReadonlyArray<string>;
   /** Frontmatter `updated_at`/`updated`, else file mtime (ISO second). */
@@ -157,6 +195,10 @@ export interface OkfManifestPage {
   readonly bundle_path: string;
   readonly kind: string;
   readonly citations: ReadonlyArray<string>;
+  /** Mapped OKF v0.2 lifecycle (`draft` | `stable` | `deprecated`). */
+  readonly status: OkfStatus;
+  /** OKF v0.2 per-page sources translated from `citations`. */
+  readonly sources: ReadonlyArray<OkfSource>;
   readonly aliases: ReadonlyArray<string>;
   readonly freshness: string | null;
   readonly foreign_type: string | null;
@@ -215,6 +257,41 @@ function collectCitations(meta: FrontmatterMap, body: string): string[] {
   }
   for (const edge of extractFrontmatterRelations(meta)) targets.push(edge.target);
   return [...new Set(targets.filter((v) => v.length > 0))].toSorted();
+}
+
+/**
+ * Frontmatter `status:` values that mean "no longer current" and map to
+ * the OKF `deprecated` value. Deliberately NARROW: the OKF enum has no
+ * room for nuance, and a conservative producer prefers understating.
+ */
+const OKF_DEPRECATED_STATUSES: ReadonlySet<string> = new Set([
+  "deprecated",
+  "retired",
+  "superseded",
+  "archived",
+  "terminal",
+]);
+
+/**
+ * Map a page onto the OKF v0.2 concept lifecycle, which admits ONLY
+ * `draft | stable | deprecated`.
+ *
+ * PINNED SOURCE FIELD: the page's frontmatter `status:` value - the
+ * operator-declared page state - and nothing else. The system-managed
+ * `_lifecycle` axis is not consulted: its `verified`/`disputed` values
+ * have no OKF counterpart, and a conservative map must not guess one.
+ * Completion states (`done` / `closed` / `resolved`) map to `stable` -
+ * completion is not deprecation, never the reverse - and a status the
+ * vocabulary does not name (including no status at all) lands on
+ * `stable`, which is also the OKF default for an absent status.
+ */
+function okfStatusOf(meta: FrontmatterMap): OkfStatus {
+  const raw = stringField(meta, "status");
+  if (raw === null) return "stable";
+  const status = raw.trim().toLowerCase();
+  if (status === "draft") return "draft";
+  if (OKF_DEPRECATED_STATUSES.has(status)) return "deprecated";
+  return "stable";
 }
 
 function freshnessOf(meta: FrontmatterMap, absPath: string): string | null {
@@ -288,6 +365,7 @@ export function collectOkfPages(vault: string): ReadonlyArray<OkfPage> {
       bundle_path: bundlePath,
       kind,
       citations: collectCitations(meta, body),
+      status: okfStatusOf(meta),
       aliases: aliasField(meta),
       freshness: freshnessOf(meta, abs),
       foreign_type: stringField(meta, FOREIGN_TYPE_KEY),
@@ -381,6 +459,12 @@ function buildLog(vault: string): { contents: string; days: number } {
 
 function renderIndex(manifest: OkfManifest): string {
   const lines: string[] = [
+    "---",
+    // OKF v0.2's version declaration. Per the spec it is a MAY in the
+    // bundle-root index, and the ONLY frontmatter an index file carries.
+    `okf_version: "${OKF_VERSION}"`,
+    "---",
+    "",
     `# ${manifest.vault_basename} — Open Knowledge Format bundle`,
     "",
     `> Portable knowledge bundle produced by \`${manifest.producer}\`.`,
@@ -417,11 +501,128 @@ export function renderOkfManifest(manifest: OkfManifest): string {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
+/** A citation target that names an absolute resource, not a vault page. */
+const URL_TARGET_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+
+/**
+ * Build the resolver that turns citation targets into OKF v0.2
+ * `sources:` entries. It keys on the page walk's own bundle_path
+ * assignment, so a resolved source names exactly the file the bundle
+ * wrote for the cited page. Resolution order:
+ *
+ * 1. a URL target is carried as-is;
+ * 2. a path-shaped target must name a collected page (with or without
+ *    the `.md` suffix) - otherwise it is dropped, never guessed;
+ * 3. a bare basename resolves only when EXACTLY ONE page carries that
+ *    stem: the colliding-basename case (two `Dup.md` pages) is dropped
+ *    rather than guessed.
+ *
+ * Anything else is dangling and dropped - consumers must tolerate
+ * broken links, and a wrong source is worse than no source.
+ */
+function sourceResolver(pages: ReadonlyArray<OkfPage>): (citation: string) => OkfSource | null {
+  const byPath = new Map<string, OkfPage>();
+  const byStem = new Map<string, OkfPage[]>();
+  for (const p of pages) {
+    byPath.set(p.path, p);
+    const stems = byStem.get(p.id);
+    if (stems === undefined) byStem.set(p.id, [p]);
+    else stems.push(p);
+  }
+  return (citation: string): OkfSource | null => {
+    if (URL_TARGET_RE.test(citation)) return { resource: citation };
+    if (citation.includes("/")) {
+      const direct = byPath.get(citation) ?? byPath.get(`${citation}.md`);
+      return direct === undefined ? null : { resource: direct.bundle_path, id: direct.id };
+    }
+    const stems = byStem.get(citation);
+    if (stems === undefined || stems.length !== 1) return null;
+    return { resource: stems[0]!.bundle_path, id: stems[0]!.id };
+  };
+}
+
+/** Translate a page's citations into de-duplicated source entries. */
+function translateSources(
+  page: OkfPage,
+  resolveSource: (citation: string) => OkfSource | null,
+): OkfSource[] {
+  const out: OkfSource[] = [];
+  const seen = new Set<string>();
+  for (const citation of page.citations) {
+    const source = resolveSource(citation);
+    if (source === null || seen.has(source.resource)) continue;
+    seen.add(source.resource);
+    out.push(source);
+  }
+  return out;
+}
+
+/**
+ * Render one scalar inside a YAML flow mapping (`{resource: …, id: …}`):
+ * bare when the value cannot break flow context, double-quoted otherwise
+ * (same escaping `formatFrontmatter` applies to block scalars).
+ */
+function okfFlowScalar(value: string): string {
+  if (
+    value.length > 0 &&
+    value === value.trim() &&
+    !/[,[\]{}#]/.test(value) &&
+    !value.includes(": ")
+  ) {
+    return value;
+  }
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Serialise one bundle page file: the page's own frontmatter and body
+ * verbatim, plus the OKF v0.2 per-page keys (`status`, `sources`,
+ * `generated`) as DERIVED fields. The derived keys are recomputed from
+ * current page state on every export and never carried through from a
+ * previous bundle, so re-exporting an imported page re-derives them
+ * instead of stacking a foreign bundle's values a second time.
+ *
+ * The derived block is rendered by hand in YAML flow style because the
+ * shared frontmatter writer emits scalars and inline arrays only - and
+ * the flow shapes chosen (one line per source entry, one line for
+ * `generated`) keep the page parseable by consumers with full YAML
+ * parsers while never producing a line this system's own scanner would
+ * misread as a top-level key.
+ */
+function renderOkfPageFile(
+  page: OkfPage,
+  sources: ReadonlyArray<OkfSource>,
+  generatedAt: string,
+): string {
+  const carried: FrontmatterMap = {};
+  for (const [key, value] of Object.entries(page.frontmatter)) {
+    if (key === "status" || key === "sources" || key === "generated") continue;
+    carried[key] = value;
+  }
+  // formatFrontmatter with an empty body is exactly "---\n<keys>---\n";
+  // drop the closing fence, append the derived block, re-close.
+  let out = formatFrontmatter(carried, "").slice(0, -"---\n".length);
+  out += `status: ${page.status}\n`;
+  if (sources.length > 0) {
+    out += "sources:\n";
+    for (const source of sources) {
+      out += `  - {resource: ${okfFlowScalar(source.resource)}`;
+      if (source.id !== undefined) out += `, id: ${okfFlowScalar(source.id)}`;
+      out += "}\n";
+    }
+  }
+  out += `generated: {by: ${okfFlowScalar(OKF_GENERATED_BY)}, at: "${generatedAt}"}\n`;
+  out += "---\n";
+  if (page.body.length > 0) out += `\n${page.body}\n`;
+  return out;
+}
+
 /**
  * Build an OKF bundle write-plan from the vault. Pure and read-only:
  * returns the manifest plus every file to write. Content is
- * deterministic across runs (pages and log days are sorted); only
- * `manifest.generated_at` varies.
+ * deterministic across runs (pages and log days are sorted); the only
+ * value that varies is the single shared generated instant, which the
+ * manifest's `generated_at` and every page's `generated.at` carry.
  */
 export function buildOkfBundle(vault: string): OkfBundle {
   return assembleOkfBundle(vault, collectOkfPages(vault), buildLog(vault));
@@ -443,22 +644,30 @@ function assembleOkfBundle(
   pages: ReadonlyArray<OkfPage>,
   log: { contents: string; days: number } | null,
 ): OkfBundle {
+  // ONE instant for the whole bundle: the manifest's `generated_at` and
+  // every page's `generated.at` share it, so whole-bundle byte equality
+  // modulo that single value stays the determinism contract.
+  const generatedAt = isoSecond();
+  const resolveSource = sourceResolver(pages);
+  const derived = pages.map((p) => ({ page: p, sources: translateSources(p, resolveSource) }));
   const manifest: OkfManifest = {
     schema: OKF_SCHEMA_VERSION,
     producer: OKF_PRODUCER,
-    generated_at: isoSecond(),
+    generated_at: generatedAt,
     vault_basename: vaultDisplayName(vault),
-    pages: pages.map((p) => ({
-      id: p.id,
-      path: p.path,
-      class: p.cls,
-      bundle_path: p.bundle_path,
-      kind: p.kind,
-      citations: p.citations,
-      aliases: p.aliases,
-      freshness: p.freshness,
-      foreign_type: p.foreign_type,
-      producer_meta: p.producer_meta,
+    pages: derived.map(({ page, sources }) => ({
+      id: page.id,
+      path: page.path,
+      class: page.cls,
+      bundle_path: page.bundle_path,
+      kind: page.kind,
+      citations: page.citations,
+      status: page.status,
+      sources,
+      aliases: page.aliases,
+      freshness: page.freshness,
+      foreign_type: page.foreign_type,
+      producer_meta: page.producer_meta,
     })),
     log_days: log?.days ?? 0,
   };
@@ -468,8 +677,8 @@ function assembleOkfBundle(
     { path: "index.md", contents: renderIndex(manifest) },
   ];
   if (log !== null) files.push({ path: "log.md", contents: log.contents });
-  for (const p of pages) {
-    files.push({ path: p.bundle_path, contents: formatFrontmatter(p.frontmatter, p.body) });
+  for (const { page, sources } of derived) {
+    files.push({ path: page.bundle_path, contents: renderOkfPageFile(page, sources, generatedAt) });
   }
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { manifest, files };
@@ -536,6 +745,15 @@ interface ManifestInput {
   readonly pages?: unknown;
 }
 
+/** Parse a manifest `sources` entry; entries without a resource are dropped. */
+function asOkfSource(value: unknown): OkfSource | null {
+  if (value === null || typeof value !== "object") return null;
+  const resource = (value as Record<string, unknown>)["resource"];
+  if (typeof resource !== "string" || resource.length === 0) return null;
+  const id = (value as Record<string, unknown>)["id"];
+  return typeof id === "string" && id.length > 0 ? { resource, id } : { resource };
+}
+
 function asManifestPage(value: unknown): OkfManifestPage | null {
   if (value === null || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
@@ -543,6 +761,7 @@ function asManifestPage(value: unknown): OkfManifestPage | null {
   const cls = v["class"];
   const klass: OkfPageClass =
     cls === "query" || cls === "reference" || cls === "concept" ? cls : "concept";
+  const status = v["status"];
   return {
     id: typeof v["id"] === "string" ? v["id"] : stem(v["path"]),
     path: v["path"],
@@ -550,6 +769,10 @@ function asManifestPage(value: unknown): OkfManifestPage | null {
     bundle_path: v["bundle_path"],
     kind: typeof v["kind"] === "string" ? v["kind"] : DEFAULT_KIND,
     citations: Array.isArray(v["citations"]) ? (v["citations"] as string[]) : [],
+    status: status === "draft" || status === "deprecated" ? status : "stable",
+    sources: Array.isArray(v["sources"])
+      ? v["sources"].map(asOkfSource).filter((s): s is OkfSource => s !== null)
+      : [],
     aliases: Array.isArray(v["aliases"]) ? (v["aliases"] as string[]) : [],
     freshness: typeof v["freshness"] === "string" ? v["freshness"] : null,
     foreign_type: typeof v["foreign_type"] === "string" ? v["foreign_type"] : null,
