@@ -1272,10 +1272,13 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
   if (record.suppressedFrom === null) {
     // Never default to pending: that would invent a lifecycle position
     // and, for a formerly dismissed finding, silently restart its
-    // cooldown from nothing.
+    // cooldown from nothing. The remedy is the hand fix, and only the
+    // hand fix - this record is terminal, so every transition including
+    // dismiss is refused and advertising one would strand the operator.
     throw new Error(
       `trigger ${record.id} is suppressed but carries no suppressed_from; ` +
-        "restore the field or dismiss the trigger instead",
+        "restore the field by hand - set suppressed_from to the status the suppression interrupted, " +
+        "or edit the status line off suppressed directly",
     );
   }
   const restored = record.suppressedFrom;
@@ -1357,10 +1360,14 @@ function unsnooze(record: TriggerRecord, now: Date): TriggerRecord {
   }
   if (record.snoozedFrom === null) {
     // Never default to pending: that would invent a lifecycle position
-    // the record does not carry.
+    // the record does not carry. The remedy is the hand fix, and only
+    // the hand fix - this record is terminal, so every transition
+    // including dismiss is refused and advertising one would strand the
+    // operator.
     throw new Error(
       `trigger ${record.id} is snoozed but carries no snoozed_from; ` +
-        "restore the field or dismiss the trigger instead",
+        "restore the field by hand - set snoozed_from to the status the snooze interrupted, " +
+        "or edit the status line off snoozed directly",
     );
   }
   const restored = record.snoozedFrom;

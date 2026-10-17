@@ -619,7 +619,18 @@ test("unsnoozing a hand-edited snoozed record with no prior status throws naming
   const path = created[0]!.path;
   transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 3 });
   rewriteLine(path, /^snoozed_from: .*$/mu, "");
-  expect(() => transitionTrigger(vault, id, "unsnooze", { now: NOW })).toThrow("snoozed_from");
+  let message = "";
+  try {
+    transitionTrigger(vault, id, "unsnooze", { now: NOW });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("snoozed_from");
+  // The remedy must be reachable: `dismiss` is refused on a snoozed
+  // record (terminal), so advertising it strands the operator. The way
+  // out of a hand-edited Markdown record is the hand fix it names.
+  expect(message).not.toMatch(/\bdismiss\b/i);
+  expect(message).toContain("by hand");
 });
 
 test("suppressing a snoozed trigger and unsuppressing restores the snooze with its window still armed", () => {
@@ -757,7 +768,18 @@ test("a hand-edited suppressed record with no prior status throws naming the fie
   const path = created[0]!.path;
   transitionTrigger(vault, id, "suppress", { now: NOW });
   writeFileSync(path, readFileSync(path, "utf8").replace(/^suppressed_from: .*$\n/mu, ""), "utf8");
-  expect(() => transitionTrigger(vault, id, "unsuppress", { now: NOW })).toThrow("suppressed_from");
+  let message = "";
+  try {
+    transitionTrigger(vault, id, "unsuppress", { now: NOW });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("suppressed_from");
+  // Same reachable-remedy rule as the unsnooze refusal: dismiss is
+  // refused on a suppressed record (terminal), so the refusal must point
+  // at the hand fix instead.
+  expect(message).not.toMatch(/\bdismiss\b/i);
+  expect(message).toContain("by hand");
 });
 
 test("a suppressed trigger is hidden from the brief and stays out of it forever", () => {
