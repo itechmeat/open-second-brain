@@ -305,6 +305,28 @@ export const DECISION_MODEL_PRESET_NAMES: ReadonlyArray<string> = Object.freeze(
   Object.keys(DECISION_MODEL_PRESETS),
 );
 
+/**
+ * The adapters none of whose presets publish an input price - the
+ * chat-shaped routes (`llm-emulation`, `converse`), where the gateway
+ * fronts an operator-chosen model family, so the repo cannot name a
+ * price and the daily cost gate records nothing for the route's calls
+ * until the operator sets one. Derived from the preset table: an adapter
+ * is here when every preset that speaks it carries
+ * `inputPriceUsdPerMtok: null`, so a new route of the same shape joins
+ * the unpriced-route warning of `check` without a name list to extend. A
+ * family with any published price (`systemone`, `vercel-evaluate`) stays
+ * out: its wire format may report a per-request cost, so an unpriced
+ * preset of it keeps the generic unknown-price warning.
+ */
+export const DECISION_MODEL_UNPRICED_ADAPTERS: ReadonlyArray<DecisionModelAdapter> = Object.freeze(
+  [...new Set(Object.values(DECISION_MODEL_PRESETS).map((preset) => preset.adapter))].filter(
+    (adapter) =>
+      Object.values(DECISION_MODEL_PRESETS)
+        .filter((preset) => preset.adapter === adapter)
+        .every((preset) => preset.inputPriceUsdPerMtok === null),
+  ),
+);
+
 export function decisionModelPreset(name: string): DecisionModelPreset | null {
   return Object.hasOwn(DECISION_MODEL_PRESETS, name) ? DECISION_MODEL_PRESETS[name]! : null;
 }

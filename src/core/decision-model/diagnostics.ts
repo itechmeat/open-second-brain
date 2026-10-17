@@ -13,6 +13,7 @@ import { CHOICE_MAX_OPTIONS } from "./answers.ts";
 import { DECISION_MODEL_USES, isDecisionModelUse, type DecisionModelUse } from "./contract.ts";
 import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
 import { makeDecisionProvider } from "./provider.ts";
+import { DECISION_MODEL_UNPRICED_ADAPTERS } from "./presets.ts";
 import type { DecisionProvider } from "./contract.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
 import {
@@ -214,14 +215,26 @@ export async function buildDecisionModelCheck(
   if (cfg.enabled && cfg.keyRequired === false && !cfg.keyPresent) {
     notes.push("no key is set; requests to this loopback server carry no authorization header");
   }
-  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && cfg.adapter === "llm-emulation") {
+  // The routes whose presets publish no price (see
+  // DECISION_MODEL_UNPRICED_ADAPTERS): until the operator sets one, the
+  // gate records nothing for the route's calls - a stronger under-count
+  // than the generic unknown-price warning below describes.
+  // `llm-emulation` keeps its exact warning: it is the one route whose
+  // config reads an output price, and its endpoint may volunteer a cost.
+  // `converse` never reports a cost (a gateway cost field is not
+  // trusted) and reads no output price.
+  const unpricedRoute = DECISION_MODEL_UNPRICED_ADAPTERS.includes(cfg.adapter);
+  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && unpricedRoute) {
     warnings.push(
-      "no prices are set for llm-emulation, so the daily cost gate counts only requests whose " +
-        "route reports a cost; set decision_model_input_price_usd_per_mtok and " +
-        "decision_model_output_price_usd_per_mtok",
+      cfg.adapter === "converse"
+        ? "no price is set for converse, so the daily cost gate counts none of its calls " +
+            "(the gateway's cost field is not trusted); set decision_model_input_price_usd_per_mtok"
+        : "no prices are set for llm-emulation, so the daily cost gate counts only requests whose " +
+            "route reports a cost; set decision_model_input_price_usd_per_mtok and " +
+            "decision_model_output_price_usd_per_mtok",
     );
   }
-  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && cfg.adapter !== "llm-emulation") {
+  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && !unpricedRoute) {
     warnings.push(
       "no input price is known for this provider, so the daily cost gate applies only to " +
         "routes that report cost; set decision_model_input_price_usd_per_mtok",

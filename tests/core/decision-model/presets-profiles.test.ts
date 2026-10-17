@@ -299,6 +299,32 @@ describe("check and doctor for the new presets", () => {
     expect(JSON.stringify(report)).not.toContain(FAKE_DECISION_KEY);
   });
 
+  test("check warns that an unpriced llm-emulation under-counts the daily cost gate", async () => {
+    const report = await buildDecisionModelCheck({
+      config: preset("llm-emulation", {
+        decision_model_base_url: "https://api.example.com/v1",
+        decision_model_id: "chat-1",
+        decision_model_env_key: "O2B_TEST_EMU_KEY",
+      }),
+      vault: null,
+      env: { O2B_TEST_EMU_KEY: FAKE_DECISION_KEY },
+    });
+    expect(report.warnings.join("\n")).toContain("no prices are set for llm-emulation");
+    // Priced, the unpriced-route warning goes.
+    const priced = await buildDecisionModelCheck({
+      config: preset("llm-emulation", {
+        decision_model_base_url: "https://api.example.com/v1",
+        decision_model_id: "chat-1",
+        decision_model_env_key: "O2B_TEST_EMU_KEY",
+        decision_model_input_price_usd_per_mtok: "1",
+        decision_model_output_price_usd_per_mtok: "4",
+      }),
+      vault: null,
+      env: { O2B_TEST_EMU_KEY: FAKE_DECISION_KEY },
+    });
+    expect(priced.warnings.join("\n")).not.toContain("no prices are set for llm-emulation");
+  });
+
   test("doctor passes a keyless loopback server without claiming a key", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "osb-dm-doctor-"));
     try {
@@ -385,6 +411,23 @@ describe("the converse preset", () => {
     expect(text).toContain("adapter converse");
     expect(text).toContain("threshold profile: converse");
     expect(JSON.stringify(report)).not.toContain(FAKE_DECISION_KEY);
+  });
+
+  test("check warns that the unpriced converse route is invisible to the daily cost gate", async () => {
+    const report = await buildDecisionModelCheck({
+      config: converseConfig(),
+      vault: null,
+      env: ENV,
+    });
+    expect(report.warnings.join("\n")).toContain("no price is set for converse");
+    expect(report.warnings.join("\n")).toContain("set decision_model_input_price_usd_per_mtok");
+    // Priced, the unpriced-route warning goes.
+    const priced = await buildDecisionModelCheck({
+      config: converseConfig({ decision_model_input_price_usd_per_mtok: "0.05" }),
+      vault: null,
+      env: ENV,
+    });
+    expect(priced.warnings.join("\n")).not.toContain("no price is set for converse");
   });
 
   test("doctor resolves the preset and names the key variable it waits for", async () => {

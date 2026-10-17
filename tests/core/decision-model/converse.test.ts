@@ -6,16 +6,24 @@
  * the wired key literal, and the refusals that must send nothing.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
+import { resolveDecisionModelConfig } from "../../../src/core/decision-model/config.ts";
 import { ConverseDecisionProvider } from "../../../src/core/decision-model/converse.ts";
 import type { DecisionProviderError } from "../../../src/core/decision-model/contract.ts";
+import {
+  listDecisionModelCalls,
+  resetDecisionSpendCache,
+  todaySpendUsd,
+} from "../../../src/core/decision-model/record.ts";
+import { runDecision } from "../../../src/core/decision-model/run.ts";
 import {
   FAKE_DECISION_KEY,
   FAKE_VENDOR_KEY,
   fakeCredential,
 } from "../../helpers/fake-credentials.ts";
 import { startFakeSystemOne, type FakeSystemOne } from "../../helpers/fake-decision-provider.ts";
+import { createTempVault } from "../../helpers/search-fixtures.ts";
 import { REDACTION_PLACEHOLDER } from "../../../src/core/redactor.ts";
 
 const KEY_VAR = "O2B_TEST_CONVERSE_KEY";
@@ -346,5 +354,65 @@ describe("converse ping", () => {
     const bad = await provider().ping();
     expect(bad.ok).toBe(false);
     expect(bad.reason).toBe("invalid_reply");
+  });
+});
+
+describe("converse records and the daily cost gate", () => {
+  const ENV = { [KEY_VAR]: FAKE_DECISION_KEY } as NodeJS.ProcessEnv;
+  let vault: string;
+  let cleanup: () => void;
+  beforeEach(() => {
+    ({ vault, cleanup } = createTempVault("dm-converse-record"));
+    resetDecisionSpendCache();
+  });
+  afterEach(() => cleanup());
+
+  function routeConfig(extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      decision_model_enabled: "true",
+      decision_model_provider: "converse",
+      decision_model_base_url: server.url,
+      decision_model_id: "gateway-jev-1",
+      decision_model_env_key: KEY_VAR,
+      decision_model_uses: "rerank:shadow",
+      ...extra,
+    };
+  }
+
+  async function runOnce(extra: Record<string, string> = {}): Promise<Record<string, unknown>> {
+    server.setReply(() =>
+      converseReply(
+        { pick: { type: "noul", noul: 0.9 } },
+        { usage: { inputTokens: 1000, outputTokens: 200 } },
+      ),
+    );
+    const cfg = resolveDecisionModelConfig({ env: ENV, config: routeConfig(extra), vault });
+    const result = await runDecision(
+      "rerank",
+      () => ({ kind: "ok", state: { text: "alpha" }, candidateCount: 1, context: null }),
+      () => ({ pick: { type: "noul", instructions: "pick?" } }),
+      { config: cfg, env: ENV },
+    );
+    expect(result.status).toBe("ok");
+    const records = listDecisionModelCalls(vault);
+    return records[records.length - 1]!.payload;
+  }
+
+  test("an unpriced call records cost_source unknown and the gate counts nothing", async () => {
+    const payload = await runOnce();
+    expect(payload["provider"]).toBe("converse");
+    expect(payload["input_tokens"]).toBe(1000);
+    // The same price-unknown marker as llm-emulation: no cost_usd, so the
+    // daily gate under-counts until the operator prices the route.
+    expect(payload["cost_source"]).toBe("unknown");
+    expect(payload["cost_usd"]).toBeUndefined();
+    expect(todaySpendUsd(vault)).toBe(0);
+  });
+
+  test("with an input price the cost is estimated from input tokens and counted", async () => {
+    const payload = await runOnce({ decision_model_input_price_usd_per_mtok: "1" });
+    expect(payload["cost_source"]).toBe("estimated");
+    expect(payload["cost_usd"] as number).toBeCloseTo(0.001, 12);
+    expect(todaySpendUsd(vault)).toBeCloseTo(0.001, 12);
   });
 });
