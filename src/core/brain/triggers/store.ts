@@ -930,6 +930,41 @@ function sourceArtifactsChanged(
   return [...new Set(current)].some((artifact) => !covered.has(artifact));
 }
 
+/**
+ * The cooldown key a batch sighting resolves to, given what is persisted.
+ *
+ * One kind's key is derived from an OBSERVED SET rather than a fixed
+ * identity: `batch_inflation` names the burst's first and last observed
+ * member, so a scan at narrower reach - which sees a subset of the
+ * burst's records - derives a different key for the SAME finding. The
+ * key must be reach-stable, and the only reach-stable quantity available
+ * to the narrowed scan is the persisted record itself: when a batch
+ * candidate grounds itself entirely in artifacts a persisted batch record
+ * already covers - a narrowed sighting of the same burst - it resolves to
+ * THAT record's cooldown key, and the ordinary movement gate decides from
+ * there. A sighting that introduces an artifact the record never saw is
+ * movement and keeps its own key; a record with no persisted grounding
+ * covers nothing, the same neutral reading
+ * {@link sourceArtifactsChanged} gives absence.
+ *
+ * This is the key-layer half of the dismissed-movement invariant: without
+ * it, a suppressed or dismissed twin is bypassed not by movement and not
+ * by the clock, but by a renamed key.
+ */
+function resolveBatchSightingKey(
+  candidate: InsightCandidate,
+  persisted: ReadonlyArray<{ readonly key: string; readonly covered: ReadonlySet<string> }>,
+): string {
+  if (candidate.kind !== "batch_inflation") return candidate.cooldownKey;
+  if (candidate.sourceArtifacts.length === 0) return candidate.cooldownKey;
+  for (const record of persisted) {
+    if (candidate.sourceArtifacts.every((artifact) => record.covered.has(artifact))) {
+      return record.key;
+    }
+  }
+  return candidate.cooldownKey;
+}
+
 function blockReason(
   twin: TriggerRecord,
   now: Date,
@@ -1041,6 +1076,11 @@ function createTriggersLocked(
     // Newest record per key wins (list is newest-first, keep the first).
     if (!byKey.has(record.cooldownKey)) byKey.set(record.cooldownKey, record);
   }
+  // Persisted batch records, newest first, as coverage sets for the
+  // reach-stable key resolution below.
+  const persistedBatches = scan.records
+    .filter((record) => record.kind === "batch_inflation" && record.sourceArtifacts.length > 0)
+    .map((record) => ({ key: record.cooldownKey, covered: new Set(record.sourceArtifacts) }));
 
   const created: TriggerRecord[] = [];
   const skipped: SkippedCandidate[] = [];
@@ -1055,20 +1095,25 @@ function createTriggersLocked(
       skipped.push({ cooldownKey: candidate.cooldownKey, reason: "invalid" });
       continue;
     }
+    // The key the candidate resolves to: its own, or - for a batch
+    // sighting a persisted record already covers - the persisted
+    // record's own key, so a narrowed scan cannot rename a finding out
+    // from under its twin.
+    const key = resolveBatchSightingKey(candidate, persistedBatches);
     // One scan observing one finding twice is ONE occurrence, so the
     // duplicate is recognised before anything reaches the ledger -
     // whether or not a record already exists for the key.
-    if (seenKeys.has(candidate.cooldownKey)) {
-      skipped.push({ cooldownKey: candidate.cooldownKey, reason: "duplicate" });
+    if (seenKeys.has(key)) {
+      skipped.push({ cooldownKey: key, reason: "duplicate" });
       continue;
     }
-    seenKeys.add(candidate.cooldownKey);
-    const twin = byKey.get(candidate.cooldownKey);
+    seenKeys.add(key);
+    const twin = byKey.get(key);
     if (twin !== undefined) {
       const reason = blockReason(twin, opts.now, cooldownDays, candidate.sourceArtifacts);
       if (reason !== null) {
         recordRecurrence(twin, opts.now);
-        skipped.push({ cooldownKey: candidate.cooldownKey, reason });
+        skipped.push({ cooldownKey: key, reason });
         continue;
       }
     }
@@ -1079,12 +1124,12 @@ function createTriggersLocked(
       // gets the occurrence. When none does there is nothing to write to
       // and `skipped` is the whole report.
       if (twin !== undefined) recordRecurrence(twin, opts.now);
-      skipped.push({ cooldownKey: candidate.cooldownKey, reason: "kind-cap" });
+      skipped.push({ cooldownKey: key, reason: "kind-cap" });
       continue;
     }
     perKind.set(candidate.kind, count + 1);
 
-    const hash = createHash("sha256").update(candidate.cooldownKey).digest("hex").slice(0, 10);
+    const hash = createHash("sha256").update(key).digest("hex").slice(0, 10);
     let id = `tr-${hash}-${createdAt.slice(0, 10)}`;
     let suffix = 2;
     while (existsSync(join(dir, `${id}${TRIGGER_FILE_EXT}`))) {
@@ -1096,6 +1141,9 @@ function createTriggersLocked(
       id,
       status: TRIGGER_STATUS.pending,
       effectiveStatus: TRIGGER_STATUS.pending,
+      // The resolved key, so a batch created past an expired twin carries
+      // the identity the next sighting will resolve to.
+      cooldownKey: key,
       createdAt,
       expiresAt,
       deliveredAt: null,

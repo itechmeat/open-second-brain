@@ -678,6 +678,120 @@ test("a materially different cooldown key is created while the twin is suppresse
   expect(other.created[0]!.status).toBe("pending");
 });
 
+// ── Defect: a batch key built from the observed endpoints shifts with reach ──
+//
+// The batch_inflation key names the burst's observed endpoints, so a
+// reach-narrowed scan - which sees a subset of the burst's records -
+// derives a different key for the SAME finding and resurrects a
+// suppressed or dismissed twin. The persisted record, not the observed
+// endpoint list, is the identity a sighting must resolve to.
+
+const BURST_IDS = ["pref-a", "pref-b", "pref-c", "pref-d", "pref-e", "pref-f"];
+
+function burstCandidate(cooldownKey: string, ids: ReadonlyArray<string>): InsightCandidate {
+  return candidate({
+    kind: "batch_inflation",
+    urgency: "low",
+    reason: `${ids.length} preferences confirmed together`,
+    suggestedAction: "Review the batch for near-duplicates",
+    cooldownKey,
+    sourceArtifacts: ids.map((id) => `[[${id}]]`),
+  });
+}
+
+test("a reach-narrowed sighting of a batch resolves to the persisted twin, not a shifted key", () => {
+  const { created } = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-a:pref-f", BURST_IDS)],
+    {
+      now: NOW,
+    },
+  );
+  expect(created).toHaveLength(1);
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+
+  // The narrowed scan observes a subset: the burst endpoints shift and
+  // with them the key it derives. The sighting grounds itself in records
+  // the twin already covers, so it must resolve to the twin's own key -
+  // reach-stable - and stay silenced by it.
+  const later = new Date(NOW.getTime() + DAY_MS);
+  const narrowed = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-b:pref-f", BURST_IDS.slice(1))],
+    { now: later },
+  );
+  expect(narrowed.created).toHaveLength(0);
+  expect(narrowed.skipped[0]!.reason).toBe("suppressed");
+  expect(narrowed.skipped[0]!.cooldownKey).toBe("batch_inflation:pref-a:pref-f");
+  // One cooldown entry: the suppressed twin, its ledger crediting the
+  // narrowed sighting.
+  const records = readTriggers(vault, { now: later }).records;
+  expect(records).toHaveLength(1);
+  expect(records[0]!.occurrences).toBe(2);
+});
+
+test("a reach-narrowed sighting of a dismissed batch stays dismissed like any subset re-fire", () => {
+  const { created } = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-a:pref-f", BURST_IDS)],
+    {
+      now: NOW,
+    },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  const narrowed = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-b:pref-f", BURST_IDS.slice(1))],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(narrowed.created).toHaveLength(0);
+  expect(narrowed.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a batch sighting introducing a record the twin never saw is movement, not a narrowed sighting", () => {
+  const { created } = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-a:pref-f", BURST_IDS)],
+    {
+      now: NOW,
+    },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // A superset grounds the finding in something the persisted record
+  // never saw: the movement gate must keep working across the shift.
+  const widened = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-a:pref-g", [...BURST_IDS, "pref-g"])],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(widened.created).toHaveLength(1);
+  expect(widened.created[0]!.status).toBe("pending");
+});
+
+test("a batch twin with no persisted grounding is never read as covering a sighting", () => {
+  const { created } = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-a:pref-f", BURST_IDS)],
+    {
+      now: NOW,
+    },
+  );
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  // Hand-strip the persisted grounding, as a record written before the
+  // key existed would read: absence is the neutral reading, and coverage
+  // of nothing is nothing.
+  rewriteLine(created[0]!.path, /^source_artifacts: .*$\n/mu, "");
+
+  const narrowed = createTriggers(
+    vault,
+    [burstCandidate("batch_inflation:pref-b:pref-f", BURST_IDS.slice(1))],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(narrowed.created).toHaveLength(1);
+});
+
 test("dismiss then suppress then unsuppress restores the state and its resolution instant", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
