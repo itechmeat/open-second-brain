@@ -605,6 +605,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "mechanism here; the surviving records' rewrites go through " +
       "`writeFrontmatterAtomic` in the same block.",
   },
+  "src/core/brain/entities/page-merge.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "archives the dropped entity page inside `withDestructiveSnapshot`, which is the " +
+      "recovery story this verb is built on; the survivor rewrite, the alias add and the " +
+      "inbound-edge retargets in the same block route through `writeFrontmatterAtomic`, " +
+      "and a removed page has no file form a shared writer could produce.",
+  },
   "src/core/brain/provenance/source-archive.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
@@ -1317,8 +1326,13 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * confirmed delete-by-source removed - an evidence-store prune whose
  * only direct call is the rmSync; its write half routes through the
  * shared atomic writer.
+ *
+ * 82 -> 83: the entity page-merge (`src/core/brain/entities/page-merge.ts`)
+ * archives the dropped entity page inside `withDestructiveSnapshot` - a
+ * retention delete whose every rewrite in the same block routes through
+ * the shared frontmatter writer.
  */
-const DIRECT_WRITE_ROWS = 82;
+const DIRECT_WRITE_ROWS = 83;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1439,8 +1453,13 @@ const DIRECT_WRITE_ROWS = 82;
  * protect consent gate (`src/core/brain/protect.ts`) persists the applied
  * settings through `atomicWriteFileSync` - machine state written only
  * after an explicit consent receipt, not a note, needing no exclusion.
+ *
+ * 123 -> 124: the entity page-merge (`src/core/brain/entities/
+ * page-merge.ts`) rewrites the survivor page, and retargets inbound
+ * relation edges, through `writeFrontmatterAtomic` - note-shaped
+ * frontmatter pages, written through the shared writer by design.
  */
-const SHARED_HELPER_ROWS = 123;
+const SHARED_HELPER_ROWS = 124;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1520,8 +1539,10 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 79 -> 80: the source archive's entry discard (answer trust) - a
  * content-addressed evidence prune whose last citing page the same
  * confirmed delete-by-source removed; no origin stamp on archive cleanup.
+ * 80 -> 81: the entity page-merge's archive removal
+ * (`src/core/brain/entities/page-merge.ts`) - a delete stamps nothing.
  */
-const UNSTAMPED_DIRECT_ROWS = 81;
+const UNSTAMPED_DIRECT_ROWS = 82;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1564,9 +1585,12 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * the same way (derived-store machine state; no origin stamp). 119 -> 120:
  * the protect consent gate (`src/core/brain/protect.ts`) persists the
  * applied settings through the shared atomic writer (consent-gated machine
- * state; no origin stamp).
+ * state; no origin stamp). 120 -> 121: the entity page-merge
+ * (`src/core/brain/entities/page-merge.ts`) rewrites entity pages through
+ * the shared frontmatter writer (a lifecycle merge of two pages; no origin
+ * stamp on the merge lane).
  */
-const UNSTAMPED_SHARED_ROWS = 120;
+const UNSTAMPED_SHARED_ROWS = 121;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
