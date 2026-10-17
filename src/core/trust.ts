@@ -3,15 +3,17 @@
  * (t_b6bcd984 + t_f4555087). What this leaf actually guarantees, no
  * more:
  *
- * 1. {@link CONSENT_VERDICTS} - the OPERATOR-consent vocabulary the
- *    CLI apply lanes record on a confirmed write (`confirmed`) and
- *    reserve for an operator's no (`refused`) and a fail-closed
- *    non-interactive refusal (`headless-refused`). The doctor repair
- *    lane deliberately records a different, machine-consent vocabulary
- *    (`yes-flag | interactive-yes | caller-apply`, see `RepairConsent`
- *    in src/core/brain/diagnostics.ts): who authorised the call is a
- *    different question from who said yes to the diff, and the two
- *    sets are not interchangeable.
+ * 1. {@link CONSENT_VERDICTS} - the OPERATOR-consent/refusal
+ *    vocabulary: `headless-refused` rides every `--json` refusal
+ *    envelope, `refused` stays reserved for a future interactive-no
+ *    envelope, and `confirmed` is the pre-ladder hard-coded write
+ *    verdict, unrecorded since the lanes began deriving what happened.
+ *    The verdict an apply records today is a `LaneConsentVerdict`
+ *    (see `RepairConsent` in src/core/brain/diagnostics.ts):
+ *    `yes-flag | interactive-yes | unchanged` on the CLI lanes
+ *    (install apply, protect, unprotect, doctor repair) and
+ *    `caller-apply` on the doctor MCP path, one vocabulary across all
+ *    of them.
  * 2. {@link formatTrustReceiptLine} and the {@link TrustReceipt} head:
  *    the fixed receipt fields (actor, pid, before-hash, summary) and a
  *    renderer that keeps the head first. A formatting helper ready for
@@ -29,10 +31,10 @@
  *    project-level backups out of the surrounding repository.
  *
  * Production imports today: the backup layout
- * (src/core/brain/pretool-host-backup.ts) and the `ConsentVerdict`
- * type (the install renderer). The vocabulary value and the formatter
- * live here so a lane adopting them inherits one spelling instead of
- * minting a third vocabulary.
+ * (src/core/brain/pretool-host-backup.ts) alone - the lanes take their
+ * verdicts from `LaneConsentVerdict` in src/core/brain/diagnostics.ts,
+ * so the vocabulary value and the formatter here are pinned by fixture
+ * (tests/core/trust-conventions.test.ts) until a lane adopts them.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -41,18 +43,21 @@ import { basename, dirname, join } from "node:path";
 import { compactRunStamp } from "./brain/time.ts";
 
 /**
- * The only OPERATOR-consent verdicts a guarded write lane may record:
+ * The OPERATOR-consent/refusal vocabulary of the guarded write lanes:
  *
- * - `confirmed` — a human said yes, interactively or via `--yes`;
- * - `refused` — an interactive operator answered no (or a non-y answer);
+ * - `confirmed` — reserved; the verdict the lanes hard-coded on a write
+ *   before they began deriving it (no lane records it today);
+ * - `refused` — reserved for a future interactive-no envelope (a
+ *   non-y answer today cancels the run and records nothing);
  * - `headless-refused` — a `--json`/non-TTY run was refused fail-closed
- *   for want of `--yes`; nothing was written.
+ *   for want of `--yes`; nothing was written. The one verdict here with
+ *   an emitter: the lanes' `--json` refusal envelopes carry it.
  *
- * Today the lanes record `confirmed` (install apply, protect, unprotect)
- * and write nothing on a refusal; the two refusal spellings are reserved
- * so a lane that begins recording refusals shares this vocabulary
- * instead of minting its own. Machine authorisation is a different
- * question, answered by `RepairConsent` in src/core/brain/diagnostics.ts.
+ * The verdict a write records lives one module over:
+ * `LaneConsentVerdict` in src/core/brain/diagnostics.ts derives
+ * `yes-flag | interactive-yes | unchanged` on the CLI lanes and the
+ * doctor MCP path records `caller-apply`; its `REFUSAL_VERDICTS` shares
+ * this constant's refusal spellings.
  */
 export const CONSENT_VERDICTS = ["confirmed", "refused", "headless-refused"] as const;
 
