@@ -152,6 +152,8 @@ async function drive(argv: ReadonlyArray<string>): Promise<{ captured: Captured;
   }
 }
 
+const DAY_MS = 86_400_000;
+
 async function runJsonReport(): Promise<{ code: number; report: StorageReportJson }> {
   const { captured, code } = await drive(["--json"]);
   return { code, report: JSON.parse(captured.stdout) as StorageReportJson };
@@ -206,9 +208,15 @@ describe("o2b brain storage", () => {
     // warn's 30 - and past critical's 7 - on every machine.
     const cap = Math.floor(total * 2.0);
     configureCap(cap);
-    seedSample("2026-10-14T00:00:00.000Z", total - total / 10, "seed-older");
-    seedSample("2026-10-15T00:00:00.000Z", total, "seed-newer");
-    seedSample("2026-10-16T00:00:00.000Z", total + total / 20, "seed-newest");
+    // Seed the two days before today and today itself (UTC midnights), so
+    // the verb's fresh census always lands on the newest seeded day; fixed
+    // dates turned into a fourth distinct day once the calendar moved past
+    // them and flattened the trend out of the warn band.
+    const today = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+    const seedDay = (daysAgo: number): string => new Date(today - daysAgo * DAY_MS).toISOString();
+    seedSample(seedDay(2), total - total / 10, "seed-older");
+    seedSample(seedDay(1), total, "seed-newer");
+    seedSample(seedDay(0), total + total / 20, "seed-newest");
 
     const { code, report } = await runJsonReport();
 
