@@ -427,7 +427,11 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
       return INSTALL_EXIT.consentRefused;
     }
     process.stdout.write(renderPlan(plan));
-    process.stdout.write("Proceed? [y/N] ");
+    // The prompt rides stderr, where every other consent ladder in the
+    // CLI puts it (upgrade, protect, doctor, merge): stdout is the
+    // payload stream, and a caller piping the plan must not catch the
+    // question in it.
+    process.stderr.write("Proceed? [y/N] ");
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
       ok("install cancelled");

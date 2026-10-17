@@ -101,6 +101,33 @@ describe("o2b install --target X (plan-only)", () => {
 });
 
 describe("o2b install --target X --apply", () => {
+  test.skipIf(process.stdin.isTTY)(
+    "the interactive y/N prompt rides stderr, not stdout (upgrade/protect/doctor convention)",
+    async () => {
+      // Reach the interactive branch: fake a TTY on the test process's
+      // stdin for one in-process run. The run's own stdin is NOT a TTY
+      // (this test is skipped when it is), so it sits at EOF:
+      // readSingleLine answers "" at once, the run cancels, and the
+      // adapter never applies - nothing touches any real HOME.
+      const stdin = process.stdin as unknown as { isTTY?: boolean };
+      const saved = stdin.isTTY;
+      Object.defineProperty(stdin, "isTTY", { value: true, configurable: true });
+      try {
+        const r = await baseRunCli(["install", "--target", "gemini-cli", "--apply"], {
+          env: envBase(),
+        });
+        expect(r.returncode).toBe(0);
+        expect(r.stdout).toContain("install cancelled");
+        expect(r.stdout).not.toContain("Proceed? [y/N]");
+        expect(r.stderr).toContain("Proceed? [y/N]");
+        expect(existsSync(join(home, ".gemini", "settings.json"))).toBe(false);
+      } finally {
+        Object.defineProperty(stdin, "isTTY", { value: saved, configurable: true });
+      }
+    },
+    5000,
+  );
+
   test("writes the cursor config file", async () => {
     const r = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
       env: envBase(),
