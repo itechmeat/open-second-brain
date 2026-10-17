@@ -130,6 +130,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       // --json/non-TTY apply refuses, so help and completions must offer
       // the remedy.
       flag("yes", "boolean"),
+      // Declaring `json` here (the refusal above names it) stops
+      // addInheritedFlagsToCommand appending the inherited stand-in, so
+      // the verb models the flag its own parser takes.
+      flag("json", "boolean"),
       flag("friction", "boolean"),
       flag("base", "string"),
       flag("compare", "string"),

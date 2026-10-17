@@ -246,6 +246,10 @@ describe("the flags the friction mode added are advertised", () => {
         "force",
         "format",
         "friction",
+        // Declared by the verb itself (the consent refusal names --json),
+        // for the reason `yes` is: help --json must model the whole
+        // surface the parser takes.
+        "json",
         "out",
         "target",
         "vault",
