@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -88,5 +88,52 @@ describe("gemini-cli adapter — config path resolution", () => {
   test("install + verify ok", () => {
     geminiCliAdapter.apply(geminiCliAdapter.plan(payload(), env()), payload(), env(), applyOpts());
     expect(geminiCliAdapter.verify(env()).status).toBe("ok");
+  });
+});
+
+describe("gemini-cli plan diff — secrets from other servers never render", () => {
+  const token = "ghp_REDACTEDTEST0a1b2c3d4e5f6a7b8c9d0e1f2";
+
+  function writeMinifiedConfig(osbArgs: string[]) {
+    const configPath = join(home, ".gemini", "settings.json");
+    mkdirSync(join(home, ".gemini"), { recursive: true });
+    // Minified, single line: the whole document lands on one diff line,
+    // which is exactly the shape that carried the token verbatim.
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          "open-second-brain": { command: "o2b", args: osbArgs },
+          github: {
+            command: "gh-mcp",
+            env: { GITHUB_TOKEN: token, VERSION: "1" },
+          },
+        },
+      }),
+    );
+    return configPath;
+  }
+
+  test("minified config: the token never reaches the rendered plan diff", () => {
+    writeMinifiedConfig(["mcp", "--vault", "/old/vault"]);
+    const plan = geminiCliAdapter.plan(payload(), env());
+    const step = plan.steps[0];
+    expect(step.kind).toBe("json-merge");
+    expect("diff" in step && typeof step.diff === "string").toBe(true);
+    const diff = (step as { diff: string }).diff;
+    expect(diff).not.toContain(token);
+  });
+
+  test("a token line inside the changed window renders redacted, shape change still shows", () => {
+    // Drifted OSB args above the github entry put a change BEFORE the
+    // token line; the trailing VERSION line keeps a change boundary
+    // below it, so the token's own line falls inside the printed
+    // window instead of being trimmed away as context.
+    writeMinifiedConfig(["mcp", "--vault", "/drifted/old"]);
+    const plan = geminiCliAdapter.plan(payload(), env());
+    const diff = (plan.steps[0] as { diff: string }).diff;
+    expect(diff).not.toContain(token);
+    expect(diff).toContain('"GITHUB_TOKEN": "***REDACTED***"');
+    expect(diff).toContain("open-second-brain");
   });
 });

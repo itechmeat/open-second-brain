@@ -21,6 +21,7 @@ import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { renderUnifiedDiff } from "../../diff.ts";
+import { redactStructured } from "../../redactor.ts";
 import type { InstallTargetId } from "../../runtime/host-facts.ts";
 import { handshakeNote, probeHost, probeRefutedVerdict, probeRefutes } from "../host-probe.ts";
 import { payloadWithRuntimeIdentity } from "../identity.ts";
@@ -235,6 +236,23 @@ function resolveEntryEquals(
 }
 
 /**
+ * Redact one side of the plan diff before it renders. The consent
+ * preview must never carry a secret VALUE from the surrounding config:
+ * a minified settings file puts every other server's `env` block on the
+ * changed lines, and the plan (plain and `--json`) goes to the invoking
+ * agent's transcript. Both sides go through `redactStructured` -
+ * credential-named keys lose their values, and both sides re-serialize
+ * through the same canonical form so the diff still shows exactly the
+ * shape change the merge makes. Redaction here is a preview concern
+ * only: `apply` keeps writing the untouched bytes.
+ */
+function redactDiffSide(text: string): string {
+  const parsed = parseJsonObject(text);
+  if (parsed === null) return text;
+  return JSON.stringify(redactStructured(parsed).value, null, 2);
+}
+
+/**
  * The file-level half of the plan preview (t_b6bcd984): read the
  * on-disk config, run the exact merge `apply` will run - pure, no
  * write - and render the unified diff the consent flow shows the
@@ -261,7 +279,7 @@ function planDiff(
     throw e;
   }
   if (merged === raw) return null;
-  return { diff: renderUnifiedDiff(raw, merged, path) };
+  return { diff: renderUnifiedDiff(redactDiffSide(raw), redactDiffSide(merged), path) };
 }
 
 export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
