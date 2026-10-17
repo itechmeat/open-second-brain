@@ -29,6 +29,14 @@
           },
           {
             "type": "command",
+            "command": "<BUN> run <REPO>/hooks/log-catchup.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "<BUN> run <REPO>/hooks/session-capture.ts",
             "env": {
               "VAULT_AGENT_NAME": "grok-dev-agent"
