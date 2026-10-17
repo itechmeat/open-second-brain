@@ -526,6 +526,23 @@ describe("listVaultPages", () => {
       }
     },
   );
+
+  test("orders titles with numeric-aware fixed-locale collation", () => {
+    // Written in scrambled filename order so the directory listing cannot
+    // fake the assertion: the sort itself must decide the output order.
+    writeFileSync(join(tmp, "b.md"), "---\ntitle: note 2\n---\n\nContent.");
+    writeFileSync(join(tmp, "a.md"), "---\ntitle: note 10\n---\n\nContent.");
+    writeFileSync(join(tmp, "d.md"), "---\ntitle: Café\n---\n\nContent.");
+    writeFileSync(join(tmp, "c.md"), "---\ntitle: Cafe\n---\n\nContent.");
+    writeFileSync(join(tmp, "e.md"), "---\ntitle: note 1\n---\n\nContent.");
+    const titles = listVaultPages(tmp, { reach: REACH_AGNOSTIC }).map((p) => p.title);
+    // Numeric: "note 2" precedes "note 10", which a lexicographic read
+    // gets backwards. Adjacent accent grouping: "Café" sorts beside "Cafe".
+    // The order is a property of the listing, not of the host, because the
+    // collation is fixed-locale - a bare `localeCompare` answers to
+    // whatever default locale the machine runs under.
+    expect(titles).toEqual(["Cafe", "Café", "note 1", "note 2", "note 10"]);
+  });
 });
 
 describe("formatFrontmatter refuses a key the parser could not read back", () => {

@@ -635,6 +635,18 @@ export interface ListVaultPagesOptions extends VaultWalkOptions {
 const LIST_VAULT_PAGES_SITE = "vault.listVaultPages";
 
 /**
+ * Fixed-locale, numeric-aware collation for the page listing sort. A bare
+ * `localeCompare` answers to the host's default locale, so the same vault
+ * lists in different orders on different machines - and a lexicographic
+ * read of titles puts "note 10" before "note 2". Pinning the locale and
+ * turning on `numeric` makes the listing order a property of the vault,
+ * not of the machine reading it. The `toLowerCase` pre-pass stays at the
+ * sort site: case-insensitivity is the long-standing contract, and the
+ * `sensitivity` options would change more than the case handling promised.
+ */
+const COLLATOR = new Intl.Collator("en", { numeric: true });
+
+/**
  * The tag list a page whose file could not be read answers with: the
  * reserved token, so a page nobody can measure is treated exactly as one
  * that reserved itself. The twin of `UNMEASURABLE_VISIBILITY` in
@@ -648,8 +660,10 @@ const UNMEASURABLE_PAGE_VISIBILITY: ReadonlyArray<string> = Object.freeze([
 
 /**
  * Walk the vault and return every Markdown page with parsed frontmatter
- * metadata. Pages are sorted by title (case-insensitive). Excluded dirs/files
- * mirror the Python defaults.
+ * metadata. Pages are sorted by title (case-insensitive) with a
+ * numeric-aware, fixed-locale collation — the order does not depend on
+ * the host locale and "note 2" precedes "note 10" on every machine.
+ * Excluded dirs/files mirror the Python defaults.
  *
  * Pass `opts.notices` to collect what the walk discarded — see
  * {@link VaultWalkOptions}.
@@ -689,7 +703,7 @@ export function listVaultPages(vaultDir: string, opts: ListVaultPagesOptions): V
       ),
     )
     .map((w) => w.page);
-  pages.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+  pages.sort((a, b) => COLLATOR.compare(a.title.toLowerCase(), b.title.toLowerCase()));
   return pages;
 }
 
