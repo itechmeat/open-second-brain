@@ -247,7 +247,6 @@ function resolveEntryEquals(
 function planDiff(
   spec: JsonMcpAdapterSpec,
   payload: McpPayload,
-  env: InstallEnv,
   path: string,
 ): { diff: string } | null {
   const raw = readFileOrEmpty(path);
@@ -342,7 +341,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
         `json-merge two keys into ${topKey} at ${path}: ` +
         `${OSB_KEY_FULL} → ${payload.full.command} ${payload.full.args.join(" ")}; ` +
         `${OSB_KEY_WRITER} → ${payload.writer.command} ${payload.writer.args.join(" ")}`;
-      const diff = planDiff(spec, payload, env, path);
+      const diff = planDiff(spec, payload, path);
       return {
         target: spec.target,
         steps: [{ kind: "json-merge", path, preview, ...(diff && { diff: diff.diff }) }],
