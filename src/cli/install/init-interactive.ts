@@ -256,7 +256,13 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
     actions.push(cmd);
   }
   for (const t of selected) {
-    actions.push(["install", "--target", t, "--apply"]);
+    // M2: the wizard already collected consent ("Run these commands
+    // now? yes") above, so each queued install must carry --yes - the
+    // consent the operator gave at the wizard's own prompt. Without it
+    // the default runner's in-process install hit the headless refusal:
+    // a piped run stopped at exit 6 halfway through setup, and a TTY run
+    // asked twice for the same consent.
+    actions.push(["install", "--target", t, "--apply", "--yes"]);
   }
   actions.push(["install", "--check"]);
 

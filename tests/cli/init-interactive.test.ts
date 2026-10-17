@@ -5,18 +5,25 @@
  * verify the command sequence under scripted user input.
  */
 
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { runCli as baseRunCli } from "../helpers/run-cli.ts";
 import {
   runWizard,
   type WizardOpts,
   type WizardReader,
   type WizardRunner,
 } from "../../src/cli/install/init-interactive.ts";
+
+// The M2 end-to-end case runs the wizard as a real subprocess so the
+// queued commands go through the default runner (main()) with a non-TTY
+// stdin - the piped-answers shape the headless refusal was breaking.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let home: string;
 
@@ -205,5 +212,50 @@ describe("init wizard", () => {
     };
     const r = await runWizard(opts);
     expect(r.exitCode).toBe(1);
+  });
+
+  test("piped answers run to completion: the queued installs carry --yes (M2)", async () => {
+    // M2: the wizard queues ["install", "--target", t, "--apply"] after
+    // it has already collected "Run these commands now? yes", so the
+    // headless consent refusal fired INSIDE the wizard - a piped run
+    // stopped at exit 6 halfway through setup, and a TTY run was asked
+    // twice for the same consent. The wizard executes through the
+    // default runner in a fresh process with non-TTY stdin: exactly the
+    // piped shape.
+    const setupHome = mkdtempSync(join(tmpdir(), "osb-wizard-run-h-"));
+    const configPath = join(setupHome, "config.yaml");
+    // A detectable runtime: the gemini-cli adapter's marker file, so
+    // the detected list is non-empty and index 5 names gemini-cli
+    // (registry order is the alphabetical registration barrel).
+    mkdirSync(join(setupHome, ".gemini"), { recursive: true });
+    writeFileSync(join(setupHome, ".gemini", "settings.json"), "{}\n");
+    const vaultPath = join(setupHome, "vault");
+    const answers = [
+      `${vaultPath}\n`,
+      "wiz-agent\n",
+      "UTC\n",
+      "en\n",
+      "5\n", // gemini-cli in the detected list
+      "y\n", // brain init
+      "n\n", // no starter
+      "yes\n", // confirm
+    ];
+    try {
+      const r = await baseRunCli(["init", "--interactive"], {
+        env: { HOME: setupHome, OPEN_SECOND_BRAIN_CONFIG: configPath },
+        stdin: answers.join(""),
+        subprocess: true,
+      });
+      // Before the fix the wizard died here with the install's exit 6.
+      expect(r.returncode).toBe(0);
+      expect(r.stdout).not.toContain("exited with code 6");
+      // The consented install actually landed the MCP entry.
+      expect(existsSync(join(setupHome, ".gemini", "settings.json"))).toBe(true);
+      expect(readFileSync(join(setupHome, ".gemini", "settings.json"), "utf8")).toContain(
+        "open-second-brain",
+      );
+    } finally {
+      rmSync(setupHome, { recursive: true, force: true });
+    }
   });
 });
