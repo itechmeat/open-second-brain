@@ -126,14 +126,19 @@ describe("brain_maintenance status journal cursor pagination", () => {
         verdict: MAINTENANCE_VERDICT.run,
       });
     }
+    const total = 4;
+    const limit = 2;
+    // A server that never ends the walk would hang an unbounded loop;
+    // ceil(total / limit) + 1 is one past the walk's own page count.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const walked: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step++) {
       const res = (await maintenance(
         { ...ctx },
-        { operation: "status", limit: 2, ...(cursor !== null ? { cursor } : {}) },
+        { operation: "status", limit, ...(cursor !== null ? { cursor } : {}) },
       )) as Record<string, unknown>;
-      expect(res["journal_total"]).toBe(4);
+      expect(res["journal_total"]).toBe(total);
       // Guard the walk protocol: an ignored cursor would loop forever.
       const next = res["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
@@ -143,7 +148,11 @@ describe("brain_maintenance status journal cursor pagination", () => {
         ),
       );
       cursor = next as string | null;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    // The walk ended because the server exhausted the set, not because
+    // the step bound fired.
+    expect(cursor).toBeNull();
     expect(walked.toSorted()).toEqual(["worker-a", "worker-b", "worker-c", "worker-d"]);
     expect(new Set(walked).size).toBe(4);
   });

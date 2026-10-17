@@ -136,18 +136,23 @@ describe("brain_agent_diff cursor pagination", () => {
     seedVault();
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
+    const total = 3;
+    const limit = 2;
+    // A server that never ends the walk would hang an unbounded loop;
+    // ceil(total / limit) + 1 is one past the walk's own page count.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const ids: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step++) {
       const response = await call(server, "brain_agent_diff", {
         mode: "diff",
         agents: ["claude", "codex"],
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
       expect(response.result.isError).toBe(false);
       const content = response.result.structuredContent;
-      expect(content.total_matched).toBe(3);
+      expect(content.total_matched).toBe(total);
       // Aggregates are computed over the whole matched set, so they do
       // not move between pages.
       expect(content.shared_topics).toEqual(["shared-topic"]);
@@ -155,7 +160,11 @@ describe("brain_agent_diff cursor pagination", () => {
       expect(content.next_cursor === null || typeof content.next_cursor === "string").toBe(true);
       ids.push(...content.contributions.map((c: any) => c.id));
       cursor = content.next_cursor;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    // The walk ended because the server exhausted the set, not because
+    // the step bound fired.
+    expect(cursor).toBeNull();
     expect(ids).toEqual([
       "sig-2026-05-20-shared-claude",
       "sig-2026-05-21-shared-codex",

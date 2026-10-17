@@ -181,15 +181,20 @@ describe("brain_event_trace cursor pagination", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
+    const total = 3;
+    const limit = 2;
+    // A server that never ends the walk would hang an unbounded loop;
+    // ceil(total / limit) + 1 is one past the walk's own page count.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const stamps: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step++) {
       const page = await callEventTrace(server, {
         date: "2026-06-15",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
-      expect(page["total"]).toBe(3);
+      expect(page["total"]).toBe(total);
       // Guard the walk protocol: an ignored cursor would loop forever.
       const next = page["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
@@ -199,7 +204,11 @@ describe("brain_event_trace cursor pagination", () => {
         ),
       );
       cursor = next as string | null;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    // The walk ended because the server exhausted the set, not because
+    // the step bound fired.
+    expect(cursor).toBeNull();
     expect(stamps).toHaveLength(3);
     expect(new Set(stamps).size).toBe(3);
   });
@@ -241,16 +250,20 @@ describe("brain_event_trace cursor pagination", () => {
 
     // The bound buys the page, never truncation: walking still
     // reassembles all eight events, and the exhausted walk's total is
-    // exact.
+    // exact. The residual walk is bounded by the whole walk's own page
+    // arithmetic so a never-null cursor fails fast instead of hanging.
+    const seeded = 8;
+    const walkLimit = 3;
+    const maxSteps = Math.ceil(seeded / walkLimit) + 1;
     const stamps: string[] = (first["events"] as ReadonlyArray<Record<string, unknown>>).map(
       (e) => (e["event"] as Record<string, unknown>)["timestamp"] as string,
     );
     let cursor = first["next_cursor"] as string | null;
     let lastTotal = first["total"];
-    while (cursor !== null) {
+    for (let step = 0; step < maxSteps && cursor !== null; step++) {
       const page = await callEventTrace(server, {
         date: "2026-06-15",
-        limit: 3,
+        limit: walkLimit,
         cursor,
       });
       stamps.push(

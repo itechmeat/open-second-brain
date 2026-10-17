@@ -397,22 +397,31 @@ describe("brain_unlinked_mentions cursor pagination", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
+    const total = 3;
+    const limit = 2;
+    // A server that never ends the walk would hang an unbounded loop;
+    // ceil(total / limit) + 1 is one past the walk's own page count.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const sources: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step++) {
       const r = await callTool(server, "brain_unlinked_mentions", {
         id: "pref-target",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
       const out = JSON.parse(r.result!.content[0]!.text);
-      expect(out["total"]).toBe(3);
+      expect(out["total"]).toBe(total);
       // Guard the walk protocol: an ignored cursor would loop forever.
       const next = out["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
       sources.push(...out["mentions"].map((m: { source: string }) => m["source"]));
       cursor = next;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    // The walk ended because the server exhausted the set, not because
+    // the step bound fired.
+    expect(cursor).toBeNull();
     expect(sources.toSorted()).toEqual(["pref-w1", "pref-w2", "pref-w3"]);
     expect(new Set(sources).size).toBe(3);
   });
@@ -465,19 +474,22 @@ describe("brain_unlinked_mentions cursor pagination", () => {
 
     // The bound buys the page, never truncation: walking still
     // reassembles all twenty mentions, and the exhausted walk's total is
-    // exact.
+    // exact. The residual walk is bounded by the whole walk's own page
+    // arithmetic so a never-null cursor fails fast instead of hanging.
+    const totalMentions = 20;
+    const walkLimit = 2;
+    const maxSteps = Math.ceil(totalMentions / walkLimit) + 1;
     const sources: string[] = first["mentions"].map(
       (m: { source: string }) => m["source"] as string,
     );
     let cursor = first["next_cursor"] as string | null;
     let lastTotal = first["total"];
-    let steps = 0;
-    while (cursor !== null && steps < 40) {
+    for (let step = 0; step < maxSteps && cursor !== null; step++) {
       const out = JSON.parse(
         (
           await callTool(server, "brain_unlinked_mentions", {
             id: "pref-bound-target",
-            limit: 2,
+            limit: walkLimit,
             cursor,
           })
         ).result!.content[0]!.text,
@@ -485,7 +497,6 @@ describe("brain_unlinked_mentions cursor pagination", () => {
       sources.push(...out["mentions"].map((m: { source: string }) => m["source"]));
       lastTotal = out["total"];
       cursor = out["next_cursor"];
-      steps += 1;
     }
     expect(cursor).toBeNull();
     expect(lastTotal).toBe(20);
