@@ -157,8 +157,10 @@ export interface TriggerRecord extends InsightCandidate {
   readonly snoozedUntil: string | null;
   /**
    * The status the snooze interrupted, restored once the window ends or
-   * the finding fires again, whichever comes first. `null` while the
-   * trigger is not snoozed.
+   * the finding fires again, whichever comes first. Seeded from the
+   * record's computed status at snooze time, so it is open by
+   * construction and never `snoozed` - a snooze cannot restore into
+   * snoozed. `null` while the trigger is not snoozed.
    */
   readonly snoozedFrom: TriggerStatus | null;
   /**

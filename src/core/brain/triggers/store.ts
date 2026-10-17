@@ -1240,13 +1240,32 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
  * a refire first.
  */
 function snooze(record: TriggerRecord, now: Date, snoozeDays: number): TriggerRecord {
+  // The interrupted status is seeded from the COMPUTED status, not the
+  // stored one. They usually agree - a live snooze is stored snoozed -
+  // but a CLOCK-WOKEN record is stored snoozed while computing the open
+  // status its elapsed window interrupted, and seeding from the file
+  // would write `snoozed_from: snoozed`: a snooze that restores INTO
+  // snoozed. The next wake would then read snoozed again, the record
+  // would hide from `list`, refuse every transition, and re-poison
+  // itself on `unsnooze` - the bounded deferral become an indefinite
+  // silent kill.
+  const interrupted = record.effectiveStatus;
+  if (interrupted === TRIGGER_STATUS.snoozed) {
+    // A snooze never restores INTO snoozed. Unreachable through
+    // {@link transitionTrigger}, whose terminal check refuses a record
+    // still reading as snoozed first; enforced here so the invariant
+    // holds at the only place that writes the field.
+    throw new Error(
+      `trigger ${record.id} is already snoozed; a snooze cannot restore into snoozed`,
+    );
+  }
   const next: TriggerRecord = Object.freeze({
     ...record,
     status: TRIGGER_STATUS.snoozed,
     effectiveStatus: TRIGGER_STATUS.snoozed,
     snoozedAt: now.toISOString(),
     snoozedUntil: new Date(now.getTime() + snoozeDays * DAY_MS).toISOString(),
-    snoozedFrom: record.status,
+    snoozedFrom: interrupted,
   });
   writeRecord(next);
   return next;

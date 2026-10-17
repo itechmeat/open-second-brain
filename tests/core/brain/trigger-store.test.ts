@@ -382,6 +382,36 @@ test("snooze defers a trigger for a bounded window, then the original resurfaces
   expect(laterScan.skipped[0]!.reason).toBe("active");
 });
 
+test("re-snoozing a clock-woken trigger restores the computed status, never snoozed", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 3 });
+
+  // The window elapses: the stored status still reads snoozed, but the
+  // wake arm computes the open status the snooze interrupted.
+  const woken = new Date(NOW.getTime() + 4 * DAY_MS);
+  expect(listTriggers(vault, { now: woken })[0]!.effectiveStatus).toBe("pending");
+
+  // Re-snooze the woken trigger. The deferral must seed its restore from
+  // the COMPUTED status - a snooze can never restore INTO snoozed, or
+  // the next wake restores snoozed and the bounded deferral becomes an
+  // indefinite silent kill.
+  const resnoozed = transitionTrigger(vault, id, "snooze", { now: woken, snoozeDays: 3 });
+  expect(resnoozed.snoozedFrom).toBe("pending");
+
+  // Past the SECOND window the record must surface again, and stay in
+  // the operator's hands: listable as open, dismissable.
+  const afterSecond = new Date(woken.getTime() + 4 * DAY_MS);
+  const resurfaced = listTriggers(vault, { now: afterSecond })[0]!;
+  expect(resurfaced.id).toBe(id);
+  expect(resurfaced.effectiveStatus).toBe("pending");
+  expect(
+    briefTriggers(vault, { now: afterSecond, cap: 5, cooldownDays: 7 }).map((t) => t.id),
+  ).toEqual([id]);
+  const dismissed = transitionTrigger(vault, id, "dismiss", { now: afterSecond });
+  expect(dismissed.status).toBe("dismissed");
+});
+
 test("a snoozed trigger wakes early when the finding fires again", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 30 });
