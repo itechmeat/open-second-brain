@@ -400,7 +400,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_doctor",
     description:
-      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes for detected classes (WAL gaps, orphaned references) with a per-file diff, `repair`+`apply` performs them as machine consent (recorded as `caller-apply` in each fix's event) and logs one event per fix.",
+      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes (WAL gaps, orphaned references) with a per-file diff; `repair`+`apply` applies them as machine consent (`caller-apply` in each fix's event).",
     inputSchema: {
       type: "object",
       properties: {
