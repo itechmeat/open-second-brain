@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -390,6 +391,126 @@ describe("computeUnprotect", () => {
     expect(c.before).toBe(withFence);
     expect(c.after).toBe(userToml);
     expect(readFileSync(join(home, ".codex", "config.toml"), "utf8")).toBe(withFence);
+  });
+});
+
+describe("approved preview pin (t_b6bcd984)", () => {
+  /** The in-vault manifest the lanes read; moved by hand after a preview here. */
+  function manifestEntry(vault: string, target: string): Record<string, unknown> {
+    const path = join(vault, ".open-second-brain", "protect.lock.json");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    const entry = parsed.entries.find((e) => e["target"] === target) as Record<string, unknown>;
+    return entry;
+  }
+
+  function rewriteManifest(
+    vault: string,
+    target: string,
+    mutate: (e: Record<string, unknown>) => void,
+  ): void {
+    const path = join(vault, ".open-second-brain", "protect.lock.json");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    const entry = parsed.entries.find((e) => e["target"] === target) as Record<string, unknown>;
+    mutate(entry);
+    writeFileSync(path, JSON.stringify(parsed, null, 2) + "\n");
+  }
+
+  function backupCount(dir: string): number {
+    return readdirSync(dir).filter((name) => name.includes(".bak.")).length;
+  }
+
+  test("applyProtect lands exactly the approved preview bytes", () => {
+    const vault = mkVault();
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    writeFileSync(join(vault, ".claude", "settings.json"), '{\n  "theme": "dark"\n}\n');
+    const c = computeProtect({ target: "claudecode", vault });
+    applyProtect({ target: "claudecode", vault, approved: c });
+    expect(readFileSync(join(vault, ".claude", "settings.json"), "utf8")).toBe(c.after);
+  });
+
+  test("applyProtect refuses when the target moved after the preview (claudecode)", () => {
+    const vault = mkVault();
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    writeFileSync(join(vault, ".claude", "settings.json"), '{\n  "theme": "dark"\n}\n');
+    const c = computeProtect({ target: "claudecode", vault });
+    // The file moves after the preview was taken; the approved pair no
+    // longer describes reality, so nothing is written and no backup lands.
+    writeFileSync(join(vault, ".claude", "settings.json"), '{\n  "theme": "light"\n}\n');
+    expect(() => applyProtect({ target: "claudecode", vault, approved: c })).toThrow(
+      /moved since the consent preview/,
+    );
+    expect(readFileSync(join(vault, ".claude", "settings.json"), "utf8")).toBe(
+      '{\n  "theme": "light"\n}\n',
+    );
+    expect(backupCount(join(vault, ".claude"))).toBe(0);
+  });
+
+  test("unprotect refuses when the manifest moved after the preview (claudecode)", () => {
+    const vault = mkVault();
+    mkdirSync(join(vault, ".claude"), { recursive: true });
+    const userDeny = "Bash(rm -rf /)";
+    writeFileSync(
+      join(vault, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { deny: [userDeny], allow: [] } }, null, 2) + "\n",
+    );
+    applyProtect({ target: "claudecode", vault });
+    const c = computeUnprotect({ target: "claudecode", vault });
+    // The manifest the removal set is read from changes after the preview:
+    // it now claims the operator's own rule too, so the derived write no
+    // longer matches the approved diff. The pin refuses; nothing moves.
+    rewriteManifest(vault, "claudecode", (e) => {
+      (e["owned_deny"] as string[]).push(userDeny);
+    });
+    // The pre-protect apply already took its own backup; the refused
+    // unprotect must not take another.
+    const backupsBefore = backupCount(join(vault, ".claude"));
+    expect(() => unprotect({ target: "claudecode", vault, approved: c })).toThrow(
+      /moved since the consent preview/,
+    );
+    // The host file keeps the exact bytes the preview showed.
+    expect(readFileSync(join(vault, ".claude", "settings.json"), "utf8")).toBe(c.before);
+    expect(backupCount(join(vault, ".claude"))).toBe(backupsBefore);
+    expect(manifestEntry(vault, "claudecode")).not.toBeNull();
+  });
+
+  test("a no-op approval refuses a target that moved (claudecode)", () => {
+    const vault = mkVault();
+    applyProtect({ target: "claudecode", vault });
+    const c = computeProtect({ target: "claudecode", vault });
+    expect(c.changed).toBe(false);
+    // An edit arrives after the "no changes" preview: applying the old
+    // no-op approval must not silently grow into a real write.
+    writeFileSync(
+      join(vault, ".claude", "settings.json"),
+      JSON.stringify({ theme: "light" }, null, 2) + "\n",
+    );
+    expect(() => applyProtect({ target: "claudecode", vault, approved: c })).toThrow(
+      /moved since the consent preview/,
+    );
+    expect(readFileSync(join(vault, ".claude", "settings.json"), "utf8")).toContain('"theme"');
+  });
+
+  test("codex unprotect refuses when the manifest moved after the preview", () => {
+    const home = mkHome();
+    const vault = mkVault();
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const userToml = '# user content\nmodel = "gpt-5.5"\n';
+    writeFileSync(join(home, ".codex", "config.toml"), userToml);
+    applyProtect({ target: "codex", vault, __homeOverride: home });
+    const c = computeUnprotect({ target: "codex", vault, __homeOverride: home });
+    rewriteManifest(vault, "codex", (e) => {
+      // Drop one owned path, so the derived fence keeps an entry the
+      // approved preview would have removed.
+      (e["owned_paths"] as string[]).pop();
+    });
+    expect(() => unprotect({ target: "codex", vault, __homeOverride: home, approved: c })).toThrow(
+      /moved since the consent preview/,
+    );
+    expect(readFileSync(join(home, ".codex", "config.toml"), "utf8")).toBe(c.before);
   });
 });
 

@@ -54,7 +54,7 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
       } else if (compute.changed && !flags["json"]) {
         info(renderUnifiedDiff(compute.before, compute.after, compute.destination));
       }
-      const result = applyProtect({ target, vault });
+      const result = applyProtect({ target, vault, approved: compute });
       if (flags["json"]) {
         okJson({
           consent: "confirmed",
@@ -139,8 +139,11 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
       } else if (compute.changed && !flags["json"]) {
         info(renderUnifiedDiff(compute.before, compute.after, compute.destination));
       }
-      // Backup-then-write inside the core; the receipt names both.
-      const result = unprotect({ target, vault });
+      // Backup-then-write inside the core; the receipt names both. The
+      // approved preview rides along, so the write must still derive the
+      // exact bytes this ladder showed - anything else is a refusal
+      // before a single byte moves.
+      const result = unprotect({ target, vault, approved: compute });
       if (flags["json"]) {
         okJson({
           consent: "confirmed",

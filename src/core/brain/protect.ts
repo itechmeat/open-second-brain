@@ -99,12 +99,23 @@ export interface ApplyOptions {
   readonly vault: string;
   /** Test seam: override `$HOME` when resolving the Codex config path. */
   readonly __homeOverride?: string;
+  /**
+   * The preview the consent ladder showed (t_b6bcd984). When present, the
+   * write must still derive exactly these before/after bytes - the target
+   * file or the manifest this change reads having moved since the preview
+   * is a typed refusal, never a write of something else. The consent
+   * ladder always passes it; it is optional so a caller that has not
+   * previewed stays type-correct.
+   */
+  readonly approved?: ProtectCompute;
 }
 
 export interface UnprotectOptions {
   readonly target: ProtectTarget;
   readonly vault: string;
   readonly __homeOverride?: string;
+  /** The approved preview, pinned exactly as on {@link ApplyOptions}. */
+  readonly approved?: ProtectCompute;
 }
 
 // ─── Pure rule set (no IO) ────────────────────────────────────────────
@@ -468,9 +479,9 @@ function ensureVaultBootstrapped(vault: string): void {
 export function applyProtect(opts: ApplyOptions): ApplyResult {
   switch (opts.target) {
     case "claudecode":
-      return applyClaudeCode(opts.vault);
+      return applyClaudeCode(opts.vault, opts.approved);
     case "codex":
-      return applyCodex(opts.vault, opts.__homeOverride);
+      return applyCodex(opts.vault, opts.__homeOverride, opts.approved);
   }
 }
 
@@ -503,12 +514,48 @@ export function computeProtect(opts: ApplyOptions): ProtectCompute {
   }
 }
 
+/**
+ * Enforce the pin the consent ladder's approval carries (t_b6bcd984): the
+ * write may land only the before/after pair the preview showed. Both
+ * halves matter - a `before` that no longer matches means the target file
+ * moved under the approved diff; an `after` that no longer matches means
+ * the inputs this change derives from (the OSB manifest among them) moved.
+ * Either way the approval no longer describes the write, so nothing is
+ * written and the refusal names the re-preview remedy - the
+ * `brain upgrade --approval-digest` convention, one level down.
+ */
+function assertApprovedUnchanged(approved: ProtectCompute, derived: ProtectCompute): void {
+  if (approved.before === derived.before && approved.after === derived.after) return;
+  throw new BrainProtectError(
+    `refused: ${approved.destination} (or the manifest this change reads) moved since ` +
+      "the consent preview; nothing was written. Re-run the verb to preview the current " +
+      "change, then apply again.",
+    { code: "PREVIEW_DRIFT" },
+  );
+}
+
+/**
+ * Land the previewed content. The compare-before-write option re-reads
+ * the target right before the rename, so an edit landing after the
+ * derivation above is refused rather than overwritten; an absent target
+ * skips the comparison, since there is no prior content to protect
+ * (`expectBefore: ""` would describe an existing empty file, not an
+ * absent one).
+ */
+function writePreviewedHostFile(compute: ProtectCompute): void {
+  if (compute.before === "" && !existsSync(compute.destination)) {
+    atomicWriteFileSync(compute.destination, compute.after);
+    return;
+  }
+  atomicWriteFileSync(compute.destination, compute.after, { expectBefore: compute.before });
+}
+
 export function unprotect(opts: UnprotectOptions): UnprotectResult {
   switch (opts.target) {
     case "claudecode":
-      return unprotectClaudeCode(opts.vault);
+      return unprotectClaudeCode(opts.vault, opts.approved);
     case "codex":
-      return unprotectCodex(opts.vault, opts.__homeOverride);
+      return unprotectCodex(opts.vault, opts.__homeOverride, opts.approved);
   }
 }
 
@@ -631,17 +678,18 @@ function computeClaudeCode(vault: string): ProtectCompute {
   return deriveClaudeCode(vault).compute;
 }
 
-function applyClaudeCode(vault: string): ApplyResult {
-  // Compute first (the exact derivation the consent preview showed),
-  // then the write: backup, settings write, manifest - in that order,
-  // unchanged.
+function applyClaudeCode(vault: string, approved?: ProtectCompute): ApplyResult {
+  // Compute first (the exact derivation the consent preview showed), then
+  // the write: the approved pin, backup, settings write, manifest - in
+  // that order, unchanged.
   const { compute, manifest } = deriveClaudeCode(vault);
-  const { destination: dest, before, after, changed } = compute;
+  if (approved !== undefined) assertApprovedUnchanged(approved, compute);
+  const { destination: dest, before, changed } = compute;
   let backupPath = "";
   if (changed && before !== "") backupPath = backupHostFile(dest, before);
   if (changed) {
     mkdirSync(join(vault, ".claude"), { recursive: true });
-    atomicWriteFileSync(dest, after);
+    writePreviewedHostFile(compute);
   }
   writeManifestIfChanged(vault, manifest);
   return Object.freeze({
@@ -686,10 +734,11 @@ function computeClaudeCodeUnprotect(vault: string): ProtectCompute {
   return deriveClaudeCodeUnprotect(vault);
 }
 
-function unprotectClaudeCode(vault: string): UnprotectResult {
-  // The exact derivation the consent preview showed, then backup,
-  // settings write, manifest retirement - in that order.
+function unprotectClaudeCode(vault: string, approved?: ProtectCompute): UnprotectResult {
+  // The exact derivation the consent preview showed, then the approved
+  // pin, backup, settings write, manifest retirement - in that order.
   const compute = deriveClaudeCodeUnprotect(vault);
+  if (approved !== undefined) assertApprovedUnchanged(approved, compute);
   if (!compute.changed) {
     removeManifestEntry(vault, "claudecode");
     return Object.freeze({
@@ -700,7 +749,7 @@ function unprotectClaudeCode(vault: string): UnprotectResult {
     });
   }
   const backupPath = backupHostFile(compute.destination, compute.before);
-  atomicWriteFileSync(compute.destination, compute.after);
+  writePreviewedHostFile(compute);
   removeManifestEntry(vault, "claudecode");
   return Object.freeze({
     target: "claudecode" as const,
@@ -832,17 +881,18 @@ function computeCodex(vault: string, homeOverride: string | undefined): ProtectC
   return deriveCodex(vault, homeOverride).compute;
 }
 
-function applyCodex(vault: string, homeOverride?: string): ApplyResult {
-  // Compute first (the exact derivation the consent preview showed),
-  // then the write: backup, config write, manifest - in that order,
-  // unchanged.
+function applyCodex(vault: string, homeOverride?: string, approved?: ProtectCompute): ApplyResult {
+  // Compute first (the exact derivation the consent preview showed), then
+  // the write: the approved pin, backup, config write, manifest - in that
+  // order, unchanged.
   const { compute, ownedPaths } = deriveCodex(vault, homeOverride);
-  const { destination: dest, before, after, changed } = compute;
+  if (approved !== undefined) assertApprovedUnchanged(approved, compute);
+  const { destination: dest, before, changed } = compute;
   let backupPath = "";
   if (changed && before !== "") backupPath = backupHostFile(dest, before);
   if (changed) {
     mkdirSync(join(dest, ".."), { recursive: true });
-    atomicWriteFileSync(dest, after);
+    writePreviewedHostFile(compute);
   }
   writeManifestIfChanged(vault, {
     schema_version: PROTECT_SCHEMA_VERSION,
@@ -888,10 +938,15 @@ function computeCodexUnprotect(vault: string, homeOverride: string | undefined):
   return deriveCodexUnprotect(vault, homeOverride);
 }
 
-function unprotectCodex(vault: string, homeOverride?: string): UnprotectResult {
-  // The exact derivation the consent preview showed, then backup and
-  // config write - in that order.
+function unprotectCodex(
+  vault: string,
+  homeOverride?: string,
+  approved?: ProtectCompute,
+): UnprotectResult {
+  // The exact derivation the consent preview showed, then the approved
+  // pin, backup and config write - in that order.
   const compute = deriveCodexUnprotect(vault, homeOverride);
+  if (approved !== undefined) assertApprovedUnchanged(approved, compute);
   if (!compute.changed) {
     removeManifestEntry(vault, "codex");
     return Object.freeze({
@@ -902,7 +957,7 @@ function unprotectCodex(vault: string, homeOverride?: string): UnprotectResult {
     });
   }
   const backupPath = backupHostFile(compute.destination, compute.before);
-  atomicWriteFileSync(compute.destination, compute.after);
+  writePreviewedHostFile(compute);
   removeManifestEntry(vault, "codex");
   return Object.freeze({
     target: "codex" as const,
