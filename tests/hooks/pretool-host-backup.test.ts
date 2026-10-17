@@ -226,7 +226,14 @@ describe("pretool-host-backup hook", () => {
     });
     expect(r.exit).toBe(0); // the dispatcher contract: the deny rides stdout
     expect(r.stdout).toContain('"permissionDecision":"deny"');
-    expect(r.stdout).toContain(target);
+    // The deny names the target. Stdout is JSON, and on Windows the
+    // path's separators arrive JSON-escaped (`\\`), so match the PARSED
+    // reason, not the raw bytes.
+    const decision = JSON.parse(r.stdout) as {
+      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
+    };
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain(target);
     // The settings file was not touched by the hook.
     expect(readFileSync(target, "utf8")).toBe('{"theme":"dark"}\n');
   });

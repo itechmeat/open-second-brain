@@ -23,6 +23,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { sep } from "node:path";
 
 import { compactRunStamp } from "../../src/core/brain/time.ts";
 import {
@@ -90,10 +91,15 @@ describe("trust conventions", () => {
       compactRunStamp(new Date("2020-01-02T03:04:05Z")),
     );
     expect(BACKUP_DIR_NAME).toBe(".o2b-backups");
-    expect(backupRootFor("/home/u/.claude/settings.json")).toBe(
+    // backupRootFor joins with the platform separator, so the win32
+    // spelling of the same layout is backslashes: compare after folding
+    // separators, not with a POSIX literal.
+    expect(backupRootFor("/home/u/.claude/settings.json").split(sep).join("/")).toBe(
       "/home/u/.claude/.o2b-backups/settings.json",
     );
     // The root sits beside the target, never inside the target file.
-    expect(backupRootFor("/x/settings.local.json")).toBe("/x/.o2b-backups/settings.local.json");
+    expect(backupRootFor("/x/settings.local.json").split(sep).join("/")).toBe(
+      "/x/.o2b-backups/settings.local.json",
+    );
   });
 });

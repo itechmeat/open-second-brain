@@ -317,7 +317,7 @@ describe("unprotect claudecode", () => {
     expect(() => unprotect({ target: "claudecode", vault })).not.toThrow();
   });
 
-  test("backups the settings file before rewriting, private 0600, exclusive name", () => {
+  test("backups the settings file before rewriting, exclusive name", () => {
     const vault = mkVault();
     mkdirSync(join(vault, ".claude"), { recursive: true });
     writeFileSync(join(vault, ".claude", "settings.json"), "{}\n");
@@ -327,12 +327,27 @@ describe("unprotect claudecode", () => {
     const r = unprotect({ target: "claudecode", vault });
     expect(r.changed).toBe(true);
     expect(r.backupPath).not.toBe("");
-    // The backup is the pre-unprotect bytes (rules still in them) ...
+    // The backup is the pre-unprotect bytes (rules still in them), taken
+    // before the rewrite under the exclusive stamp name.
     expect(readFileSync(r.backupPath, "utf8")).toBe(before);
-    // ... taken before the rewrite, private 0600: settings backups
-    // carry secrets (guarded-host-writes convention, t_b6bcd984).
-    expect(statSync(r.backupPath).mode & 0o777).toBe(0o600);
   });
+
+  test.skipIf(IS_WINDOWS)(
+    "unprotect's backup is private 0600 - settings backups carry secrets",
+    () => {
+      const vault = mkVault();
+      mkdirSync(join(vault, ".claude"), { recursive: true });
+      writeFileSync(join(vault, ".claude", "settings.json"), "{}\n");
+      applyProtect({ target: "claudecode", vault });
+      const r = unprotect({ target: "claudecode", vault });
+      expect(r.changed).toBe(true);
+      // Private 0600: settings backups carry secrets (guarded-host-writes
+      // convention, t_b6bcd984). Windows stat.mode does not carry the
+      // POSIX bits, so the mode is a POSIX-only assertion - the apply
+      // twin above gates the same way.
+      expect(statSync(r.backupPath).mode & 0o777).toBe(0o600);
+    },
+  );
 
   test("a no-op unprotect takes no backup and reports changed:false", () => {
     const vault = mkVault();

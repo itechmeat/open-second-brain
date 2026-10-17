@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import {
   decideHostBackup,
@@ -78,8 +78,10 @@ describe("decideHostBackup", () => {
 
     const tilde = decide(home, home, "~/f/.claude/settings.json");
     const relative = decide(home, join(home, "f"), ".claude/settings.json");
-    // A symlinked settings dir resolving at the same file.
-    symlinkSync(join(home, "f", ".claude"), join(home, "linked-claude"));
+    // A symlinked settings dir resolving at the same file. A directory
+    // junction needs no symlink privilege on Windows and is a plain
+    // symlink on POSIX - the one portable way to build this fixture.
+    symlinkSync(join(home, "f", ".claude"), join(home, "linked-claude"), "junction");
     const symlinked = decide(home, home, join(home, "linked-claude", "settings.json"));
 
     for (const d of [tilde, relative, symlinked]) {
@@ -88,7 +90,9 @@ describe("decideHostBackup", () => {
     const target = tilde.kind === "backup" ? tilde.targets[0]! : "";
     expect(relative.kind === "backup" && relative.targets[0]).toBe(target);
     expect(symlinked.kind === "backup" && symlinked.targets[0]).toBe(target);
-    expect(target.endsWith(".claude/settings.json")).toBe(true);
+    // The canonical target names the real .claude settings file; the
+    // comparison is separator-agnostic so the win32 spelling matches.
+    expect(target.split(sep).join("/").endsWith(".claude/settings.json")).toBe(true);
   });
 
   test("settings.local.json and the user-level settings file are protected", () => {
@@ -321,7 +325,10 @@ describe("executeHostBackup", () => {
     expect(readFileSync(first.backupPath, "utf8")).toBe('{"theme":"dark"}\n');
     expect(readFileSync(second.backupPath, "utf8")).toBe('{"theme":"dark"}\n');
     // Folder layout: <dir>/.o2b-backups/settings.json/<stamp>[-N].
-    expect(first.backupPath).toContain(".o2b-backups/settings.json/2026-10-16-123456");
+    // Separator-agnostic: the win32 backup path is backslash-joined.
+    expect(first.backupPath.split(sep).join("/")).toContain(
+      ".o2b-backups/settings.json/2026-10-16-123456",
+    );
   });
 
   test.skipIf(IS_WINDOWS)(
