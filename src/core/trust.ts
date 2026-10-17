@@ -24,7 +24,9 @@
  * 3. The backup layout the host-backup hook uses, as constants and
  *    functions: a sibling `.o2b-backups/` beside the protected file,
  *    one folder per protected file name, each backup a file named by
- *    {@link backupFolderStamp} (UTC compact `YYYY-MM-DD-HHMMSS`).
+ *    {@link backupFolderStamp} (UTC compact `YYYY-MM-DD-HHMMSS`), and
+ *    the `*`-ignore marker ({@link ensureBackupRootIgnored}) that keeps
+ *    project-level backups out of the surrounding repository.
  *
  * Production imports today: the backup layout
  * (src/core/brain/pretool-host-backup.ts) and the `ConsentVerdict`
@@ -33,6 +35,7 @@
  * minting a third vocabulary.
  */
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { compactRunStamp } from "./brain/time.ts";
@@ -115,4 +118,31 @@ export function backupFolderStamp(d: Date): string {
  */
 export function backupRootFor(target: string): string {
   return join(join(dirname(target), BACKUP_DIR_NAME), basename(target));
+}
+
+/**
+ * The git-ignore marker written into a `.o2b-backups/` root on first
+ * use. A project-level backup root lives inside someone's repository,
+ * and a `.claude/settings.local.json` copy can hold local permissions,
+ * env values and tokens - without the marker the next `git add -A`
+ * commits the backup. `*` ignores every backup; `!.gitignore` keeps
+ * the marker itself committable so a fresh clone is covered too.
+ */
+export const BACKUP_IGNORE_FILE_TEXT = "*\n!.gitignore\n";
+
+/**
+ * Drop {@link BACKUP_IGNORE_FILE_TEXT} into the `.o2b-backups/` root
+ * that owns `backupRoot` (`<dir>/.o2b-backups/<name>`), creating that
+ * root if needed, unless the marker is already there. Returns `true`
+ * when the marker was written. Throws on an unwritable location -
+ * callers treat that as hygiene, not as a guard, and decide their own
+ * failure policy.
+ */
+export function ensureBackupRootIgnored(backupRoot: string): boolean {
+  const backupsDir = dirname(backupRoot);
+  mkdirSync(backupsDir, { recursive: true });
+  const marker = join(backupsDir, ".gitignore");
+  if (existsSync(marker)) return false;
+  writeFileSync(marker, BACKUP_IGNORE_FILE_TEXT, { mode: 0o644 });
+  return true;
 }

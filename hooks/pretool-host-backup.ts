@@ -4,13 +4,21 @@
  * file writes (t_f4555087).
  *
  * With `host_settings_backup` on (default OFF), a file-tool call
- * (Write/Edit/MultiEdit/apply_patch) whose path canonically names a
+ * (Write/Edit/MultiEdit/apply_patch) whose paths name a
  * `.claude/settings.json` or `.claude/settings.local.json` at any level
- * gets its current content backed up - into the sibling folder beside
+ * get their current content backed up - into the sibling folder beside
  * the target (`<dir>/.o2b-backups/<name>/`), each backup a FILE named
  * with the UTC stamp - and one audit receipt appended, before the call
  * is allowed to proceed. A backup that cannot be taken DENIES the call:
  * if the snapshot cannot be written, the write never proceeds.
+ *
+ * Codex `apply_patch` carries its targets inside the patch body, so
+ * every `*** (Update|Add|Delete) File:` header is parsed and each
+ * protected path is backed up (one patch, several backups). A settings
+ * file that is itself a symlink is protected through its lexical path,
+ * and the backup reads through the link. On first use the
+ * `.o2b-backups/` root gets a `*`-ignore marker, so a project-level
+ * backup is never left for the next `git add -A` to commit.
  *
  * Guarantees:
  *   - OPT-IN: the flag is checked FIRST; unset means an immediate
@@ -57,6 +65,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -81,11 +90,27 @@ const PROTECTED_SETTINGS_NAMES: ReadonlySet<string> = new Set([
   "settings.local.json",
 ]);
 const PROTECTED_DIR_NAME = ".claude";
+/**
+ * Codex `apply_patch` carries its targets inside the patch body: every
+ * `*** Update File:` / `*** Add File:` / `*** Delete File:` header
+ * names one write path.
+ */
+const APPLY_PATCH_FILE_HEADER_RE = /\*\*\* (?:Update File|Add File|Delete File): ([^\n]+)/g;
 /** Same-second backups ladder (`<stamp>-2`, ...); a bound, never an overwrite. */
 const ALLOC_MAX_ATTEMPTS = 128;
 
-/** The trust-conventions backup layout, restated (stdlib twin). */
+/**
+ * The trust-conventions backup layout, restated (stdlib twin).
+ */
 const BACKUP_DIR_NAME = ".o2b-backups";
+/**
+ * The git-ignore marker dropped into a `.o2b-backups/` root on first
+ * use (stdlib twin of ensureBackupRootIgnored): a project-level backup
+ * root sits inside someone's repository, and a settings.local.json
+ * copy can hold tokens - without it the next `git add -A` commits the
+ * backup.
+ */
+const BACKUP_IGNORE_FILE_TEXT = "*\n!.gitignore\n";
 const PRE_TOOL_USE_EVENT = "PreToolUse";
 
 function backupFolderStamp(d: Date): string {
@@ -197,19 +222,60 @@ function isProtectedSettingsPath(canonical: string): boolean {
   return PROTECTED_SETTINGS_NAMES.has(basename(canonical));
 }
 
-function protectedTarget(toolName: string, toolInput: Record<string, unknown>): string | null {
-  if (!WRITE_TOOL_NAMES.has(toolName)) return null;
-  let raw: string | null = null;
+/**
+ * Every path one tool call would write, in payload order: the direct
+ * `file_path`/`path` argument when present, otherwise every
+ * `*** (Update|Add|Delete) File:` header of a Codex `apply_patch` body
+ * (one patch can touch several files) - the shape
+ * hooks/post-write-reminder.ts and hooks/lib/detect.ts already parse.
+ */
+function readCandidatePaths(toolInput: Record<string, unknown>): string[] {
+  const direct: string[] = [];
   for (const key of FILE_PATH_KEYS) {
     const value = toolInput[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      raw = value;
-      break;
-    }
+    if (typeof value === "string" && value.trim().length > 0) direct.push(value);
   }
-  if (raw === null) return null;
-  const canonical = canonicalize(raw, homedir(), process.cwd());
-  return isProtectedSettingsPath(canonical) ? canonical : null;
+  if (direct.length > 0) return direct;
+  const paths: string[] = [];
+  const input = toolInput["input"];
+  if (typeof input !== "string") return paths;
+  for (const m of input.matchAll(APPLY_PATCH_FILE_HEADER_RE)) {
+    const p = m[1]?.trim();
+    if (p) paths.push(p);
+  }
+  return paths;
+}
+
+function lexicallyHostPath(raw: string, home: string, cwd: string): string {
+  const expanded = raw === "~" || raw.startsWith("~/") ? join(home, raw.slice(1)) : raw;
+  const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+  return normalize(absolute);
+}
+
+/**
+ * The protected targets of one tool call. The predicate tests BOTH the
+ * lexical path (tilde and cwd expanded) and the realpath: a settings
+ * file that is itself a symlink (stow-style dotfiles) canonicalizes
+ * its final component into an unprotected directory, so the realpath
+ * alone says not-protected for a file every operator would call
+ * `~/.claude/settings.json`. Either match protects; the lexical path
+ * wins as the backup target, because that is the path the tool call
+ * names and the place a backup belongs beside.
+ */
+function protectedTargets(toolName: string, toolInput: Record<string, unknown>): string[] {
+  if (!WRITE_TOOL_NAMES.has(toolName)) return [];
+  const targets: string[] = [];
+  for (const raw of readCandidatePaths(toolInput)) {
+    const lexical = lexicallyHostPath(raw, homedir(), process.cwd());
+    const canonical = canonicalize(raw, homedir(), process.cwd());
+    const target = isProtectedSettingsPath(lexical)
+      ? lexical
+      : isProtectedSettingsPath(canonical)
+        ? canonical
+        : null;
+    if (target !== null && !targets.includes(target)) targets.push(target);
+  }
+  return targets;
 }
 
 // ─── Fail-closed backup + receipt (stdlib twins) ──────────────────────
@@ -236,6 +302,15 @@ function executeBackup(target: string, now: Date): BackupOutcome {
   const root = backupRootFor(target);
   const stamp = backupFolderStamp(now);
   mkdirSync(root, { recursive: true });
+  // Git hygiene, best-effort - the ignore marker is not the guard, and
+  // a failed write never fails the backup (the ladder below still
+  // denies on failure).
+  try {
+    const marker = join(dirname(root), ".gitignore");
+    if (!existsSync(marker)) writeFileSync(marker, BACKUP_IGNORE_FILE_TEXT, { mode: 0o644 });
+  } catch {
+    // hygiene marker, not the guard
+  }
   for (let attempt = 1; attempt <= ALLOC_MAX_ATTEMPTS; attempt++) {
     const name = attempt === 1 ? stamp : `${stamp}-${attempt}`;
     const candidate = join(root, name);
@@ -382,22 +457,25 @@ async function main(): Promise<void> {
         ? (payload.tool_input as Record<string, unknown>)
         : {};
 
-    const target = protectedTarget(toolName, toolInput);
-    if (target === null) return; // not a protected settings file: silent allow
+    const targets = protectedTargets(toolName, toolInput);
+    if (targets.length === 0) return; // not a protected settings file: silent allow
 
     const now = new Date();
-    try {
-      const backup = executeBackup(target, now);
-      if (backup.kind === "allow-no-source") return; // nothing to protect: silent allow
-      appendReceipt(resolveVaultPath(), target, backup, `hook:${detectHookRuntime(raw)}`, now);
-      // Silent success: the call proceeds through the normal permission
-      // flow; the backup already happened. An explicit allow here would
-      // pre-approve the very write this hook guards.
-    } catch (err) {
-      emitPermission(
-        "deny",
-        `host settings backup failed for ${target}; write refused: ${(err as Error).message}`,
-      );
+    for (const target of targets) {
+      try {
+        const backup = executeBackup(target, now);
+        if (backup.kind === "allow-no-source") continue; // nothing to protect: silent allow
+        appendReceipt(resolveVaultPath(), target, backup, `hook:${detectHookRuntime(raw)}`, now);
+        // Silent success: the call proceeds through the normal permission
+        // flow; the backup already happened. An explicit allow here would
+        // pre-approve the very write this hook guards.
+      } catch (err) {
+        emitPermission(
+          "deny",
+          `host settings backup failed for ${target}; write refused: ${(err as Error).message}`,
+        );
+        return;
+      }
     }
   } finally {
     disarm();

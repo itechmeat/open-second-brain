@@ -12,11 +12,18 @@
  * semantic, one level down).
  *
  * Split, with the PreToolUse orient precedent:
- *   - {@link decideHostBackup} is the I/O-free decision: canonicalize
- *     the tool-call path (tilde, cwd-relative, symlink) and test the
- *     protected-path predicate.
+ *   - {@link decideHostBackup} is the I/O-free decision: collect every
+ *     path the call would write (the direct path argument, or every
+ *     `*** (Update|Add|Delete) File:` header of a Codex `apply_patch`
+ *     body), canonicalize each (tilde, cwd-relative, symlink) and test
+ *     the protected-path predicate on the lexical AND the canonical
+ *     form - either match protects, so a symlinked settings file is
+ *     covered too.
  *   - {@link executeHostBackup} is the executor: read, hash, exclusive
- *     create with a bounded collision ladder, then the audit receipt.
+ *     create with a bounded collision ladder, then the audit receipt -
+ *     and a best-effort `*`-ignore marker in the `.o2b-backups/` root,
+ *     so a project-level backup is never left for the next
+ *     `git add -A` to commit.
  *
  * The wrapper (hooks/pretool-host-backup.ts) stays stdlib-only and
  * re-states the receipt shape; this core module may import freely.
@@ -28,7 +35,7 @@ import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "no
 
 import { atomicCreateFileSyncExclusive, isFileAlreadyExists } from "../fs-atomic.ts";
 import { appendAuditRecord } from "../reliability/audit.ts";
-import { backupFolderStamp, backupRootFor } from "../trust.ts";
+import { backupFolderStamp, backupRootFor, ensureBackupRootIgnored } from "../trust.ts";
 import { collisionCandidateName, hookAuditDir } from "./paths.ts";
 
 /**
@@ -45,6 +52,14 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 /** Keys under which a tool's file-path argument may appear. */
 const FILE_PATH_KEYS: ReadonlyArray<string> = ["file_path", "path"];
+
+/**
+ * Codex `apply_patch` carries its targets inside the patch body, not in
+ * a path argument: every `*** Update File:` / `*** Add File:` /
+ * `*** Delete File:` header names one write path. The same shape
+ * hooks/post-write-reminder.ts and hooks/lib/detect.ts already parse.
+ */
+const APPLY_PATCH_FILE_HEADER_RE = /\*\*\* (?:Update File|Add File|Delete File): ([^\n]+)/g;
 
 /** Basenames of the settings files the predicate protects, in one place. */
 export const PROTECTED_SETTINGS_NAMES: ReadonlySet<string> = new Set([
@@ -81,51 +96,93 @@ export interface HostBackupInput {
 
 export type HostBackupDecision =
   | { readonly kind: "allow"; readonly reason: string }
-  | { readonly kind: "backup"; readonly target: string };
+  | { readonly kind: "backup"; readonly targets: readonly string[] };
 
 /**
- * The structural decision for one tool call: does the call's file path
- * canonically name a protected Claude settings file?
+ * Every path one tool call would write, in payload order: the direct
+ * `file_path`/`path` argument when present, otherwise every
+ * `*** (Update|Add|Delete) File:` header in an `apply_patch` body
+ * (one patch can touch several files, so several backups may be due).
+ */
+function readCandidatePaths(toolInput: Readonly<Record<string, unknown>>): string[] {
+  const direct: string[] = [];
+  for (const key of FILE_PATH_KEYS) {
+    const value = toolInput[key];
+    if (typeof value === "string" && value.trim().length > 0) direct.push(value);
+  }
+  if (direct.length > 0) return direct;
+  const paths: string[] = [];
+  const input = toolInput["input"];
+  if (typeof input !== "string") return paths;
+  for (const m of input.matchAll(APPLY_PATCH_FILE_HEADER_RE)) {
+    const p = m[1]?.trim();
+    if (p) paths.push(p);
+  }
+  return paths;
+}
+
+/**
+ * The structural decision for one tool call: which of the call's write
+ * paths name a protected Claude settings file?
  *
  * Canonicalization: tilde expansion against `home`, cwd-relative join,
  * then `realpathSync` over the deepest existing ancestor - so a
  * symlinked settings dir and its real location resolve identically,
  * and a not-yet-existing target (a Write that would create the file)
  * still lands on the canonical path of the directory that exists.
+ *
+ * The predicate runs on BOTH the lexical and the canonical form: a
+ * settings file that is itself a symlink (stow-style dotfiles) resolves
+ * its final component into an unprotected directory, so the realpath
+ * alone says not-protected for a file every operator would call
+ * `~/.claude/settings.json`. Either match protects; the lexical path
+ * wins as the backup target, because that is the path the tool call
+ * names and the place a backup belongs beside.
  */
 export function decideHostBackup(input: HostBackupInput): HostBackupDecision {
   if (!WRITE_TOOL_NAMES.has(input.toolName)) {
     return { kind: "allow", reason: `tool ${input.toolName} is not a file write` };
   }
-  const raw = readFilePath(input.toolInput);
-  if (raw === null) return { kind: "allow", reason: "no file path in tool input" };
-  const target = canonicalizeHostPath(raw, input.home, input.cwd);
-  if (!isProtectedSettingsPath(target)) {
-    return { kind: "allow", reason: `${target} is not a protected settings file` };
+  const raws = readCandidatePaths(input.toolInput);
+  if (raws.length === 0) return { kind: "allow", reason: "no file path in tool input" };
+  const targets: string[] = [];
+  for (const raw of raws) {
+    const lexical = lexicallyHostPath(raw, input.home, input.cwd);
+    const canonical = canonicalizeHostPath(lexical);
+    const target = isProtectedSettingsPath(lexical)
+      ? lexical
+      : isProtectedSettingsPath(canonical)
+        ? canonical
+        : null;
+    if (target !== null && !targets.includes(target)) targets.push(target);
   }
-  return { kind: "backup", target };
-}
-
-function readFilePath(toolInput: Readonly<Record<string, unknown>>): string | null {
-  for (const key of FILE_PATH_KEYS) {
-    const value = toolInput[key];
-    if (typeof value === "string" && value.trim().length > 0) return value;
+  if (targets.length === 0) {
+    return { kind: "allow", reason: `${raws[0]} is not a protected settings file` };
   }
-  return null;
+  return { kind: "backup", targets };
 }
 
 /**
- * Tilde expansion, cwd-relative join, then symlink truth: realpath the
- * deepest existing ancestor and re-attach the unresolved tail, so a
- * canonical target comes out of a path that does not exist yet.
+ * The call's path with `~` and a relative cwd resolved, normalized -
+ * NO symlink resolution. This lexical form is what the protected-path
+ * predicate tests first: it is the path the tool call names.
  */
-function canonicalizeHostPath(raw: string, home: string, cwd: string): string {
+function lexicallyHostPath(raw: string, home: string, cwd: string): string {
   const expanded =
     raw === "~" || raw.startsWith(`~${sep}`) || raw.startsWith("~/")
       ? join(home, raw.slice(1))
       : raw;
   const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-  let prefix = normalize(absolute);
+  return normalize(absolute);
+}
+
+/**
+ * Symlink truth on top of the lexical path: realpath the deepest
+ * existing ancestor and re-attach the unresolved tail, so a canonical
+ * target comes out of a path that does not exist yet.
+ */
+function canonicalizeHostPath(lexical: string): string {
+  let prefix = lexical;
   const tail: string[] = [];
   for (;;) {
     try {
@@ -156,7 +213,12 @@ function isProtectedSettingsPath(canonical: string): boolean {
 // ─── Fail-closed backup executor ──────────────────────────────────────
 
 export interface HostBackupExecuteOptions {
-  /** Canonical protected path, as {@link decideHostBackup} produced. */
+  /**
+   * Protected path, as {@link decideHostBackup} produced: the lexical
+   * path when it is protected (a symlinked settings file backs up
+   * beside the link, and reads through it), the canonical path when
+   * only the realpath is protected.
+   */
   readonly target: string;
   /** Vault root for the audit receipt; `null` skips the receipt. */
   readonly vault: string | null;
@@ -215,6 +277,17 @@ export function executeHostBackup(opts: HostBackupExecuteOptions): HostBackupOut
   const beforeHash = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
   const root = backupRootFor(opts.target);
   const stamp = backupFolderStamp(opts.now);
+
+  // Git hygiene, best-effort: a project-level backup root sits inside
+  // someone's repository, and a settings.local.json copy can hold
+  // tokens - without the ignore marker the next `git add -A` commits
+  // it. The marker is hygiene, not the guard: a failed write never
+  // fails the backup (the ladder below still denies on failure).
+  try {
+    ensureBackupRootIgnored(root);
+  } catch {
+    // hygiene marker, not the guard
+  }
 
   // Exclusive create with the shared collision ladder: a same-second
   // second backup takes `-2`, never overwrites, and a bound that trips

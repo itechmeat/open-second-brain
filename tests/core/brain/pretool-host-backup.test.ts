@@ -85,9 +85,9 @@ describe("decideHostBackup", () => {
     for (const d of [tilde, relative, symlinked]) {
       expect(d.kind).toBe("backup");
     }
-    const target = tilde.kind === "backup" ? tilde.target : "";
-    expect(relative.kind === "backup" && relative.target).toBe(target);
-    expect(symlinked.kind === "backup" && symlinked.target).toBe(target);
+    const target = tilde.kind === "backup" ? tilde.targets[0] : "";
+    expect(relative.kind === "backup" && relative.targets[0]).toBe(target);
+    expect(symlinked.kind === "backup" && symlinked.targets[0]).toBe(target);
     expect(target.endsWith(".claude/settings.json")).toBe(true);
   });
 
@@ -144,6 +144,161 @@ describe("decideHostBackup", () => {
       cwd: home,
     });
     expect(noPath.kind).toBe("allow");
+  });
+});
+
+describe("decideHostBackup — Codex apply_patch payloads", () => {
+  test("an Update File header naming a protected path backs up", () => {
+    const home = tmpDir("osb-hb-ap-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+    const d = decideHostBackup({
+      runtime: "codex",
+      toolName: "apply_patch",
+      toolInput: {
+        input:
+          "*** Begin Patch\n*** Update File: " +
+          join(home, ".claude", "settings.json") +
+          "\n@@\n- old\n+ new\n*** End Patch",
+      },
+      home,
+      cwd: home,
+    });
+    expect(d.kind).toBe("backup");
+    if (d.kind !== "backup") return;
+    expect(d.targets).toEqual([join(home, ".claude", "settings.json")]);
+  });
+
+  test("every header path is collected; only the protected ones back up", () => {
+    const home = tmpDir("osb-hb-ap2-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+    writeFileSync(join(home, ".claude", "settings.local.json"), "{}\n");
+    writeFileSync(join(home, "notes.md"), "x\n");
+    const d = decideHostBackup({
+      runtime: "codex",
+      toolName: "apply_patch",
+      toolInput: {
+        input:
+          "*** Begin Patch\n" +
+          "*** Add File: " +
+          join(home, "notes.md") +
+          "\n+hello\n" +
+          "*** Update File: " +
+          join(home, ".claude", "settings.json") +
+          "\n@@\n" +
+          "*** Delete File: " +
+          join(home, ".claude", "settings.local.json") +
+          "\n*** End Patch",
+      },
+      home,
+      cwd: home,
+    });
+    expect(d.kind).toBe("backup");
+    if (d.kind !== "backup") return;
+    expect(d.targets).toEqual([
+      join(home, ".claude", "settings.json"),
+      join(home, ".claude", "settings.local.json"),
+    ]);
+  });
+
+  test("a relative header path resolves against the hook cwd", () => {
+    const home = tmpDir("osb-hb-ap3-");
+    const proj = join(home, "proj");
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".claude", "settings.local.json"), "{}\n");
+    const d = decideHostBackup({
+      runtime: "codex",
+      toolName: "apply_patch",
+      toolInput: { input: "*** Begin Patch\n*** Add File: .claude/settings.local.json\n+{}\n" },
+      home,
+      cwd: proj,
+    });
+    expect(d.kind).toBe("backup");
+    if (d.kind !== "backup") return;
+    expect(d.targets).toEqual([join(proj, ".claude", "settings.local.json")]);
+  });
+});
+
+describe("decideHostBackup — symlinked settings files", () => {
+  test("a settings file that is itself a symlink is protected via its lexical path", () => {
+    const home = tmpDir("osb-hb-symlink-");
+    mkdirSync(join(home, "dotfiles"), { recursive: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const real = join(home, "dotfiles", "settings.json");
+    writeFileSync(real, '{"theme":"dark"}\n');
+    symlinkSync(real, join(home, ".claude", "settings.json"));
+
+    // The realpath resolves the final component into the dotfiles dir,
+    // whose parent is not `.claude`; the lexical path the agent names
+    // IS a `.claude` settings file, and either match protects.
+    const d = decide(home, home, "~/.claude/settings.json");
+    expect(d.kind).toBe("backup");
+    if (d.kind !== "backup") return;
+    expect(d.targets).toEqual([join(home, ".claude", "settings.json")]);
+  });
+
+  test("the symlinked file's backup carries the real bytes through the link", () => {
+    const home = tmpDir("osb-hb-symlink2-");
+    mkdirSync(join(home, "dotfiles"), { recursive: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const real = join(home, "dotfiles", "settings.json");
+    const contents = '{"token":"s3cret"}\n';
+    writeFileSync(real, contents);
+    const lexical = join(home, ".claude", "settings.json");
+    symlinkSync(real, lexical);
+
+    const out = executeHostBackup({
+      target: lexical,
+      vault: null,
+      now: new Date("2026-10-16T12:34:56Z"),
+      actor: "hook:claudecode",
+    });
+    expect(out.kind).toBe("backed-up");
+    if (out.kind !== "backed-up") return;
+    expect(readFileSync(out.backupPath, "utf8")).toBe(contents);
+  });
+});
+
+describe("executeHostBackup — backups root git hygiene", () => {
+  test("the first project backup drops a *-ignore into the backups root", () => {
+    const home = tmpDir("osb-hb-ignore-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const target = join(home, ".claude", "settings.local.json");
+    writeFileSync(target, '{"allow":["Bash"]}\n');
+    const out = executeHostBackup({
+      target,
+      vault: null,
+      now: new Date("2026-10-16T12:34:56Z"),
+      actor: "hook:claudecode",
+    });
+    expect(out.kind).toBe("backed-up");
+    if (out.kind !== "backed-up") return;
+    // settings.local.json copies can hold tokens; without this marker
+    // the next `git add -A` commits them from a project repo.
+    const ignorePath = join(home, ".claude", ".o2b-backups", ".gitignore");
+    expect(existsSync(ignorePath)).toBe(true);
+    const text = readFileSync(ignorePath, "utf8");
+    expect(text).toContain("*");
+    expect(text).toContain("!.gitignore");
+  });
+
+  test("a second backup never rewrites the ignore file", () => {
+    const home = tmpDir("osb-hb-ignore2-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const target = join(home, ".claude", "settings.json");
+    writeFileSync(target, "x\n");
+    const opts = {
+      target,
+      vault: null,
+      now: new Date("2026-10-16T12:34:56Z"),
+      actor: "hook:claudecode",
+    };
+    executeHostBackup(opts);
+    const ignorePath = join(home, ".claude", ".o2b-backups", ".gitignore");
+    const before = readFileSync(ignorePath, "utf8");
+    executeHostBackup({ ...opts, now: new Date("2026-10-16T12:34:57Z") });
+    expect(readFileSync(ignorePath, "utf8")).toBe(before);
   });
 });
 

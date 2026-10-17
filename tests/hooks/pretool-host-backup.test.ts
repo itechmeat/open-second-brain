@@ -18,6 +18,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,6 +93,17 @@ function writePayload(filePath: string): unknown {
     tool_use_id: "tu1",
     tool_name: "Write",
     tool_input: { file_path: filePath },
+  };
+}
+
+function applyPatchPayload(patchBody: string): unknown {
+  return {
+    hook_event_name: "PreToolUse",
+    session_id: "s1",
+    cwd: home,
+    tool_use_id: "tu1",
+    tool_name: "apply_patch",
+    tool_input: { input: patchBody },
   };
 }
 
@@ -230,5 +242,99 @@ describe("pretool-host-backup hook", () => {
     expect(existsSync(backupRoot)).toBe(true);
     // A missing vault degrades the receipt, never the backup or the call.
     expect(auditRecords()).toEqual([]);
+  });
+
+  test("flag on: an apply_patch Update File on a protected path backs up (Codex lane)", async () => {
+    const target = join(home, ".claude", "settings.json");
+    const r = await runHook(
+      applyPatchPayload("*** Begin Patch\n*** Update File: " + target + "\n@@\n- old\n+ new\n"),
+      { OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toContain('"deny"');
+    const backupRoot = join(home, ".claude", ".o2b-backups", "settings.json");
+    const backups = readdirSync(backupRoot);
+    expect(backups.length).toBe(1);
+    expect(readFileSync(join(backupRoot, backups[0]!), "utf8")).toBe('{"theme":"dark"}\n');
+    const records = auditRecords();
+    expect(records.length).toBe(1);
+    expect((records[0] as { target: string }).target).toBe(target);
+  });
+
+  test("flag on: an apply_patch patch with several targets backs up each protected one", async () => {
+    const local = join(home, ".claude", "settings.local.json");
+    writeFileSync(local, '{"allow":["Bash"]}\n');
+    const notes = join(home, "notes.md");
+    writeFileSync(notes, "x\n");
+    const r = await runHook(
+      applyPatchPayload(
+        "*** Begin Patch\n" +
+          "*** Add File: " +
+          notes +
+          "\n+hello\n" +
+          "*** Update File: " +
+          join(home, ".claude", "settings.json") +
+          "\n@@\n" +
+          "*** Delete File: " +
+          local +
+          "\n",
+      ),
+      { OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toContain('"deny"');
+    const backupRoot = join(home, ".claude", ".o2b-backups");
+    // One folder per protected file name; notes.md has none. The
+    // `*`-ignore marker (git hygiene) sits beside the folders.
+    expect(readdirSync(backupRoot).toSorted()).toEqual([
+      ".gitignore",
+      "settings.json",
+      "settings.local.json",
+    ]);
+    // Exactly one receipt per protected target, none for notes.md.
+    expect(auditRecords().length).toBe(2);
+  });
+
+  test.skipIf(IS_WINDOWS)(
+    "flag on: a settings file that is itself a symlink is backed up through the link",
+    async () => {
+      const dotfiles = join(home, "dotfiles");
+      mkdirSync(dotfiles, { recursive: true });
+      const real = join(dotfiles, "claude-settings.json");
+      writeFileSync(real, '{"theme":"stow"}\n');
+      const target = join(home, ".claude", "settings.json");
+      rmSync(target);
+      symlinkSync(real, target);
+
+      const r = await runHook(writePayload(target), {
+        OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true",
+      });
+      expect(r.exit).toBe(0);
+      expect(r.stdout).not.toContain('"deny"');
+      // The backup lands beside the path the agent writes through, and
+      // holds the real bytes (read through the link).
+      const backupRoot = join(home, ".claude", ".o2b-backups", "settings.json");
+      const backups = readdirSync(backupRoot);
+      expect(backups.length).toBe(1);
+      expect(readFileSync(join(backupRoot, backups[0]!), "utf8")).toBe('{"theme":"stow"}\n');
+    },
+  );
+
+  test("flag on: the first project backup drops a *-ignore into the backups root", async () => {
+    const proj = join(home, "proj");
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    const local = join(proj, ".claude", "settings.local.json");
+    writeFileSync(local, '{"allow":["Bash"]}\n');
+    const r = await runHook(
+      { ...writePayload(local), cwd: proj },
+      { OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toContain('"deny"');
+    const ignorePath = join(proj, ".claude", ".o2b-backups", ".gitignore");
+    expect(existsSync(ignorePath)).toBe(true);
+    const text = readFileSync(ignorePath, "utf8");
+    expect(text).toContain("*");
+    expect(text).toContain("!.gitignore");
   });
 });
