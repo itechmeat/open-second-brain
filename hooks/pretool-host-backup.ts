@@ -6,11 +6,11 @@
  * With `host_settings_backup` on (default OFF), a file-tool call
  * (Write/Edit/MultiEdit/apply_patch) whose path canonically names a
  * `.claude/settings.json` or `.claude/settings.local.json` at any level
- * gets its current content backed up - into a timestamped folder beside
- * the target (`<dir>/.o2b-backups/<name>/<UTC stamp>`) - and one audit
- * receipt appended, before the call is allowed to proceed. A backup
- * that cannot be taken DENIES the call: if the snapshot cannot be
- * written, the write never proceeds.
+ * gets its current content backed up - into the sibling folder beside
+ * the target (`<dir>/.o2b-backups/<name>/`), each backup a FILE named
+ * with the UTC stamp - and one audit receipt appended, before the call
+ * is allowed to proceed. A backup that cannot be taken DENIES the call:
+ * if the snapshot cannot be written, the write never proceeds.
  *
  * Guarantees:
  *   - OPT-IN: the flag is checked FIRST; unset means an immediate

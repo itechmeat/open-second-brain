@@ -1,18 +1,36 @@
 /**
  * Shared trust conventions for Open Second Brain's guarded host writes
- * (t_b6bcd984 + t_f4555087). Three agreements every guarded write lane
- * (install JSON-merge, protect, doctor repair) and the standalone
- * PreToolUse host-backup hook satisfy, pinned by
- * tests/core/trust-conventions.test.ts:
+ * (t_b6bcd984 + t_f4555087). What this leaf actually guarantees, no
+ * more:
  *
- * 1. the consent vocabulary recorded in every lane's receipt;
- * 2. the receipt-line schema: actor, pid, before-hash, summary plus a
- *    per-lane tail;
- * 3. the timestamped backup-folder layout for the host-backup hook.
+ * 1. {@link CONSENT_VERDICTS} - the OPERATOR-consent vocabulary the
+ *    CLI apply lanes record on a confirmed write (`confirmed`) and
+ *    reserve for an operator's no (`refused`) and a fail-closed
+ *    non-interactive refusal (`headless-refused`). The doctor repair
+ *    lane deliberately records a different, machine-consent vocabulary
+ *    (`yes-flag | interactive-yes | caller-apply`, see `RepairConsent`
+ *    in src/core/brain/diagnostics.ts): who authorised the call is a
+ *    different question from who said yes to the diff, and the two
+ *    sets are not interchangeable.
+ * 2. {@link formatTrustReceiptLine} and the {@link TrustReceipt} head:
+ *    the fixed receipt fields (actor, pid, before-hash, summary) and a
+ *    renderer that keeps the head first. A formatting helper ready for
+ *    lane adoption - no lane routes its receipts through it yet, so
+ *    its compliance is pinned by fixture
+ *    (tests/core/trust-conventions.test.ts) alone. The PreToolUse
+ *    host-backup hook appends these same head fields to its audit
+ *    record; it stays stdlib-only and restates the shape, so its
+ *    compliance is pinned by fixture too, not by an import.
+ * 3. The backup layout the host-backup hook uses, as constants and
+ *    functions: a sibling `.o2b-backups/` beside the protected file,
+ *    one folder per protected file name, each backup a file named by
+ *    {@link backupFolderStamp} (UTC compact `YYYY-MM-DD-HHMMSS`).
  *
- * The CLI lanes import the vocabulary and the receipt formatter from
- * here. The hook wrapper stays stdlib-only and re-states the receipt
- * shape itself; its compliance is pinned by fixture, not by an import.
+ * Production imports today: the backup layout
+ * (src/core/brain/pretool-host-backup.ts) and the `ConsentVerdict`
+ * type (the install renderer). The vocabulary value and the formatter
+ * live here so a lane adopting them inherits one spelling instead of
+ * minting a third vocabulary.
  */
 
 import { basename, dirname, join } from "node:path";
@@ -20,12 +38,18 @@ import { basename, dirname, join } from "node:path";
 import { compactRunStamp } from "./brain/time.ts";
 
 /**
- * The only consent verdicts a guarded write lane may record:
+ * The only OPERATOR-consent verdicts a guarded write lane may record:
  *
  * - `confirmed` — a human said yes, interactively or via `--yes`;
  * - `refused` — an interactive operator answered no (or a non-y answer);
  * - `headless-refused` — a `--json`/non-TTY run was refused fail-closed
  *   for want of `--yes`; nothing was written.
+ *
+ * Today the lanes record `confirmed` (install apply, protect, unprotect)
+ * and write nothing on a refusal; the two refusal spellings are reserved
+ * so a lane that begins recording refusals shares this vocabulary
+ * instead of minting its own. Machine authorisation is a different
+ * question, answered by `RepairConsent` in src/core/brain/diagnostics.ts.
  */
 export const CONSENT_VERDICTS = ["confirmed", "refused", "headless-refused"] as const;
 
@@ -49,6 +73,12 @@ export interface TrustReceipt {
 /**
  * Render one receipt line (JSONL) with the fixed head first and the
  * per-lane tail after; a tail key can never clobber a head field.
+ *
+ * A convention helper, not yet a lane's code path: no production caller
+ * renders receipts through this today (the install renderer, the
+ * protect/unprotect JSON envelopes and the audit appends each emit
+ * their own fields), so the head-first guarantee is pinned by fixture
+ * here rather than by lane adoption.
  */
 export function formatTrustReceiptLine(
   receipt: TrustReceipt,
@@ -60,17 +90,20 @@ export function formatTrustReceiptLine(
 /**
  * Directory name of the per-file backup root the host-backup hook uses:
  * a sibling `.o2b-backups/` beside the protected file, holding one
- * folder per {@link backupFolderStamp} with the backup inside. Kept
- * beside the target (not under `~/.claude` at large) so the backup of a
- * file is findable next to the file it protects.
+ * folder per protected file name. Each backup inside that folder is a
+ * FILE named by {@link backupFolderStamp} (a same-second collision
+ * ladders `-2`, `-3`, ... onto the name) - the stamp is the backup's
+ * file name, not a folder of its own. Kept beside the target (not under
+ * `~/.claude` at large) so the backup of a file is findable next to the
+ * file it protects.
  */
 export const BACKUP_DIR_NAME = ".o2b-backups";
 
 /**
- * The timestamped folder name for one backup run: the repo's compact
- * UTC run stamp, `YYYY-MM-DD-HHMMSS`. Whole-second precision; a second
- * backup within the same second ladders the name
- * (`collisionCandidateName`), never overwrites.
+ * The file name for one backup: the repo's compact UTC run stamp,
+ * `YYYY-MM-DD-HHMMSS`. Whole-second precision; a second backup within
+ * the same second ladders the name (`collisionCandidateName`), never
+ * overwrites.
  */
 export function backupFolderStamp(d: Date): string {
   return compactRunStamp(d);
