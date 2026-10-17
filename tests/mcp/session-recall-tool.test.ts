@@ -289,6 +289,17 @@ describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
       const refused = await call({ operation: "coverage", char_budget: 100_000, ...extra });
       expect(refused.error?.code).toBe(-32602);
     }
+
+    // The coverage answer is one selection with no walk, so a well-formed
+    // match-operation cursor must be refused by name, not silently
+    // ignored (an ignored cursor would read as a page that happened).
+    const cursor = await call({
+      operation: "coverage",
+      char_budget: 100_000,
+      cursor: "bzow",
+    });
+    expect(cursor.error?.code).toBe(-32602);
+    expect(cursor.error?.message).toContain("cursor is not applicable to operation 'coverage'");
   });
 
   test("entity_key accepts the mined-key length (200) and refuses longer", async () => {

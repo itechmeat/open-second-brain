@@ -1044,11 +1044,12 @@ function toolBrainSessionGrepCoverage(
     "snippet_chars",
     "include_raw",
     "raw_budget_chars",
+    "cursor",
   ] as const) {
     if (args[inapplicable] !== undefined) {
       throw new MCPError(
         INVALID_PARAMS,
-        `brain_session_grep: ${inapplicable} is not applicable to operation 'coverage'; it sizes or filters the match operation`,
+        `brain_session_grep: ${inapplicable} is not applicable to operation 'coverage'; it pages, sizes or filters the match operation`,
       );
     }
   }
