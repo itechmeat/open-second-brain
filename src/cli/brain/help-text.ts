@@ -128,7 +128,7 @@ Brain verbs (observing memory):
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
   import-session      Replay signals from a registered agent session .jsonl (or directory)
-  entity              Canonical entity registry: set, get, list, relate, archive, prune, lexicon
+  entity              Canonical entity registry: set, get, list, relate, archive, prune, lexicon, merge
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -892,7 +892,7 @@ export const VERB_HELP: Record<string, string> = {
     "Default is --dry-run; --apply requires --yes and --approval-digest in\n" +
     "non-interactive mode.\n",
   entity:
-    "usage: o2b brain entity <set|get|list|relate|archive|prune|lexicon> [args]\n" +
+    "usage: o2b brain entity <set|get|list|relate|archive|prune|lexicon|merge> [args]\n" +
     "  set <category> <name> [--alias <a>]... [--body <md>] [--confidence <c>] [--json]\n" +
     "  get <name-or-alias> [--category <c>] [--json]      exit 2 when not found\n" +
     "  list [--category <c>] [--status active|archived] [--json]\n" +
@@ -902,9 +902,16 @@ export const VERB_HELP: Record<string, string> = {
     "                                                     advisory verdicts need the opt-in\n" +
     "  lexicon rebuild [--apply] [--json]                 dry-run default; writes only the\n" +
     "                                                     derived Brain/entities/lexicon.json\n" +
+    "  merge <keep> <drop> [--dry-run] [--expect-hash <hash>] [--force] [--json]\n" +
+    "                                                     preview echoes the plan hash; apply\n" +
+    "                                                     verifies it before any write; a TTY gets\n" +
+    "                                                     a y/N prompt, agents pass --force\n" +
+    "                                                     (--json needs it)\n" +
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
     "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
-    "malformed nodes and their edges. Denylist: entities.label_denylist config key. The\n" +
+    "malformed nodes and their edges. merge folds a duplicate page into the survivor: the\n" +
+    "old name becomes an alias, the old page is archived behind a recovery point, and no\n" +
+    "claim is rewritten. Denylist: entities.label_denylist config key. The\n" +
     "store-learned lexicon artifact feeds the tightened creation verdicts; rebuild it\n" +
     "after corpus edits (a stale artifact degrades admission fail-open, never mis-rejects).",
   "design-note":

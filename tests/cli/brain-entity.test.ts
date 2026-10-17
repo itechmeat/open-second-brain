@@ -309,3 +309,136 @@ describe("o2b brain entity prune - advisory classes are opt-in (recall-quality M
     expect(existsSync(junk)).toBe(false);
   });
 });
+
+describe("o2b brain entity merge", () => {
+  async function seedMergePair(): Promise<{ keepId: string; dropId: string; dropPath: string }> {
+    const keep = await runCli(
+      ["brain", "entity", "set", "people", "Ada Lovelace", "--body", "Analytical engines."],
+      { env: env() },
+    );
+    expect(keep.returncode).toBe(0);
+    const drop = await runCli(["brain", "entity", "set", "people", "Ada", "--json"], {
+      env: env(),
+    });
+    expect(drop.returncode).toBe(0);
+    const dropPayload = JSON.parse(drop.stdout) as { id: string; path: string };
+    return {
+      keepId: "ent-people-ada-lovelace",
+      dropId: dropPayload.id,
+      dropPath: dropPayload.path,
+    };
+  }
+
+  test("dry-run --json prints the plan and its hash without touching the vault", async () => {
+    const { keepId, dropId, dropPath } = await seedMergePair();
+    const out = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      dry_run: boolean;
+      plan: { keep_id: string; drop_id: string; alias_added: string | null };
+      plan_hash: string;
+    };
+    expect(payload.dry_run).toBe(true);
+    expect(payload.plan.keep_id).toBe(keepId);
+    expect(payload.plan.drop_id).toBe(dropId);
+    expect(payload.plan.alias_added).toBe("Ada");
+    expect(payload.plan_hash).toMatch(/^[0-9a-f]{64}$/);
+    // The drop page is still on disk: a preview writes nothing.
+    expect(existsSync(dropPath)).toBe(true);
+  });
+
+  test("apply without --expect-hash refuses by name and writes nothing", async () => {
+    const { keepId, dropId, dropPath } = await seedMergePair();
+    const out = await runCli(["brain", "entity", "merge", keepId, dropId, "--force"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("hash-required");
+    expect(existsSync(dropPath)).toBe(true);
+  });
+
+  test("apply with a stale or mismatched hash refuses before any write", async () => {
+    const { keepId, dropId, dropPath } = await seedMergePair();
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", "deadbeef"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("hash-mismatch");
+    expect(existsSync(dropPath)).toBe(true);
+  });
+
+  test("apply with the echoed hash and --force merges without prompting", async () => {
+    const { keepId, dropId, dropPath } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", hash, "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      applied: boolean;
+      keep_id: string;
+      drop_id: string;
+      snapshot_run_id: string;
+    };
+    expect(payload.applied).toBe(true);
+    expect(payload.keep_id).toBe(keepId);
+    expect(payload.drop_id).toBe(dropId);
+    expect(payload.snapshot_run_id).toMatch(/^entity-prune-/);
+    expect(existsSync(dropPath)).toBe(false);
+    // The old name now resolves to the survivor.
+    const get = await runCli(["brain", "entity", "get", "Ada", "--json"], { env: env() });
+    expect(get.returncode).toBe(0);
+    expect((JSON.parse(get.stdout) as { id: string }).id).toBe(keepId);
+    // A doctor re-run after apply is clean of duplicate-entity findings.
+    const doctor = await runCli(["brain", "doctor", "--json"], { env: env() });
+    expect(doctor.stdout).not.toContain("duplicate-entity");
+  });
+
+  test("--json without --force refuses (the interactive prompt cannot render)", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--json", "--expect-hash", hash],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("--json without --force");
+  });
+
+  test("non-TTY stdin without --force refuses instead of prompting", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const out = await runCli(["brain", "entity", "merge", keepId, dropId, "--expect-hash", hash], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("--force required when stdin is not a TTY");
+  });
+
+  test("plain dry-run prints the plan-hash line and an apply command", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const out = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain("plan-hash: ");
+    expect(out.stdout).toContain("--expect-hash ");
+    expect(out.stdout).toContain("dry-run; no changes written");
+  });
+});

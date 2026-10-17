@@ -628,7 +628,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command("deep-synthesis", "Topic dossier: agreements, contradictions, stale claims, gaps"),
         command("ideas", "Ranked next-direction candidates from open loops"),
-        command("entity", "Canonical entity registry: set, get, list, relate, archive"),
+        command(
+          "entity",
+          "Canonical entity registry: set, get, list, relate, archive, prune, lexicon, merge",
+        ),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),
         // no-dead-ends, task 6: the fifty-five brain cases the manifest
