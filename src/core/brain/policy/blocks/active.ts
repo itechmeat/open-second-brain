@@ -64,6 +64,20 @@ export const INJECT_BUDGET_CHARS_DEFAULT = 8000;
 export const INJECT_BUDGET_CHARS_MIN = 500;
 export const INJECT_BUDGET_CHARS_MAX = 200_000;
 
+/**
+ * Per-lane caps for the opt-in cross-agent log catch-up SessionStart
+ * lane (t_3b44cd9a). The lane is a standalone process - it pays no
+ * `inject_budget_chars` - so it carries its own caps instead: the newest
+ * {@link LOG_CATCHUP_MAX_LINES} other-agent log lines are shown and the
+ * count of older ones is stated rather than rendered, and the fenced
+ * block is trimmed to {@link LOG_CATCHUP_MAX_CHARS} by dropping the
+ * oldest lines first. Deliberately constants, not config keys: a runaway
+ * catch-up must be bounded by the same review that bounds every other
+ * injected lane, not by a knob an agent could turn up.
+ */
+export const LOG_CATCHUP_MAX_LINES = 50;
+export const LOG_CATCHUP_MAX_CHARS = 6000;
+
 const KNOWN_KEYS = [
   "most_applied_window_days",
   "most_applied_limit",

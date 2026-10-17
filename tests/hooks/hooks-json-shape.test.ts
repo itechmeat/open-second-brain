@@ -254,6 +254,38 @@ describe("hooks.json SessionStart backlog-nudge entry", () => {
     expect(nudgeIndices).toEqual([agenda + 1]);
   });
 
+  test("the single SessionStart group carries exactly one log-catchup entry, after backlog-nudge", () => {
+    expect(sessionStartGroups.length).toBe(1);
+    const hooks = sessionStartGroups[0]!.hooks;
+    const nudge = hooks.findIndex((h) => h.command.includes("o2b-hook backlog-nudge"));
+    expect(nudge).toBeGreaterThanOrEqual(0);
+    const catchupIndices = hooks
+      .map((h, i) => (h.command.includes("o2b-hook log-catchup") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(catchupIndices).toEqual([nudge + 1]);
+    // Session-capture stays last: the lifecycle event records the start
+    // of the session, after every injection lane has had its turn.
+    const capture = hooks.findIndex((h) => h.command.includes("o2b-hook session-capture"));
+    expect(capture).toBe(hooks.length - 1);
+    expect(capture).toBeGreaterThan(catchupIndices[0]!);
+  });
+
+  test("the log-catchup entry declares the sibling timeout and the opt-in status line", () => {
+    const hooks = sessionStartGroups[0]!.hooks;
+    const entry = hooks.find((h) => h.command.includes("o2b-hook log-catchup"))!;
+    expect(entry.type).toBe("command");
+    expect(entry.timeout).toBe(10);
+    expect(entry.statusMessage).toBe("OSB: injecting cross-agent log catch-up (opt-in)");
+    // The dispatch target resolves to an existing hook file, so the
+    // registered name can never silently no-op.
+    expect(existsSync(join(REPO, "hooks", "log-catchup.ts"))).toBe(true);
+    // Same resilient shape as every sibling: plugin-root wrapper, PATH
+    // fallback, never-blocks tail.
+    const sibling = hooks.find((h) => h.command.includes("o2b-hook backlog-nudge"))!;
+    expect(entry.command).toBe(sibling.command.replaceAll("backlog-nudge", "log-catchup"));
+    expect(entry.command.trimEnd().endsWith("exit 0")).toBe(true);
+  });
+
   test("the backlog-nudge entry declares the sibling timeout and the opt-in status line", () => {
     const hooks = sessionStartGroups[0]!.hooks;
     const entry = hooks.find((h) => h.command.includes("o2b-hook backlog-nudge"))!;
