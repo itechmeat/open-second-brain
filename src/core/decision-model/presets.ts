@@ -30,7 +30,8 @@ export const DECISION_MODEL_HOSTED_MAX_STATE_TOKENS = 32_000;
  * `POST <base>/v1/evaluate` variant; `llm-emulation` asks an
  * OpenAI-compatible chat model for probabilities (uncalibrated, explicit
  * only); `converse` speaks a bearer-authenticated Converse-protocol
- * (Bedrock-style) gateway's `POST <base>/converse`.
+ * (Bedrock-style) gateway's `POST <base>/model/<model_id>/converse`, the
+ * model named in the path.
  */
 export type DecisionModelAdapter = "systemone" | "vercel-evaluate" | "llm-emulation" | "converse";
 
@@ -280,7 +281,8 @@ export const DECISION_MODEL_PRESETS: Readonly<Record<string, DecisionModelPreset
     name: "converse",
     adapter: "converse",
     // The operator's bearer-authenticated gateway, such as
-    // https://gateway.example.com; requests go to <base>/converse.
+    // https://gateway.example.com; requests go to
+    // <base>/model/<model_id>/converse, the model named in the path.
     baseUrl: null,
     model: null,
     envKey: null,

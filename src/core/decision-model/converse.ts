@@ -1,7 +1,7 @@
 /**
  * `converse` adapter: a decision reached through a bearer-authenticated
  * gateway that speaks the Bedrock-style Converse protocol
- * (`POST <base_url>/converse`).
+ * (`POST <base_url>/model/<model_id>/converse`).
  *
  * A Converse gateway is chat-shaped, so the judgment is carried the way
  * `llm-emulation` carries one - the state and the questions travel in a
@@ -9,11 +9,13 @@
  * holding one JSON object keyed by question id - with the Converse wire
  * names around it:
  *
- *   request   `{ modelId, system: [{text}], messages: [{role, content:
- *             [{text}]}], inferenceConfig }`. The model id rides in the
- *             body as `modelId`, so the path below the base URL is fixed.
- *             `temperature` is pinned to 0; nothing else about sampling is
- *             configured, and no vendor-specific extension is sent;
+ *   request   the model is named in the path
+ *             (`/model/${encodeURIComponent(model)}/converse`), and the
+ *             body is `{ system: [{text}], messages: [{role, content:
+ *             [{text}]}], inferenceConfig }` - no `modelId` field, the
+ *             protocol puts none there. `temperature` is pinned to 0;
+ *             nothing else about sampling is configured, and no
+ *             vendor-specific extension is sent;
  *   response  `output.message.content` text blocks are joined and parsed
  *             as one JSON object whose items follow the same answer shape
  *             every decision route validates (`validateAnswer`), so a
@@ -72,8 +74,10 @@ import {
 /** The registry id this module is declared under in `EGRESS_SITES`. */
 export const CONVERSE_EGRESS_SITE = "decision-model-converse";
 
-/** The path below the configured base URL. The model id rides in the body. */
-const CONVERSE_PATH = "/converse";
+/** The path below the base URL: the protocol names the model in it. */
+function conversePath(model: string): string {
+  return `/model/${encodeURIComponent(model)}/converse`;
+}
 
 /** The `origin` label of the fenced state. */
 const CONVERSE_STATE_ORIGIN = "decision-model-state";
@@ -205,7 +209,7 @@ export class ConverseDecisionProvider implements DecisionProvider {
       allowInsecureHttp: endpoint.allowInsecureHttp === true,
       key: "decision_model_allow_insecure_http",
     });
-    this.url = `${base.replace(/\/+$/, "")}${CONVERSE_PATH}`;
+    this.url = `${base.replace(/\/+$/, "")}${conversePath(endpoint.model)}`;
   }
 
   async decide(req: DecisionRequest, opts: DecideOptions): Promise<DecisionResponse> {
@@ -260,7 +264,6 @@ export class ConverseDecisionProvider implements DecisionProvider {
       `Reply with one JSON object that matches this JSON schema:\n${JSON.stringify(schema)}\n\n` +
       `State:\n${fencedState}`;
     return JSON.stringify({
-      modelId: this.model,
       system: [{ text: CONVERSE_SYSTEM_PROMPT }],
       messages: [{ role: "user", content: [{ text: user }] }],
       inferenceConfig: { temperature: 0 },

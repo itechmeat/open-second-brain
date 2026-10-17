@@ -223,7 +223,9 @@ const ROUTES: ReadonlyArray<Route> = [
   },
   {
     adapter: "converse",
-    path: "/converse",
+    // The Converse protocol names the model in the path, and the shared
+    // config below pins `fake-model-1`.
+    path: "/model/fake-model-1/converse",
     calibrated: true,
     // A Converse gateway answers with generated text carrying the same
     // answer JSON a decision server returns, wrapped in the Bedrock-style

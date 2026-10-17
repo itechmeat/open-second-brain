@@ -100,7 +100,7 @@ async function failure(promise: Promise<unknown>): Promise<DecisionProviderError
 }
 
 describe("converse request mapping", () => {
-  test("the judgment travels as a Converse body: modelId, system, one user message", async () => {
+  test("the model names the path; the body carries system and one user message", async () => {
     server.setReply(() => converseReply({ refunded: { type: "noul", noul: 0.9 } }));
     await provider().decide(
       {
@@ -112,9 +112,11 @@ describe("converse request mapping", () => {
     );
     expect(server.requests).toHaveLength(1);
     const sent = server.requests[0]!;
-    expect(sent.path).toBe("/converse");
+    // The Converse protocol names the model in the path.
+    expect(sent.path).toBe("/model/gateway-jev-1/converse");
     expect(sent.headers["authorization"]).toBe(`Bearer ${FAKE_DECISION_KEY}`);
-    expect(sent.body["modelId"]).toBe("gateway-jev-1");
+    // The body has no modelId field: the path already names the model.
+    expect(sent.body["modelId"]).toBeUndefined();
     const system = sent.body["system"] as Array<{ text: string }>;
     expect(system).toHaveLength(1);
     expect(system[0]!.text).toContain("probabilities only");
@@ -131,6 +133,28 @@ describe("converse request mapping", () => {
     // No sampling licence is taken beyond determinism.
     const inferenceConfig = sent.body["inferenceConfig"] as Record<string, unknown>;
     expect(inferenceConfig["temperature"]).toBe(0);
+  });
+
+  test("the model id is URL-encoded into the path", async () => {
+    server.setReply(() => converseReply({ refunded: { type: "noul", noul: 0.9 } }));
+    const wide = new ConverseDecisionProvider({
+      name: "converse",
+      baseUrl: server.url,
+      model: "family/jev 1",
+      envKey: KEY_VAR,
+      apiKey: FAKE_DECISION_KEY,
+      calibrated: true,
+      timeoutMs: 2000,
+    });
+    await wide.decide(
+      {
+        use: "rerank",
+        state: "state",
+        questions: { refunded: QUESTIONS["refunded"]! },
+      },
+      { timeoutMs: 2000 },
+    );
+    expect(server.requests[0]!.path).toBe("/model/family%2Fjev%201/converse");
   });
 
   test("the state is fenced as untrusted content and cannot close the fence", async () => {

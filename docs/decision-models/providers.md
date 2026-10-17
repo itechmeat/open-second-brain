@@ -182,7 +182,8 @@ decision_model_uses: "rerank:shadow"
 
 `converse` reaches a decision model through a bearer-authenticated gateway
 that speaks the Bedrock-style Converse protocol
-(`POST <base_url>/converse`). The base URL, the pinned model id and the key
+(`POST <base_url>/model/<model_id>/converse`, the model named in the path).
+The base URL, the pinned model id and the key
 variable are yours to set; a key is required on every host, loopback
 included. The judgment travels the chat-shaped way: a system prompt and one
 user message carry the questions, the reply's JSON schema and the state,
