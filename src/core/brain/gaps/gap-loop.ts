@@ -36,7 +36,7 @@ import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { fenceUntrustedContent, neutralizeSingleLine } from "../untrusted-source.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
-import type { RecallResultSet, RecallRetriever } from "../recall-inject.ts";
+import type { RecallResultSet } from "../recall-inject.ts";
 import type { RetrievalDegradationCode } from "../../search/retrieval-trail.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../vault.ts";
@@ -424,7 +424,7 @@ export function renderGapAgenda(vault: string, now: Date): string {
  * measured something else, and {@link autoCloseRecalledGaps} refuses its
  * answer by name rather than reading the number anyway.
  *
- * A plain {@link RecallRetriever} is still assignable (it ignores the
+ * A plain recall retriever is still assignable (it ignores the
  * second argument) and is still correct for a retrieval that cannot
  * surface a rejected path at all - which is what the vault-identity
  * guard's fixture is.
