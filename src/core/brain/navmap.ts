@@ -13,7 +13,7 @@
  * ({@link buildNavmap}) so the render is unit-testable without an index.
  */
 
-import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
+import { fenceUntrustedContent, neutralizeSingleLine } from "./untrusted-source.ts";
 import { graphStats, type GraphStats } from "./link-graph/graph-index.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { Store } from "../search/store.ts";
@@ -56,15 +56,6 @@ export function deriveNavmap(stats: GraphStats): Navmap {
       stats.topByDegree.map((e) => Object.freeze({ path: e.path, degree: e.degree })),
     ),
   });
-}
-
-/**
- * Collapse any control/newline/tab run in an untrusted vault path to a single
- * space so a smuggled newline can never break the one-hub-per-line structure or
- * forge a fake block. Mirrors the recall-inject neutralizer precedent.
- */
-function neutralizeSingleLine(text: string): string {
-  return neutralizeUntrustedText(text).replace(/[\n\t]+/g, " ");
 }
 
 /**

@@ -30,7 +30,7 @@ import { RECALL_CHANNEL } from "./recall-telemetry.ts";
 import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
-import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
+import { fenceUntrustedContent, neutralizeSingleLine } from "./untrusted-source.ts";
 import { RECALL_INJECT_ANY_MIN, RECALL_INJECT_NOTE_MIN } from "../decision-model/questions.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import type { RecallSliceSpec } from "./types.ts";
@@ -1080,16 +1080,6 @@ function neutralizeTitle(title: string | null): string {
   if (title === null || title.length === 0) return "(untitled)";
   const clean = neutralizeSingleLine(title);
   return clean.length > 0 ? clean : "(untitled)";
-}
-
-/**
- * Structural single-line neutralizer for untrusted vault strings: strip
- * control/bidi/zero-width and escape delimiters ({@link
- * neutralizeUntrustedText}), then collapse any surviving newline/tab run to
- * one space so the value can never break the brief's one-per-line structure.
- */
-function neutralizeSingleLine(text: string): string {
-  return neutralizeUntrustedText(text).replace(/[\n\t]+/g, " ");
 }
 
 function renderNoteLine(note: { readonly title: string } & Omit<RecallCandidate, "title">): string {
