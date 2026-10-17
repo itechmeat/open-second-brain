@@ -10,9 +10,9 @@
  *    `confirmed | refused | headless-refused`;
  * 2. the receipt-line schema: actor, pid, before-hash, summary plus a
  *    per-lane tail (consent verdict, backup path, ...);
- * 3. the timestamped backup-folder layout: one stamp folder per target
- *    under a sibling `.o2b-backups` root, stamp in UTC compact
- *    `YYYY-MM-DD-HHMMSS` form.
+ * 3. the timestamped backup layout: a sibling `.o2b-backups` root
+ *    holding one folder per target file, each backup a stamp-named FILE
+ *    inside it, stamp in UTC compact `YYYY-MM-DD-HHMMSS` form.
  *
  * The conventions live in src/core/trust.ts so the CLI lanes import
  * them directly. The hook wrapper imports no src/core behavior - only
@@ -75,7 +75,7 @@ describe("trust conventions", () => {
     expect(parsed.actor).toBe("cli");
   });
 
-  test("backup-folder layout: one UTC stamp folder per target under .o2b-backups", () => {
+  test("backup layout: one folder per target under .o2b-backups, each backup a UTC-stamp file", () => {
     const stamp = backupFolderStamp(new Date("2026-10-16T12:34:56Z"));
     expect(stamp).toBe("2026-10-16-123456");
     expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2}-\d{6}$/);

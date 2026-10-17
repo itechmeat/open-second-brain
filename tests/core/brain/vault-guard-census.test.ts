@@ -115,8 +115,9 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "vault content. Keyed by `configPath`; no vault is in scope.",
   "src/core/brain/pretool-host-backup.ts":
     "host-settings backup executor. It writes only beside the caller-named " +
-    "host target (the stamped `.o2b-backups` folder under the same host " +
-    "client directory), outside any vault, and its one in-vault artifact - " +
+    "host target (its `.o2b-backups` folder under the same host client " +
+    "directory, each backup a stamped file inside it), outside any vault, " +
+    "and its one in-vault artifact - " +
     "the audit receipt - routes through the shared `appendAuditRecord` at " +
     "the caller-supplied audit root. A host settings file has no vault " +
     "identity to assert; the executor is fail-closed on its own terms (a " +

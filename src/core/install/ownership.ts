@@ -264,13 +264,13 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     location:
       "a .o2b-backups/ folder beside each protected settings file - e.g. " +
       "~/.claude/.o2b-backups/ for the user-level Claude settings - holding one " +
-      "timestamped folder per backup run",
+      "folder per protected file name, each run a stamped backup file inside it",
     carries_memory: false,
     created_by:
       "the opt-in PreToolUse host-backup hook, each time it allows an agent write to a " +
       "protected settings file by taking the snapshot first",
     removed_by:
-      "deleting the folder yourself - the hook only ever adds stamped folders and never prunes them",
+      "deleting the stamped files yourself - the hook only ever adds them and never prunes",
     note:
       "A point-in-time copy of the client's own settings file, kept so a badly advised agent " +
       "write can be undone by hand. It holds the host client's configuration, never vault " +
