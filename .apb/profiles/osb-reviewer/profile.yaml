@@ -3,6 +3,7 @@ description: Code reviewer for Open Second Brain pull requests; runs OpenCodeRev
 executor:
   agent: claude
   model: claude-opus-5-5
+  fallbacks: []
 soul: any
 skills: []
 environment: full
