@@ -426,4 +426,70 @@ describe("brain_unlinked_mentions cursor pagination", () => {
     });
     expect((r as { error?: { code: number } }).error?.code).toBe(-32602);
   });
+
+  test("a page fetch's scan stops at the page's lookahead bound and the walk still reassembles every mention", async () => {
+    writePref("pref-bound-target", {
+      kind: "preference",
+      topic: "t",
+      status: "confirmed",
+      principle: "p",
+      title: "Bound Target",
+    });
+    // Ten sources carrying two mentions each: the true filtered set (20)
+    // sits far past one page's reach, so the answer to page 1 tells
+    // whether the scan walked the whole set (total 20) or stopped at the
+    // page's own reach (the offset + limit + 1 lookahead bound).
+    for (let i = 1; i <= 10; i++) {
+      writePref(
+        `pref-bound-${i}`,
+        { kind: "preference", topic: "b", status: "confirmed", principle: "p" },
+        "Bound Target said once.\nBound Target said twice.",
+      );
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const first = JSON.parse(
+      (
+        await callTool(server, "brain_unlinked_mentions", {
+          id: "pref-bound-target",
+          limit: 2,
+        })
+      ).result!.content[0]!.text,
+    );
+    // The scan may stop three mentions in; `total` reports that bound
+    // instead of pretending page 1 paid for the whole walk.
+    expect(first["total"]).toBe(3);
+    expect(first["mentions"]).toHaveLength(2);
+    expect(first["next_cursor"]).not.toBeNull();
+
+    // The bound buys the page, never truncation: walking still
+    // reassembles all twenty mentions, and the exhausted walk's total is
+    // exact.
+    const sources: string[] = first["mentions"].map(
+      (m: { source: string }) => m["source"] as string,
+    );
+    let cursor = first["next_cursor"] as string | null;
+    let lastTotal = first["total"];
+    let steps = 0;
+    while (cursor !== null && steps < 40) {
+      const out = JSON.parse(
+        (
+          await callTool(server, "brain_unlinked_mentions", {
+            id: "pref-bound-target",
+            limit: 2,
+            cursor,
+          })
+        ).result!.content[0]!.text,
+      );
+      sources.push(...out["mentions"].map((m: { source: string }) => m["source"]));
+      lastTotal = out["total"];
+      cursor = out["next_cursor"];
+      steps += 1;
+    }
+    expect(cursor).toBeNull();
+    expect(lastTotal).toBe(20);
+    expect(sources).toHaveLength(20);
+    expect(new Set(sources).size).toBe(10);
+  });
 });

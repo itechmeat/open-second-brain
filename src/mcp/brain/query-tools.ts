@@ -719,15 +719,23 @@ async function toolBrainUnlinkedMentions(
   }
   // `context` is the source artifact's own line of prose, so an
   // unscoped scan republished an owner-private body (U3, recon C3).
-  // The page is cut at this layer over the full visible set, so `total`
-  // counts every mention across pages and `next_cursor` continues the
-  // walk (null when exhausted).
+  // The scanner early-exits one mention past the page's reach
+  // (`offset + limit + 1`): the lookahead proves whether a next page
+  // exists, so `next_cursor` never lies and the full visible set stays
+  // reachable by walking, while one page fetch never rescans the
+  // directory walk past its own reach. (The cursor rollout replaced the
+  // scanner's caller cap with `MAX_SAFE_INTEGER`, which made every page
+  // fetch re-walk every preference and retired file - a quadratic walk
+  // under forged cursors; the bound restores the early exit without
+  // reintroducing silent truncation.) `total` is exact once the walk
+  // exhausts; before that it reports the bound the page reached.
+  const pageSize = limit ?? UNLINKED_MENTIONS_DEFAULT_LIMIT;
   const mentions = findUnlinkedMentions(ctx.vault, targetId, {
-    limit: Number.MAX_SAFE_INTEGER,
+    limit: offset + pageSize + 1,
     ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
     reachView: reachView(ctx.vault, contextReach(ctx)),
   });
-  const page = pageSlice(mentions, offset, limit ?? UNLINKED_MENTIONS_DEFAULT_LIMIT);
+  const page = pageSlice(mentions, offset, pageSize);
   return {
     vault_path: vaultPathField(ctx),
     target_id: targetId,

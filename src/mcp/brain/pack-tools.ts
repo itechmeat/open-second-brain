@@ -810,14 +810,26 @@ async function toolBrainEventTrace(
 
   let events;
   try {
-    // The full day's matching set is resolved and one page is cut here, so
-    // `total`/`trace_total` stay exact across pages and the walk continues
-    // through `next_cursor` (null when exhausted).
+    // The scan early-exits one event past the page's reach
+    // (`offset + limit + 1`, evaluated by the core before the
+    // trace-attachment work): the lookahead proves whether a next page
+    // exists, so `next_cursor` never lies and the full day's matching
+    // set stays reachable by walking, while one page fetch never re-runs
+    // the attachment scan past its own reach. (The cursor rollout
+    // dropped the caller cap that bounded this scan, making every page
+    // fetch attach traces for the whole day - a quadratic walk under
+    // forged cursors; the bound restores the early exit without
+    // reintroducing silent truncation.) `total`/`trace_total` are exact
+    // once the walk exhausts; before that they report the bound the
+    // page reached. A limit-less call still reads the day whole: its
+    // page is the answer, not a step of a walk.
+    const scanBound = limit !== undefined ? offset + limit + 1 : undefined;
     events = resolveLogEventTraces(ctx.vault, {
       ...(date !== undefined ? { date } : {}),
       ...(at !== undefined ? { at } : {}),
       ...(kind !== undefined ? { kind: kind as BrainLogEventKind } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(scanBound !== undefined ? { limit: scanBound } : {}),
       ...(keepPrivate === true ? { keepPrivate: true } : {}),
       // The event body is echoed verbatim and log payloads carry
       // artifact paths (a-label-is-not-a-boundary, U3).

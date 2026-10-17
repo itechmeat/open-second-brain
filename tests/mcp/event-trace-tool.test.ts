@@ -218,4 +218,52 @@ describe("brain_event_trace cursor pagination", () => {
     })) as { error?: { code: number } };
     expect(response.error?.code).toBe(-32602);
   });
+
+  test("a page fetch's scan stops at the page's lookahead bound and the walk still reassembles every event", async () => {
+    for (let index = 0; index < 8; index++) {
+      appendLogEvent(vault, {
+        timestamp: `2026-06-15T10:${String(index * 5).padStart(2, "0")}:00Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.writeSession,
+        agent: "tester",
+        body: { session_id: `sess-bound-${index}`, kind: "note", status: "committed" },
+      });
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    // Eight events sit far past one page's reach, so page 1's `total`
+    // tells whether the trace-attachment scan walked the whole day
+    // (total 8) or stopped at the page's own reach (the
+    // offset + limit + 1 lookahead bound).
+    const first = await callEventTrace(server, { date: "2026-06-15", limit: 3 });
+    expect(first["total"]).toBe(4);
+    expect(first["next_cursor"]).not.toBeNull();
+
+    // The bound buys the page, never truncation: walking still
+    // reassembles all eight events, and the exhausted walk's total is
+    // exact.
+    const stamps: string[] = (first["events"] as ReadonlyArray<Record<string, unknown>>).map(
+      (e) => (e["event"] as Record<string, unknown>)["timestamp"] as string,
+    );
+    let cursor = first["next_cursor"] as string | null;
+    let lastTotal = first["total"];
+    while (cursor !== null) {
+      const page = await callEventTrace(server, {
+        date: "2026-06-15",
+        limit: 3,
+        cursor,
+      });
+      stamps.push(
+        ...(page["events"] as ReadonlyArray<Record<string, unknown>>).map(
+          (e) => (e["event"] as Record<string, unknown>)["timestamp"] as string,
+        ),
+      );
+      lastTotal = page["total"];
+      cursor = page["next_cursor"] as string | null;
+    }
+    expect(cursor).toBeNull();
+    expect(lastTotal).toBe(8);
+    expect(stamps).toHaveLength(8);
+    expect(new Set(stamps).size).toBe(8);
+  });
 });
