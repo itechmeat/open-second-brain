@@ -94,7 +94,7 @@ describe("gemini-cli adapter — config path resolution", () => {
 describe("gemini-cli plan diff — secrets from other servers never render", () => {
   // Credential-plausible but format-neutral: no real provider prefix
   // (ghp_, sk-, AKIA, xoxb-), so secret scanners do not flag the fixture.
-  const token = "fake-credential-value-0123456789abcdef";
+  const leakedMarker = "fake-credential-value-0123456789abcdef";
 
   function writeMinifiedConfig(osbArgs: string[]) {
     const configPath = join(home, ".gemini", "settings.json");
@@ -108,7 +108,7 @@ describe("gemini-cli plan diff — secrets from other servers never render", () 
           "open-second-brain": { command: "o2b", args: osbArgs },
           github: {
             command: "gh-mcp",
-            env: { GITHUB_TOKEN: token, VERSION: "1" },
+            env: { GITHUB_TOKEN: leakedMarker, VERSION: "1" },
           },
         },
       }),
@@ -123,7 +123,7 @@ describe("gemini-cli plan diff — secrets from other servers never render", () 
     expect(step.kind).toBe("json-merge");
     expect("diff" in step && typeof step.diff === "string").toBe(true);
     const diff = (step as { diff: string }).diff;
-    expect(diff).not.toContain(token);
+    expect(diff).not.toContain(leakedMarker);
   });
 
   test("a token line inside the changed window renders redacted, shape change still shows", () => {
@@ -134,7 +134,7 @@ describe("gemini-cli plan diff — secrets from other servers never render", () 
     writeMinifiedConfig(["mcp", "--vault", "/drifted/old"]);
     const plan = geminiCliAdapter.plan(payload(), env());
     const diff = (plan.steps[0] as { diff: string }).diff;
-    expect(diff).not.toContain(token);
+    expect(diff).not.toContain(leakedMarker);
     expect(diff).toContain('"GITHUB_TOKEN": "***REDACTED***"');
     expect(diff).toContain("open-second-brain");
   });
