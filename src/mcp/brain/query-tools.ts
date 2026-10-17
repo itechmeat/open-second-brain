@@ -1122,7 +1122,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "Maximum number of mentions to return. Defaults to 100; the scanner stops as soon as the cap is hit.",
+            "Maximum mentions on one page. Defaults to 100; walk further with the returned `next_cursor`.",
         },
         cursor: CURSOR_SCHEMA,
       },
