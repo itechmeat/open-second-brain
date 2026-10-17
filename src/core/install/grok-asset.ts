@@ -112,7 +112,22 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
     event: "UserPromptSubmit",
     groups: [{ hooks: ["session-capture", "recall-inject", "nav-inject"] }],
   },
-  { event: "PreToolUse", groups: [{ hooks: ["pretool-orient"] }] },
+  {
+    event: "PreToolUse",
+    groups: [
+      {
+        hooks: [
+          "pretool-orient",
+          // The opt-in host-settings backup gate: default OFF and a silent
+          // no-op until armed, and its own write-tool check does the
+          // narrowing the plugin spells as a matcher (grok's PreToolUse
+          // carries none, so a non-write tool call reaches it and is
+          // waved through by the hook itself).
+          "pretool-host-backup",
+        ],
+      },
+    ],
+  },
   {
     event: "PostToolUse",
     groups: [
