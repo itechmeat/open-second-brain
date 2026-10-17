@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
+import { writePreference } from "../../src/core/brain/preference.ts";
+import { BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import type { InsightCandidate, TriggerRecord } from "../../src/core/brain/triggers/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -75,6 +77,33 @@ function seedUnreadable(overrides: Partial<InsightCandidate> = {}): string {
     "utf8",
   );
   return path;
+}
+
+/**
+ * Seed the finding the core scan tests use (a burst of confirmed
+ * preferences): the one vault shape whose `scan` produces candidates on
+ * its own, so a rescan after the finding is silenced lands in `skipped`.
+ */
+const BURST_SIZE = 6;
+
+function seedBurstMember(index: number): void {
+  writePreference(
+    vault,
+    {
+      slug: `zzburst-${index}`,
+      topic: `zzburst-topic-${index}`,
+      principle: `Keep burst preference ${index} distinct from its siblings.`,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: `2026-05-02T0${index}:00:00Z`,
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+    },
+    { overwrite: true },
+  );
 }
 
 interface UnreadableJson {
@@ -243,12 +272,30 @@ describe("o2b brain trigger", () => {
   });
 
   test("scan --json skip rows always name their cooldown key and reason", async () => {
+    // The empty vault scans to `skipped: []`, which would make every
+    // assertion below vacuous. Seed the burst finding the core scan
+    // tests use, let the first scan create its trigger, then suppress
+    // it: the rescan's sighting is silenced by the suppressed twin,
+    // which is what puts a row in `skipped` for the CLI to project.
+    for (let index = 0; index < BURST_SIZE; index++) seedBurstMember(index);
+    const first = await runCli(["brain", "trigger", "scan", "--json"], { env: env() });
+    expect(first.returncode).toBe(0);
+    const created = (JSON.parse(first.stdout) as { created: Array<{ id: string }> }).created;
+    expect(created).toHaveLength(1);
+    const silenced = await runCli(["brain", "trigger", "suppress", created[0]!.id], { env: env() });
+    expect(silenced.returncode).toBe(0);
+
     const out = await runCli(["brain", "trigger", "scan", "--json"], { env: env() });
     expect(out.returncode).toBe(0);
     const parsed = JSON.parse(out.stdout) as { skipped: Array<Record<string, unknown>> };
+    expect(parsed.skipped).toHaveLength(1);
     for (const row of parsed.skipped) {
       expect(Object.keys(row).toSorted()).toEqual(["cooldown_key", "reason"]);
     }
+    expect(parsed.skipped[0]).toEqual({
+      cooldown_key: "batch_inflation:pref-zzburst-0:pref-zzburst-5",
+      reason: "suppressed",
+    });
   });
 
   test("snoozing an already-snoozed trigger fails naming its state", async () => {
