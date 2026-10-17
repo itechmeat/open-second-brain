@@ -11,8 +11,9 @@
  * Anti-nag invariants live here and only here:
  *   - cooldown-key dedup across ALL statuses makes repeated scans
  *     idempotent (a suppressed twin always blocks; an open twin always
- *     blocks; a dismissed twin blocks while its grounding artifacts are
- *     unchanged - movement, not the clock, is what resurrects it; an
+ *     blocks; a dismissed twin blocks while no re-fire grounds the
+ *     finding in anything its dismissal does not cover - movement, not
+ *     the clock, is what resurrects it; an
  *     acted twin blocks for `cooldownDays` after its resolution; an
  *     expired twin allows);
  *   - lifecycle transitions: acknowledge / act / dismiss are allowed
@@ -795,9 +796,9 @@ export interface CreateTriggersOptions {
   readonly now: Date;
   /**
    * Days an acted twin blocks recreation. A DISMISSED twin is not on
-   * this clock: it blocks while its grounding artifacts are unchanged,
-   * however long, and moves aside the moment a re-fire arrives on
-   * changed ones (t_00e9de6a).
+   * this clock: it blocks while no re-fire introduces grounding the
+   * dismissal does not cover, however long, and moves aside the moment
+   * a re-fire arrives on changed ones (t_00e9de6a).
    */
   readonly cooldownDays?: number;
   /** Days until a fresh trigger expires. */
@@ -843,14 +844,19 @@ export interface CreateTriggersResult {
 }
 
 /**
- * Whether a re-fire arrived on different grounding than a dismissed
- * record is persisted against.
+ * Whether a re-fire arrived on grounding the dismissal does not cover.
  *
- * The comparison is the `deriveDatasetHash` convention inlined
- * (src/core/brain/derived-artifact.ts): both lists deduplicated and
- * lexicographically sorted before comparing, so it is order-insensitive
- * and duplicate-insensitive by construction - the detector firing on the
- * same artifacts in a different walk order is not movement.
+ * Movement is the candidate INTRODUCING an artifact absent from the
+ * persisted set: the finding now rests on something the dismissal never
+ * saw, so it no longer covers it. The comparison is set-based, in the
+ * `deriveDatasetHash` convention inlined
+ * (src/core/brain/derived-artifact.ts): both sides deduplicated, so it
+ * is order-insensitive and duplicate-insensitive by construction - the
+ * detector firing on the same artifacts in a different walk order is not
+ * movement, and neither is a re-fire naming a SUBSET of the persisted
+ * grounding. A remote `brain_trigger scan` that sees less than the
+ * original one introduces nothing new, and a dismissal is undone only by
+ * new evidence, not by a narrower sighting of the same one.
  *
  * An EMPTY persisted list never reads as moved, whatever the candidate
  * names: absence of grounding is the neutral reading (the content-hash
@@ -864,10 +870,8 @@ function sourceArtifactsChanged(
   current: ReadonlyArray<string>,
 ): boolean {
   if (persisted.length === 0) return false;
-  const stable = [...new Set(persisted)].toSorted();
-  const moved = [...new Set(current)].toSorted();
-  if (stable.length !== moved.length) return true;
-  return stable.some((artifact, i) => artifact !== moved[i]);
+  const covered = new Set(persisted);
+  return [...new Set(current)].some((artifact) => !covered.has(artifact));
 }
 
 function blockReason(
@@ -887,10 +891,11 @@ function blockReason(
   if (twin.effectiveStatus === TRIGGER_STATUS.snoozed) return "snoozed";
   if (TRIGGER_OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
   if (twin.effectiveStatus === TRIGGER_STATUS.expired) return null;
-  // dismissed: movement-gated. The finding stays silent for however
-  // long its grounding is unchanged and is recreated - as a new record
-  // through the normal path - the moment a re-fire arrives on changed
-  // artifacts. No clock: the old cooldown window could resurrect an
+  // dismissed: movement-gated. The finding stays silent while no
+  // re-fire grounds it in anything the dismissal does not cover, and is
+  // recreated - as a new record through the normal path - the moment a
+  // re-fire introduces an artifact the dismissal never saw. No clock:
+  // the old cooldown window could resurrect an
   // untouched finding and keep a moved one silent, which is exactly the
   // nag this gate replaces.
   if (twin.effectiveStatus === TRIGGER_STATUS.dismissed) {

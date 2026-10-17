@@ -154,6 +154,46 @@ test("a dismissed record with no persisted artifacts is never read as moved", ()
   expect(later.skipped[0]!.reason).toBe("dismissed");
 });
 
+test("a dismissed trigger stays dismissed when a re-fire grounds a subset of its artifacts", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // A remote `brain_trigger scan` re-firing a SUBSET of the persisted
+  // grounding introduces nothing the dismissal did not already cover, so
+  // it is not movement and must not resurrect the finding.
+  const subset = createTriggers(vault, [candidate({ sourceArtifacts: ["[[pref-a]]"] })], {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(subset.created).toHaveLength(0);
+  expect(subset.skipped[0]!.reason).toBe("dismissed");
+
+  // Still not movement past the old cooldown window: the dismissal has
+  // no clock, and the subset adds nothing new at any age.
+  const later = createTriggers(vault, [candidate({ sourceArtifacts: ["[[pref-a]]"] })], {
+    now: new Date(NOW.getTime() + 8 * DAY_MS),
+    cooldownDays: 7,
+  });
+  expect(later.created).toHaveLength(0);
+  expect(later.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a dismissed trigger is recreated when a re-fire introduces an artifact the dismissal never covered", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // The superset direction: everything persisted is named again, but the
+  // candidate also grounds the finding in something new - the finding
+  // moved, so a NEW pending record arrives.
+  const widened = createTriggers(
+    vault,
+    [candidate({ sourceArtifacts: ["[[pref-a]]", "[[pref-b]]", "[[pref-c]]"] })],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(widened.created).toHaveLength(1);
+  expect(widened.created[0]!.id).not.toBe(created[0]!.id);
+  expect(widened.created[0]!.sourceArtifacts).toEqual(["[[pref-a]]", "[[pref-b]]", "[[pref-c]]"]);
+});
+
 test("lifecycle transitions are enforced", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
