@@ -416,14 +416,70 @@ function parseOptionalInstant(raw: unknown, key: string, path: string): string |
  * but not a status refuses. A snoozed record whose interrupted status
  * cannot be read must not degrade to a snooze that can never wake into
  * anything - the wake arm would have nothing to restore.
+ *
+ * One present value refuses even though it IS a status: `snoozed`. A
+ * snooze seeded from the computed status can never record it (see
+ * {@link snooze}), so a file carrying it was hand-edited or predates the
+ * write-site guard - and it describes a restore that restores into
+ * itself. Read honestly it makes the record a permanent zombie: hidden
+ * from `list` behind the terminal partition, refused by every
+ * transition, undismissable. Rather than admit it silently, the read
+ * boundary refuses and names the hand fix, so the record surfaces in
+ * {@link TriggerScan.unreadable} next to its healthy siblings instead of
+ * zombifying in silence.
  */
 function parseSnoozedFrom(raw: unknown, path: string): TriggerStatus | null {
   if (raw === undefined) return null;
-  if (typeof raw === "string" && isTriggerStatus(raw)) return raw;
+  if (typeof raw === "string" && isTriggerStatus(raw)) {
+    if (raw === TRIGGER_STATUS.snoozed) {
+      throw new TriggerFieldError(path, TRIGGER_KEY.snoozedFrom, restoreIntoItself(raw));
+    }
+    return raw;
+  }
   throw new TriggerFieldError(
     path,
     TRIGGER_KEY.snoozedFrom,
     presentButUnreadable(`not one of ${TRIGGER_STATUSES.join(", ")}`, raw),
+  );
+}
+
+/**
+ * The status a suppression interrupted, or `null` when nothing recorded
+ * one.
+ *
+ * The twin of {@link parseSnoozedFrom}: absent is an honest `null`,
+ * present but not a status refuses rather than degrading to `null` (which
+ * would read a hand-edited record as one that never carried a prior
+ * status), and `suppressed` refuses as the restore-into-itself zombie it
+ * is - a suppression carrying it can never be undone into anything but
+ * itself.
+ */
+function parseSuppressedFrom(raw: unknown, path: string): TriggerStatus | null {
+  if (raw === undefined) return null;
+  if (typeof raw === "string" && isTriggerStatus(raw)) {
+    if (raw === TRIGGER_STATUS.suppressed) {
+      throw new TriggerFieldError(path, TRIGGER_KEY.suppressedFrom, restoreIntoItself(raw));
+    }
+    return raw;
+  }
+  throw new TriggerFieldError(
+    path,
+    TRIGGER_KEY.suppressedFrom,
+    presentButUnreadable(`not one of ${TRIGGER_STATUSES.join(", ")}`, raw),
+  );
+}
+
+/**
+ * Detail for a restore-from field naming its own status class. The value
+ * is a real status, so the ordinary vocabulary refusal would pass it; the
+ * remedy it names is the hand fix - never `dismiss`, which is exactly the
+ * transition a record this broken is refused.
+ */
+function restoreIntoItself(value: TriggerStatus): string {
+  return (
+    `reads '${value}', which would restore a ${value} record into itself - ` +
+    "a zombie hidden from list and refused by every transition; " +
+    "fix the field by hand to the status the silence interrupted"
   );
 }
 
@@ -553,7 +609,7 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
   }
   const createdAt = parseCreatedAt(meta[TRIGGER_KEY.createdAt], path);
   const expiresAt = textOrEmpty(meta[TRIGGER_KEY.expiresAt]);
-  const suppressedFrom = meta[TRIGGER_KEY.suppressedFrom];
+  const suppressedFrom = parseSuppressedFrom(meta[TRIGGER_KEY.suppressedFrom], path);
   const snoozedAt = parseOptionalInstant(meta[TRIGGER_KEY.snoozedAt], TRIGGER_KEY.snoozedAt, path);
   const snoozedUntil = parseOptionalInstant(
     meta[TRIGGER_KEY.snoozedUntil],
@@ -589,7 +645,7 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     deliveredAt: textOrNull(meta[TRIGGER_KEY.deliveredAt]),
     resolvedAt: textOrNull(meta[TRIGGER_KEY.resolvedAt]),
     suppressedAt: textOrNull(meta[TRIGGER_KEY.suppressedAt]),
-    suppressedFrom: isTriggerStatus(suppressedFrom) ? suppressedFrom : null,
+    suppressedFrom,
     snoozedAt,
     snoozedUntil,
     snoozedFrom,
@@ -1223,6 +1279,16 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
     );
   }
   const restored = record.suppressedFrom;
+  // A suppression never restores INTO suppressed, mirroring the snooze
+  // write-site guard below. {@link parseSuppressedFrom} refuses such a
+  // file at the read boundary, so this arm guards the in-memory path only;
+  // enforced here so the invariant holds at every place the field is read.
+  if (restored === TRIGGER_STATUS.suppressed) {
+    throw new Error(
+      `trigger ${record.id} carries suppressed_from: suppressed; ` +
+        "a suppression cannot restore into suppressed",
+    );
+  }
   const next: TriggerRecord = Object.freeze({
     ...record,
     status: restored,
@@ -1298,6 +1364,16 @@ function unsnooze(record: TriggerRecord, now: Date): TriggerRecord {
     );
   }
   const restored = record.snoozedFrom;
+  // A snooze never restores INTO snoozed, mirroring the {@link snooze}
+  // write-site guard. {@link parseSnoozedFrom} refuses such a file at the
+  // read boundary, so this arm guards the in-memory path only; enforced
+  // here so the invariant holds at every place the field is read.
+  if (restored === TRIGGER_STATUS.snoozed) {
+    throw new Error(
+      `trigger ${record.id} carries snoozed_from: snoozed; ` +
+        "a snooze cannot restore into snoozed",
+    );
+  }
   const next: TriggerRecord = Object.freeze({
     ...record,
     status: restored,

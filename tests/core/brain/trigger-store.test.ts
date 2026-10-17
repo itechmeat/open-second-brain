@@ -385,6 +385,100 @@ test("an unreadable snoozed_from refuses instead of silently defaulting", () => 
   expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_from");
 });
 
+// ── Defect: a restore-from field naming its own status class is a zombie ─────
+//
+// `snoozed_from: snoozed` and `suppressed_from: suppressed` describe a
+// restore that restores into itself: the wake arm reads the record back to
+// its own status forever, so it hides from `list` behind the terminal
+// partition and refuses every transition - undismissable, unwakeable,
+// silent. The write site can never produce one (a snooze seeds its restore
+// from the computed status), but the parser admitted one, so a hand-edited
+// or pre-upgrade record became a permanent zombie with nothing anywhere
+// saying so. The read boundary now refuses, naming the field and the fix.
+
+test("a snoozed_from reading snoozed refuses at the read boundary instead of zombifying", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(
+    path,
+    NOW.toISOString(),
+    new Date(NOW.getTime() + 3 * DAY_MS).toISOString(),
+    "snoozed",
+  );
+
+  const scan = readTriggers(vault, { now: NOW });
+  expect(scan.records).toHaveLength(0);
+  expect(scan.unreadable).toHaveLength(1);
+  expect(scan.unreadable[0]!.key).toBe("snoozed_from");
+  expect(scan.unreadable[0]!.path).toBe(path);
+  // The refusal tells the operator to fix the field - never to dismiss,
+  // which a snoozed record refuses (terminal) and a record this broken
+  // could not reach anyway.
+  expect(scan.unreadable[0]!.error.message).not.toMatch(/\bdismiss\b/i);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("snoozed_from");
+});
+
+test("a suppressed_from reading suppressed refuses at the read boundary instead of zombifying", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  rewriteLine(path, /^suppressed_from: .*$/mu, "suppressed_from: suppressed");
+
+  const scan = readTriggers(vault, { now: NOW });
+  expect(scan.records).toHaveLength(0);
+  expect(scan.unreadable).toHaveLength(1);
+  expect(scan.unreadable[0]!.key).toBe("suppressed_from");
+  expect(scan.unreadable[0]!.error.message).not.toMatch(/\bdismiss\b/i);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("suppressed_from");
+});
+
+test("a record zombied before the fix names the field to fix instead of vanishing", () => {
+  // A record written before the parser refused: the operator must be able
+  // to find it through the surfaces they have, and the naming must point at
+  // the hand fix.
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(
+    path,
+    NOW.toISOString(),
+    new Date(NOW.getTime() + 3 * DAY_MS).toISOString(),
+    "snoozed",
+  );
+  expect(() => transitionTrigger(vault, created[0]!.id, "unsnooze", { now: NOW })).toThrow(
+    "snoozed_from",
+  );
+  expect(() => transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW })).toThrow(
+    "snoozed_from",
+  );
+  // The unreadable record stays confined to itself: its sibling is still
+  // readable and operable.
+  const { created: fresh } = createTriggers(
+    vault,
+    [candidate({ cooldownKey: "contradiction:pref-c:pref-d" })],
+    { now: NOW },
+  );
+  expect(readTriggers(vault, { now: NOW }).records.map((r) => r.id)).toEqual([fresh[0]!.id]);
+});
+
+test("a restore-from field naming the OTHER silence class still reads and restores verbatim", () => {
+  // Only the self-referential values are zombies. A snooze over a
+  // suppression (and a suppression over a snooze) is a real lifecycle
+  // position: `snoozed_from: suppressed` restores into suppressed, which is
+  // exactly what the verbatim-restore contract promises.
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
+  rewriteLine(path, /^snoozed_from: .*$/mu, "snoozed_from: suppressed");
+  const record = listTriggers(vault, { now: NOW })[0]!;
+  expect(record.snoozedFrom).toBe("suppressed");
+  // The wake restores suppressed, the terminal status the snooze
+  // interrupted - not a zombie, an honest lifecycle position.
+  const woken = listTriggers(vault, { now: new Date(NOW.getTime() + 4 * DAY_MS) })[0]!;
+  expect(woken.effectiveStatus).toBe("suppressed");
+});
+
 // ── Snooze transition and wake (t_00e9de6a) ─────────────────────────────────
 
 test("snooze defers a trigger for a bounded window, then the original resurfaces with its ledger intact", () => {
