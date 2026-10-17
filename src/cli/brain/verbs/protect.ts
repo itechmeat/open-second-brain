@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+
 import {
   applyProtect,
   BrainProtectError,
@@ -7,10 +10,23 @@ import {
   printSnippet,
   PROTECT_TARGETS,
   unprotect,
+  type ProtectCompute,
+  type UnprotectResult,
 } from "../../../core/brain/protect.ts";
 import type { LaneConsentVerdict } from "../../../core/brain/diagnostics.ts";
+import { hookAuditDir } from "../../../core/brain/paths.ts";
+import { appendAuditRecord } from "../../../core/reliability/audit.ts";
 import { renderUnifiedDiff } from "../../../core/diff.ts";
-import { brainVerbContext, fail, info, ok, okJson, parse, readSingleLine } from "../helpers.ts";
+import {
+  brainVerbContext,
+  fail,
+  info,
+  ok,
+  okJson,
+  parse,
+  readSingleLine,
+  resolveBrainAgent,
+} from "../helpers.ts";
 
 /**
  * Derive the consent verdict the guarded host-write lanes record, from
@@ -49,6 +65,47 @@ export function consentRefusal(json: boolean, message: string, exitCode = 1): nu
     return exitCode;
   }
   return fail(message);
+}
+
+/**
+ * The unprotect audit receipt (M4): one record in the vault's audit
+ * store naming the host file, the sha-256 of the pre-write bytes, the
+ * backup, and the consent verdict - the audit trail the docs promise
+ * for this lane. Same store and record shape the host-backup hook's
+ * receipts use, so the guarded host-write evidence reads one way.
+ *
+ * Best-effort, like the hook's receipt: the write has already happened,
+ * so a failed append must not turn a completed unprotect into a
+ * non-zero exit - evidence, not the guard.
+ */
+function appendUnprotectReceipt(opts: {
+  vault: string;
+  actor: string;
+  consent: LaneConsentVerdict;
+  compute: ProtectCompute;
+  result: UnprotectResult;
+}): void {
+  try {
+    appendAuditRecord(hookAuditDir(opts.vault), {
+      timestamp: new Date().toISOString(),
+      actor: opts.actor,
+      action: "brain-unprotect",
+      target: opts.result.destination,
+      ok: true,
+      details: {
+        pid: process.pid,
+        before_hash: `sha256:${createHash("sha256").update(opts.compute.before).digest("hex")}`,
+        summary: opts.result.changed
+          ? `removed OSB-managed rules from ${basename(opts.result.destination)}`
+          : `nothing OSB-managed to remove for ${opts.result.target}`,
+        consent: opts.consent,
+        changed: opts.result.changed,
+        ...(opts.result.backupPath ? { backup: opts.result.backupPath } : {}),
+      },
+    });
+  } catch {
+    /* evidence, not the guard */
+  }
 }
 
 export async function cmdBrainProtect(argv: string[]): Promise<number> {
@@ -144,7 +201,7 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
     );
   }
   const target = rawTarget;
-  const vault = brainVerbContext(flags).vault;
+  const { config, vault } = brainVerbContext(flags);
 
   // H4: `--yes` without `--apply` used to fall through to the read-only
   // preview and exit 0, so a script migrated per the documented ladder
@@ -199,6 +256,15 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
       // exact bytes this ladder showed - anything else is a refusal
       // before a single byte moves.
       const result = unprotect({ target, vault, approved: compute });
+      // M4c: the audit receipt the docs promise for this lane, recorded
+      // beside the write with the verdict this run actually earned.
+      appendUnprotectReceipt({
+        vault,
+        actor: resolveBrainAgent(flags, config),
+        consent: deriveConsentVerdict(result.changed, flags["yes"] === true),
+        compute,
+        result,
+      });
       if (flags["json"]) {
         okJson({
           consent: deriveConsentVerdict(result.changed, flags["yes"] === true),

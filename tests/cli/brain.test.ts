@@ -27,11 +27,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
+import { hookAuditDir } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
 let vault: string;
@@ -1985,6 +1987,52 @@ describe("brain unprotect consent ladder", () => {
     expect(payload["changed"]).toBe(true);
     // The preview wrote nothing.
     expect(readFileSync(settingsPath, "utf8")).toBe(withRules);
+  });
+
+  test("--apply --yes appends an audit receipt beside the write (M4c)", async () => {
+    await bootstrap();
+    const settingsPath = join(vault, ".claude", "settings.json");
+    await runCli(protectArgs(), { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const beforeUnprotect = readFileSync(settingsPath, "utf8");
+
+    const r = await runCli(
+      [
+        "brain",
+        "unprotect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+
+    // The receipt lands in the vault's audit store beside the write:
+    // one record naming the host file, the pre-write hash, the backup
+    // and the consent verdict - the audit trail the docs promise for
+    // unprotect.
+    const auditDir = hookAuditDir(vault);
+    const records: Array<Record<string, unknown>> = [];
+    for (const f of readdirSync(auditDir)) {
+      for (const line of readFileSync(join(auditDir, f), "utf8").split("\n")) {
+        if (line.trim().length > 0) records.push(JSON.parse(line) as Record<string, unknown>);
+      }
+    }
+    const receipt = records.find((l) => l["action"] === "brain-unprotect");
+    expect(receipt).toBeDefined();
+    expect(receipt!["target"]).toBe(settingsPath);
+    expect(receipt!["ok"]).toBe(true);
+    const details = receipt!["details"] as Record<string, unknown>;
+    expect(details["consent"]).toBe("yes-flag");
+    expect(details["changed"]).toBe(true);
+    expect(details["backup"]).toBeTruthy();
+    // The before-hash pins the exact pre-write bytes the backup holds.
+    const digest = createHash("sha256").update(beforeUnprotect).digest("hex");
+    expect(details["before_hash"]).toBe(`sha256:${digest}`);
   });
 
   test("--apply --yes with nothing managed is a changed:false no-op with no backup", async () => {
