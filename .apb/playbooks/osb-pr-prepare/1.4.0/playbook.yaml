@@ -375,8 +375,9 @@ nodes:
        node; its last line is `CYCLE-RUN: <status> exit=<n>
        summary=<path>`). Read summary.txt and the ocr, codex and
        security-review outputs in that run folder. `nothing-new` (runner
-       exit 4) means HEAD is already pushed or the range is empty:
-       report that and stop. `failed`: a step
+       exit 4) means the cycle already reviewed HEAD on an earlier
+       pass: skip to the output below with `CYCLE: done (0 rounds, 0
+       real, 0 fixed, 0 declined)` and that reason. `failed`: a step
        did not really review; rerun only that step with the skill
        runner once (`--steps <step>`, same range) and report it; never
        report a step that did not review as clean. `resumable`: a
@@ -415,6 +416,10 @@ nodes:
        wait, never a polling loop.
     6. Do not push and do not touch the version or CHANGELOG: the QA
        and architecture gates run again after you when you committed.
+    7. Last, record the head the cycle reviewed: write the line
+       `<branch> <git rev-parse HEAD>` to
+       <git-dir>/osb-pr-prepare/cycle-reviewed (the cycle_run node of a
+       later pass reviews only what came after it).
 
     Security dispositions (the repository is PUBLIC):
     - A confirmed issue the branch introduces (never released): fix it in
@@ -496,11 +501,18 @@ nodes:
     of the qa_fix node (full logs in <git-dir>/osb-pr-prepare/qa-logs/);
     for architecture, the code-ranker rule of the arch_fix node (read
     `code-ranker docs ts <PRINCIPLE>` first, smallest structural fix).
-    Commit per the brief. The script node runs both gates again after
-    you.
+    Commit per the brief. A code fix (not a pure formatting or mirror
+    sync) goes through the convergence table of the dev-quality-cycle
+    skill before you finish: usually OCR on your fix commits only
+    (`<skill>/scripts/cycle.sh --range <before-fix>..HEAD --steps ocr`);
+    verify its findings like the cycle_review node does. Then write
+    `<branch> <git rev-parse HEAD>` to
+    <git-dir>/osb-pr-prepare/cycle-reviewed. The script node runs both
+    gates again after you.
 
     Wrap ONLY the result in <node_output> and </node_output>: each red
-    gate, the cause, and the fix commit.
+    gate, the cause, the fix commit, and the cycle pass on the fix
+    commits (range, findings, decision).
   profile: null
   max_retries: null
   timeout_seconds: null
@@ -906,7 +918,7 @@ edges:
     type: output_field
     node: bot_review
     field: pushed
-    equals: yes
+    equals: 'yes'
   fallback: false
   join: null
 - from: ci_check
@@ -915,7 +927,7 @@ edges:
     type: output_field
     node: bot_review
     field: pushed
-    equals: no
+    equals: 'no'
   fallback: false
   join: null
 - from: ci_check

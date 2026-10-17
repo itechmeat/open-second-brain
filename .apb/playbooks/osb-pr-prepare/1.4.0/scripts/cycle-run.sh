@@ -5,10 +5,12 @@
 # skill owns the commands, flags, effort levels and failure detection; this
 # script only picks the range and records where the run folder is.
 #
-# Range: the runner's own choice when the branch has an upstream (the commits
-# not pushed yet, or its rebase mode when pushed history was rewritten), else
-# the whole branch against origin/<base>. The runner exits 4 when there is
-# nothing new to review (HEAD already pushed, or an empty diff).
+# Range: what the cycle has not reviewed yet, never what was merely pushed. The
+# cycle_review and final_fix nodes record the head the cycle reviewed in
+# <git-dir>/osb-pr-prepare/cycle-reviewed as "<branch> <sha>". When that record
+# names this branch and its sha is an ancestor of HEAD, the range is <sha>..HEAD;
+# otherwise it is the whole branch against origin/<base>. The runner exits 4
+# when the range is empty (HEAD already reviewed).
 #
 # The skill lives in $DEV_QUALITY_CYCLE_DIR, default ~/.agents/skills/dev-quality-cycle.
 #
@@ -27,8 +29,17 @@ skill="${DEV_QUALITY_CYCLE_DIR:-$HOME/.agents/skills/dev-quality-cycle}"
 runner="$skill/scripts/cycle.sh"
 [ -x "$runner" ] || die "the dev-quality-cycle skill runner is missing: $runner"
 
-range_args=()
-git rev-parse -q --verify '@{u}' >/dev/null 2>&1 || range_args=(--base "origin/$OSB_BASE")
+git rev-parse -q --verify "origin/$OSB_BASE^{commit}" >/dev/null ||
+  die "origin/$OSB_BASE is unknown: fetch it first"
+range_args=(--base "origin/$OSB_BASE")
+reviewed_file="$CTX_DIR/cycle-reviewed"
+if [ -s "$reviewed_file" ]; then
+  read -r reviewed_branch reviewed_sha <"$reviewed_file"
+  if [ "$reviewed_branch" = "$OSB_BRANCH" ] && [ -n "${reviewed_sha:-}" ] &&
+    git merge-base --is-ancestor "$reviewed_sha" HEAD 2>/dev/null; then
+    range_args=(--range "$reviewed_sha..HEAD")
+  fi
+fi
 
 # What the change is for: OCR --background-file and the Codex prompt.
 intent="$CTX_DIR/cycle-intent.md"
@@ -39,7 +50,7 @@ intent="$CTX_DIR/cycle-intent.md"
 } >"$intent"
 
 log="$CTX_DIR/cycle-run.log"
-"$runner" ${range_args[@]+"${range_args[@]}"} --context-file "$intent" --exclude 'bun.lock,uv.lock' . >"$log" 2>&1
+"$runner" "${range_args[@]}" --context-file "$intent" --exclude 'bun.lock,uv.lock' . >"$log" 2>&1
 rc=$?
 cat "$log"
 summary=$(sed -n 's/^Summary: //p' "$log" | tail -1)
