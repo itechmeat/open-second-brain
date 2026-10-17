@@ -16,9 +16,15 @@ import { RETRIEVAL_DEGRADATION_CODES } from "../../src/core/search/retrieval-tra
 const CLI_REFERENCE = readFileSync(
   join(import.meta.dir, "..", "..", "docs", "cli-reference.md"),
   "utf8",
-);
+).replace(/[ \t]{2,}/g, " ");
 
-/** The table whose header row is `header`, up to the blank line after it. */
+/**
+ * The table whose header row is `header`, up to the blank line after it.
+ * Column-alignment padding was collapsed above, so a formatter that widens
+ * cells cannot hide the table or its rows from these lookups; the needles
+ * stay the single-space canonical spelling, and the assertion is exactly
+ * as strong as before.
+ */
 function tableUnder(header: string): string {
   const start = CLI_REFERENCE.indexOf(header);
   expect(start).toBeGreaterThanOrEqual(0);
