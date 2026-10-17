@@ -49,7 +49,16 @@
  */
 
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
@@ -104,6 +113,27 @@ function configPath(): string {
   return join(xdg || join(homedir(), ".config"), "open-second-brain", "config.yaml");
 }
 
+/**
+ * Cut an unquoted trailing `#...` comment: one scan tracking quote
+ * state, so a `#` INSIDE a quoted value (a vault path like
+ * `/data/brain#main`) stays whole. The stdlib twin of the canonical
+ * resolver's quote-aware YAML parsing.
+ */
+function stripUnquotedComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
+      return value.slice(0, i);
+    }
+  }
+  return value;
+}
+
 /** Value of a top-level `key:` in the config file, quotes stripped; null when unset. */
 function configValue(key: string): string | null {
   let text: string;
@@ -112,9 +142,11 @@ function configValue(key: string): string | null {
   } catch {
     return null;
   }
-  const m = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*(?:#.*)?$`, "m").exec(text);
+  const m = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`, "m").exec(text);
   if (m === null) return null;
-  const value = m[1]!.trim().replace(/^["']|["']$/g, "");
+  const value = stripUnquotedComment(m[1]!)
+    .trim()
+    .replace(/^["']|["']$/g, "");
   return value.length > 0 ? value : null;
 }
 
@@ -182,10 +214,18 @@ function protectedTarget(toolName: string, toolInput: Record<string, unknown>): 
 
 // ─── Fail-closed backup + receipt (stdlib twins) ──────────────────────
 
-function executeBackup(
-  target: string,
-  now: Date,
-): { kind: "backed-up"; backupPath: string; beforeHash: string; bytes: number } {
+type BackupOutcome =
+  | { kind: "allow-no-source"; reason: string }
+  | { kind: "backed-up"; backupPath: string; beforeHash: string; bytes: number };
+
+function executeBackup(target: string, now: Date): BackupOutcome {
+  // The twin's allow-no-source (executeHostBackup): a missing source is
+  // nothing to protect, so the write may CREATE the settings file -
+  // denying it here would make a fresh `.claude/settings.json`
+  // unreachable with the flag on.
+  if (!existsSync(target)) {
+    return { kind: "allow-no-source", reason: `${target} does not exist yet` };
+  }
   let contents: string;
   try {
     contents = readFileSync(target, "utf8");
@@ -209,11 +249,40 @@ function executeBackup(
       throw new Error(`cannot write backup for ${target}: ${(err as Error).message}`);
     }
     try {
-      writeSync(fd, contents);
+      // Full-write loop (the core twin's durability, fs-atomic
+      // withTempFile): writeSync may take fewer bytes than asked, and a
+      // truncated backup reported as success would let the guarded
+      // write proceed on a corrupt snapshot. A short write that never
+      // throws keeps looping; only a full byte count plus the fsyncs
+      // below count as taken.
+      const buf = Buffer.from(contents, "utf8");
+      let written = 0;
+      while (written < buf.byteLength) {
+        written += writeSync(fd, buf, written, buf.byteLength - written);
+      }
+      fsyncSync(fd);
+      // Best-effort fsync of the parent dir, so the new backup entry is
+      // durable too (no portable dir fsync; failures on platforms
+      // without the O_RDONLY-dir trick are not fatal).
+      try {
+        const dfd = openSync(root, "r");
+        try {
+          fsyncSync(dfd);
+        } finally {
+          closeSync(dfd);
+        }
+      } catch {
+        // durability optimization, not the guard
+      }
     } finally {
       closeSync(fd);
     }
-    return { kind: "backed-up", backupPath: candidate, beforeHash, bytes: contents.length };
+    return {
+      kind: "backed-up",
+      backupPath: candidate,
+      beforeHash,
+      bytes: contents.length,
+    };
   }
   throw new Error(
     `host settings backup allocation exhausted for ${target} ` +
@@ -319,6 +388,7 @@ async function main(): Promise<void> {
     const now = new Date();
     try {
       const backup = executeBackup(target, now);
+      if (backup.kind === "allow-no-source") return; // nothing to protect: silent allow
       appendReceipt(resolveVaultPath(), target, backup, `hook:${detectHookRuntime(raw)}`, now);
       // Silent success: the call proceeds through the normal permission
       // flow; the backup already happened. An explicit allow here would

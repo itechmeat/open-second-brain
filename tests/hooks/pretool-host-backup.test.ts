@@ -95,8 +95,8 @@ function writePayload(filePath: string): unknown {
   };
 }
 
-function auditRecords(): Array<Record<string, unknown>> {
-  const dir = join(vault, ".open-second-brain", "hook-audit");
+function auditRecords(from: string = vault): Array<Record<string, unknown>> {
+  const dir = join(from, ".open-second-brain", "hook-audit");
   if (!existsSync(dir)) return [];
   const records: Array<Record<string, unknown>> = [];
   for (const file of readdirSync(dir)) {
@@ -163,6 +163,47 @@ describe("pretool-host-backup hook", () => {
       expect(statSync(join(backupRoot, backups[0]!)).mode & 0o777).toBe(0o600);
     },
   );
+
+  test("flag on: a Write that CREATES a missing settings file is a silent allow (twin's allow-no-source)", async () => {
+    // The canonical twin allows a missing source ("nothing to protect",
+    // tests/core/brain/pretool-host-backup.test.ts): a fresh
+    // settings.local.json must be creatable with the flag on, not denied
+    // for having no prior bytes to back up.
+    const target = join(home, ".claude", "settings.local.json");
+    expect(existsSync(target)).toBe(false);
+    const r = await runHook(writePayload(target), {
+      OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true",
+    });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toContain('"deny"');
+    // Nothing existed to back up: no backup folder, no receipt.
+    expect(existsSync(join(home, ".claude", ".o2b-backups"))).toBe(false);
+    expect(auditRecords()).toEqual([]);
+  });
+
+  test("flag on: a '#' inside a quoted config value does not truncate the receipt vault", async () => {
+    const configVault = mkdtempSync(join(tmpdir(), "osb-hook-hb-cfgvault-"));
+    writeFileSync(
+      join(configHome, "config.yaml"),
+      `host_settings_backup: true\nvault: "${join(configVault, "brain#main")}"\n`,
+    );
+    try {
+      const r = await runHook(writePayload(join(home, ".claude", "settings.json")), {
+        OPEN_SECOND_BRAIN_VAULT: "", // vault comes from the config, not the env
+        OPEN_SECOND_BRAIN_CONFIG: join(configHome, "config.yaml"),
+      });
+      expect(r.exit).toBe(0);
+      expect(r.stdout).not.toContain('"deny"');
+      expect(existsSync(join(home, ".claude", ".o2b-backups"))).toBe(true);
+      // The receipt lands under the FULL quoted path, hash included - not
+      // under a value truncated at the `#` as if it began a YAML comment.
+      const records = auditRecords(join(configVault, "brain#main"));
+      expect(records.length).toBe(1);
+      expect(records[0]!["action"]).toBe("host-settings-backup");
+    } finally {
+      rmSync(configVault, { recursive: true, force: true });
+    }
+  });
 
   test("flag on with a backup made to fail emits a stdout deny naming the path", async () => {
     // A FILE where the backup folder must be makes the backup impossible.
