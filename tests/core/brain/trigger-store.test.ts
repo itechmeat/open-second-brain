@@ -194,6 +194,284 @@ test("a dismissed trigger is recreated when a re-fire introduces an artifact the
   expect(widened.created[0]!.sourceArtifacts).toEqual(["[[pref-a]]", "[[pref-b]]", "[[pref-c]]"]);
 });
 
+// ── Dismissed movement for the kinds whose key pins their artifacts ─────────
+//
+// For stale_claim, contradiction, retention_action and the idea kinds the
+// cooldown key is derived from the same artifact ids the movement gate
+// compares (`stale_claim:<id>` grounds itself in `[[<id>]]` alone), so the
+// artifact set can never change for a given twin and the gate above can
+// never see movement: dismissing one of these findings was permanent. The
+// gate therefore also reads a grounding fingerprint - a content hash of
+// the finding's reason and context, persisted at dismissal time - so
+// changed grounding resurrects the finding while a re-sight of untouched
+// grounding stays silent.
+//
+// The candidates below are the REAL adapter shapes (adapters.ts), not
+// synthetic ones: their reasons embed the clock (day counts, ages,
+// scores), so a fingerprint of the raw text would read the clock's own
+// movement as the finding's movement and resurrect an untouched finding
+// at the first day boundary - the nag the movement gate replaced. The
+// fingerprint normalizes clock projections away; the tests pin both
+// directions of that choice.
+
+/** The exact stale-claim shape candidatesFromHealth emits. */
+function staleClaimCandidate(
+  id: string,
+  ageDays: number,
+  lastEvidenceAt: string,
+): InsightCandidate {
+  return {
+    kind: "stale_claim",
+    urgency: "medium",
+    reason: `${id} has had no fresh evidence for ${ageDays} days (last: ${lastEvidenceAt})`,
+    suggestedAction: "Re-evidence the preference or let the dream pass retire it",
+    sourceArtifacts: [`[[${id}]]`],
+    contextSnippets: [`last_evidence_at: ${lastEvidenceAt}`],
+    cooldownKey: `stale_claim:${id}`,
+  };
+}
+
+/** The exact contradiction shape candidatesFromHealth emits. */
+function healthContradictionCandidate(
+  a: string,
+  aSign: string,
+  b: string,
+  bSign: string,
+  scope: string,
+  jaccard: string,
+): InsightCandidate {
+  return {
+    kind: "contradiction",
+    urgency: "high",
+    reason: `${a} (${aSign}) contradicts ${b} (${bSign}) in scope '${scope}' (principle similarity ${jaccard})`,
+    suggestedAction: "Review the pair and retire, merge, or rescope one of the rules",
+    sourceArtifacts: [`[[${a}]]`, `[[${b}]]`],
+    contextSnippets: [`signs: ${a}=${aSign}, ${b}=${bSign}`],
+    cooldownKey: `contradiction:${[a, b].toSorted().join(":")}`,
+  };
+}
+
+/** The exact retention_action shape candidatesFromRetention emits. */
+function retentionCandidate(
+  id: string,
+  action: "park" | "prune",
+  grounds: string,
+  path: string,
+): InsightCandidate {
+  return {
+    kind: "retention_action",
+    urgency: action === "prune" ? "medium" : "low",
+    reason: `retention recommends '${action}' for ${id}: ${grounds}`,
+    suggestedAction:
+      action === "prune"
+        ? "Prune the artifact (it no longer earns its keep)"
+        : "Park the artifact out of the active set",
+    sourceArtifacts: [`[[${id}]]`],
+    contextSnippets: [`path: ${path}`],
+    cooldownKey: `retention_action:${id}:${action}`,
+  };
+}
+
+/** The exact idea_direction shape ideaCandidates emits for an inbox signal. */
+function inboxIdeaCandidate(
+  topic: string,
+  name: string,
+  ageDays: number,
+  score: string,
+): InsightCandidate {
+  return {
+    kind: "idea_direction",
+    urgency: "low",
+    reason: `inbox signal '${topic}' has waited ${ageDays}d without becoming a preference`,
+    suggestedAction: "Pick this up as a next direction or archive it deliberately",
+    sourceArtifacts: [`Brain/inbox/${name}`],
+    contextSnippets: [`score: ${score}`],
+    cooldownKey: `idea_direction:Brain/inbox/${name}`,
+  };
+}
+
+test("a dismissed stale_claim is recreated when the preference is re-evidenced and goes stale again", () => {
+  const { created } = createTriggers(vault, [staleClaimCandidate("pref-x", 30, "2026-05-04")], {
+    now: NOW,
+  });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // The reviewer's scenario: same artifact, same cooldown key, rescan a
+  // year later. The preference WAS re-evidenced in between (a fresh
+  // evidence date landed in the note) and has gone stale again - the
+  // grounding changed, so the dismissal no longer covers it and a new
+  // pending record arrives.
+  const rescan = createTriggers(vault, [staleClaimCandidate("pref-x", 45, "2027-03-01")], {
+    now: new Date("2027-04-15T10:00:00Z"),
+  });
+  expect(rescan.created).toHaveLength(1);
+  expect(rescan.created[0]!.cooldownKey).toBe("stale_claim:pref-x");
+  expect(rescan.created[0]!.status).toBe("pending");
+});
+
+test("a dismissed stale_claim stays silent when only the clock moved", () => {
+  const { created } = createTriggers(vault, [staleClaimCandidate("pref-x", 30, "2026-05-04")], {
+    now: NOW,
+  });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // A year later the SAME candidate re-fires except for the day count,
+  // which the clock grew. Untouched grounding: the dismissal still
+  // covers it, however long. A fingerprint of the raw reason text would
+  // read the day count as movement and resurrect the finding here.
+  const rescan = createTriggers(vault, [staleClaimCandidate("pref-x", 330, "2026-05-04")], {
+    now: new Date("2027-04-15T10:00:00Z"),
+  });
+  expect(rescan.created).toHaveLength(0);
+  expect(rescan.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a dismissed contradiction is recreated when the pair is edited and still conflicts", () => {
+  const { created } = createTriggers(
+    vault,
+    [healthContradictionCandidate("pref-a", "positive", "pref-b", "negative", "testing", "0.81")],
+    { now: NOW },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // Both notes were rewritten; they still conflict, with a flipped sign,
+  // a moved scope and a different overlap. Same pair, same key, changed
+  // grounding: the operator hears about it again.
+  const rescan = createTriggers(
+    vault,
+    [
+      healthContradictionCandidate(
+        "pref-a",
+        "negative",
+        "pref-b",
+        "negative",
+        "code-review",
+        "0.63",
+      ),
+    ],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(rescan.created).toHaveLength(1);
+  expect(rescan.created[0]!.cooldownKey).toBe("contradiction:pref-a:pref-b");
+});
+
+test("a dismissed retention_action is recreated when the recommendation's grounds change", () => {
+  const { created } = createTriggers(
+    vault,
+    [
+      retentionCandidate(
+        "sig-keep",
+        "prune",
+        "old processed one-off signal has no source pointers; safe candidate for manual pruning",
+        "Brain/signals/sig-keep.md",
+      ),
+    ],
+    { now: NOW },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // The artifact's content changed, so the review's grounds changed with
+  // it, while the id, action and path - and with them the key and the
+  // artifact set - did not. Changed grounding: recreated.
+  const rescan = createTriggers(
+    vault,
+    [
+      retentionCandidate(
+        "sig-keep",
+        "prune",
+        "the signal now duplicates pref-x without adding evidence",
+        "Brain/signals/sig-keep.md",
+      ),
+    ],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(rescan.created).toHaveLength(1);
+  expect(rescan.created[0]!.cooldownKey).toBe("retention_action:sig-keep:prune");
+});
+
+test("a dismissed idea_direction is recreated when the signal's topic changes", () => {
+  const { created } = createTriggers(
+    vault,
+    [inboxIdeaCandidate("draft-memory-ttl", "sig-memory.md", 20, "0.121")],
+    { now: NOW },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // The signal's frontmatter grew a new topic; the file, and with it the
+  // key and the artifact set, did not change. Changed grounding:
+  // recreated.
+  const rescan = createTriggers(
+    vault,
+    [inboxIdeaCandidate("memory-ttl-policy", "sig-memory.md", 40, "0.141")],
+    { now: new Date(NOW.getTime() + DAY_MS) },
+  );
+  expect(rescan.created).toHaveLength(1);
+  expect(rescan.created[0]!.cooldownKey).toBe("idea_direction:Brain/inbox/sig-memory.md");
+});
+
+test("a dismissed idea_direction stays silent when only its age and score drifted", () => {
+  const { created } = createTriggers(
+    vault,
+    [inboxIdeaCandidate("draft-memory-ttl", "sig-memory.md", 20, "0.121")],
+    { now: NOW },
+  );
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+
+  // The idea detector's score carries an age bonus and its reason an age
+  // count, so an untouched signal re-fires every scan with different
+  // numbers. The clock's drift is not movement: the dismissal holds.
+  const rescan = createTriggers(
+    vault,
+    [inboxIdeaCandidate("draft-memory-ttl", "sig-memory.md", 300, "0.365")],
+    { now: new Date(NOW.getTime() + 280 * DAY_MS) },
+  );
+  expect(rescan.created).toHaveLength(0);
+  expect(rescan.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("a dismissed record written before fingerprints existed is never resurrected by the fingerprint arm", () => {
+  const { created } = createTriggers(vault, [staleClaimCandidate("pref-x", 30, "2026-05-04")], {
+    now: NOW,
+  });
+  const path = created[0]!.path;
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+  // Hand-strip the persisted fingerprint, as a record dismissed by an
+  // older build would read: absence is the neutral reading - the
+  // fingerprint arm cannot claim movement it has no baseline for, the
+  // artifact arm sees none, and the finding stays dismissed.
+  rewriteLine(path, /^dismissed_fingerprint: .*$\n/mu, "");
+
+  const rescan = createTriggers(vault, [staleClaimCandidate("pref-x", 45, "2027-03-01")], {
+    now: new Date("2027-04-15T10:00:00Z"),
+  });
+  expect(rescan.created).toHaveLength(0);
+  expect(rescan.skipped[0]!.reason).toBe("dismissed");
+});
+
+test("the dismissal fingerprint round-trips through the record and refuses an unreadable value", () => {
+  const { created } = createTriggers(vault, [staleClaimCandidate("pref-x", 30, "2026-05-04")], {
+    now: NOW,
+  });
+  const path = created[0]!.path;
+  const dismissed = transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+  expect(dismissed.dismissedFingerprint).not.toBeNull();
+  expect(readTriggers(vault, { now: NOW }).records[0]!.dismissedFingerprint).toBe(
+    dismissed.dismissedFingerprint,
+  );
+  expect(readFileSync(path, "utf8")).toContain("dismissed_fingerprint: ");
+
+  // A present value that cannot be read as the hash it claims to be
+  // refuses, naming the field - it never silently reads as absence,
+  // which would retire the record's own dismissal coverage. The refusal
+  // is confined to the record that carries it.
+  rewriteLine(path, /^dismissed_fingerprint: .*$/mu, "dismissed_fingerprint: [not, a, hash]");
+  const scan = readTriggers(vault, { now: NOW });
+  expect(scan.records).toHaveLength(0);
+  expect(scan.unreadable).toHaveLength(1);
+  expect(scan.unreadable[0]!.key).toBe("dismissed_fingerprint");
+  expect(scan.unreadable[0]!.path).toBe(path);
+});
+
 test("lifecycle transitions are enforced", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
@@ -492,7 +770,7 @@ test("snooze defers a trigger for a bounded window, then the original resurfaces
   expect(snoozed.resolvedAt).toBeNull();
 
   // A scan during the window is blocked by the snooze and records the
-  // recurrence - the ledger is the refire detector.
+  // recurrence - the ledger keeps the re-sighting auditable.
   const during = new Date(NOW.getTime() + DAY_MS);
   const blocked = createTriggers(vault, [candidate()], { now: during });
   expect(blocked.created).toHaveLength(0);
@@ -543,20 +821,123 @@ test("re-snoozing a clock-woken trigger restores the computed status, never snoo
   expect(dismissed.status).toBe("dismissed");
 });
 
-test("a snoozed trigger wakes early when the finding fires again", () => {
+test("a snoozed trigger stays snoozed when a scan re-sights the finding unchanged", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
 
-  // A refire inside the window stamps the ledger; the wake arm reads it.
-  const refire = new Date(NOW.getTime() + DAY_MS);
-  const blocked = createTriggers(vault, [candidate()], { now: refire });
+  // Five minutes later a scan re-sights the SAME finding: the detectors
+  // report state, so any rescan fires a still-true condition and agents
+  // can scan at will. A bare re-sighting is not a refire - the snooze
+  // must hold, and the record must stay out of `list` and the brief.
+  const rescan = new Date(NOW.getTime() + 5 * 60 * 1000);
+  const blocked = createTriggers(vault, [candidate()], { now: rescan });
   expect(blocked.created).toHaveLength(0);
   expect(blocked.skipped[0]!.reason).toBe("snoozed");
 
-  const woken = listTriggers(vault, { now: refire })[0]!;
+  const still = readTriggers(vault, { now: rescan }).records[0]!;
+  expect(still.id).toBe(created[0]!.id);
+  expect(still.effectiveStatus).toBe("snoozed");
+  // Terminal, so the brief - the surfacing lane - still hides it.
+  expect(briefTriggers(vault, { now: rescan, cap: 5, cooldownDays: 7 })).toHaveLength(0);
+  // The re-sighting is still on the ledger: occurrences keep counting.
+  expect(still.occurrences).toBe(2);
+  expect(still.lastSeenAt).toBe(rescan.toISOString());
+});
+
+test("a snoozed trigger wakes early, in place, when a re-fire introduces an artifact it never saw", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
+
+  // The re-fire grounds the finding in an artifact the snoozed record
+  // never saw: movement. The record wakes IN PLACE - the exact status
+  // the snooze interrupted is restored, the snooze state is cleared -
+  // and the waking scan meets an open twin, not a duplicate.
+  const rescan = new Date(NOW.getTime() + DAY_MS);
+  const moved = createTriggers(
+    vault,
+    [candidate({ sourceArtifacts: ["[[pref-a]]", "[[pref-c]]"] })],
+    { now: rescan },
+  );
+  expect(moved.created).toHaveLength(0);
+  expect(moved.skipped[0]!.reason).toBe("active");
+
+  const woken = readTriggers(vault, { now: rescan }).records[0]!;
+  expect(woken.id).toBe(created[0]!.id);
+  expect(woken.status).toBe("pending");
+  expect(woken.effectiveStatus).toBe("pending");
+  expect(woken.snoozedAt).toBeNull();
+  expect(woken.snoozedUntil).toBeNull();
+  expect(woken.snoozedFrom).toBeNull();
+  expect(woken.snoozedFingerprint).toBeNull();
+  expect(woken.occurrences).toBe(2);
+  expect(woken.lastSeenAt).toBe(rescan.toISOString());
+  expect(listTriggers(vault, { now: rescan }).map((t) => t.id)).toEqual([created[0]!.id]);
+});
+
+test("a snoozed trigger wakes early when the re-firing finding's grounding content changed", () => {
+  const { created } = createTriggers(vault, [staleClaimCandidate("pref-x", 30, "2026-05-04")], {
+    now: NOW,
+  });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
+
+  // Same artifact, same key, re-evidenced content: the fingerprint the
+  // snooze persisted no longer matches, and the window has not ended -
+  // movement wakes the snooze early anyway.
+  const rescan = new Date(NOW.getTime() + DAY_MS);
+  const moved = createTriggers(vault, [staleClaimCandidate("pref-x", 3, "2026-05-31")], {
+    now: rescan,
+  });
+  expect(moved.created).toHaveLength(0);
+  expect(moved.skipped[0]!.reason).toBe("active");
+  const woken = readTriggers(vault, { now: rescan }).records[0]!;
   expect(woken.id).toBe(created[0]!.id);
   expect(woken.effectiveStatus).toBe("pending");
-  expect(woken.lastSeenAt).toBe(refire.toISOString());
+});
+
+test("a hand-written snoozed record without a fingerprint wakes on artifact movement, never on a bare re-sighting", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  handSnooze(path, NOW.toISOString(), new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
+
+  // A record snoozed by an older build carries no grounding fingerprint:
+  // the fingerprint arm has no baseline and stays silent, so a bare
+  // re-sighting holds the snooze exactly as for a fresh one.
+  const rescan = new Date(NOW.getTime() + DAY_MS);
+  const bare = createTriggers(vault, [candidate()], { now: rescan });
+  expect(bare.created).toHaveLength(0);
+  expect(bare.skipped[0]!.reason).toBe("snoozed");
+  expect(readTriggers(vault, { now: rescan }).records[0]!.effectiveStatus).toBe("snoozed");
+
+  // The artifact arm never needed the fingerprint: an introduced artifact
+  // is movement, and wakes the record.
+  const movedAt = new Date(rescan.getTime() + DAY_MS);
+  const moved = createTriggers(
+    vault,
+    [candidate({ sourceArtifacts: ["[[pref-a]]", "[[pref-c]]"] })],
+    {
+      now: movedAt,
+    },
+  );
+  expect(moved.created).toHaveLength(0);
+  expect(moved.skipped[0]!.reason).toBe("active");
+  expect(readTriggers(vault, { now: movedAt }).records[0]!.effectiveStatus).toBe("pending");
+});
+
+test("the snooze persists its grounding fingerprint and unsnooze clears it", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  const snoozed = transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
+  expect(snoozed.snoozedFingerprint).not.toBeNull();
+  expect(readFileSync(path, "utf8")).toContain("snoozed_fingerprint: ");
+  expect(readTriggers(vault, { now: NOW }).records[0]!.snoozedFingerprint).toBe(
+    snoozed.snoozedFingerprint,
+  );
+
+  const woken = transitionTrigger(vault, created[0]!.id, "unsnooze", {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(woken.snoozedFingerprint).toBeNull();
+  expect(readFileSync(path, "utf8")).not.toContain("snoozed_fingerprint: ");
 });
 
 test("snooze without an explicit window uses the bounded default", () => {

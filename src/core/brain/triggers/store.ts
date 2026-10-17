@@ -13,7 +13,10 @@
  *     idempotent (a suppressed twin always blocks; an open twin always
  *     blocks; a dismissed twin blocks while no re-fire grounds the
  *     finding in anything its dismissal does not cover - movement, not
- *     the clock, is what resurrects it; an
+ *     the clock, is what resurrects it, read off the artifact set the
+ *     candidate introduces AND a grounding fingerprint persisted at
+ *     dismissal time, so the kinds whose cooldown key pins their own
+ *     artifact ids are not dismissed into silence forever; an
  *     acted twin blocks for `cooldownDays` after its resolution; an
  *     expired twin allows);
  *   - lifecycle transitions: acknowledge / act / dismiss are allowed
@@ -25,8 +28,10 @@
  *     restores the interrupted status verbatim on `unsuppress` because
  *     suppressing leaves the delivery and resolution instants untouched;
  *   - snooze is suppression's time-boxed sibling: it defers an open
- *     trigger for a bounded window OR until the finding fires again,
- *     whichever comes first (the refire read off the recurrence ledger),
+ *     trigger for a bounded window OR until the finding's grounding
+ *     moves since the snooze, whichever comes first (the early wake is
+ *     the same movement gate the dismissal uses - a bare re-sighting of
+ *     a still-true condition is not movement and never wakes it),
  *     and `unsnooze` wakes it by hand - the wake restores the
  *     interrupted status verbatim because snoozing leaves the delivery
  *     and resolution instants untouched;
@@ -71,11 +76,11 @@ export const TRIGGER_COOLDOWN_DAYS = 7;
 /**
  * The snooze window in days: how long the `snooze` action defers an open
  * trigger. A constant, not a config key and not a caller option - the
- * snooze is the caller's estimate of "later", and a refire wakes the
- * trigger early regardless of the window (t_00e9de6a). Both production
- * surfaces pass `{ now }` only, so the option that once carried this
- * number was reachable from no surface and now lives here alone, with
- * the other knobs.
+ * snooze is the caller's estimate of "later", and grounding movement
+ * wakes the trigger early regardless of the window (t_00e9de6a). Both
+ * production surfaces pass `{ now }` only, so the option that once
+ * carried this number was reachable from no surface and now lives here
+ * alone, with the other knobs.
  */
 export const TRIGGER_SNOOZE_DAYS = 3;
 export const TRIGGER_MAX_PER_KIND = 10;
@@ -119,9 +124,11 @@ const TRIGGER_KEY = Object.freeze({
   resolvedAt: "resolved_at",
   suppressedAt: "suppressed_at",
   suppressedFrom: "suppressed_from",
+  dismissedFingerprint: "dismissed_fingerprint",
   snoozedAt: "snoozed_at",
   snoozedUntil: "snoozed_until",
   snoozedFrom: "snoozed_from",
+  snoozedFingerprint: "snoozed_fingerprint",
   occurrences: "occurrences",
   lastSeenAt: "last_seen_at",
   sourceArtifacts: "source_artifacts",
@@ -158,11 +165,17 @@ function renderTrigger(record: StoredTrigger): string {
     ...(record.suppressedFrom !== null
       ? [`${TRIGGER_KEY.suppressedFrom}: ${record.suppressedFrom}`]
       : []),
+    ...(record.dismissedFingerprint !== null
+      ? [`${TRIGGER_KEY.dismissedFingerprint}: ${record.dismissedFingerprint}`]
+      : []),
     ...(record.snoozedAt !== null ? [`${TRIGGER_KEY.snoozedAt}: ${record.snoozedAt}`] : []),
     ...(record.snoozedUntil !== null
       ? [`${TRIGGER_KEY.snoozedUntil}: ${record.snoozedUntil}`]
       : []),
     ...(record.snoozedFrom !== null ? [`${TRIGGER_KEY.snoozedFrom}: ${record.snoozedFrom}`] : []),
+    ...(record.snoozedFingerprint !== null
+      ? [`${TRIGGER_KEY.snoozedFingerprint}: ${record.snoozedFingerprint}`]
+      : []),
     `${TRIGGER_KEY.occurrences}: ${record.occurrences}`,
     `${TRIGGER_KEY.lastSeenAt}: ${record.lastSeenAt}`,
     `${TRIGGER_KEY.sourceArtifacts}: ${JSON.stringify(record.sourceArtifacts)}`,
@@ -413,6 +426,23 @@ function parseOptionalInstant(raw: unknown, key: string, path: string): string |
 }
 
 /**
+ * A persisted grounding fingerprint, or `null` when nothing recorded one.
+ *
+ * The fingerprints are optional in the honest direction: absent means the
+ * record was dismissed or snoozed before the field existed, and every
+ * reader treats that as "no baseline to compare against" - never as "the
+ * grounding changed". A PRESENT value must read as the single hash string
+ * the store writes; anything else refuses, because a fingerprint that
+ * silently degraded to absent would retire the record's own movement
+ * baseline while reporting the record as clean.
+ */
+function parseOptionalFingerprint(raw: unknown, key: string, path: string): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  throw new TriggerFieldError(path, key, presentButUnreadable("not a fingerprint hash", raw));
+}
+
+/**
  * The status a snooze interrupted, or `null` when nothing recorded one.
  *
  * Like {@link parseOptionalInstant}: absent is an honest `null`, present
@@ -501,13 +531,10 @@ function textOrNull(raw: unknown): string | null {
 }
 
 /**
- * The fields the snooze wake arm reads: when the snooze started and ends,
- * the status it interrupted, and the ledger instant a refire is read
- * from. {@link TriggerRecord} satisfies it.
+ * The fields the snooze wake arm reads: when the snooze window ends, and
+ * the status it interrupted. {@link TriggerRecord} satisfies it.
  */
 interface SnoozeLedger {
-  readonly lastSeenAt: string;
-  readonly snoozedAt: string | null;
   readonly snoozedUntil: string | null;
   readonly snoozedFrom: TriggerStatus | null;
 }
@@ -515,24 +542,25 @@ interface SnoozeLedger {
 /**
  * The status a finished snooze restores, or `null` while it still holds.
  *
- * The wake condition is the window end OR a refire, whichever comes
- * first, and the refire half is read straight off the recurrence ledger:
- * every scan of a snoozed twin stamps `lastSeenAt` ({@link blockReason}
- * keeps reporting snoozed twins for exactly that reason), so "fired
- * again since snoozing" is `lastSeenAt > snoozedAt`. A record missing
- * either instant never wakes by that half - no window means no clock to
- * elapse, and no start instant makes the refire comparison unreadable.
- * That is the neutral-absence reading, not a defaulted one: the store
- * always writes both instants, so only a hand-edited record lacks them.
+ * The CLOCK half of the wake condition: the window end. The other half -
+ * the early wake - is a movement judgement ("the finding's grounding
+ * moved since the snooze"), and a read-time arm cannot make it: at read
+ * time there is no candidate to compare against, and the recurrence
+ * ledger it used to read (`lastSeenAt > snoozedAt`) records a bare
+ * re-sighting, which is not movement - the detectors report state, so a
+ * still-true condition re-fires on EVERY scan and any scan wakes the
+ * snooze within minutes. The early wake therefore lives where the
+ * candidate is: {@link createTriggersLocked} wakes a snoozed twin whose
+ * re-fire introduces grounding the snooze does not cover, and this arm
+ * wakes by the window alone. A record missing the window never wakes by
+ * the clock - no window means no clock to elapse. That is the
+ * neutral-absence reading, not a defaulted one: the store always writes
+ * it, so only a hand-edited record lacks it.
  */
 function snoozeWoken(ledger: SnoozeLedger, now: Date): TriggerStatus | null {
   if (ledger.snoozedFrom === null) return null;
   const until = ledger.snoozedUntil !== null ? Date.parse(ledger.snoozedUntil) : Number.NaN;
-  const at = ledger.snoozedAt !== null ? Date.parse(ledger.snoozedAt) : Number.NaN;
-  const seen = Date.parse(ledger.lastSeenAt);
-  const windowOver = Number.isFinite(until) && now.getTime() > until;
-  const refired = Number.isFinite(at) && Number.isFinite(seen) && seen > at;
-  return windowOver || refired ? ledger.snoozedFrom : null;
+  return Number.isFinite(until) && now.getTime() > until ? ledger.snoozedFrom : null;
 }
 
 function effectiveStatus(
@@ -542,10 +570,12 @@ function effectiveStatus(
   ledger: SnoozeLedger,
 ): TriggerStatus {
   // The snooze wake: a snoozed record reads as the status its snooze
-  // interrupted once the window ends or the finding fires again. Like
-  // expiry below this is a read-time computation - the file keeps its
-  // stored status - and the restored status is open by construction,
-  // because `snooze` is legal from open states only.
+  // interrupted once the window ends; grounding movement wakes it early
+  // at the scan site instead, where the candidate is available to
+  // compare against ({@link createTriggersLocked}). Like expiry below
+  // this is a read-time computation - the file keeps its stored status -
+  // and the restored status is open by construction, because `snooze`
+  // is legal from open states only.
   let current = status;
   if (current === TRIGGER_STATUS.snoozed) {
     const restored = snoozeWoken(ledger, now);
@@ -613,6 +643,11 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
   const createdAt = parseCreatedAt(meta[TRIGGER_KEY.createdAt], path);
   const expiresAt = textOrEmpty(meta[TRIGGER_KEY.expiresAt]);
   const suppressedFrom = parseSuppressedFrom(meta[TRIGGER_KEY.suppressedFrom], path);
+  const dismissedFingerprint = parseOptionalFingerprint(
+    meta[TRIGGER_KEY.dismissedFingerprint],
+    TRIGGER_KEY.dismissedFingerprint,
+    path,
+  );
   const snoozedAt = parseOptionalInstant(meta[TRIGGER_KEY.snoozedAt], TRIGGER_KEY.snoozedAt, path);
   const snoozedUntil = parseOptionalInstant(
     meta[TRIGGER_KEY.snoozedUntil],
@@ -620,14 +655,17 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     path,
   );
   const snoozedFrom = parseSnoozedFrom(meta[TRIGGER_KEY.snoozedFrom], path);
+  const snoozedFingerprint = parseOptionalFingerprint(
+    meta[TRIGGER_KEY.snoozedFingerprint],
+    TRIGGER_KEY.snoozedFingerprint,
+    path,
+  );
   const lastSeenAt = parseLastSeenAt(meta[TRIGGER_KEY.lastSeenAt], createdAt, path);
   return Object.freeze({
     id,
     kind,
     status,
     effectiveStatus: effectiveStatus(status, expiresAt, now, {
-      lastSeenAt,
-      snoozedAt,
       snoozedUntil,
       snoozedFrom,
     }),
@@ -649,9 +687,11 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     resolvedAt: textOrNull(meta[TRIGGER_KEY.resolvedAt]),
     suppressedAt: textOrNull(meta[TRIGGER_KEY.suppressedAt]),
     suppressedFrom,
+    dismissedFingerprint,
     snoozedAt,
     snoozedUntil,
     snoozedFrom,
+    snoozedFingerprint,
     occurrences: parseOccurrences(meta[TRIGGER_KEY.occurrences], path),
     lastSeenAt,
     path,
@@ -934,6 +974,81 @@ function sourceArtifactsChanged(
 }
 
 /**
+ * Digit runs that are NOT the date of an ISO-8601 instant. The alternation
+ * is ordered so a date matches first and survives verbatim, while every
+ * other digit run is normalized away.
+ */
+const CLOCK_PROJECTED_DIGITS = /(\d{4}-\d{2}-\d{2})|\d+/gu;
+
+/**
+ * Read a grounding text with its clock projections normalized away.
+ *
+ * The producers embed the clock in their findings: the stale-claim reason
+ * carries a day count that grows every scan, the idea reasons carry ages
+ * and age-derived scores, and a dismissed record's own Reason section
+ * carries the day count frozen at its creation. A fingerprint of the raw
+ * text would therefore differ on the first day boundary after the
+ * silence even though nothing about the finding moved - the clock, not
+ * the content, resurrecting a silenced finding, which is exactly the nag
+ * the movement gate exists to replace. Day counts, ages and scores are
+ * the clock speaking; dates and identifiers are the content. This keeps
+ * the dates (a re-evidenced preference carries a new evidence date) and
+ * masks every other digit run, so a bare re-sight of untouched grounding
+ * hashes the same at any age.
+ */
+function normalizeGroundingText(text: string): string {
+  return text.replace(CLOCK_PROJECTED_DIGITS, (match, iso: string | undefined) =>
+    iso !== undefined ? iso : "#",
+  );
+}
+
+/**
+ * A content fingerprint of a finding's grounding: its reason and context
+ * snippets, clock-normalized, hashed with field-tagged separators so no
+ * pair of different groundings collides across boundaries.
+ *
+ * This is the second arm of the movement gate. The first - the artifact
+ * set - can never move for the kinds whose cooldown key is built from
+ * their own artifact ids (`stale_claim:<id>` grounds itself in `[[<id>]]`
+ * alone), so without it a dismissal of those kinds is permanent. The
+ * fingerprint changes when the grounding's CONTENT changes - a preference
+ * re-evidenced, a contradicting pair rewritten - and stays put when only
+ * the clock moved, which is what makes it a movement signal and not a
+ * cooldown.
+ */
+function groundingFingerprintOf(reason: string, contextSnippets: ReadonlyArray<string>): string {
+  const hash = createHash("sha256");
+  hash.update("reason\n" + normalizeGroundingText(reason));
+  for (const snippet of contextSnippets) {
+    hash.update("context\n" + normalizeGroundingText(snippet));
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * Whether a re-fire arrived on grounding the persisted silence does not
+ * cover - the one movement gate both silenced classes read.
+ *
+ * Movement is the candidate INTRODUCING an artifact the persisted set
+ * lacks ({@link sourceArtifactsChanged}) or grounding the finding in
+ * content the persisted fingerprint does not cover. A persisted
+ * fingerprint of `null` - a record written before the field existed, or
+ * a hand-edited one - leaves the fingerprint arm silent: absence of a
+ * baseline can never read as movement, the same neutral reading the
+ * artifact arm gives an empty persisted list, so legacy records behave
+ * exactly as they did and only ever move by their artifacts.
+ */
+function groundingMoved(
+  persistedArtifacts: ReadonlyArray<string>,
+  candidateArtifacts: ReadonlyArray<string>,
+  persistedFingerprint: string | null,
+  candidateFingerprint: string,
+): boolean {
+  if (sourceArtifactsChanged(persistedArtifacts, candidateArtifacts)) return true;
+  return persistedFingerprint !== null && persistedFingerprint !== candidateFingerprint;
+}
+
+/**
  * The cooldown key a batch sighting resolves to, given what is persisted.
  *
  * One kind's key is derived from an OBSERVED SET rather than a fixed
@@ -973,27 +1088,43 @@ function blockReason(
   now: Date,
   cooldownDays: number,
   candidateArtifacts: ReadonlyArray<string>,
+  candidateFingerprint: string,
 ): SkippedCandidate["reason"] | null {
   // Suppression comes first and carries no clock: the operator judged
   // this cooldown key structurally benign, so no arithmetic below can
   // ever let it back through.
   if (twin.effectiveStatus === TRIGGER_STATUS.suppressed) return "suppressed";
-  // A snoozed twin blocks too, and MUST: the recurrence this write is
-  // what stamps `lastSeenAt`, and that stamp is the refire half of the
-  // wake condition. Stop reporting a reason here and a snoozed finding
-  // could never wake early again.
+  // A snoozed twin blocks too, and MUST: the recurrence this write
+  // records is what keeps a still-true finding auditable while the
+  // window runs ({@link recordRecurrence}). The early wake is not
+  // decided here - a bare re-sighting must not wake the snooze, and
+  // only the scan site holds the candidate a movement judgement needs -
+  // so a snoozed twin always reports snoozed, and
+  // {@link wakeSnoozedOnMovement} has already done the waking for the
+  // sightings that did move.
   if (twin.effectiveStatus === TRIGGER_STATUS.snoozed) return "snoozed";
   if (TRIGGER_OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
   if (twin.effectiveStatus === TRIGGER_STATUS.expired) return null;
   // dismissed: movement-gated. The finding stays silent while no
   // re-fire grounds it in anything the dismissal does not cover, and is
   // recreated - as a new record through the normal path - the moment a
-  // re-fire introduces an artifact the dismissal never saw. No clock:
-  // the old cooldown window could resurrect an
-  // untouched finding and keep a moved one silent, which is exactly the
-  // nag this gate replaces.
+  // re-fire introduces an artifact the dismissal never saw or grounds
+  // the finding in content the dismissal-time fingerprint does not
+  // cover. The fingerprint is what gives the four kinds whose cooldown
+  // key pins their own artifact ids a movement signal at all: for them
+  // the artifact set can never change, and without it a dismissal is a
+  // permanent suppress. No clock: the old cooldown window could
+  // resurrect an untouched finding and keep a moved one silent, which
+  // is exactly the nag this gate replaces.
   if (twin.effectiveStatus === TRIGGER_STATUS.dismissed) {
-    return sourceArtifactsChanged(twin.sourceArtifacts, candidateArtifacts) ? null : "dismissed";
+    return groundingMoved(
+      twin.sourceArtifacts,
+      candidateArtifacts,
+      twin.dismissedFingerprint,
+      candidateFingerprint,
+    )
+      ? null
+      : "dismissed";
   }
   // acted: the plain cooldown window after the resolution instant.
   const resolved = twin.resolvedAt !== null ? Date.parse(twin.resolvedAt) : Number.NaN;
@@ -1028,6 +1159,74 @@ export function recordRecurrence(record: TriggerRecord, now: Date): TriggerRecor
     ...record,
     occurrences: record.occurrences + 1,
     lastSeenAt: now.toISOString(),
+  });
+  writeRecord(next);
+  return next;
+}
+
+/**
+ * Wake a snoozed record whose re-fire arrived on grounding the snooze
+ * does not cover; return the record unchanged when the sighting moved
+ * nothing.
+ *
+ * This is the early wake, and it lives at the scan site because movement
+ * is a judgement ABOUT A CANDIDATE: the detectors report state, so a
+ * still-true condition re-fires on every scan and every scan stamps the
+ * recurrence ledger - the `lastSeenAt > snoozedAt` read this used to
+ * wake on treated any rescan as a refire and ended the snooze within
+ * minutes. A bare re-sighting leaves the snooze holding; one that
+ * introduces an artifact the record never saw, or grounds the finding in
+ * content its snooze-time fingerprint does not cover
+ * ({@link groundingMoved}), wakes the record IN PLACE: the exact status
+ * the snooze interrupted is restored, the snooze state is cleared, and
+ * the waking scan goes on to meet an open twin rather than a duplicate.
+ *
+ * A record carrying no restore status never wakes - the neutral reading
+ * {@link snoozeWoken} gives the same absence at the clock arm.
+ */
+function wakeSnoozedOnMovement(
+  twin: TriggerRecord,
+  candidate: InsightCandidate,
+  candidateFingerprint: string,
+  now: Date,
+): TriggerRecord {
+  if (twin.snoozedFrom === null) return twin;
+  const moved = groundingMoved(
+    twin.sourceArtifacts,
+    candidate.sourceArtifacts,
+    twin.snoozedFingerprint,
+    candidateFingerprint,
+  );
+  return moved ? wakeSnoozed(twin, now) : twin;
+}
+
+/**
+ * Restore a snoozed record to the status its snooze interrupted and
+ * clear the snooze state, fingerprint included - the wake hands back the
+ * record as it was before the pause, so a later snooze baselines a later
+ * grounding. Expiry is re-applied on the computed status, the
+ * {@link unsnooze} precedent.
+ */
+function wakeSnoozed(record: TriggerRecord, now: Date): TriggerRecord {
+  const restored = record.snoozedFrom;
+  if (restored === null) {
+    // Unreachable through both callers: {@link unsnooze} refuses such a
+    // record at its guard, and {@link wakeSnoozedOnMovement} returns
+    // early. Guarded here so the invariant holds at the only place the
+    // wake is written.
+    throw new Error(`trigger ${record.id} is snoozed but carries no snoozed_from`);
+  }
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    status: restored,
+    effectiveStatus: effectiveStatus(restored, record.expiresAt, now, {
+      snoozedUntil: null,
+      snoozedFrom: null,
+    }),
+    snoozedAt: null,
+    snoozedUntil: null,
+    snoozedFrom: null,
+    snoozedFingerprint: null,
   });
   writeRecord(next);
   return next;
@@ -1111,9 +1310,16 @@ function createTriggersLocked(
       continue;
     }
     seenKeys.add(key);
-    const twin = byKey.get(key);
+    let twin = byKey.get(key);
     if (twin !== undefined) {
-      const reason = blockReason(twin, opts.now, cooldownDays, candidate.sourceArtifacts);
+      // The sighting's grounding fingerprint, computed once for both
+      // movement readers below: the snooze wake (which can rewrite the
+      // twin in place) and the dismissed gate.
+      const sighting = groundingFingerprintOf(candidate.reason, candidate.contextSnippets);
+      if (twin.effectiveStatus === TRIGGER_STATUS.snoozed) {
+        twin = wakeSnoozedOnMovement(twin, candidate, sighting, opts.now);
+      }
+      const reason = blockReason(twin, opts.now, cooldownDays, candidate.sourceArtifacts, sighting);
       if (reason !== null) {
         recordRecurrence(twin, opts.now);
         skipped.push({ cooldownKey: key, reason });
@@ -1153,9 +1359,11 @@ function createTriggersLocked(
       resolvedAt: null,
       suppressedAt: null,
       suppressedFrom: null,
+      dismissedFingerprint: null,
       snoozedAt: null,
       snoozedUntil: null,
       snoozedFrom: null,
+      snoozedFingerprint: null,
       // Creating the record IS the first recorded occurrence.
       occurrences: OCCURRENCES_WHEN_UNRECORDED,
       lastSeenAt: createdAt,
@@ -1287,6 +1495,13 @@ function transitionTriggerLocked(
     status: ACTION_TO_STATUS[action],
     effectiveStatus: ACTION_TO_STATUS[action],
     resolvedAt: action === "acknowledge" ? record.resolvedAt : nowIso,
+    // The dismissal persists the grounding it covered, so a later
+    // re-fire can be judged against it ({@link blockReason}). The
+    // record's own reason and context ARE the grounding it was created
+    // from - the same fields a candidate carries.
+    ...(action === "dismiss"
+      ? { dismissedFingerprint: groundingFingerprintOf(record.reason, record.contextSnippets) }
+      : {}),
   });
   writeRecord(next);
   return next;
@@ -1360,14 +1575,15 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
 }
 
 /**
- * Defer an open trigger for a bounded window, or until it fires again.
+ * Defer an open trigger for a bounded window, or until its grounding
+ * moves.
  *
  * The snooze is a pause, not a resolution: `resolvedAt` and the delivery
- * ledger are untouched, so what the window ends - or a refire wakes
- * early - is the exact status that was interrupted. Legal from open
- * states only; the transition refuses it on anything terminal, snoozed
- * included, so re-snoozing goes through an explicit {@link unsnooze} or
- * a refire first.
+ * ledger are untouched, so what the window ends - or grounding movement
+ * wakes early ({@link wakeSnoozedOnMovement}) - is the exact status that
+ * was interrupted. Legal from open states only; the transition refuses
+ * it on anything terminal, snoozed included, so re-snoozing goes through
+ * an explicit {@link unsnooze} or a movement wake first.
  */
 function snooze(record: TriggerRecord, now: Date): TriggerRecord {
   // The interrupted status is seeded from the COMPUTED status, not the
@@ -1396,6 +1612,10 @@ function snooze(record: TriggerRecord, now: Date): TriggerRecord {
     snoozedAt: now.toISOString(),
     snoozedUntil: new Date(now.getTime() + TRIGGER_SNOOZE_DAYS * DAY_MS).toISOString(),
     snoozedFrom: interrupted,
+    // The grounding baseline the early wake reads: a re-fire must move
+    // past this fingerprint (or introduce a new artifact) to wake the
+    // snooze before its window ends.
+    snoozedFingerprint: groundingFingerprintOf(record.reason, record.contextSnippets),
   });
   writeRecord(next);
   return next;
@@ -1437,16 +1657,7 @@ function unsnooze(record: TriggerRecord, now: Date): TriggerRecord {
         "a snooze cannot restore into snoozed",
     );
   }
-  const next: TriggerRecord = Object.freeze({
-    ...record,
-    status: restored,
-    effectiveStatus: effectiveStatus(restored, record.expiresAt, now, record),
-    snoozedAt: null,
-    snoozedUntil: null,
-    snoozedFrom: null,
-  });
-  writeRecord(next);
-  return next;
+  return wakeSnoozed(record, now);
 }
 
 /**
