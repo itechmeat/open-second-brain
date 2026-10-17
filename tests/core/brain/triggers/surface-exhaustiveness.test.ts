@@ -26,6 +26,17 @@ const VERB_ALIAS: Partial<Record<(typeof TRIGGER_ACTIONS)[number], string>> = {
 
 const TRIGGER_VERBS = TRIGGER_ACTIONS.map((action) => VERB_ALIAS[action] ?? action);
 
+/**
+ * A regex matching the verb as a whole word. Prose mirrors that match
+ * substrings pass vacuously - "unsnooze" contains "snooze", "unsuppress"
+ * contains "suppress", "defers" contains "defer" - so deleting a verb from a
+ * surface while a neighbour or a prose sentence still spells it goes
+ * unnoticed. Whole-word matching on the specific expected line closes that.
+ */
+function wholeWord(verb: string): RegExp {
+  return new RegExp(`\\b${verb}\\b`);
+}
+
 test("the brain_trigger operation enum covers every TriggerAction exactly", () => {
   // The enum spreads TRIGGER_OPERATIONS, which spreads
   // TRIGGER_TRANSITIONS - a plain array a missing arm never breaks at
@@ -39,19 +50,25 @@ test("the brain_trigger operation enum covers every TriggerAction exactly", () =
   expect([...transitions].toSorted()).toEqual([...TRIGGER_ACTIONS].toSorted());
 });
 
-test("the brain help one-liner names every trigger verb", () => {
+test("the brain help one-liner names every trigger verb as a whole word", () => {
   const line = BRAIN_HELP.split("\n").find((l) => l.trimStart().startsWith("trigger"));
   expect(line).toBeDefined();
   for (const verb of TRIGGER_VERBS) {
-    expect(line!).toContain(verb);
+    expect(line!).toMatch(wholeWord(verb));
   }
 });
 
-test("the brain trigger help block names every trigger verb and the wake", () => {
+test("the brain trigger help usage line names every trigger verb as a whole word", () => {
   const usage = VERB_HELP["trigger"];
   expect(usage).toBeDefined();
+  // The verb list lives on the `usage:` header line specifically. The prose
+  // below it mentions the verbs too ("snooze defers a trigger ...",
+  // "unsnooze wakes it by hand"), so a substring check over the whole block
+  // passed vacuously - deleting snooze|unsnooze from the header stayed green.
+  const header = usage!.split("\n").find((l) => l.startsWith("usage:"));
+  expect(header).toBeDefined();
   for (const verb of [...TRIGGER_VERBS, "scan", "list", "history"]) {
-    expect(usage!).toContain(verb);
+    expect(header!).toMatch(wholeWord(verb));
   }
 });
 
@@ -60,7 +77,7 @@ test("the command manifest names every trigger verb in the trigger summary", () 
   const trigger = brain?.commands?.find((c) => c.name === "trigger");
   expect(trigger).toBeDefined();
   for (const verb of TRIGGER_VERBS) {
-    expect(trigger!.summary).toContain(verb);
+    expect(trigger!.summary).toMatch(wholeWord(verb));
   }
 });
 
