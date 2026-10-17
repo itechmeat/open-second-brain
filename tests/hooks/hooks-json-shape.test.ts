@@ -265,3 +265,44 @@ describe("hooks.json SessionStart backlog-nudge entry", () => {
     expect(existsSync(join(REPO, "hooks", "backlog-nudge.ts"))).toBe(true);
   });
 });
+
+describe("hooks.json PreToolUse host-settings backup entry (t_f4555087)", () => {
+  const groups =
+    (
+      JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+        hooks: Record<
+          string,
+          Array<{ matcher?: string; hooks: Array<HookEntry & { timeout?: number }> }>
+        >;
+      }
+    ).hooks["PreToolUse"] ?? [];
+
+  test("a write-family matcher group carries exactly one pretool-host-backup entry", () => {
+    const group = groups.find((g) => g.matcher === "Write|Edit|MultiEdit|apply_patch");
+    expect(group).toBeDefined();
+    const carriers = (group?.hooks ?? []).filter((h) =>
+      h.command.includes("o2b-hook pretool-host-backup"),
+    );
+    expect(carriers.length).toBe(1);
+    const entry = carriers[0]!;
+    expect(entry.type).toBe("command");
+    expect(entry.timeout).toBe(10);
+    expect(entry.statusMessage).toBe("OSB: backing up host settings before writes (opt-in)");
+    expect(entry.command.trimEnd()).toEndWith(
+      "command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook pretool-host-backup; exit 0",
+    );
+  });
+
+  test("the orientation group keeps its * matcher and the backup group sits beside it", () => {
+    const orient = groups.filter(
+      (g) => g.matcher === "*" && g.hooks.some((h) => h.command.includes("pretool-orient")),
+    );
+    expect(orient.length).toBe(1);
+    // Two PreToolUse groups now: the orient gate and the backup gate.
+    expect(groups.length).toBe(2);
+  });
+
+  test("the dispatch target resolves to an existing hook file", () => {
+    expect(existsSync(join(REPO, "hooks", "pretool-host-backup.ts"))).toBe(true);
+  });
+});
