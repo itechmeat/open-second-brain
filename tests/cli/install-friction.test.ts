@@ -249,6 +249,10 @@ describe("the flags the friction mode added are advertised", () => {
         "out",
         "target",
         "vault",
+        // The apply lane's consent flag (t_b6bcd984): parsed by the
+        // verb since its consent ladder landed, so help --json must
+        // declare it like the rest instead of hiding the remedy.
+        "yes",
       ].toSorted(),
     );
   });

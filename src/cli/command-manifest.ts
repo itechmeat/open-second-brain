@@ -126,6 +126,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("target", "string"),
       flag("apply", "boolean"),
       flag("check", "boolean"),
+      // The consent flag the apply lane takes (t_b6bcd984): without it a
+      // --json/non-TTY apply refuses, so help and completions must offer
+      // the remedy.
+      flag("yes", "boolean"),
       flag("friction", "boolean"),
       flag("base", "string"),
       flag("compare", "string"),
@@ -339,7 +343,13 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("yes", "boolean"),
           flag("json", "boolean"),
         ]),
-        command("unprotect", "Remove managed runtime deny rules"),
+        command("unprotect", "Remove managed runtime deny rules", [
+          flag("target", "string"),
+          flag("vault", "string"),
+          flag("apply", "boolean"),
+          flag("yes", "boolean"),
+          flag("json", "boolean"),
+        ]),
         command(
           "snapshot",
           "Inspect Brain snapshots",
