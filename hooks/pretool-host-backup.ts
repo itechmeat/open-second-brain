@@ -23,14 +23,18 @@
  *     the call proceeds through the normal permission flow (an explicit
  *     allow here would pre-approve exactly the writes this hook exists
  *     to guard).
- *   - STDLIB-ONLY: this file imports no `src/core` module. The flag
+ *   - STDLIB-ONLY: this file imports no `src/core` behavior. The flag
  *     read, path predicate, backup executor, and receipt writer are
  *     restated here (their canonical twins live in
  *     `src/core/brain/pretool-host-backup.ts`, `src/core/trust.ts` and
  *     `src/core/reliability/audit.ts`), so a broken or absent core
  *     build cannot turn a failed backup into a failed hook load. The
- *     receipt contract - actor, pid, before-hash, summary - is pinned
- *     against the trust conventions by tests, not by an import.
+ *     one sanctioned exception is the two directory-name constants
+ *     from the leaf `src/core/brain/path-constants.ts` - names, not
+ *     behavior - so the hook-audit root keeps its single spelling
+ *     (`tests/hooks/audit-root.test.ts`). The receipt contract -
+ *     actor, pid, before-hash, summary - is pinned against the trust
+ *     conventions by tests, not by an import.
  *   - HARD FLOOR, stated honestly: the deny guarantee ends at this
  *     process. A missing bun, a missing hook script, or the fail-soft
  *     dispatcher swallowing a non-zero exit means no deny at all and
@@ -45,18 +49,11 @@
  */
 
 import { createHash } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
+import { DERIVED_STORE_DIR, HOOK_AUDIT_DIR } from "../src/core/brain/path-constants.ts";
 import { detectHookRuntime } from "./lib/detect.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
@@ -247,7 +244,7 @@ function appendReceipt(
 ): void {
   if (vault === null) return;
   try {
-    const dir = join(vault, ".open-second-brain", "hook-audit");
+    const dir = join(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR);
     mkdirSync(dir, { recursive: true });
     const record = {
       timestamp: now.toISOString(),

@@ -15,9 +15,11 @@
  *    `YYYY-MM-DD-HHMMSS` form.
  *
  * The conventions live in src/core/trust.ts so the CLI lanes import
- * them directly. The hook wrapper stays stdlib-only and re-states the
- * receipt shape; its compliance is pinned by its own fixture test
- * (tests/hooks/pretool-host-backup.test.ts), not by an import.
+ * them directly. The hook wrapper imports no src/core behavior - only
+ * the two directory-name constants from the path-constants leaf - and
+ * re-states the receipt shape; its compliance is pinned by its own
+ * fixture test (tests/hooks/pretool-host-backup.test.ts), not by an
+ * import.
  */
 
 import { describe, expect, test } from "bun:test";
