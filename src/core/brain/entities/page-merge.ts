@@ -30,7 +30,8 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter, writeFrontmatterAtomic, type FrontmatterMap } from "../../vault.ts";
+import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import type { FrontmatterMap } from "../../types.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { relationFromFrontmatterField } from "../../graph/relation-vocab.ts";
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
