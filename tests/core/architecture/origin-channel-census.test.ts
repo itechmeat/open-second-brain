@@ -203,8 +203,12 @@ describe("the unverifiable surface this rule exists for", () => {
    * the tool is read-only and the argument selects which recorded writes
    * to list. It still counts, because the regex measures the SURFACE a
    * caller can spell and not the use each schema makes of it.
+   *
+   * 26 -> 27: `brain_write_destinations` (actionable-now batch) - the
+   * same read-only shape one tool over: `agent` narrows the aggregate,
+   * it stamps nothing.
    */
-  const CALLER_SUPPLIED_AGENT_PROPERTIES = 26;
+  const CALLER_SUPPLIED_AGENT_PROPERTIES = 27;
 
   test("is exactly what the rule was argued from, in both directions", () => {
     let count = 0;
