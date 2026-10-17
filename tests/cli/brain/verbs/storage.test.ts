@@ -17,7 +17,7 @@
  *      answer as an empty vault.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,16 +110,6 @@ function seedSample(runAt: string, totalBytes: number, runId: string): void {
   });
 }
 
-/**
- * The UTC-midnight stamp `seedSample` consumes, `offsetDays` from today:
- * the seeded trend must trail the current clock or the horizon math
- * reads it as stale history.
- */
-function dayStamp(offsetDays: number): string {
-  const day = new Date(Date.now() + offsetDays * 86_400_000);
-  return `${day.toISOString().slice(0, 10)}T00:00:00.000Z`;
-}
-
 /** The usage samples recorded for this vault so far. */
 function usageSamples(): MetricRecord[] {
   return listMetrics(vault, { surface: STORAGE_USAGE_METRIC_SURFACE });
@@ -161,6 +151,8 @@ async function drive(argv: ReadonlyArray<string>): Promise<{ captured: Captured;
     process.stderr.write = originalErr;
   }
 }
+
+const DAY_MS = 86_400_000;
 
 async function runJsonReport(): Promise<{ code: number; report: StorageReportJson }> {
   const { captured, code } = await drive(["--json"]);
@@ -213,15 +205,28 @@ describe("o2b brain storage", () => {
     // the verb's own fresh census supersedes the newest seeded day inside
     // the fit, which flattens the seeded rise to a fraction of the daily
     // step; twice the cap keeps the resulting horizon a few days inside
-    // warn's 30 - and past critical's 7 - and the seeds trail the current
-    // clock, so the seeded window never goes stale.
+    // warn's 30 - and past critical's 7 - on every machine.
     const cap = Math.floor(total * 2.0);
     configureCap(cap);
-    seedSample(dayStamp(-2), total - total / 10, "seed-older");
-    seedSample(dayStamp(-1), total, "seed-newer");
-    seedSample(dayStamp(0), total + total / 20, "seed-newest");
+    // Seed the two days before today and today itself (UTC midnights), so
+    // the verb's fresh census always lands on the newest seeded day; fixed
+    // dates turned into a fourth distinct day once the calendar moved past
+    // them and flattened the trend out of the warn band. The clock is
+    // frozen at today's UTC noon so the census cannot cross midnight.
+    const today = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+    const seedDay = (daysAgo: number): string => new Date(today - daysAgo * DAY_MS).toISOString();
+    seedSample(seedDay(2), total - total / 10, "seed-older");
+    seedSample(seedDay(1), total, "seed-newer");
+    seedSample(seedDay(0), total + total / 20, "seed-newest");
 
-    const { code, report } = await runJsonReport();
+    setSystemTime(new Date(today + DAY_MS / 2));
+    let run: Awaited<ReturnType<typeof runJsonReport>>;
+    try {
+      run = await runJsonReport();
+    } finally {
+      setSystemTime();
+    }
+    const { code, report } = run;
 
     expect(code).toBe(0);
     const forecast = report.forecast;
