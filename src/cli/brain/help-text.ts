@@ -71,7 +71,7 @@ Brain verbs (observing memory):
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply --yes])
-  unprotect        Remove OSB-managed deny rules for the chosen target (--target)
+  unprotect        Remove OSB-managed deny rules (--target {claudecode|codex} [--apply --yes])
   permissions      Show the trust policy document and query the decision ledger (show | ledger)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
@@ -85,7 +85,7 @@ Brain verbs (observing memory):
                    diff (two snapshots, or a snapshot vs live)
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
-  doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply])
+  doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply --yes])
   status              Unified operator status snapshot with next-command hints
   hygiene             Hygiene pipeline: scan findings; apply by ids (--dry-run)
   refresh             Targeted recompile of stale derived pages (--stale [--dry-run])
@@ -542,12 +542,14 @@ export const VERB_HELP: Record<string, string> = {
     "(warm | stale | miss), or force a refresh first (TTL debounce applies).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
-    "                        [--remediate [--dry-run]] [--repair [--apply]]\n" +
+    "                        [--remediate [--dry-run]] [--repair [--apply]] [--yes]\n" +
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
     "--remediate builds a dependency-ordered repair plan and applies the\n" +
     "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n" +
     "--repair previews safe fixes for detected classes (WAL gaps, orphaned\n" +
     "references); --repair --apply performs them and logs one event per fix.\n" +
+    "--apply requires --yes in non-interactive mode (--json or non-TTY stdin);\n" +
+    "the refusal exits 1 with nothing written, the protected verb's code.\n" +
     "Plain doctor and --strict stay read-only.\n",
   watchdog:
     "usage: o2b brain watchdog [--vault <path>] [--json] [--remediate [--dry-run]]\n" +

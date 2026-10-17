@@ -1645,9 +1645,14 @@ describe("brain protect", () => {
     const original = '{\n  "theme": "dark"\n}\n';
     mkdirSync(join(vault, ".claude"), { recursive: true });
     writeFileSync(settingsPath, original);
+    // stdin is fed (fast EOF), which also forces the subprocess path:
+    // the run sees a real, deterministic non-TTY stdin, so a regression
+    // into the y/N prompt answers no and fails THIS assertion instead
+    // of hanging on open stdin until the suite timeout - the cascade
+    // that used to be the only red this arm could produce.
     const r = await runCli(
       ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config }, stdin: "" },
     );
     expect(r.returncode).not.toBe(0);
     expect(r.stderr).toContain("--yes");
@@ -1694,9 +1699,12 @@ describe("brain protect", () => {
         env: { OPEN_SECOND_BRAIN_CONFIG: config },
       },
     );
-    const r = await runCli(["brain", "unprotect", "--target", "claudecode", "--vault", vault], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    });
+    const r = await runCli(
+      ["brain", "unprotect", "--target", "claudecode", "--vault", vault, "--apply", "--yes"],
+      {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      },
+    );
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("removed");
     const parsed = JSON.parse(readFileSync(join(vault, ".claude", "settings.json"), "utf8"));
@@ -1706,5 +1714,117 @@ describe("brain protect", () => {
       e.includes("Brain/preferences"),
     );
     expect(ownedLeft).toEqual([]);
+  });
+});
+
+describe("brain unprotect consent ladder", () => {
+  /** Fresh per test: `vault` is reassigned in beforeEach. */
+  function protectArgs(): string[] {
+    return ["brain", "protect", "--target", "claudecode", "--vault", vault, "--apply", "--yes"];
+  }
+
+  test("without --apply previews the removal and writes nothing", async () => {
+    await bootstrap();
+    await runCli(protectArgs(), { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const settingsPath = join(vault, ".claude", "settings.json");
+    const withRules = readFileSync(settingsPath, "utf8");
+
+    const r = await runCli(["brain", "unprotect", "--target", "claudecode", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    // The preview shows the exact deletion set before anything moves:
+    // the manifest the deletion set comes from is agent-writable, so the
+    // operator sees the diff and says yes - that is the trust answer.
+    expect(r.stdout).toContain("preview only");
+    expect(r.stdout).toContain("---");
+    expect(r.stdout).toContain("Brain/preferences");
+    expect(readFileSync(settingsPath, "utf8")).toBe(withRules);
+    expect(existsSync(join(vault, ".open-second-brain", "protect.lock.json"))).toBe(true);
+  });
+
+  test("--apply without --yes in non-TTY refuses, naming the remedy, and removes nothing", async () => {
+    await bootstrap();
+    await runCli(protectArgs(), { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const settingsPath = join(vault, ".claude", "settings.json");
+    const withRules = readFileSync(settingsPath, "utf8");
+
+    // stdin fed (fast EOF) so a regression into the interactive prompt
+    // answers no and fails this test immediately instead of hanging.
+    const r = await runCli(
+      ["brain", "unprotect", "--target", "claudecode", "--vault", vault, "--apply"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config }, stdin: "" },
+    );
+    // The protect verb's refusal code, one refusal family across the
+    // guarded host writes this verb belongs to.
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--yes");
+    expect(r.stderr).toContain("non-interactive");
+    expect(readFileSync(settingsPath, "utf8")).toBe(withRules);
+    expect(existsSync(join(vault, ".open-second-brain", "protect.lock.json"))).toBe(true);
+  });
+
+  test("--apply --yes removes the rules, takes a private backup, and the JSON carries the receipt", async () => {
+    await bootstrap();
+    const settingsPath = join(vault, ".claude", "settings.json");
+    await runCli(protectArgs(), { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+    const beforeUnprotect = readFileSync(settingsPath, "utf8");
+
+    const r = await runCli(
+      [
+        "brain",
+        "unprotect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(payload["consent"]).toBe("confirmed");
+    expect(payload["changed"]).toBe(true);
+    const backup = payload["backup"] as string;
+    expect(typeof backup).toBe("string");
+    expect(backup).not.toBe("");
+    // The backup holds the pre-unprotect bytes (rules still present).
+    expect(readFileSync(backup, "utf8")).toBe(beforeUnprotect);
+    const parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const ownedLeft = (parsed.permissions?.deny ?? []).filter((e: string) =>
+      e.includes("Brain/preferences"),
+    );
+    expect(ownedLeft).toEqual([]);
+    // The claudecode manifest entry is retired with the rules (the
+    // sidecar file itself may remain as an empty entries list).
+    const manifest = JSON.parse(
+      readFileSync(join(vault, ".open-second-brain", "protect.lock.json"), "utf8"),
+    ) as { entries?: Array<{ target?: string }> };
+    expect((manifest.entries ?? []).some((e) => e.target === "claudecode")).toBe(false);
+  });
+
+  test("--apply --yes with nothing managed is a changed:false no-op with no backup", async () => {
+    await bootstrap();
+    const r = await runCli(
+      [
+        "brain",
+        "unprotect",
+        "--target",
+        "claudecode",
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(payload["changed"]).toBe(false);
+    expect(payload["backup"]).toBeNull();
   });
 });

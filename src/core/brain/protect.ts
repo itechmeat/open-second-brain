@@ -25,15 +25,28 @@
  * Both targets are fully idempotent: a second `applyProtect` on the
  * same state is a byte-identical no-op, and `unprotect` removes
  * exactly the entries the matching `applyProtect` added.
+ *
+ * Guarded-host-write convention (t_b6bcd984): every rewrite of a host
+ * settings file - apply and unprotect alike - backs the current content
+ * up FIRST (exclusive create, private `0600`, laddered name, never an
+ * overwrite), and the CLI verbs above this module run the fail-closed
+ * consent ladder before calling it. The unprotect deletion set comes
+ * from the in-vault manifest, which an agent can write; the consent
+ * step above (the operator saw the diff and said yes) is what makes
+ * applying it legitimate.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  isFileAlreadyExists,
+} from "../fs-atomic.ts";
 import { escapeRegex } from "../strings.ts";
-import { BRAIN_ROOT_REL, brainConfigPath, brainDirs } from "./paths.ts";
+import { BRAIN_ROOT_REL, brainConfigPath, brainDirs, collisionCandidateName } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Bumped on any structural change to manifest / fence layout. */
@@ -389,6 +402,41 @@ function readFileOrEmpty(path: string): string {
   }
 }
 
+// ─── The protect lane's own backup-then-write ─────────────────────────
+
+/**
+ * Bound on distinct backup-file names one `Date.now()` stamp tries
+ * (`<dest>.bak.<ms>`, `-2`, ... via {@link collisionCandidateName}).
+ * Exhaustion is a typed error, never an overwrite.
+ */
+export const PROTECT_BACKUP_MAX_ATTEMPTS = 128;
+
+/**
+ * Back `before` up beside `dest` before a protect/unprotect rewrite
+ * lands. Exclusive create, private `0600` (settings backups carry
+ * secrets), same-millisecond collisions ladder the name, and an
+ * exhausted ladder is a typed refusal rather than a silent overwrite -
+ * the same treatment the PreToolUse host-backup executor gives its
+ * copies.
+ */
+function backupHostFile(dest: string, before: string): string {
+  const base = `${dest}.bak.${Date.now()}`;
+  for (let attempt = 1; attempt <= PROTECT_BACKUP_MAX_ATTEMPTS; attempt++) {
+    const candidate = collisionCandidateName(base, attempt);
+    try {
+      atomicCreateFileSyncExclusive(candidate, before, { mode: 0o600 });
+      return candidate;
+    } catch (err) {
+      if (!isFileAlreadyExists(err)) throw err;
+    }
+  }
+  throw new BrainProtectError(
+    `protect backup allocation exhausted for ${dest} ` +
+      `(${PROTECT_BACKUP_MAX_ATTEMPTS} candidates taken); refusing to overwrite`,
+    { code: "BACKUP_ALLOC_EXHAUSTED" },
+  );
+}
+
 export function removeManifestEntry(vault: string, target: ProtectTarget): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
@@ -455,12 +503,44 @@ export function computeProtect(opts: ApplyOptions): ProtectCompute {
   }
 }
 
-export function unprotect(opts: UnprotectOptions): void {
+export function unprotect(opts: UnprotectOptions): UnprotectResult {
   switch (opts.target) {
     case "claudecode":
       return unprotectClaudeCode(opts.vault);
     case "codex":
       return unprotectCodex(opts.vault, opts.__homeOverride);
+  }
+}
+
+/**
+ * What one unprotect did: the host file it touched, the pre-write
+ * backup it took (empty when nothing changed), and whether the host
+ * file moved at all. The receipt the CLI's consent ladder reports.
+ */
+export interface UnprotectResult {
+  readonly target: ProtectTarget;
+  readonly destination: string;
+  /** Empty string when no backup was written (nothing changed). */
+  readonly backupPath: string;
+  readonly changed: boolean;
+}
+
+/**
+ * What one unprotect WOULD change, computed without writing - the
+ * consent preview half of {@link unprotect}, derived exactly as the
+ * write derives it so the diff an operator approves is the write that
+ * runs. The deletion set comes from the in-vault manifest (or the
+ * current rules when no manifest exists); showing it as a before/after
+ * of the host file is the trust answer to that manifest being
+ * agent-writable: nothing is removed until an operator approved this
+ * exact diff.
+ */
+export function computeUnprotect(opts: UnprotectOptions): ProtectCompute {
+  switch (opts.target) {
+    case "claudecode":
+      return computeClaudeCodeUnprotect(opts.vault);
+    case "codex":
+      return computeCodexUnprotect(opts.vault, opts.__homeOverride);
   }
 }
 
@@ -558,10 +638,7 @@ function applyClaudeCode(vault: string): ApplyResult {
   const { compute, manifest } = deriveClaudeCode(vault);
   const { destination: dest, before, after, changed } = compute;
   let backupPath = "";
-  if (changed && before !== "") {
-    backupPath = `${dest}.bak.${Date.now()}`;
-    atomicWriteFileSync(backupPath, before);
-  }
+  if (changed && before !== "") backupPath = backupHostFile(dest, before);
   if (changed) {
     mkdirSync(join(vault, ".claude"), { recursive: true });
     atomicWriteFileSync(dest, after);
@@ -575,12 +652,19 @@ function applyClaudeCode(vault: string): ApplyResult {
   });
 }
 
-function unprotectClaudeCode(vault: string): void {
+/**
+ * One claudecode unprotect derivation, shared by the consent preview
+ * and the write so the two cannot disagree.
+ */
+function deriveClaudeCodeUnprotect(vault: string): ProtectCompute {
   const dest = join(vault, ".claude", "settings.json");
   const prev = readManifest(vault, "claudecode") as ManifestRecordClaudeCode | null;
+  const before = readFileOrEmpty(dest);
   if (prev === null || !existsSync(dest)) {
-    removeManifestEntry(vault, "claudecode");
-    return;
+    // Nothing names an OSB-owned entry, or the file is already gone:
+    // the host file is not ours to touch (the manifest bookkeeping
+    // below is all that is left).
+    return Object.freeze({ destination: dest, before, after: before, changed: false });
   }
   const { parsed: settings } = readSettingsJson(dest);
   if (settings.permissions?.deny !== undefined) {
@@ -593,8 +677,37 @@ function unprotectClaudeCode(vault: string): void {
       (e) => !prev.owned_allow.includes(e),
     );
   }
-  atomicWriteFileSync(dest, JSON.stringify(settings, null, 2) + "\n");
+  const after = JSON.stringify(settings, null, 2) + "\n";
+  return Object.freeze({ destination: dest, before, after, changed: after !== before });
+}
+
+/** The settings content one claudecode unprotect would write. */
+function computeClaudeCodeUnprotect(vault: string): ProtectCompute {
+  return deriveClaudeCodeUnprotect(vault);
+}
+
+function unprotectClaudeCode(vault: string): UnprotectResult {
+  // The exact derivation the consent preview showed, then backup,
+  // settings write, manifest retirement - in that order.
+  const compute = deriveClaudeCodeUnprotect(vault);
+  if (!compute.changed) {
+    removeManifestEntry(vault, "claudecode");
+    return Object.freeze({
+      target: "claudecode" as const,
+      destination: compute.destination,
+      backupPath: "",
+      changed: false,
+    });
+  }
+  const backupPath = backupHostFile(compute.destination, compute.before);
+  atomicWriteFileSync(compute.destination, compute.after);
   removeManifestEntry(vault, "claudecode");
+  return Object.freeze({
+    target: "claudecode" as const,
+    destination: compute.destination,
+    backupPath,
+    changed: true,
+  });
 }
 
 // ─── Codex apply / unprotect ──────────────────────────────────────────
@@ -726,10 +839,7 @@ function applyCodex(vault: string, homeOverride?: string): ApplyResult {
   const { compute, ownedPaths } = deriveCodex(vault, homeOverride);
   const { destination: dest, before, after, changed } = compute;
   let backupPath = "";
-  if (changed && before !== "") {
-    backupPath = `${dest}.bak.${Date.now()}`;
-    atomicWriteFileSync(backupPath, before);
-  }
+  if (changed && before !== "") backupPath = backupHostFile(dest, before);
   if (changed) {
     mkdirSync(join(dest, ".."), { recursive: true });
     atomicWriteFileSync(dest, after);
@@ -748,25 +858,58 @@ function applyCodex(vault: string, homeOverride?: string): ApplyResult {
   });
 }
 
-function unprotectCodex(vault: string, homeOverride?: string): void {
+/**
+ * One codex unprotect derivation, shared by the consent preview and the
+ * write so the two cannot disagree.
+ */
+function deriveCodexUnprotect(vault: string, homeOverride: string | undefined): ProtectCompute {
   const dest = codexConfigPath(homeOverride);
-  if (existsSync(dest)) {
-    const raw = readFileSync(dest, "utf8");
-    // Prefer the manifest's record of OSB-owned paths. Fall back to
-    // current rules only when no manifest is on disk — that handles
-    // a hand-edited fence whose manifest was deleted out-of-band.
-    const prev = readManifest(vault, "codex") as ManifestRecordCodex | null;
-    const ownedPaths = new Set<string>(
-      prev?.owned_paths ?? codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
-    );
-    const remaining = parseCodexFence(raw).filter((e) => !ownedPaths.has(e.path));
-    const after = replaceCodexFence(
-      raw,
-      remaining.length > 0 ? renderCodexEntries(remaining).body : null,
-    );
-    if (after !== raw) atomicWriteFileSync(dest, after);
+  const before = readFileOrEmpty(dest);
+  if (!existsSync(dest)) {
+    return Object.freeze({ destination: dest, before, after: before, changed: false });
   }
+  // Prefer the manifest's record of OSB-owned paths. Fall back to
+  // current rules only when no manifest is on disk — that handles
+  // a hand-edited fence whose manifest was deleted out-of-band.
+  const prev = readManifest(vault, "codex") as ManifestRecordCodex | null;
+  const ownedPaths = new Set<string>(
+    prev?.owned_paths ?? codexEntriesFromRules(buildProtectRules(vault)).map((e) => e.path),
+  );
+  const remaining = parseCodexFence(before).filter((e) => !ownedPaths.has(e.path));
+  const after = replaceCodexFence(
+    before,
+    remaining.length > 0 ? renderCodexEntries(remaining).body : null,
+  );
+  return Object.freeze({ destination: dest, before, after, changed: after !== before });
+}
+
+/** The config content one codex unprotect would write. */
+function computeCodexUnprotect(vault: string, homeOverride: string | undefined): ProtectCompute {
+  return deriveCodexUnprotect(vault, homeOverride);
+}
+
+function unprotectCodex(vault: string, homeOverride?: string): UnprotectResult {
+  // The exact derivation the consent preview showed, then backup and
+  // config write - in that order.
+  const compute = deriveCodexUnprotect(vault, homeOverride);
+  if (!compute.changed) {
+    removeManifestEntry(vault, "codex");
+    return Object.freeze({
+      target: "codex" as const,
+      destination: compute.destination,
+      backupPath: "",
+      changed: false,
+    });
+  }
+  const backupPath = backupHostFile(compute.destination, compute.before);
+  atomicWriteFileSync(compute.destination, compute.after);
   removeManifestEntry(vault, "codex");
+  return Object.freeze({
+    target: "codex" as const,
+    destination: compute.destination,
+    backupPath,
+    changed: true,
+  });
 }
 
 // ─── Print mode (no IO mutation) ──────────────────────────────────────
