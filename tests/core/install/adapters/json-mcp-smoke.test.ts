@@ -92,7 +92,9 @@ describe("gemini-cli adapter — config path resolution", () => {
 });
 
 describe("gemini-cli plan diff — secrets from other servers never render", () => {
-  const token = "ghp_REDACTEDTEST0a1b2c3d4e5f6a7b8c9d0e1f2";
+  // Credential-plausible but format-neutral: no real provider prefix
+  // (ghp_, sk-, AKIA, xoxb-), so secret scanners do not flag the fixture.
+  const token = "fake-credential-value-0123456789abcdef";
 
   function writeMinifiedConfig(osbArgs: string[]) {
     const configPath = join(home, ".gemini", "settings.json");
