@@ -159,7 +159,7 @@ describe("brain_agent_query cursor pagination", () => {
     expect(ids).toEqual(["sig-2026-05-20-agent-query", "pref-agent-query"]);
   });
 
-  test("a page's summary describes the page it returned", async () => {
+  test("the summary describes the whole matched set on every page (brain_agent_diff parity)", async () => {
     seedVault();
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
@@ -168,7 +168,9 @@ describe("brain_agent_query cursor pagination", () => {
     const content1 = page1.result.structuredContent;
     expect(content1.returned).toBe(1);
     expect(content1.next_cursor).not.toBeNull();
-    expect(content1.summary).toBe("claude: 1 contributions across 1 topic (signal).");
+    // The aggregate is computed over the whole matched set, so it does
+    // not move between pages (the sibling brain_agent_diff's contract).
+    expect(content1.summary).toBe("claude: 2 contributions across 1 topic (preference, signal).");
 
     const page2 = await call(server, "brain_agent_query", {
       agents: ["claude"],
@@ -178,7 +180,7 @@ describe("brain_agent_query cursor pagination", () => {
     const content2 = page2.result.structuredContent;
     expect(content2.total_matched).toBe(2);
     expect(content2.contributions.map((c: any) => c.id)).toEqual(["pref-agent-query"]);
-    expect(content2.summary).toBe("claude: 1 contributions across 1 topic (preference).");
+    expect(content2.summary).toBe("claude: 2 contributions across 1 topic (preference, signal).");
   });
 
   test("a malformed cursor is invalid params", async () => {

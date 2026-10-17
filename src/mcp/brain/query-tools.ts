@@ -72,7 +72,6 @@ import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
-import { summarizeAgentContributions } from "../../core/brain/agent-source/summary.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
@@ -326,7 +325,10 @@ async function toolBrainAgentQuery(
     total_matched: full.total_matched,
     returned: page.items.length,
     contributions: page.items,
-    summary: summarizeAgentContributions(page.items, full.filters.agents),
+    // The core already computed the summary over the WHOLE matched set
+    // (the fetch-all above), so it does not move between pages - the
+    // same whole-set semantics the sibling `brain_agent_diff` keeps.
+    summary: full.summary,
     next_cursor: page.next_cursor,
   };
 }
