@@ -236,11 +236,12 @@ describe("applyEntityMerge", () => {
       agent: "test-agent",
       now: NOW,
     });
-    relateEntities(
-      vault,
-      { from: { query: "Mary Somerville" }, relation: "related", to: { query: "Ada" } },
-      { now: NOW },
-    );
+    relateEntities(vault, {
+      from: { query: "Mary Somerville" },
+      relation: "related",
+      to: { query: "Ada" },
+      now: NOW,
+    });
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
     expect(plan.inbound_edges_retarged).toBe(1);
     applyEntityMerge(
