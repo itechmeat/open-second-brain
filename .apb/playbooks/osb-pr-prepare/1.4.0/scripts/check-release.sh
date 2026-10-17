@@ -21,6 +21,10 @@ now=$(json_version <package.json)
 
 if [ "$OSB_RELEASE" = none ]; then
   [ "$now" = "$prev" ] || die "kind $OSB_KIND ships no release, but package.json moved $prev -> $now"
+  base_first=$(git show "origin/$OSB_BASE:CHANGELOG.md" | grep -m1 -E '^## \[' || true)
+  head_first=$(grep -m1 -E '^## \[' CHANGELOG.md || true)
+  [ "$head_first" = "$base_first" ] ||
+    die "kind $OSB_KIND ships no release, but the first CHANGELOG heading moved '$base_first' -> '$head_first'"
   echo "release check ok: no release, version stays $now"
   exit 0
 fi
