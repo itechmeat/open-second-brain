@@ -76,7 +76,7 @@ async function runDriver(body: string): Promise<DriverResult> {
       stdout,
       stderr,
       code: proc.exitCode,
-      signal: proc.signalCode,
+      signal: proc.signalCode == null ? null : String(proc.signalCode),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
