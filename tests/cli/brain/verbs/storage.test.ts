@@ -17,7 +17,7 @@
  *      answer as an empty vault.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,14 +211,22 @@ describe("o2b brain storage", () => {
     // Seed the two days before today and today itself (UTC midnights), so
     // the verb's fresh census always lands on the newest seeded day; fixed
     // dates turned into a fourth distinct day once the calendar moved past
-    // them and flattened the trend out of the warn band.
+    // them and flattened the trend out of the warn band. The clock is
+    // frozen at today's UTC noon so the census cannot cross midnight.
     const today = Math.floor(Date.now() / DAY_MS) * DAY_MS;
     const seedDay = (daysAgo: number): string => new Date(today - daysAgo * DAY_MS).toISOString();
     seedSample(seedDay(2), total - total / 10, "seed-older");
     seedSample(seedDay(1), total, "seed-newer");
     seedSample(seedDay(0), total + total / 20, "seed-newest");
 
-    const { code, report } = await runJsonReport();
+    setSystemTime(new Date(today + DAY_MS / 2));
+    let run: Awaited<ReturnType<typeof runJsonReport>>;
+    try {
+      run = await runJsonReport();
+    } finally {
+      setSystemTime();
+    }
+    const { code, report } = run;
 
     expect(code).toBe(0);
     const forecast = report.forecast;
