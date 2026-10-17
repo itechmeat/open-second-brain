@@ -109,6 +109,11 @@ describe("o2b install --target X --apply", () => {
       // (this test is skipped when it is), so it sits at EOF:
       // readSingleLine answers "" at once, the run cancels, and the
       // adapter never applies - nothing touches any real HOME.
+      //
+      // This is the suite's ONE prompt-consuming test: readSingleLine
+      // answers off the shared process stdin, whose EOF fires once per
+      // bun test process, so every other interactive-ladder assertion
+      // rides here rather than in a second TTY-faked test.
       const stdin = process.stdin as unknown as { isTTY?: boolean };
       const saved = stdin.isTTY;
       Object.defineProperty(stdin, "isTTY", { value: true, configurable: true });
@@ -120,6 +125,15 @@ describe("o2b install --target X --apply", () => {
         expect(r.stdout).toContain("install cancelled");
         expect(r.stdout).not.toContain("Proceed? [y/N]");
         expect(r.stderr).toContain("Proceed? [y/N]");
+        // M15: the consent-time plan renders beside the prompt on
+        // stderr - stdout is the payload stream, and a plan prefixed
+        // there corrupted e.g. `generic --out -` - and its header no
+        // longer says dry-run while asking for apply consent.
+        expect(r.stdout).not.toContain("dry-run");
+        expect(r.stdout).not.toContain("— plan");
+        expect(r.stderr).toContain("— plan");
+        expect(r.stderr).toContain("nothing written until you confirm");
+        expect(r.stderr).not.toContain("dry-run");
         expect(existsSync(join(home, ".gemini", "settings.json"))).toBe(false);
       } finally {
         Object.defineProperty(stdin, "isTTY", { value: saved, configurable: true });
@@ -236,6 +250,21 @@ describe("o2b install --target generic", () => {
     expect(existsSync(outPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(outPath, "utf8"));
     expect(parsed.mcpServers["open-second-brain"]).toBeDefined();
+  });
+
+  test("--out - with --yes writes the snippet first on stdout, no plan header (M15)", async () => {
+    // Non-TTY with --yes: no prompt, so the run needs no interactive
+    // stdin - and the payload pin holds without one. The apply consent
+    // was given, so nothing may prefix the snippet on stdout (the
+    // plain-text receipt after it is the apply close's own channel).
+    const r = await runCli(["install", "--target", "generic", "--apply", "--yes", "--out", "-"], {
+      env: envBase(),
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout.startsWith("{")).toBe(true);
+    expect(r.stdout).not.toContain("dry-run");
+    expect(r.stdout).not.toContain("— plan");
+    expect(r.stdout).toContain('"open-second-brain"');
   });
 
   test("--format yaml emits YAML to stdout", async () => {

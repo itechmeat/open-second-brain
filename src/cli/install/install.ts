@@ -440,11 +440,14 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
       }
       return INSTALL_EXIT.consentRefused;
     }
-    // The prompt rides stderr, where every other consent ladder in the
-    // CLI puts it (upgrade, protect, doctor, merge): stdout is the
-    // payload stream, and a caller piping the plan must not catch the
-    // question in it.
-    process.stdout.write(renderPlan(plan));
+    // M15: the consent-time plan renders to stderr, where the prompt
+    // already rides - stdout is the payload stream, and for
+    // `--target generic --out -` the plan prefixed the snippet made it
+    // unparsable. The header drops the dry-run wording: this render is
+    // asking for apply consent, not previewing a dry run. The plain
+    // print-only plan (no --apply) keeps its stdout dry-run render
+    // below.
+    process.stderr.write(renderPlan(plan, { consent: true }));
     process.stderr.write("Proceed? [y/N] ");
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {

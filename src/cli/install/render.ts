@@ -124,9 +124,23 @@ export function renderPlanJson(plan: InstallPlan): string {
   return installJson({ plan });
 }
 
-export function renderPlan(plan: InstallPlan): string {
+/**
+ * The plan, as text.
+ *
+ * Two modes: the plain print-only dry run (default) keeps its
+ * "dry-run; pass --apply to execute" header, and the consent render
+ * (`{ consent: true }`) drops the dry-run wording - M15, it is asking
+ * for APPLY consent, and a header that says dry-run misnames the
+ * question. The consent render rides stderr beside the prompt (the
+ * caller's job), where it cannot corrupt a payload on stdout.
+ */
+export function renderPlan(plan: InstallPlan, opts: { readonly consent?: boolean } = {}): string {
   const lines: string[] = [];
-  lines.push(`o2b install --target ${plan.target} — plan (dry-run; pass --apply to execute)`);
+  lines.push(
+    opts.consent === true
+      ? `o2b install --target ${plan.target} — plan (nothing written until you confirm)`
+      : `o2b install --target ${plan.target} — plan (dry-run; pass --apply to execute)`,
+  );
   lines.push("-".repeat(60));
   for (const [i, step] of plan.steps.entries()) {
     lines.push(`  step ${i + 1}: [${step.kind}] ${step.preview}`);
