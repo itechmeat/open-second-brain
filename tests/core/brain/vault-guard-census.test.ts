@@ -113,6 +113,14 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/portability/recall-sources.ts":
     "machine-local recall-source registry under the config directory, not " +
     "vault content. Keyed by `configPath`; no vault is in scope.",
+  "src/core/brain/pretool-host-backup.ts":
+    "host-settings backup executor. It writes only beside the caller-named " +
+    "host target (the stamped `.o2b-backups` folder under the same host " +
+    "client directory), outside any vault, and its one in-vault artifact - " +
+    "the audit receipt - routes through the shared `appendAuditRecord` at " +
+    "the caller-supplied audit root. A host settings file has no vault " +
+    "identity to assert; the executor is fail-closed on its own terms (a " +
+    "failed backup denies the tool call).",
   "src/core/brain/provenance/source-archive.ts":
     "every path it writes or removes is derived inside this module from the " +
     "entry's own sha-256 and validated before the join, so the store cannot be " +

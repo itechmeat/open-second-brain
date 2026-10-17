@@ -35,6 +35,7 @@ import {
   WRITE_TOOL_NAMES,
 } from "../../../src/core/brain/pretool-host-backup.ts";
 import { hookAuditDir } from "../../../src/core/brain/paths.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 /** Minimal audit reader: every record in the (single-shard) audit root. */
 function readAuditRecords(auditDir: string): Array<Record<string, unknown>> {
@@ -202,27 +203,29 @@ describe("executeHostBackup", () => {
     expect(existsSync(hookAuditDir(vault))).toBe(false);
   });
 
-  test("an unreadable source returns a typed failure naming the path", () => {
-    if (process.platform === "win32") return; // chmod unreadability is POSIX-only
-    const home = tmpDir("osb-hb-unread-");
-    const vault = tmpDir("osb-hb-vault4-");
-    mkdirSync(join(home, ".claude"), { recursive: true });
-    const target = join(home, ".claude", "settings.json");
-    writeFileSync(target, "secret\n");
-    chmodSync(target, 0o000);
-    try {
-      let raised: unknown = null;
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable source returns a typed failure naming the path",
+    () => {
+      const home = tmpDir("osb-hb-unread-");
+      const vault = tmpDir("osb-hb-vault4-");
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      const target = join(home, ".claude", "settings.json");
+      writeFileSync(target, "secret\n");
+      chmodSync(target, 0o000);
       try {
-        executeHostBackup({ target, vault, now: new Date(), actor: "hook:claudecode" });
-      } catch (e) {
-        raised = e;
+        let raised: unknown = null;
+        try {
+          executeHostBackup({ target, vault, now: new Date(), actor: "hook:claudecode" });
+        } catch (e) {
+          raised = e;
+        }
+        expect(raised).toBeInstanceOf(HostBackupError);
+        expect((raised as Error).message).toContain(target);
+      } finally {
+        chmodSync(target, 0o644);
       }
-      expect(raised).toBeInstanceOf(HostBackupError);
-      expect((raised as Error).message).toContain(target);
-    } finally {
-      chmodSync(target, 0o644);
-    }
-  });
+    },
+  );
 
   test("a failed copy raises a typed failure naming the path", () => {
     const home = tmpDir("osb-hb-failcopy-");

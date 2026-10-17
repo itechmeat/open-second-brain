@@ -1434,8 +1434,13 @@ const DIRECT_WRITE_ROWS = 82;
  * mining surveys (`src/core/brain/session-mining-surveys.ts`) write their
  * JSON through `atomicWriteFileSync` under the file's own lock - derived-
  * store machine state, not a note, needing no exclusion.
+ *
+ * 122 -> 123, from the guarded-host-writes wave and nothing else: the
+ * protect consent gate (`src/core/brain/protect.ts`) persists the applied
+ * settings through `atomicWriteFileSync` - machine state written only
+ * after an explicit consent receipt, not a note, needing no exclusion.
  */
-const SHARED_HELPER_ROWS = 122;
+const SHARED_HELPER_ROWS = 123;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1556,9 +1561,12 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * through the shared atomic writer (derived-store machine state, not
  * notes; no origin stamp on machine state). 118 -> 119: the pending mining
  * surveys (`src/core/brain/session-mining-surveys.ts`) write their JSON
- * the same way (derived-store machine state; no origin stamp).
+ * the same way (derived-store machine state; no origin stamp). 119 -> 120:
+ * the protect consent gate (`src/core/brain/protect.ts`) persists the
+ * applied settings through the shared atomic writer (consent-gated machine
+ * state; no origin stamp).
  */
-const UNSTAMPED_SHARED_ROWS = 119;
+const UNSTAMPED_SHARED_ROWS = 120;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

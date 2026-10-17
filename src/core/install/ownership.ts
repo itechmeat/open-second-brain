@@ -259,6 +259,26 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     sources: ["src/core/brain/protect.ts"],
   },
   {
+    id: "host_settings_backups",
+    label: "host settings backups",
+    location:
+      "a .o2b-backups/ folder beside each protected settings file - e.g. " +
+      "~/.claude/.o2b-backups/ for the user-level Claude settings - holding one " +
+      "timestamped folder per backup run",
+    carries_memory: false,
+    created_by:
+      "the opt-in PreToolUse host-backup hook, each time it allows an agent write to a " +
+      "protected settings file by taking the snapshot first",
+    removed_by:
+      "deleting the folder yourself - the hook only ever adds stamped folders and never prunes them",
+    note:
+      "A point-in-time copy of the client's own settings file, kept so a badly advised agent " +
+      "write can be undone by hand. It holds the host client's configuration, never vault " +
+      "memory, and it sits beside the file it protects so it is findable where the damage " +
+      "would have been.",
+    sources: ["hooks/pretool-host-backup.ts", "src/core/brain/pretool-host-backup.ts"],
+  },
+  {
     id: "hook_reminder_markers",
     label: "hook reminder markers",
     location: "${O2B_REMINDER_STATE_DIR:-$TMPDIR/o2b-reminder-markers}",
