@@ -103,6 +103,10 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
           // in the position the plugin's own SessionStart group lists it:
           // default-off like gap-agenda, fail-open, one context line.
           "backlog-nudge",
+          // The opt-in cross-agent log catch-up (actionable-now-batch), in
+          // the plugin's own order: default-off, fail-soft exit 0, read-only
+          // over Brain/log with its cursor in the vault's derived store.
+          "log-catchup",
           "session-capture",
         ],
       },
