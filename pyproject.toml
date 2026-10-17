@@ -6,8 +6,10 @@ build-backend = "setuptools.build_meta"
 # version lives in package.json. This pyproject.toml exists only so the
 # Hermes Python shim (`plugins/hermes/__init__.py`) and the root entry
 # (`__init__.py`) are addressable as a Python package — Hermes loads them
-# in-process as part of its plugin lifecycle. No runtime dependencies, no
-# CLI entry points (those moved to `package.json` `bin`).
+# in-process as part of its plugin lifecycle. No runtime dependencies and
+# no CLI entry points (those moved to `package.json` `bin`); the one entry
+# point declared below is a Hermes plugin registration in the
+# `hermes_agent.memory_providers` group, not a CLI script.
 [project]
 name = "open-second-brain"
 version = "1.87.0"
@@ -18,6 +20,9 @@ license = "MIT"
 authors = [{ name = "Open Second Brain contributors" }]
 keywords = ["second-brain", "obsidian", "agents", "hermes-plugin"]
 dependencies = []
+
+[project.entry-points."hermes_agent.memory_providers"]
+open-second-brain = "plugins.hermes"
 
 [tool.setuptools]
 packages = ["plugins.hermes"]

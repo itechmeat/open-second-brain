@@ -158,6 +158,27 @@ location shadows the plugin `hermes plugins install` and
 `hermes plugins update` manage, so an update appears to change nothing.
 Remove such a copy and restart the gateway.
 
+### How Hermes discovers the provider
+
+Discovery runs through Python packaging metadata, not a config file: the
+package declares a `hermes_agent.memory_providers` entry point group
+whose `open-second-brain` entry names the `plugins.hermes` module. When
+Hermes lists memory providers it reads that group, imports
+`plugins.hermes`, and finds the `register` callable there — the same
+module this plugin's install lays down, so the entry point resolves
+whether Hermes loaded the wheel or a checkout.
+
+Registering the provider is automatic; running it is not entirely. The
+provider serves memory by driving the Open Second Brain CLI over an
+internal `o2b mcp` bridge, and that bridge needs `o2b` reachable: either
+on PATH (step 2 creates the links) or resolvable from a checkout, where
+the provider falls back to launching the repo's TypeScript entry point
+through Bun. In both contexts nothing beyond the install above is
+needed. Outside them — the entry point resolved but neither an `o2b`
+binary nor a checkout present — registration still succeeds and the
+failure surfaces later as a bridge start error in the gateway log, so
+keep step 2 in place.
+
 ## 5. Verify
 
 ```bash

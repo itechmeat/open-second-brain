@@ -7,8 +7,10 @@ contract Hermes relies on: ``register`` wiring, the health report, the root
 entrypoint re-export, and the identity-reminder template source of truth.
 """
 
+import importlib
 import importlib.util
 import sys
+import tomllib
 import types
 import unittest
 from pathlib import Path
@@ -201,6 +203,41 @@ class HermesLoaderContractTests(unittest.TestCase):
 
         register(Context())
         self.assertNotIn("pre_llm_call", registered)
+
+
+class MemoryProviderEntryPointTests(unittest.TestCase):
+    """The package is discoverable through Python packaging metadata:
+    ``pyproject.toml`` declares the ``hermes_agent.memory_providers`` entry
+    point group targeting ``plugins.hermes``, and the target module
+    satisfies the loader contract Hermes applies to whatever it loads back
+    (``hasattr(loaded, "register")``, per the root ``__init__.py``).
+
+    This pins the declaration and the importability of the target from a
+    checkout. Resolving the entry point through an installed wheel's
+    metadata is the external loader's job and is not asserted here - Hermes
+    is not in CI - but because the target IS ``plugins.hermes`` and the
+    wheel ships exactly that package, a resolved entry point lands on the
+    same module these tests import directly.
+    """
+
+    ENTRY_POINT_GROUP = "hermes_agent.memory_providers"
+
+    def test_pyproject_declares_the_memory_providers_group(self):
+        with (ROOT / "pyproject.toml").open("rb") as fh:
+            data = tomllib.load(fh)
+        entry_points = data["project"]["entry-points"]
+        self.assertIn(self.ENTRY_POINT_GROUP, entry_points)
+        self.assertEqual(entry_points[self.ENTRY_POINT_GROUP], {"open-second-brain": "plugins.hermes"})
+
+    def test_entry_point_target_imports_and_satisfies_the_loader_contract(self):
+        module = importlib.import_module("plugins.hermes")
+        self.assertTrue(hasattr(module, "register"))
+        self.assertTrue(callable(module.register))
+
+    def test_entry_point_target_is_the_module_the_tests_import(self):
+        module = importlib.import_module("plugins.hermes")
+        self.assertIs(module.register, register)
+        self.assertIs(module.OpenSecondBrainMemoryProvider, OpenSecondBrainMemoryProvider)
 
 
 class TemplateSourceOfTruthTests(unittest.TestCase):
