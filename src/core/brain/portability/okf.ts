@@ -784,11 +784,38 @@ function asManifestPage(value: unknown): OkfManifestPage | null {
 }
 
 /**
+ * Read the bundle-root index's `okf_version` declaration, or null when
+ * the index is missing, unreadable, or declares no version. Consulted
+ * only when the manifest does not carry the dialect schema, so the
+ * schema-"1" path (sealed knowledge-pack halves included) never grows a
+ * dependency on an index file being present.
+ */
+function indexOkfVersion(dir: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(dir, "index.md"), "utf8");
+  } catch {
+    return null;
+  }
+  const [meta] = parseFrontmatterText(raw);
+  const value = meta["okf_version"];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
  * Read an OKF bundle directory: parse `okf.json`, validate the schema,
- * then parse each manifest-listed page file. A page whose file is
- * missing or unreadable is skipped (the manifest is the source of truth
- * for what *should* be there; a partial bundle still imports what it
- * has). An unsupported schema or absent manifest throws {@link OkfError}.
+ * then parse each manifest-listed page file. Two bundle generations are
+ * accepted: a manifest carrying the Open Second Brain dialect
+ * `schema: "1"`, and a bundle whose bundle-root `index.md` declares
+ * `okf_version: "0.2"` (the OKF v0.2 marker this export writes beside
+ * the dialect schema). Dual acceptance is what keeps sealed
+ * knowledge-pack halves exported before v0.2 emission importable, and
+ * what lets a v0.2-declared half whose manifest names a non-dialect
+ * schema through the same gate. Everything else is refused by name. A
+ * page whose file is missing or unreadable is skipped (the manifest is
+ * the source of truth for what *should* be there; a partial bundle
+ * still imports what it has). An unsupported schema or absent manifest
+ * throws {@link OkfError}.
  */
 export function readOkfBundle(dir: string): ParsedOkfBundle {
   const manifestPath = join(dir, OKF_MANIFEST_FILENAME);
@@ -804,7 +831,7 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
   if (parsed === null || typeof parsed !== "object") {
     throw new OkfError("okf.json must be a JSON object");
   }
-  if (parsed.schema !== OKF_SCHEMA_VERSION) {
+  if (parsed.schema !== OKF_SCHEMA_VERSION && indexOkfVersion(dir) !== OKF_VERSION) {
     throw new OkfError(
       `unsupported OKF schema: expected ${OKF_SCHEMA_VERSION}, got ${String(parsed.schema)}`,
     );
@@ -835,7 +862,11 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
 
   return {
     manifest: {
-      schema: OKF_SCHEMA_VERSION,
+      // Preserve the ON-DISK schema value rather than stamping this
+      // module's constant: a reader inspecting the parsed manifest must
+      // see which declaration the bundle actually made (a v0.2-accepted
+      // bundle may name a non-dialect schema, or none at all).
+      schema: typeof parsed.schema === "string" ? parsed.schema : "",
       producer,
       // Preserve the bundle's own metadata instead of synthesizing
       // placeholders: readOkfBundle is a reader, and a caller that

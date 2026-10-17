@@ -26,6 +26,11 @@ import {
   readOkfBundle,
   writeOkfBundle,
 } from "../../../../src/core/brain/portability/okf.ts";
+import {
+  installKnowledgePack,
+  readKnowledgePack,
+  sealKnowledgePack,
+} from "../../../../src/core/brain/portability/knowledge-pack.ts";
 
 let vault: string;
 beforeEach(() => {
@@ -270,6 +275,165 @@ describe("v0.2 emission", () => {
     expect(byPath.get("Notes/Archived.md")?.status).toBe("deprecated");
     expect(byPath.get("Notes/Draft.md")?.status).toBe("draft");
     expect(byPath.get("Notes/Plain.md")?.status).toBe("stable");
+  });
+});
+
+/**
+ * OKF v0.2 import acceptance (t_ffdb4fac): the reader admits a bundle
+ * whose manifest carries the Open Second Brain dialect `schema: "1"` OR
+ * whose bundle-root index declares `okf_version: "0.2"`, preserves the
+ * on-disk schema value instead of stamping its own constant, and still
+ * refuses everything else by name. Dual acceptance is what keeps sealed
+ * knowledge-pack halves (which carry no okf_version declaration from
+ * before v0.2 emission) importable.
+ */
+describe("v0.2 import acceptance", () => {
+  /**
+   * Hand-build a bundle in `dir` in the singlePageBundle pattern, with
+   * caller-chosen manifest `schema` and index `okf_version` markers
+   * (either may be null to omit the marker entirely).
+   */
+  function bundleWithMarkers(
+    dir: string,
+    schema: string | null,
+    indexVersion: string | null,
+  ): void {
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    const manifest: Record<string, unknown> = {
+      producer: "some-other-wiki",
+      generated_at: "2026-06-01T00:00:00Z",
+      vault_basename: "Foreign",
+      log_days: 0,
+      pages: [
+        {
+          id: "Topic",
+          path: "Concepts/Topic.md",
+          class: "concept",
+          bundle_path: "concepts/Topic.md",
+          kind: "note",
+          citations: [],
+          status: "stable",
+          sources: [],
+          aliases: [],
+          freshness: null,
+          foreign_type: null,
+          producer_meta: {},
+        },
+      ],
+    };
+    if (schema !== null) manifest["schema"] = schema;
+    writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+    const index =
+      indexVersion === null
+        ? "# Foreign\n"
+        : `---\nokf_version: "${indexVersion}"\n---\n# Foreign\n`;
+    writeFileSync(join(dir, "index.md"), index, "utf8");
+    writeFileSync(join(dir, "concepts/Topic.md"), "---\ntitle: Topic\n---\nBody.\n", "utf8");
+  }
+
+  test("a bundle whose index declares okf_version 0.2 is accepted beside the dialect schema", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-v02-"));
+    try {
+      bundleWithMarkers(dir, "0.2", "0.2");
+      const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(true);
+      expect(parsed.pages.length).toBe(1);
+      // The parsed manifest reports the ON-DISK declaration, not a
+      // hardcoded constant.
+      expect(parsed.manifest.schema).toBe("0.2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a bundle with neither marker is refused by name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-v02-refuse-"));
+    try {
+      bundleWithMarkers(dir, "999", "9.9");
+      expect(() => readOkfBundle(dir)).toThrow("unsupported OKF schema: expected 1, got 999");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a v0.2 bundle round-trips through importOkfBundle", () => {
+    note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nsee [[Beta]].\n");
+    note("Notes/Beta.md", "---\ntitle: Beta\n---\nleaf.\n");
+    const bundle = buildOkfBundle(vault);
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const parsed = readOkfBundle(dir);
+      const result = importOkfBundle(dest, parsed, { trusted: true });
+      expect(result.errors).toEqual([]);
+      expect(result.written).toContain("Notes/Alpha.md");
+      const landed = readFileSync(join(dest, "Notes/Alpha.md"), "utf8");
+      // The v0.2 per-page keys ride the round-trip as foreign-but-
+      // tolerated frontmatter: never stripped, never re-stamped. The
+      // block values land as this parser's string form of the flow maps
+      // (quoted on re-write), so the assertions pin the DATA, not the
+      // quoting shape.
+      expect(landed).toContain("status: stable");
+      expect(landed).toContain("{resource: concepts/Beta.md, id: Beta}");
+      expect(landed).toContain(bundle.manifest.generated_at);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a sealed knowledge-pack half carrying a v0.2 okf.json installs", () => {
+    const packDir = mkdtempSync(join(tmpdir(), "o2b-okf-pack-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-pack-dest-"));
+    try {
+      const okfManifest = {
+        schema: "0.2",
+        producer: OKF_PRODUCER,
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Packed",
+        log_days: 0,
+        pages: [
+          {
+            id: "runbook",
+            path: "Notes/runbook.md",
+            class: "concept" as const,
+            bundle_path: "concepts/runbook.md",
+            kind: "note",
+            citations: [],
+            status: "stable" as const,
+            sources: [],
+            aliases: [] as string[],
+            freshness: null,
+            foreign_type: null,
+            producer_meta: {},
+          },
+        ],
+      };
+      const sealed = sealKnowledgePack({
+        name: "v02-pack",
+        version: "1.0.0",
+        selection: ["tag:ops"],
+        okfManifest,
+        // The index carries the v0.2 declaration the manifest schema
+        // does not; the seal hashes exactly these bytes.
+        pageFiles: [
+          { path: "index.md", contents: '---\nokf_version: "0.2"\n---\n# Packed\n' },
+          { path: "concepts/runbook.md", contents: "---\ntitle: Runbook\n---\nRestart.\n" },
+        ],
+        preferences: [],
+      });
+      writeOkfBundle(packDir, { manifest: okfManifest, files: sealed.files });
+
+      const pack = readKnowledgePack(packDir);
+      expect(pack.integrity.verified).toBe(true);
+      const result = installKnowledgePack(dest, pack);
+      expect(result.pages.written).toEqual([`${OKF_REVIEW_REL}/Notes/runbook.md`]);
+      expect(existsSync(join(dest, OKF_REVIEW_REL, "Notes", "runbook.md"))).toBe(true);
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
   });
 });
 
