@@ -242,7 +242,7 @@ describe("brain_context_receipts tool", () => {
 });
 
 describe("brain_context_receipts cursor pagination", () => {
-  test("operation=list declares a described cursor property declares a described cursor property", () => {
+  test("operation=list declares a described, length-capped cursor property", () => {
     const tool = buildToolTable("full").find((t) => t.name === "brain_context_receipts")!;
     const schema = tool.inputSchema as {
       properties: Record<string, { type?: string; maxLength?: number; description?: string }>;
@@ -274,17 +274,25 @@ describe("brain_context_receipts cursor pagination", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
+    // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+    // slack step, so a next_cursor that never turns null (an ignored or
+    // never-exhausting cursor) exhausts the budget and fails here instead of
+    // hanging the suite.
+    const total = 3;
+    const limit = 2;
+    const maxSteps = Math.ceil(total / limit) + 1;
     const walked: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const list = await callReceipts(server, {
         operation: "list",
         session_id: "session-walk",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
-      expect(list["total"]).toBe(3);
-      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(list["total"]).toBe(total);
+      // Guard the walk protocol: an ignored cursor is a shape violation,
+      // not a stop condition.
       const next = list["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
       walked.push(
@@ -293,7 +301,9 @@ describe("brain_context_receipts cursor pagination", () => {
         ),
       );
       cursor = next as string | null;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     expect(walked.toSorted()).toEqual(ids.toSorted());
     expect(new Set(walked).size).toBe(3);
   });

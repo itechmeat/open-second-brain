@@ -147,16 +147,24 @@ test("op=list walks by cursor: the pages reassemble every session, the last page
     ids.push(opened["session_id"] as string);
   }
 
+  const total = 3;
+  const limit = 2;
+  // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+  // slack step, so a next_cursor that never turns null (an ignored or
+  // never-exhausting cursor) exhausts the budget and fails here instead of
+  // hanging the suite.
+  const maxSteps = Math.ceil(total / limit) + 1;
   const walked: string[] = [];
   let cursor: string | null = null;
-  do {
+  for (let step = 0; step < maxSteps; step += 1) {
     const page = (await tool().handler(ctx(), {
       op: "list",
-      limit: 2,
+      limit,
       ...(cursor !== null ? { cursor } : {}),
     })) as Record<string, unknown>;
-    expect(page["total"]).toBe(3);
-    // Guard the walk protocol: an ignored cursor would loop forever.
+    expect(page["total"]).toBe(total);
+    // Guard the walk protocol: an ignored cursor is a shape violation,
+    // not a stop condition.
     const next = page["next_cursor"];
     expect(next === null || typeof next === "string").toBe(true);
     walked.push(
@@ -165,7 +173,9 @@ test("op=list walks by cursor: the pages reassemble every session, the last page
       ),
     );
     cursor = next as string | null;
-  } while (cursor !== null);
+    if (cursor === null) break;
+  }
+  expect(cursor).toBeNull();
   expect(walked.toSorted()).toEqual(ids.toSorted());
   expect(new Set(walked).size).toBe(3);
 });

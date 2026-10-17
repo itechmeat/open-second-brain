@@ -130,22 +130,32 @@ describe("brain_agent_query cursor pagination", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
+    const total = 2;
+    const limit = 1;
+    // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+    // slack step, so a next_cursor that never turns null (an ignored or
+    // never-exhausting cursor) exhausts the budget and fails here instead of
+    // hanging the suite.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const ids: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const response = await call(server, "brain_agent_query", {
         agents: ["claude"],
-        limit: 1,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
       expect(response.result.isError).toBe(false);
       const content = response.result.structuredContent;
-      expect(content.total_matched).toBe(2);
-      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(content.total_matched).toBe(total);
+      // Guard the walk protocol: an ignored cursor is a shape violation,
+      // not a stop condition.
       expect(content.next_cursor === null || typeof content.next_cursor === "string").toBe(true);
       ids.push(...content.contributions.map((c: any) => c.id));
       cursor = content.next_cursor;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     expect(ids).toEqual(["sig-2026-05-20-agent-query", "pref-agent-query"]);
   });
 

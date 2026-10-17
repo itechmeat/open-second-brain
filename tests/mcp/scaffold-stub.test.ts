@@ -138,21 +138,31 @@ describe("list cursor pagination", () => {
     const { indexVault, resolveSearchConfig } = await import("../../src/core/search/index.ts");
     await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
 
+    // The index knows exactly three dangling targets; bound the walk by that
+    // arithmetic: ceil(total/limit) pages plus one slack step, so a
+    // next_cursor that never turns null exhausts the budget and fails here
+    // instead of hanging the suite.
+    const total = 3;
+    const limit = 2;
+    const maxSteps = Math.ceil(total / limit) + 1;
     const walked: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const res = await call({
         action: "list",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
       expect(res["state"]).toBe("measured");
-      // Guard the walk protocol: an ignored cursor would loop forever.
+      // Guard the walk protocol: an ignored cursor is a shape violation,
+      // not a stop condition.
       const next = res["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
       walked.push(...(res["targets"] as ReadonlyArray<{ target: string }>).map((t) => t.target));
       cursor = next as string | null;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     expect(walked.map((t) => t.replace(/^\[\[|\/.*$/g, "")).toSorted()).toEqual([
       "dangling-one",
       "dangling-three",

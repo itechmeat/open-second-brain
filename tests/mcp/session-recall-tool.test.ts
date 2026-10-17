@@ -445,22 +445,31 @@ describe("brain_session_grep cursor pagination", () => {
     const allIds = (full["hits"] as ReadonlyArray<{ id: string }>).map((h) => h.id);
     expect(allIds.length).toBeGreaterThanOrEqual(3);
 
+    // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+    // slack step, so a next_cursor that never turns null (an ignored or
+    // never-exhausting cursor) exhausts the budget and fails here instead of
+    // hanging the suite.
+    const limit = 2;
+    const maxSteps = Math.ceil(allIds.length / limit) + 1;
     const walked: string[] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const page = await callOn(server, "brain_session_grep", {
         query: "walrus",
         session_id: "session-walk",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       });
       expect(page["total"]).toBe(allIds.length);
-      // Guard the walk protocol: an ignored cursor would loop forever.
+      // Guard the walk protocol: an ignored cursor is a shape violation,
+      // not a stop condition.
       const next = page["next_cursor"];
       expect(next === null || typeof next === "string").toBe(true);
       walked.push(...(page["hits"] as ReadonlyArray<{ id: string }>).map((h) => h.id));
       cursor = next as string | null;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     expect(walked).toEqual(allIds);
   });
 

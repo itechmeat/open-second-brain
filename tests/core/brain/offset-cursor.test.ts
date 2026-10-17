@@ -39,14 +39,22 @@ describe("pageSlice", () => {
   });
 
   test("each page's cursor leads to the next and the pages reassemble the set", () => {
+    const limit = 2;
+    // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+    // slack step, so a next_cursor that never turns null exhausts the budget
+    // and fails here instead of hanging the loop at 100% CPU.
+    const maxSteps = Math.ceil(items.length / limit) + 1;
     const pages: string[][] = [];
     let cursor: string | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const offset: number = cursor === null ? 0 : decodeOffsetCursor(cursor);
-      const page: ReturnType<typeof pageSlice<string>> = pageSlice(items, offset, 2);
+      const page: ReturnType<typeof pageSlice<string>> = pageSlice(items, offset, limit);
       pages.push([...page.items]);
       cursor = page.next_cursor;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
+    expect(pages).toHaveLength(Math.ceil(items.length / limit));
     expect(pages.flat()).toEqual(items);
   });
 

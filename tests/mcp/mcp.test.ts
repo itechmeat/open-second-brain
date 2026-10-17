@@ -564,25 +564,35 @@ describe("tool calls", () => {
     }
     const server = new MCPServer({ vault });
     await initialize(server);
+    // The test created exactly three matching pages; bound the walk by that
+    // arithmetic: ceil(total/limit) pages plus one slack step, so a
+    // next_cursor that never turns null exhausts the budget and fails here
+    // instead of hanging the suite.
+    const total = 3;
+    const limit = 2;
+    const maxSteps = Math.ceil(total / limit) + 1;
     const seen: string[] = [];
     let cursor: string | null = null;
     let totalPages: number | null = null;
-    do {
+    for (let step = 0; step < maxSteps; step += 1) {
       const r = (await callTool(server, "second_brain_query", {
         pattern: "Cursor Walk",
-        limit: 2,
+        limit,
         ...(cursor !== null ? { cursor } : {}),
       })) as any;
       const s = r.result.structuredContent;
       // `total_pages` is the vault's whole page count, stable across the walk.
       if (totalPages === null) totalPages = s.total_pages;
       expect(s.total_pages).toBe(totalPages);
-      expect(s.returned).toBeLessThanOrEqual(2);
-      // Guard the walk protocol: an ignored cursor would loop forever.
+      expect(s.returned).toBeLessThanOrEqual(limit);
+      // Guard the walk protocol: an ignored cursor is a shape violation,
+      // not a stop condition.
       expect(s.next_cursor === null || typeof s.next_cursor === "string").toBe(true);
       seen.push(...s.pages.map((p: { title: string }) => p.title));
       cursor = s.next_cursor;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     // Path order, so the walk reads the pages back in the same order an
     // unpaginated call lists them.
     expect(seen).toEqual(["Cursor Walk 1", "Cursor Walk 2", "Cursor Walk 3"]);

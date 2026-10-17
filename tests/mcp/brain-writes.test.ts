@@ -161,17 +161,25 @@ describe("brain_writes cursor pagination", () => {
     await call("brain_create_note", { path: "Notes/Two.md", content: "body" });
     await call("brain_create_note", { path: "Notes/Three.md", content: "body" });
 
+    const total = 3;
+    const limit = 2;
+    // Bound the walk by the page arithmetic: ceil(total/limit) pages plus one
+    // slack step, so a next_cursor that never turns null (a never-exhausting
+    // tool) exhausts the budget and fails here instead of hanging the suite.
+    const maxSteps = Math.ceil(total / limit) + 1;
     const targets: Array<unknown> = [];
     let cursor: string | null = null;
-    do {
-      const reply = await listWrites({ limit: 2, ...(cursor !== null ? { cursor } : {}) });
-      expect(reply.total_matched).toBe(3);
+    for (let step = 0; step < maxSteps; step += 1) {
+      const reply = await listWrites({ limit, ...(cursor !== null ? { cursor } : {}) });
+      expect(reply.total_matched).toBe(total);
       // Guard the walk protocol itself: an undefined next_cursor (a tool
-      // that ignores the cursor) would loop forever.
+      // that ignores the cursor) is a shape violation, not a stop condition.
       expect(reply.next_cursor === null || typeof reply.next_cursor === "string").toBe(true);
       targets.push(...reply.writes.map((w) => w["target"]));
       cursor = reply.next_cursor;
-    } while (cursor !== null);
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
     // Newest first, so a full walk reads the log backwards.
     expect(targets).toEqual(["Notes/Three.md", "Notes/Two.md", "Notes/One.md"]);
   });
