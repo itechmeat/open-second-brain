@@ -69,10 +69,13 @@ import {
 export const TRIGGER_TTL_DAYS = 14;
 export const TRIGGER_COOLDOWN_DAYS = 7;
 /**
- * Default snooze window in days: how long the `snooze` action defers an
- * open trigger when the caller gives no explicit window. A constant, not
- * a config key - the snooze is the caller's estimate of "later", and a
- * refire wakes the trigger early regardless of the window (t_00e9de6a).
+ * The snooze window in days: how long the `snooze` action defers an open
+ * trigger. A constant, not a config key and not a caller option - the
+ * snooze is the caller's estimate of "later", and a refire wakes the
+ * trigger early regardless of the window (t_00e9de6a). Both production
+ * surfaces pass `{ now }` only, so the option that once carried this
+ * number was reachable from no surface and now lives here alone, with
+ * the other knobs.
  */
 export const TRIGGER_SNOOZE_DAYS = 3;
 export const TRIGGER_MAX_PER_KIND = 10;
@@ -1188,10 +1191,15 @@ export const TRIGGER_ACTIONS = Object.freeze([
 
 export type TriggerAction = (typeof TRIGGER_ACTIONS)[number];
 
+/**
+ * What every lifecycle transition and the delivery stamp are given: the
+ * instant they run at. Deliberately nothing else - the snooze window in
+ * particular is {@link TRIGGER_SNOOZE_DAYS}, a constant beside the other
+ * knobs, not a caller option: both production surfaces pass `{ now }`
+ * only, so an option here was reachable from no surface.
+ */
 export interface TransitionOptions {
   readonly now: Date;
-  /** Days the `snooze` action defers the trigger. */
-  readonly snoozeDays?: number;
 }
 
 /**
@@ -1269,7 +1277,7 @@ function transitionTriggerLocked(
     throw new Error(`trigger ${id} is terminal (${record.effectiveStatus})`);
   }
   if (action === "snooze") {
-    return snooze(record, opts.now, opts.snoozeDays ?? TRIGGER_SNOOZE_DAYS);
+    return snooze(record, opts.now);
   }
   if (action === "acknowledge" && record.effectiveStatus === TRIGGER_STATUS.acknowledged) {
     return record; // idempotent
@@ -1361,7 +1369,7 @@ function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
  * included, so re-snoozing goes through an explicit {@link unsnooze} or
  * a refire first.
  */
-function snooze(record: TriggerRecord, now: Date, snoozeDays: number): TriggerRecord {
+function snooze(record: TriggerRecord, now: Date): TriggerRecord {
   // The interrupted status is seeded from the COMPUTED status, not the
   // stored one. They usually agree - a live snooze is stored snoozed -
   // but a CLOCK-WOKEN record is stored snoozed while computing the open
@@ -1386,7 +1394,7 @@ function snooze(record: TriggerRecord, now: Date, snoozeDays: number): TriggerRe
     status: TRIGGER_STATUS.snoozed,
     effectiveStatus: TRIGGER_STATUS.snoozed,
     snoozedAt: now.toISOString(),
-    snoozedUntil: new Date(now.getTime() + snoozeDays * DAY_MS).toISOString(),
+    snoozedUntil: new Date(now.getTime() + TRIGGER_SNOOZE_DAYS * DAY_MS).toISOString(),
     snoozedFrom: interrupted,
   });
   writeRecord(next);

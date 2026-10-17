@@ -483,10 +483,7 @@ test("a restore-from field naming the OTHER silence class still reads and restor
 
 test("snooze defers a trigger for a bounded window, then the original resurfaces with its ledger intact", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
-  const snoozed = transitionTrigger(vault, created[0]!.id, "snooze", {
-    now: NOW,
-    snoozeDays: 3,
-  });
+  const snoozed = transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
   expect(snoozed.status).toBe("snoozed");
   expect(snoozed.snoozedAt).toBe(NOW.toISOString());
   expect(snoozed.snoozedUntil).toBe(new Date(NOW.getTime() + 3 * DAY_MS).toISOString());
@@ -519,7 +516,7 @@ test("snooze defers a trigger for a bounded window, then the original resurfaces
 test("re-snoozing a clock-woken trigger restores the computed status, never snoozed", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
-  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 3 });
+  transitionTrigger(vault, id, "snooze", { now: NOW });
 
   // The window elapses: the stored status still reads snoozed, but the
   // wake arm computes the open status the snooze interrupted.
@@ -530,7 +527,7 @@ test("re-snoozing a clock-woken trigger restores the computed status, never snoo
   // the COMPUTED status - a snooze can never restore INTO snoozed, or
   // the next wake restores snoozed and the bounded deferral becomes an
   // indefinite silent kill.
-  const resnoozed = transitionTrigger(vault, id, "snooze", { now: woken, snoozeDays: 3 });
+  const resnoozed = transitionTrigger(vault, id, "snooze", { now: woken });
   expect(resnoozed.snoozedFrom).toBe("pending");
 
   // Past the SECOND window the record must surface again, and stay in
@@ -548,7 +545,7 @@ test("re-snoozing a clock-woken trigger restores the computed status, never snoo
 
 test("a snoozed trigger wakes early when the finding fires again", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
-  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 30 });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
 
   // A refire inside the window stamps the ledger; the wake arm reads it.
   const refire = new Date(NOW.getTime() + DAY_MS);
@@ -573,9 +570,9 @@ test("snooze without an explicit window uses the bounded default", () => {
 test("snooze is refused on a terminal trigger and names its state", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   transitionTrigger(vault, created[0]!.id, "act", { now: NOW });
-  expect(() =>
-    transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 3 }),
-  ).toThrow("terminal (acted)");
+  expect(() => transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW })).toThrow(
+    "terminal (acted)",
+  );
 
   // Snoozed is itself terminal: re-snoozing is refused naming snoozed,
   // not silently treated as idempotent.
@@ -584,17 +581,17 @@ test("snooze is refused on a terminal trigger and names its state", () => {
     [candidate({ cooldownKey: "contradiction:pref-c:pref-d" })],
     { now: NOW },
   );
-  transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW, snoozeDays: 3 });
-  expect(() =>
-    transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW, snoozeDays: 3 }),
-  ).toThrow("terminal (snoozed)");
+  transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW });
+  expect(() => transitionTrigger(vault, fresh[0]!.id, "snooze", { now: NOW })).toThrow(
+    "terminal (snoozed)",
+  );
 });
 
 test("unsnooze restores the interrupted status before the window ends", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
   transitionTrigger(vault, id, "acknowledge", { now: NOW });
-  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 30 });
+  transitionTrigger(vault, id, "snooze", { now: NOW });
   const woken = transitionTrigger(vault, id, "unsnooze", {
     now: new Date(NOW.getTime() + DAY_MS),
   });
@@ -617,7 +614,7 @@ test("unsnoozing a hand-edited snoozed record with no prior status throws naming
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
   const path = created[0]!.path;
-  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 3 });
+  transitionTrigger(vault, id, "snooze", { now: NOW });
   rewriteLine(path, /^snoozed_from: .*$/mu, "");
   let message = "";
   try {
@@ -636,19 +633,21 @@ test("unsnoozing a hand-edited snoozed record with no prior status throws naming
 test("suppressing a snoozed trigger and unsuppressing restores the snooze with its window still armed", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
   const id = created[0]!.id;
-  transitionTrigger(vault, id, "snooze", { now: NOW, snoozeDays: 30 });
+  transitionTrigger(vault, id, "snooze", { now: NOW });
   transitionTrigger(vault, id, "suppress", { now: NOW });
   const restored = transitionTrigger(vault, id, "unsuppress", {
     now: new Date(NOW.getTime() + DAY_MS),
   });
   expect(restored.status).toBe("snoozed");
   expect(restored.effectiveStatus).toBe("snoozed");
-  expect(restored.snoozedUntil).toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
+  expect(restored.snoozedUntil).toBe(
+    new Date(NOW.getTime() + TRIGGER_SNOOZE_DAYS * DAY_MS).toISOString(),
+  );
 });
 
 test("a snoozed trigger is hidden from the brief until its window ends", () => {
   const { created } = createTriggers(vault, [candidate()], { now: NOW });
-  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW, snoozeDays: 3 });
+  transitionTrigger(vault, created[0]!.id, "snooze", { now: NOW });
   const during = new Date(NOW.getTime() + DAY_MS);
   expect(briefTriggers(vault, { now: during, cap: 5, cooldownDays: 7 })).toHaveLength(0);
   const after = new Date(NOW.getTime() + 4 * DAY_MS);
