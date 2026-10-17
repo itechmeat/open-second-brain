@@ -33,6 +33,10 @@ import { parseFrontmatterText } from "../../src/core/vault.ts";
 import { brainActivePath, brainLessonsPath } from "../../src/core/brain/paths.ts";
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
 import {
+  neutralizeUntrustedText,
+  untrustedFramingHeader,
+} from "../../src/core/brain/untrusted-source.ts";
+import {
   INJECT_BUDGET_CHARS_DEFAULT,
   loadBrainConfig,
   resolveScopedRulesMaxChars,
@@ -75,6 +79,30 @@ export const BLOCK_SEPARATOR = "\n\n";
 /** Join the non-empty blocks in order; an all-empty list yields "". */
 export function joinBlocks(blocks: ReadonlyArray<string>): string {
   return blocks.filter((block) => block.length > 0).join(BLOCK_SEPARATOR);
+}
+
+/**
+ * Set one budgeted memory body under the light untrusted framing header:
+ * the header line, then the body. A full fence is deliberately not used
+ * here - the wrapper pair would be charged to `inject_budget_chars` and
+ * the tier ladder would answer by evicting sections - so the provenance
+ * rides as the shared one-line records-not-instructions header instead.
+ * The header line IS part of the metered source, so per-source
+ * attribution names the guarded bytes.
+ */
+function frameMemoryBody(origin: string, body: string): string {
+  return `${untrustedFramingHeader(origin)}\n${body}`;
+}
+
+/**
+ * The characters one framed body costs beyond its inner body: the header
+ * line plus the newline that carries the body. Charged against the
+ * injection budget before the tier ladder runs (the recall-inject
+ * fenceOverhead precedent), so the ladder never evicts a section merely
+ * to pay for the framing.
+ */
+function framingOverhead(origin: string): number {
+  return untrustedFramingHeader(origin).length + 1;
 }
 
 /** A fresh, empty meter for one assembly run. */
@@ -274,10 +302,21 @@ function readActiveBody(
   // the active-preferences injection above.
   const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
 
-  const budgetedActive = budgetActiveBody(trimmed, budget);
+  // Untrusted vault content: neutralize (control/bidi/zero-width strip,
+  // delimiter escape) BEFORE budgeting, and set the result under the light
+  // framing header. The header's overhead comes out of this body's budget
+  // first, so the tier ladder works on the room that is actually left and
+  // the framed whole stays within the budget it is charged against.
+  const framedActive = frameMemoryBody(
+    SOURCE_ACTIVE_BODY,
+    budgetActiveBody(
+      neutralizeUntrustedText(trimmed),
+      Math.max(0, budget - framingOverhead(SOURCE_ACTIVE_BODY)),
+    ),
+  );
   meter.sources.push({
     name: SOURCE_ACTIVE_BODY,
-    text: budgetedActive,
+    text: framedActive,
     lane: LANE_BUDGETED,
     outsideBoundary: false,
   });
@@ -290,13 +329,15 @@ function readActiveBody(
     });
   }
 
-  return lessonsBody === null ? budgetedActive : joinBlocks([budgetedActive, lessonsBody]);
+  return lessonsBody === null ? framedActive : joinBlocks([framedActive, lessonsBody]);
 }
 
 /**
  * Read and budget the `Brain/lessons.md` body for injection. Returns
  * `null` on any failure mode (missing file, unreadable, empty body) so
- * the caller falls back to injecting active.md alone.
+ * the caller falls back to injecting active.md alone. The body is
+ * neutralized and framed like the active body, with the same
+ * budget-charged header overhead.
  */
 function readLessonsBody(lessonsPath: string, budget: number): string | null {
   if (!existsSync(lessonsPath)) return null;
@@ -305,7 +346,11 @@ function readLessonsBody(lessonsPath: string, budget: number): string | null {
     const [, body] = parseFrontmatterText(raw);
     const trimmed = body.trim();
     if (trimmed.length === 0) return null;
-    return budgetActiveBody(trimmed, budget);
+    const innerBudget = Math.max(0, budget - framingOverhead(SOURCE_LESSONS_BODY));
+    return frameMemoryBody(
+      SOURCE_LESSONS_BODY,
+      budgetActiveBody(neutralizeUntrustedText(trimmed), innerBudget),
+    );
   } catch {
     return null;
   }

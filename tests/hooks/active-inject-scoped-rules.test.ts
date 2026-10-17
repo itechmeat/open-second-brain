@@ -30,6 +30,11 @@ import {
   readScopedRules,
 } from "../../src/core/brain/scoped-rules.ts";
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import {
+  neutralizeUntrustedText,
+  untrustedFramingHeader,
+} from "../../src/core/brain/untrusted-source.ts";
+import { SOURCE_ACTIVE_BODY } from "../../hooks/lib/active-context.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
@@ -221,8 +226,16 @@ describe("active-inject scoped rules - budget", () => {
     expect(context).toContain(expected.text);
 
     const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
-    const activeBudget = Math.max(0, 1000 - expected.text.length);
-    expect(context.endsWith(budgetActiveBody(trimmedActive, activeBudget))).toBe(true);
+    // The framed guarded body: the header's overhead comes out of the
+    // budget the scoped block left, then the neutralized body is budgeted
+    // into the rest, exactly as the assembly composes it.
+    const framedHeader = untrustedFramingHeader(SOURCE_ACTIVE_BODY);
+    const activeBudget = Math.max(0, 1000 - expected.text.length - (framedHeader.length + 1));
+    expect(
+      context.endsWith(
+        `${framedHeader}\n${budgetActiveBody(neutralizeUntrustedText(trimmedActive), activeBudget)}`,
+      ),
+    ).toBe(true);
 
     const receipts = injectionReceipts();
     expect(receipts.length).toBe(1);
@@ -319,8 +332,10 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
 
     const scopedStart = context.indexOf(SCOPED_RULES_HEADER);
-    const activeStart = context.indexOf(ACTIVE_HEAD);
+    // The memory body opens with its framing header, not the digest title.
+    const activeStart = context.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY));
     expect(scopedStart).toBeGreaterThan(-1);
+    expect(activeStart).toBeGreaterThan(scopedStart);
     const scopedBlock = context.slice(scopedStart, activeStart).trimEnd();
     // A one-line rule that cannot fit is dropped whole, never left as a
     // bare heading, and the notice says so.
@@ -331,8 +346,9 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     // budget plus the memory body's own truncation notice.
     const budgeted = context.slice(scopedStart);
     const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
-    const activeBudget = 500 - scopedBlock.length;
-    const activeOut = budgetActiveBody(trimmedActive, activeBudget);
+    const framedHeader = untrustedFramingHeader(SOURCE_ACTIVE_BODY);
+    const activeBudget = 500 - scopedBlock.length - (framedHeader.length + 1);
+    const activeOut = `${framedHeader}\n${budgetActiveBody(neutralizeUntrustedText(trimmedActive), activeBudget)}`;
     expect(budgeted.endsWith(activeOut)).toBe(true);
     const activeNotice = activeOut.slice(activeOut.lastIndexOf("\n\n") + 2);
     expect(budgeted.length).toBeLessThanOrEqual(500 + "\n\n".length + activeNotice.length);

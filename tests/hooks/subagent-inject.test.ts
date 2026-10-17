@@ -37,6 +37,11 @@ import {
 import { renderStandingBlock } from "../../hooks/lib/standing-block.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import {
+  neutralizeUntrustedText,
+  untrustedFramingHeader,
+} from "../../src/core/brain/untrusted-source.ts";
+import { SOURCE_ACTIVE_BODY, SOURCE_LESSONS_BODY } from "../../hooks/lib/active-context.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
 import { INJECT_BUDGET_CHARS_DEFAULT } from "../../src/core/brain/policy.ts";
 import { readScopedRules, scopedRuleKey } from "../../src/core/brain/scoped-rules.ts";
@@ -96,11 +101,22 @@ function writeLessons(body: string): void {
   writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
 }
 
-/** The active.md body as the assembly renders it: frontmatter dropped, budget applied. */
+/**
+ * One memory body as the assembly renders it: frontmatter dropped,
+ * neutralized, set under the light framing header, with the header's
+ * overhead charged against `budget` before the budget core runs.
+ */
+function expectedFramedBody(origin: string, fmBody: string, budget: number): string {
+  const overhead = untrustedFramingHeader(origin).length + 1;
+  const inner = Math.max(0, budget - overhead);
+  return `${untrustedFramingHeader(origin)}\n${budgetActiveBody(neutralizeUntrustedText(fmBody.trim()), inner)}`;
+}
+
+/** The active.md body as the assembly renders it: frontmatter dropped, guarded, budgeted. */
 function expectedActiveBody(budget: number): string {
   const raw = readFileSync(join(vault, "Brain", "active.md"), "utf8");
   const [, fmBody] = parseFrontmatterText(raw);
-  return budgetActiveBody(fmBody.trim(), budget);
+  return expectedFramedBody(SOURCE_ACTIVE_BODY, fmBody, budget);
 }
 
 /** The lessons.md body as the assembly renders it, or "" without the file. */
@@ -108,7 +124,7 @@ function expectedLessonsBody(budget: number): string {
   try {
     const raw = readFileSync(join(vault, "Brain", "lessons.md"), "utf8");
     const [, fmBody] = parseFrontmatterText(raw);
-    return budgetActiveBody(fmBody.trim(), budget);
+    return expectedFramedBody(SOURCE_LESSONS_BODY, fmBody, budget);
   } catch {
     return "";
   }

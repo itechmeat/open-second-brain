@@ -21,6 +21,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
+import { untrustedFramingHeader } from "../../src/core/brain/untrusted-source.ts";
+import { SOURCE_ACTIVE_BODY, SOURCE_LESSONS_BODY } from "../../hooks/lib/active-context.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -112,6 +114,9 @@ const ACTIVE_BODY =
   "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n";
 const LESSONS_BODY =
   "---\nkind: brain-lessons\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Lessons\n\n## Avoid (1)\n\n- `de-2026-05-18-x` (score: -0.95) — the flaky retry loop\n";
+/** The frontmatter-stripped bodies, as the assembly budgets and meters them. */
+const ACTIVE_TRIMMED = ACTIVE_BODY.slice(ACTIVE_BODY.indexOf("# Active")).trimEnd();
+const LESSONS_TRIMMED = LESSONS_BODY.slice(LESSONS_BODY.indexOf("# Lessons")).trimEnd();
 
 describe("active-inject injection meter", () => {
   test("records one session_inject receipt per injection with per-source bytes and tokens", async () => {
@@ -161,6 +166,38 @@ describe("active-inject injection meter", () => {
     expect(r.exit).toBe(0);
     const injection = injectionReceipts()[0]!.payload["injection"] as Record<string, unknown>;
     expect(injection["hook_event"]).toBe("UserPromptSubmit");
+  });
+
+  test("attributes the GUARDED bytes: the framing header is part of the metered source", async () => {
+    // The guard runs BEFORE the meter push, so the receipt names exactly
+    // the bytes that reached the payload - framed, neutralized body
+    // included. Guarding after the push would break this exact-match
+    // attribution silently.
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    const r = await runHook({ hook_event_name: "SessionStart" });
+    expect(r.exit).toBe(0);
+    const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+
+    const items = injectionReceipts()[0]!.payload["items"] as ReadonlyArray<
+      Record<string, unknown>
+    >;
+    const byId = new Map(items.map((i) => [i["id"], i]));
+    const activeItem = byId.get(SOURCE_ACTIVE_BODY)!;
+    const lessonsItem = byId.get(SOURCE_LESSONS_BODY)!;
+    // Each metered source is the framing header line plus the neutralized
+    // body block, exactly as the join in the emitted context carries them.
+    expect(activeItem["bytes"]).toBe(
+      Buffer.byteLength(`${untrustedFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`, "utf8"),
+    );
+    expect(lessonsItem["bytes"]).toBe(
+      Buffer.byteLength(
+        `${untrustedFramingHeader(SOURCE_LESSONS_BODY)}\n${LESSONS_TRIMMED}`,
+        "utf8",
+      ),
+    );
+    expect(injected).toContain(`${untrustedFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`);
+    expect(injected).toContain(untrustedFramingHeader(SOURCE_LESSONS_BODY));
   });
 
   test("records the budget the sources were measured against", async () => {
