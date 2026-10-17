@@ -100,6 +100,15 @@ const SANCTIONED: Readonly<Record<string, SanctionedPointer>> = Object.freeze({
       "file to stdout for redirection and names, in a comment line, the command that produced it. " +
       "The operator has already run it; there is nothing forward about it.",
   },
+  "src/cli/brain/verbs/protect.ts :: o2b brain unprotect": {
+    count: 1,
+    reason:
+      "provenance header of the preview report, not a pointer: the read-only print mode stamps, " +
+      "in a comment line, the command that produced the diff below it - the same header its " +
+      "protect sibling stamps on the redirected artifact. The operator has already run it; the " +
+      "only forward guidance on the page is the `re-run with --apply` line, which carries no " +
+      "invocation literal.",
+  },
   "src/cli/main.ts :: o2b search check": {
     count: 1,
     reason:
@@ -328,10 +337,12 @@ describe("the rail is the only forward-pointer mechanism", () => {
     // IS the number of unmigrated sites. Five was the ceiling this change
     // inherited; 6-9 are the bootstrap receipt's four measured literals,
     // each interpolating runtime state (`--target`, `--name`) the rail
-    // structurally cannot carry because it resolves one structural command
-    // per code with no parameter channel - the same argument the `state
-    // migrate` undo line makes. A tenth needs its own argument.
-    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(9);
+    // structurally cannot carry because it resolves one structural
+    // command per code with no parameter channel - the same argument the
+    // `state migrate` undo line makes. 10 is the unprotect preview's
+    // provenance header, the same not-a-pointer shape as its protect
+    // sibling one entry above. An eleventh needs its own argument.
+    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(10);
   });
 });
 
