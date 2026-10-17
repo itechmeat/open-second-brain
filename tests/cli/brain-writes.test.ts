@@ -142,10 +142,10 @@ describe("o2b brain writes", () => {
     expect(res.stderr).toContain("--op must be one of create|update|append|revert");
   });
 
-  test("an unknown subcommand names the three that exist", async () => {
+  test("an unknown subcommand names the four that exist", async () => {
     const res = await runCli(["brain", "writes", "purge"], { env: env() });
     expect(res.returncode).toBe(2);
-    expect(res.stderr).toContain("expected list, revert or prune-images");
+    expect(res.stderr).toContain("expected list, destinations, revert or prune-images");
   });
 });
 
