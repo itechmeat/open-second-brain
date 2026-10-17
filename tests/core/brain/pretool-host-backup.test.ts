@@ -20,6 +20,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -35,7 +36,7 @@ import {
   WRITE_TOOL_NAMES,
 } from "../../../src/core/brain/pretool-host-backup.ts";
 import { hookAuditDir } from "../../../src/core/brain/paths.ts";
-import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 /** Minimal audit reader: every record in the (single-shard) audit root. */
 function readAuditRecords(auditDir: string): Array<Record<string, unknown>> {
@@ -167,6 +168,28 @@ describe("executeHostBackup", () => {
     // Folder layout: <dir>/.o2b-backups/settings.json/<stamp>[-N].
     expect(first.backupPath).toContain(".o2b-backups/settings.json/2026-10-16-123456");
   });
+
+  test.skipIf(IS_WINDOWS)(
+    "the backup file is private 0600 - settings backups carry secrets",
+    () => {
+      const home = tmpDir("osb-hb-mode-");
+      const vault = tmpDir("osb-hb-vault-mode-");
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      const target = join(home, ".claude", "settings.json");
+      writeFileSync(target, '{"token":"s3cret"}\n');
+      const out = executeHostBackup({
+        target,
+        vault,
+        now: new Date("2026-10-16T12:34:56Z"),
+        actor: "hook:claudecode",
+      });
+      expect(out.kind).toBe("backed-up");
+      if (out.kind !== "backed-up") return;
+      // Both twins agree with the wrapper's openSync(..., "wx", 0o600):
+      // the canonical core creates exclusively at the same private mode.
+      expect(statSync(out.backupPath).mode & 0o777).toBe(0o600);
+    },
+  );
 
   test("exhausted collision attempts raise a typed error, never overwriting", () => {
     const home = tmpDir("osb-hb-exh-");

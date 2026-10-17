@@ -17,12 +17,13 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homeEnv } from "../helpers/platform.ts";
+import { homeEnv, IS_WINDOWS } from "../helpers/platform.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 
 const HOOK = resolve(
@@ -148,6 +149,20 @@ describe("pretool-host-backup hook", () => {
     expect(String(record.details["summary"])).toContain("settings.json");
     expect(record.details["backup"]).toBe(join(backupRoot, backups[0]!));
   });
+
+  test.skipIf(IS_WINDOWS)(
+    "flag on: the wrapper twin's backup is private 0600, same as the canonical core",
+    async () => {
+      const r = await runHook(writePayload(join(home, ".claude", "settings.json")), {
+        OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP: "true",
+      });
+      expect(r.exit).toBe(0);
+      const backupRoot = join(home, ".claude", ".o2b-backups", "settings.json");
+      const backups = readdirSync(backupRoot);
+      expect(backups.length).toBe(1);
+      expect(statSync(join(backupRoot, backups[0]!)).mode & 0o777).toBe(0o600);
+    },
+  );
 
   test("flag on with a backup made to fail emits a stdout deny naming the path", async () => {
     // A FILE where the backup folder must be makes the backup impossible.

@@ -3,9 +3,10 @@
  * PreToolUse host-settings backup hook (t_f4555087).
  *
  * When an agent's file-tool call targets a host client's Claude
- * settings file, the hook backs the current file up - into a
- * timestamped folder beside the target, per the trust conventions
- * (src/core/trust.ts) - appends one audit receipt, and only then
+ * settings file, the hook backs the current file up - into the stamped
+ * backup root beside the target, per the trust conventions
+ * (src/core/trust.ts), the stamp naming the backup file inside it -
+ * appends one audit receipt, and only then
  * allows the write. A failed backup denies the call: if the snapshot
  * cannot be taken, the write never proceeds (the snapshot-gate
  * semantic, one level down).
@@ -217,11 +218,13 @@ export function executeHostBackup(opts: HostBackupExecuteOptions): HostBackupOut
 
   // Exclusive create with the shared collision ladder: a same-second
   // second backup takes `-2`, never overwrites, and a bound that trips
-  // is a typed error instead of a silent overwrite.
+  // is a typed error instead of a silent overwrite. Private 0600, the
+  // mode the stdlib wrapper twin creates with - a settings backup
+  // carries the same secrets the settings file does.
   for (let attempt = 1; attempt <= HOST_BACKUP_ALLOC_MAX_ATTEMPTS; attempt++) {
     const candidate = join(root, collisionCandidateName(stamp, attempt));
     try {
-      atomicCreateFileSyncExclusive(candidate, contents);
+      atomicCreateFileSyncExclusive(candidate, contents, { mode: 0o600 });
     } catch (err) {
       if (isFileAlreadyExists(err)) continue;
       throw new HostBackupError(

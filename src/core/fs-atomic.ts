@@ -464,25 +464,44 @@ function findFileAlreadyExists(err: unknown, accept: (node: object) => boolean):
  * disk or a read-only mount is not a collision and must not be retried as
  * one.
  */
-export function atomicCreateFileSyncExclusive(target: string, contents: string): void {
-  withTempFile(target, contents, (tmpPath) => {
-    try {
-      linkSync(tmpPath, target);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | null)?.code === FILE_EXISTS_CODE) {
-        throw new FileAlreadyExistsError(target, { cause: err });
-      }
-      throw err;
-    } finally {
-      // Always remove the temp inode regardless of whether linkSync
-      // succeeded — the temp is an implementation detail.
+export function atomicCreateFileSyncExclusive(
+  target: string,
+  contents: string,
+  opts: AtomicCreateExclusiveOptions = {},
+): void {
+  withTempFile(
+    target,
+    contents,
+    (tmpPath) => {
       try {
-        unlinkSync(tmpPath);
-      } catch {
-        // already gone; ignore
+        linkSync(tmpPath, target);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException | null)?.code === FILE_EXISTS_CODE) {
+          throw new FileAlreadyExistsError(target, { cause: err });
+        }
+        throw err;
+      } finally {
+        // Always remove the temp inode regardless of whether linkSync
+        // succeeded — the temp is an implementation detail.
+        try {
+          unlinkSync(tmpPath);
+        } catch {
+          // already gone; ignore
+        }
       }
-    }
-  });
+    },
+    opts.mode ?? 0o644,
+  );
+}
+
+/** Options of {@link atomicCreateFileSyncExclusive}. */
+export interface AtomicCreateExclusiveOptions {
+  /**
+   * File mode for the new inode. Defaults to `0o644`, the mode every
+   * existing caller was created with; secret-bearing writes (host
+   * settings backups) pass `0o600` explicitly.
+   */
+  readonly mode?: number;
 }
 
 /**
