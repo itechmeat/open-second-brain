@@ -183,3 +183,53 @@ describe("brain_agent_diff cursor pagination", () => {
     expect(response.error?.code).toBe(-32602);
   });
 });
+
+describe("brain_agent_diff answer size semantics (M10)", () => {
+  test("no limit returns the whole matched set with aggregates over it", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = await call(server, "brain_agent_diff", {
+      mode: "diff",
+      agents: ["claude", "codex"],
+    });
+    const content = response.result.structuredContent;
+    // The no-limit answer IS the whole matched set: one page, no cursor.
+    expect(content.total_matched).toBe(3);
+    expect(content.returned).toBe(3);
+    expect(content.next_cursor).toBeNull();
+    // The comparison covers the whole set: claude 1 contribution,
+    // codex 2.
+    const perAgent = new Map(
+      (content.per_agent as ReadonlyArray<{ agent: string; contribution_count: number }>).map(
+        (row) => [row.agent, row.contribution_count],
+      ),
+    );
+    expect(perAgent.get("claude")).toBe(1);
+    expect(perAgent.get("codex")).toBe(2);
+  });
+
+  test("limit bounds the returned contributions, never the comparison", async () => {
+    seedVault();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = await call(server, "brain_agent_diff", {
+      mode: "diff",
+      agents: ["claude", "codex"],
+      limit: 1,
+    });
+    const content = response.result.structuredContent;
+    expect(content.total_matched).toBe(3);
+    expect(content.returned).toBe(1);
+    expect(content.next_cursor).not.toBeNull();
+    // The aggregates still cover the whole matched set, exactly as the
+    // schema text states.
+    const perAgent = new Map(
+      (content.per_agent as ReadonlyArray<{ agent: string; contribution_count: number }>).map(
+        (row) => [row.agent, row.contribution_count],
+      ),
+    );
+    expect(perAgent.get("codex")).toBe(2);
+    expect(content.shared_topics).toEqual(["shared-topic"]);
+  });
+});

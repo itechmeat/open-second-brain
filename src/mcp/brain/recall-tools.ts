@@ -67,6 +67,8 @@ import {
 } from "../../core/config.ts";
 import {
   coverageSessionRecall,
+  DEFAULT_LIMIT as SESSION_RECALL_DEFAULT_LIMIT,
+  decorateSessionRecallHits,
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
@@ -996,25 +998,39 @@ async function toolBrainSessionGrep(
   // The matches are a deterministic ranked walk (score, then id), so the
   // page is cut here over the full hit set: `total` counts every match
   // across pages and `next_cursor` continues the walk (null when
-  // exhausted). Absent `limit`, the whole match set is one page.
+  // exhausted). Absent `limit`, the page is the historical bounded
+  // default (DEFAULT_LIMIT in session-recall.ts) - an unpaginated call
+  // used to answer 10 hits, not every hit in the vault.
+  //
+  // The search below NEVER runs with includeRaw: decoration reads the
+  // record set once per hit decorated, so decorating the full match set
+  // on every page made a cursor walk O(N^2). The page is cut first and
+  // only its items are decorated.
   const offset = cursorOffsetArg("brain_session_grep", args);
+  const sessionIdArg = optionalStringArg("brain_session_grep", args, "session_id");
   const hits = searchSessionRecall(ctx.vault, {
     query: requiredStringArg("brain_session_grep", args, "query"),
     ...withheldAtRemoteReach(ctx),
-    ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
-      ? {
-          sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
-        }
-      : {}),
+    ...(sessionIdArg !== undefined ? { sessionId: sessionIdArg } : {}),
     limit: Number.MAX_SAFE_INTEGER,
     ...(snippetChars !== undefined ? { snippetChars } : {}),
     ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
     ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
-    ...(includeRaw ? { includeRaw: true } : {}),
     ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
   });
-  const page = pageSlice(hits.hits, offset, limit ?? Math.max(hits.hits.length, 1));
-  return { hits: page.items, total: page.total, next_cursor: page.next_cursor };
+  const page = pageSlice(hits.hits, offset, limit ?? SESSION_RECALL_DEFAULT_LIMIT);
+  if (!includeRaw) {
+    return { hits: page.items, total: page.total, next_cursor: page.next_cursor };
+  }
+  return {
+    hits: decorateSessionRecallHits(ctx.vault, page.items, {
+      ...withheldAtRemoteReach(ctx),
+      ...(sessionIdArg !== undefined ? { sessionId: sessionIdArg } : {}),
+      ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
+    }),
+    total: page.total,
+    next_cursor: page.next_cursor,
+  };
 }
 
 /**

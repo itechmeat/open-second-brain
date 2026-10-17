@@ -220,7 +220,13 @@ export interface ExpandSessionRecallResult {
 }
 
 const DEFAULT_GROUP_SIZE = 8;
-const DEFAULT_LIMIT = 10;
+/**
+ * The bounded default answer size of the search (and the MCP
+ * `brain_session_grep` page when `limit` is omitted). Exported so the
+ * paging tool keeps ONE spelling of its historical default instead of
+ * minting a second 10.
+ */
+export const DEFAULT_LIMIT = 10;
 const DEFAULT_SNIPPET_CHARS = 160;
 
 /**
@@ -325,6 +331,32 @@ function decorateHitWithRaw(
     extracted: record.kind === "session_summary_node",
     raw: Object.freeze(raw),
   });
+}
+
+/**
+ * Decorate already-fetched hits (C2) without re-running the search: the
+ * record set is read once and each given hit passes through
+ * {@link decorateHitWithRaw}. The paging MCP tool slices its page FIRST
+ * and decorates only the page's items, so a cursor walk decorates each
+ * hit exactly once instead of re-decorating the whole match set on
+ * every page.
+ */
+export function decorateSessionRecallHits(
+  vault: string,
+  hits: ReadonlyArray<SessionRecallHit>,
+  opts: {
+    readonly sessionId?: string;
+    readonly withholdPrivate?: boolean;
+    readonly rawBudgetChars?: number;
+  } = {},
+): ReadonlyArray<SessionRecallHit> {
+  if (hits.length === 0) return Object.freeze([]);
+  const byId = new Map(
+    sessionRecallRecords(vault, opts.sessionId, opts.withholdPrivate).map(
+      (record) => [record.id, record] as const,
+    ),
+  );
+  return Object.freeze(hits.map((hit) => decorateHitWithRaw(hit, byId, opts.rawBudgetChars)));
 }
 
 /**

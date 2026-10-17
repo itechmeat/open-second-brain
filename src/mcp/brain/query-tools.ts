@@ -506,7 +506,8 @@ async function toolBrainAgentDiff(
   // fold slices from the first match, so the full matched set is fetched
   // and one offset window is taken. The aggregates (per-agent rollup,
   // topic map, shared/unique topics) are computed over the whole matched
-  // set, so they do not move between pages.
+  // set, so they do not move between pages: the limit bounds the
+  // returned contributions and the paging, never the comparison.
   const result = diffAgentSources(ctx.vault, {
     ...(mode !== null ? { mode } : {}),
     ...(ownerScope !== null ? { ownerScope } : {}),
@@ -1050,7 +1051,8 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           maximum: 500,
-          description: "Maximum contributions returned before comparison. Defaults to 50.",
+          description:
+            "Maximum contributions returned per page; the per-agent and topic aggregates always cover the whole matched set, not just this page. Defaults to 50.",
         },
         cursor: CURSOR_SCHEMA,
       },

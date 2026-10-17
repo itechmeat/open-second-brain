@@ -30,6 +30,7 @@ import {
   type NoteLifecycleResult,
 } from "../../core/brain/notes/lifecycle.ts";
 import {
+  DANGLING_SCAN_DEFAULT_LIMIT,
   listDanglingTargets,
   scaffoldStub,
   ScaffoldStubError,
@@ -296,11 +297,14 @@ async function toolBrainScaffoldStub(
     // empty page with the walk already exhausted. `pageSlice` only takes
     // a positive limit, and letting its OffsetCursorError escape would
     // surface as INTERNAL_ERROR - an internal failure for a request the
-    // schema calls well-formed.
+    // schema calls well-formed. Absent `limit`, the page is the scan's
+    // own historical default (DANGLING_SCAN_DEFAULT_LIMIT) - an
+    // unpaginated list used to answer 100 targets and reach a cursor,
+    // not every dangling target in one unbounded answer.
     const page =
       limit === 0
         ? { items: [], total: scan.targets.length, next_cursor: null as string | null }
-        : pageSlice(scan.targets, offset, limit ?? Math.max(scan.targets.length, 1));
+        : pageSlice(scan.targets, offset, limit ?? DANGLING_SCAN_DEFAULT_LIMIT);
     return {
       action,
       state: scan.state,

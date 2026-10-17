@@ -22,7 +22,10 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { DANGLING_SCAN } from "../../src/core/brain/notes/scaffold-stub.ts";
+import {
+  DANGLING_SCAN,
+  DANGLING_SCAN_DEFAULT_LIMIT,
+} from "../../src/core/brain/notes/scaffold-stub.ts";
 import { LIFECYCLE_FILE_TOOLS } from "../../src/mcp/brain/lifecycle-file-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
@@ -191,5 +194,25 @@ describe("list cursor pagination", () => {
     expect(res["targets"]).toEqual([]);
     expect(res["total"]).toBe(2);
     expect(res["next_cursor"]).toBeNull();
+  });
+});
+
+describe("brain_scaffold_stub list default answer size (M10)", () => {
+  test("no limit returns DANGLING_SCAN_DEFAULT_LIMIT targets and issues a cursor", async () => {
+    const extra = 5;
+    for (let i = 1; i <= DANGLING_SCAN_DEFAULT_LIMIT + extra; i++) {
+      note(`N${String(i).padStart(3, "0")}.md`, `[[dangling-${i}]]\n`);
+    }
+    const { indexVault, resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
+
+    const res = await call({ action: "list" });
+    expect(res["state"]).toBe("measured");
+    // The historical bounded default: an unpaginated list used to answer
+    // 100 targets (DANGLING_SCAN_DEFAULT_LIMIT), not every dangling one -
+    // and the walk only starts when a next_cursor is issued.
+    expect(res["total"]).toBe(DANGLING_SCAN_DEFAULT_LIMIT + extra);
+    expect((res["targets"] as ReadonlyArray<unknown>).length).toBe(DANGLING_SCAN_DEFAULT_LIMIT);
+    expect(res["next_cursor"]).not.toBeNull();
   });
 });
