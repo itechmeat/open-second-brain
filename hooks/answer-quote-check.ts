@@ -80,6 +80,10 @@ import {
 } from "../src/core/brain/answer-quotes/check.ts";
 import { findQuoteSpans } from "../src/core/brain/distill/quote-spans.ts";
 import { brainConfigPath } from "../src/core/brain/paths.ts";
+import {
+  neutralizeUntrustedText,
+  untrustedFramingHeader,
+} from "../src/core/brain/untrusted-source.ts";
 import { appendLogEvent } from "../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../src/core/brain/types.ts";
 import { isoSecond } from "../src/core/brain/time.ts";
@@ -721,14 +725,19 @@ function checkSpan(
   return { verdict: mergeAnswerQuoteVerdicts(verdicts), preview, decidingPhases };
 }
 
+/** `origin` label of the annotation's framing line for the quoted spans. */
+const QUOTE_CHECK_FRAMING_ORIGIN = "quoted-answer-spans";
+
 /**
- * One rendered finding line. The span renders flattened - CR/LF and
- * whitespace runs collapsed to single spaces, inside the check module's
- * preview cap - so answer text can never introduce annotation-shaped
- * lines of its own.
+ * One rendered finding line. The span renders neutralized first - the
+ * structural strip (control/bidi/zero-width, delimiter escape) shared
+ * with every other untrusted lane, so a span's invisible machinery can
+ * never ride into the annotation - then flattened - CR/LF and whitespace
+ * runs collapsed to single spaces, inside the check module's preview cap
+ * - so answer text can never introduce annotation-shaped lines of its own.
  */
 function findingLine(span: string, verdict: AnswerQuoteVerdict): string {
-  return `- [${verdict}] "${span.replace(/\s+/g, " ").trim()}"`;
+  return `- [${verdict}] "${neutralizeUntrustedText(span).replace(/\s+/g, " ").trim()}"`;
 }
 
 /** One unverified span, as the annotation and the enforce trail name it. */
@@ -766,12 +775,15 @@ function listedFindings(
 /**
  * The annotation: exactly one line block listing the unverified spans
  * with their verdicts, duplicate-free, in answer order, under the
- * findings cap.
+ * findings cap. The spans are answer text - untrusted by definition - so
+ * the shared records-not-instructions framing line sits between the
+ * header and the first finding.
  */
 function annotation(findings: ReadonlyArray<AnswerQuoteSpanFinding>): string {
   const listed = listedFindings(findings);
   const lines = [
     `Open Second Brain quote check: ${findings.length} quoted span(s) were not found in the notes this turn had:`,
+    untrustedFramingHeader(QUOTE_CHECK_FRAMING_ORIGIN),
     ...listed.map((finding) => findingLine(finding.span, finding.verdict)),
   ];
   if (listed.length < findings.length) {

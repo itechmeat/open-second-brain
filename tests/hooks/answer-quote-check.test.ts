@@ -42,6 +42,10 @@ import {
   checkAnswerQuotes,
   type AnswerQuoteEvidence,
 } from "../../src/core/brain/answer-quotes/check.ts";
+import {
+  neutralizeUntrustedText,
+  untrustedFramingHeader,
+} from "../../src/core/brain/untrusted-source.ts";
 import { QUOTE_SPAN_PREVIEW_MAX_CHARS } from "../../src/core/brain/distill/quote-verdict.ts";
 
 const HOOK = resolve(
@@ -248,11 +252,37 @@ describe("answer-quote-check hook - annotation rendering", () => {
     // One aggregate annotation, never one annotation per span.
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    expect(lines).toHaveLength(4); // header + two findings + footer
-    expect(lines[1]).toContain("[not-in-note]");
-    expect(lines[1]).toContain("reuses pooled capital");
+    expect(lines).toHaveLength(5); // header + framing + two findings + footer
+    // The quoted spans are answer text, so the annotation frames them as
+    // data before listing any finding.
+    expect(lines[1]).toBe(untrustedFramingHeader("quoted-answer-spans"));
     expect(lines[2]).toContain("[not-in-note]");
-    expect(lines[2]).toContain("secures pooled validators");
+    expect(lines[2]).toContain("reuses pooled capital");
+    expect(lines[3]).toContain("[not-in-note]");
+    expect(lines[3]).toContain("secures pooled validators");
+  });
+
+  test("quoted spans render control and bidi character machinery stripped", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    const zwsp = String.fromCodePoint(0x200b);
+    const rlo = String.fromCodePoint(0x202e);
+    writeTranscript([
+      ccUser("what does the note say?"),
+      ccAssistant(
+        `The note states "reuses po${zwsp}oled cap${rlo}ital" plainly (Brain/notes/restaking.md).`,
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    const rendered = found[0]!;
+    // The invisible machinery never reaches the annotation; the visible
+    // words do, flattened exactly as before.
+    expect(rendered).not.toContain(zwsp);
+    expect(rendered).not.toContain(rlo);
+    expect(rendered).toContain("reuses pooled capital");
   });
 
   test("a span with embedded newlines renders flattened - it cannot forge annotation lines", async () => {
@@ -268,11 +298,11 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const found = annotations(run);
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    // Header, exactly one flattened finding line, footer: the span's
-    // newlines never become annotation structure.
-    expect(lines).toHaveLength(3);
-    expect(lines[1]).toContain("[not-in-note]");
-    expect(lines[1]).toContain("fake line");
+    // Header, framing line, exactly one flattened finding line, footer:
+    // the span's newlines never become annotation structure.
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toContain("[not-in-note]");
+    expect(lines[2]).toContain("fake line");
     expect(lines.some((line) => line.startsWith("- [verified]"))).toBe(false);
   });
 
@@ -290,7 +320,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const run = await runHook();
     const found = annotations(run);
     expect(found.length).toBe(1);
-    const finding = found[0]!.split("\n")[1]!;
+    const finding = found[0]!.split("\n")[2]!;
     expect(finding.startsWith('- [not-in-note] "')).toBe(true);
     expect(finding.length).toBeLessThan(QUOTE_SPAN_PREVIEW_MAX_CHARS + 40);
   });
@@ -310,10 +340,10 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const found = annotations(run);
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    // Header + the capped findings + one overflow line + footer.
-    expect(lines).toHaveLength(ANSWER_QUOTE_MAX_FINDINGS + 3);
+    // Header + framing + the capped findings + one overflow line + footer.
+    expect(lines).toHaveLength(ANSWER_QUOTE_MAX_FINDINGS + 4);
     expect(lines[0]).toContain(`${spans.length} quoted span(s)`);
-    expect(lines[ANSWER_QUOTE_MAX_FINDINGS + 1]).toContain(
+    expect(lines[ANSWER_QUOTE_MAX_FINDINGS + 2]).toContain(
       `and ${spans.length - ANSWER_QUOTE_MAX_FINDINGS} more`,
     );
     expect(lines[lines.length - 1]).toContain("Advisory only");

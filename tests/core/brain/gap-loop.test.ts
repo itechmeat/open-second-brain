@@ -24,6 +24,7 @@ import {
 } from "../../../src/core/brain/gaps/gap-loop.ts";
 import { brainGapTasksDir } from "../../../src/core/brain/paths.ts";
 import type { RecallResultSet } from "../../../src/core/brain/recall-inject.ts";
+import { UNTRUSTED_SOURCE_TAG } from "../../../src/core/brain/untrusted-source.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../../src/core/vault.ts";
 
 let vault: string;
@@ -165,6 +166,22 @@ describe("gap loop (A3 / t_67d38036)", () => {
     expect(agenda).toContain("alpha topic");
     // The shared activity helper stamps the fixed "open" marker for questions.
     expect(agenda).toContain("[open]");
+  });
+
+  test("the agenda is fenced as untrusted content and gap topics are single-line neutralized", () => {
+    // Gap topics come from recall telemetry buckets, and telemetry text
+    // originates outside this module: the agenda block rides the shared
+    // fence, and each topic rides the single-line neutralizer.
+    const zwsp = String.fromCodePoint(0x200b);
+    seedGap(`al${zwsp}pha topic`, 3);
+    promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    const agenda = renderGapAgenda(vault, NOW);
+    expect(agenda).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="recall-gap-agenda">`);
+    expect(agenda.trimEnd().endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
+    const closes = agenda.split(`</${UNTRUSTED_SOURCE_TAG}>`).length - 1;
+    expect(closes).toBe(1);
+    expect(agenda).not.toContain(zwsp);
+    expect(agenda).toContain("alpha topic");
   });
 
   test("agenda is empty when there are no open gap tasks", () => {

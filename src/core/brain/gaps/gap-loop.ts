@@ -34,6 +34,7 @@ import { brainGapTasksDir, BRAIN_GAP_TASKS_REL } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
+import { fenceUntrustedContent, neutralizeSingleLine } from "../untrusted-source.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
 import type { RecallResultSet, RecallRetriever } from "../recall-inject.ts";
 import type { RetrievalDegradationCode } from "../../search/retrieval-trail.ts";
@@ -369,6 +370,9 @@ function coerceGapSource(value: unknown): GapSource {
   return GAP_SOURCES.includes(value as GapSource) ? (value as GapSource) : GAP_SOURCE_TELEMETRY;
 }
 
+/** `origin` label stamped on the agenda block's untrusted-content fence. */
+const GAP_AGENDA_FENCE_ORIGIN = "recall-gap-agenda";
+
 /**
  * Render open gap tasks as a compact session-start agenda through the
  * shared activity helper (each task is an `openQuestion` item, so it carries
@@ -378,16 +382,26 @@ function coerceGapSource(value: unknown): GapSource {
  * Each row is labelled by its recurrence source, so a reader can tell a
  * coarse telemetry code bucket from a fine term bucket and never reads the
  * two counts as one number.
+ *
+ * Topics are untrusted: they originate in recall telemetry, which records
+ * query text this module never vetted. Each topic rides the shared
+ * single-line neutralizer, and the whole block rides the shared
+ * untrusted-content fence - a topic line that reads like an instruction
+ * reaches the session as framed data, and cannot break the block out of
+ * its one-row-per-task shape.
  */
 export function renderGapAgenda(vault: string, now: Date): string {
   const open = listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN });
   if (open.length === 0) return "";
   const items: ReadonlyArray<ActivityItem> = open.map((task) => ({
     kind: "openQuestion",
-    text: `${task.topic} (${GAP_LABEL_BY_SOURCE[task.source]} x${task.occurrences})`,
+    text: `${neutralizeSingleLine(task.topic)} (${GAP_LABEL_BY_SOURCE[task.source]} x${task.occurrences})`,
     timestamp: task.createdAt,
   }));
-  return `# Open recall-gap tasks\n${renderActivityTimeline(items, now)}`;
+  return fenceUntrustedContent(
+    `# Open recall-gap tasks\n${renderActivityTimeline(items, now)}`,
+    GAP_AGENDA_FENCE_ORIGIN,
+  );
 }
 
 /**
