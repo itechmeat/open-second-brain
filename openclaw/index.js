@@ -2273,6 +2273,7 @@ __export(exports_config, {
   resolveGapLoopThreshold: () => resolveGapLoopThreshold,
   resolveGenerationTraceEnabled: () => resolveGenerationTraceEnabled,
   resolveHookStrictEnabled: () => resolveHookStrictEnabled,
+  resolveHostSettingsBackupEnabled: () => resolveHostSettingsBackupEnabled,
   resolveHygieneDigestEnabled: () => resolveHygieneDigestEnabled,
   resolveInstallationSecret: () => resolveInstallationSecret,
   resolveLinkOutputFormat: () => resolveLinkOutputFormat,
@@ -2857,6 +2858,9 @@ function resolveNavTierCadenceMinutes(configPath) {
 }
 function resolveHookStrictEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED", "hook_strict_enabled", configPath);
+}
+function resolveHostSettingsBackupEnabled(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP", "host_settings_backup", configPath);
 }
 function resolveMaintenanceEmbeddings(configPath) {
   return resolveConfigFlag(MAINTENANCE_EMBEDDINGS_ENV, MAINTENANCE_EMBEDDINGS_CONFIG_KEY, configPath);
@@ -4800,6 +4804,13 @@ var EGRESS_SITES = Object.freeze({
     module: "src/core/decision-model/llm-emulation.ts",
     redaction: R.sharedRedactor,
     reason: "the optional, uncalibrated decision emulation: the same masked, clipped state and " + "question texts as the `/v1/systemone` route, POSTed as a chat completion to the " + "operator's OpenAI-compatible endpoint, which asks a GENERATIVE model for " + "probabilities only. The state and questions pass the shared guard before the body " + "is built and a refusal sends nothing; the state is fenced as untrusted content. " + "Never selected implicitly and never a fallback: it runs only when the operator names " + "this provider, every record is `calibrated: false`, and `enforce` is refused unless " + "`decision_model_allow_uncalibrated` is true."
+  },
+  "decision-model-converse": {
+    id: "decision-model-converse",
+    verb: "decision_model_uses with decision_model_provider: converse",
+    module: "src/core/decision-model/converse.ts",
+    redaction: R.sharedRedactor,
+    reason: "the optional decision-model route through a bearer-authenticated gateway that speaks " + "the Bedrock-style Converse protocol: the same masked, clipped state and question texts " + "as every decision route, POSTed as a chat-shaped request to the operator's configured " + "gateway. The state and questions pass the shared guard before the body is built and a " + "refusal sends nothing; the state is fenced as untrusted content because the mapping is " + "chat-shaped, and the scan carries the resolved bearer key as a literal so a value that " + "leaked into vault text cannot ride along with the credential it would otherwise meet. " + "Off unless the operator enables it in machine config AND the named key variable is " + "set; a vault can opt out."
   },
   "brain-telegram-capture": {
     id: "brain-telegram-capture",
