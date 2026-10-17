@@ -8,6 +8,10 @@ import {
 } from "../../../core/brain/notes/revert.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../core/brain/notes/write-log.ts";
 import {
+  listWriteDestinations,
+  type WriteDestinationRow,
+} from "../../../core/brain/notes/write-destinations.ts";
+import {
   NOTE_WRITE_OP,
   WRITE_IMAGE_RETENTION_DAYS,
   isNoteWriteOp,
@@ -30,6 +34,7 @@ import {
  *
  * Subcommands:
  *   list          (default)  recorded note writes, newest first
+ *   destinations             the ledger folded into one row per target
  *   revert                   plan, and with --apply run, a per-agent undo
  *   prune-images             bound the before-image store by age
  *
@@ -49,6 +54,7 @@ export async function cmdBrainWrites(argv: string[]): Promise<number> {
     until: { type: "string" },
     op: { type: "string" },
     "older-than-days": { type: "string" },
+    limit: { type: "string" },
     "dry-run": { type: "boolean" },
     apply: { type: "string" },
     json: { type: "boolean" },
@@ -58,6 +64,9 @@ export async function cmdBrainWrites(argv: string[]): Promise<number> {
   if (sub === undefined || sub.startsWith("--") || sub === "list") {
     return listWrites(flags, json);
   }
+  if (sub === "destinations") {
+    return destinations(flags, json);
+  }
   if (sub === "revert") {
     return revert(flags, json);
   }
@@ -65,7 +74,7 @@ export async function cmdBrainWrites(argv: string[]): Promise<number> {
     return pruneImages(flags, json);
   }
   return usageError(
-    `unknown brain writes subcommand '${sub}' - expected list, revert or prune-images`,
+    `unknown brain writes subcommand '${sub}' - expected list, destinations, revert or prune-images`,
   );
 }
 
@@ -141,6 +150,93 @@ function renderRow(write: NoteWriteRecord): string {
     device,
     write.target,
     `${before} -> ${after}`,
+  ].join("  ");
+}
+
+/**
+ * `destinations` - the destination-keyed aggregate over the same ledger
+ * `list` reads (actionable-now batch, A4): one row per target path the
+ * recorded write events name, across BOTH the note-write and the
+ * write-session kinds, with the contributing agents and devices. Read
+ * only, like every subcommand here; the default window is the last
+ * seven days, and `--since` / `--until` narrow the walk.
+ */
+function destinations(
+  flags: Record<string, string | boolean | string[] | undefined>,
+  json: boolean,
+): number {
+  const rawLimit = normalizeFlagString(flags["limit"]);
+  let limit: number | undefined;
+  if (rawLimit !== null) {
+    const parsed = Number.parseInt(rawLimit, 10);
+    if (!Number.isInteger(parsed) || String(parsed) !== rawLimit || parsed < 1) {
+      return usageError(`--limit must be a positive integer, got '${rawLimit}'`);
+    }
+    limit = parsed;
+  }
+  const { vault } = brainVerbContext(flags);
+  const agent = normalizeFlagString(flags["agent"]);
+  const device = normalizeFlagString(flags["device"]);
+  const path = normalizeFlagString(flags["path"]);
+  const since = normalizeFlagString(flags["since"]);
+  const until = normalizeFlagString(flags["until"]);
+
+  const result = listWriteDestinations(vault, {
+    ...(agent !== null ? { agent } : {}),
+    ...(device !== null ? { device } : {}),
+    ...(path !== null ? { path } : {}),
+    ...(since !== null ? { since } : {}),
+    ...(until !== null ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  });
+
+  const warnings = result.warnings.map((w) => ({
+    path: w.path,
+    line: w.lineNumber,
+    message: w.message,
+  }));
+  if (json) {
+    okJson({
+      destinations: result.destinations.map((d) => ({
+        ...d,
+        kinds: [...d.kinds],
+        agents: [...d.agents],
+        devices: [...d.devices],
+      })),
+      total_matched: result.total_matched,
+      returned: result.destinations.length,
+      coverage_note: result.coverage_note,
+      warnings,
+    });
+    return 0;
+  }
+
+  if (result.destinations.length === 0) {
+    ok("no recorded write destinations in this window");
+  } else {
+    for (const row of result.destinations) ok(renderDestinationRow(row));
+  }
+  // The coverage note is part of the answer, not a footnote: derived
+  // write sites emit no event of either kind, so a short list must not
+  // read as a complete one.
+  ok(`note: ${result.coverage_note}`);
+  for (const warning of result.warnings) {
+    ok(`warning: ${warning.path}:${warning.lineNumber}: ${warning.message}`);
+  }
+  return 0;
+}
+
+/** One row: target, both kinds' counts, who and on what, newest touch. */
+function renderDestinationRow(row: WriteDestinationRow): string {
+  const device = row.devices.length === 0 ? ABSENT_COLUMN : row.devices.join(",");
+  const agent = row.agents.length === 0 ? ABSENT_COLUMN : row.agents.join(",");
+  return [
+    row.target,
+    `${row.note_writes} note-write(s)`,
+    `${row.write_sessions} write-session(s)`,
+    `agent: ${agent}`,
+    `device: ${device}`,
+    `last ${row.last_write}`,
   ].join("  ");
 }
 

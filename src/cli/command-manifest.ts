@@ -253,7 +253,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("agent-diff", "Compare source-agent coverage"),
         command(
           "writes",
-          "Recorded note writes: list (default), revert, prune-images",
+          "Recorded note writes: list (default), destinations, revert, prune-images",
           [
             flag("vault", "string"),
             flag("agent", "string"),
@@ -274,6 +274,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
               flag("since", "string"),
               flag("until", "string"),
               flag("op", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("destinations", "Fold the write ledger into one row per destination", [
+              flag("vault", "string"),
+              flag("agent", "string"),
+              flag("device", "string"),
+              flag("path", "string"),
+              flag("since", "string"),
+              flag("until", "string"),
+              flag("limit", "string"),
               flag("json", "boolean"),
             ]),
             command("revert", "Plan, and with --apply run, a per-agent undo of note writes", [

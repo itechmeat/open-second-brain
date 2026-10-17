@@ -61,7 +61,7 @@ Brain verbs (observing memory):
   query            Read by --preference, --topic, or --since
   agent-query      Read Brain provenance by source agent (--agent; --json)
   agent-diff       Compare source-agent coverage (browse/search/diff/map)
-  writes           Recorded note writes: list (default), revert, prune-images
+  writes           Recorded note writes: list (default), destinations, revert, prune-images
   reject           Move a preference to retired (user-rejected); --yes if pinned
   freeze           Stop every content write on every device (--reason <text>)
   unfreeze         Lift the freeze and reopen the content lane
@@ -432,6 +432,8 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain writes [list] [--agent <id>] [--device <id>] [--path <note>]\n" +
     "                        [--since <date>] [--until <date>] [--op create|update|append|revert]\n" +
     "                        [--vault <path>] [--json]\n" +
+    "       o2b brain writes destinations [--agent <id>] [--device <id>] [--path <note>]\n" +
+    "                        [--since <date>] [--until <date>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain writes revert (--agent <id> | --device <id> | --path <note>)\n" +
     "                        [--since <date>] [--until <date>] [--apply <digest>]\n" +
     "                        [--vault <path>] [--json]\n" +
@@ -448,6 +450,12 @@ export const VERB_HELP: Record<string, string> = {
     "refuses a digest that no longer describes the vault before any byte moves, takes a\n" +
     "note-revert snapshot, and records each restored or deleted target as a note write of\n" +
     "operation revert, so a revert is itself attributable and revertible.\n" +
+    "destinations folds the same ledger by target path: one row per destination the recorded\n" +
+    "write events name, across the note-write and write-session kinds, with per-kind counts,\n" +
+    "the contributing agents and devices, and a kinds coverage field that names which kinds\n" +
+    "spoke. The default window is the last 7 days; --since/--until narrow it. Derived write\n" +
+    "sites (signal slugs, daily logs) emit neither kind, so the rows carry a coverage note\n" +
+    "instead of implying completeness.\n" +
     "prune-images bounds the before-image store by file age; the default window is 30 days.\n",
   "agent-diff":
     "usage: o2b brain agent-diff [--mode browse|search|diff|map] [--agent <id>...]\n" +

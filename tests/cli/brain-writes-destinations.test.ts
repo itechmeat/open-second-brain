@@ -1,0 +1,183 @@
+/**
+ * `o2b brain writes destinations` (actionable-now batch, A4 / t_69fec179):
+ * the CLI exposure of the destination-keyed write aggregate. The same
+ * rows the core reader returns, with the filters it accepts; a query
+ * here never writes.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { WRITE_DESTINATION_COVERAGE_NOTE } from "../../src/core/brain/notes/write-destinations.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
+import { runCli } from "../helpers/run-cli.ts";
+
+let tmp: string;
+let vault: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-writes-destinations-"));
+  vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function seedNoteWrite(timestamp: string, agent: string, target: string, deviceId = ""): void {
+  appendLogEvent(
+    vault,
+    {
+      timestamp,
+      eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
+      agent,
+      body: {
+        write_id: `nw_${timestamp.replace(/\D/g, "")}_${target}`,
+        op: "update",
+        target,
+        hash_before: "a".repeat(64),
+        hash_after: "b".repeat(64),
+        bytes_before: "10",
+        bytes_after: "20",
+        agent,
+      },
+    },
+    { deviceId },
+  );
+}
+
+function seedWriteSession(timestamp: string, agent: string, target: string): void {
+  appendLogEvent(
+    vault,
+    {
+      timestamp,
+      eventType: BRAIN_LOG_EVENT_KIND.writeSession,
+      agent,
+      body: {
+        session_id: `ws_${timestamp.replace(/\D/g, "")}`,
+        kind: "artifact",
+        status: "done",
+        target,
+        attempts: "1",
+        review: "not-required",
+      },
+    },
+    { deviceId: "" },
+  );
+}
+
+function seedBoth(): void {
+  seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "Notes/One.md");
+  seedNoteWrite("2026-03-04T02:00:00Z", "beta", "Notes/One.md", "laptop");
+  seedWriteSession("2026-03-04T03:00:00Z", "alpha", "Notes/Two.md");
+}
+
+interface DestinationRow {
+  readonly target: string;
+  readonly kinds: string[];
+  readonly note_writes: number;
+  readonly write_sessions: number;
+  readonly agents: string[];
+  readonly last_write: string;
+}
+
+interface DestinationsReply {
+  readonly destinations: DestinationRow[];
+  readonly total_matched: number;
+  readonly returned: number;
+  readonly coverage_note: string;
+  readonly warnings: unknown[];
+}
+
+describe("o2b brain writes destinations", () => {
+  test("--json lists the rows the core reader returns", async () => {
+    seedBoth();
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2026-03-01",
+      "--until",
+      "2026-03-04",
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as DestinationsReply;
+    expect(payload.total_matched).toBe(2);
+    expect(payload.coverage_note).toBe(WRITE_DESTINATION_COVERAGE_NOTE);
+    const one = payload.destinations.find((d) => d.target === "Notes/One.md")!;
+    expect(one.note_writes).toBe(2);
+    expect(one.agents).toEqual(["alpha", "beta"]);
+    const two = payload.destinations.find((d) => d.target === "Notes/Two.md")!;
+    expect(two.kinds).toEqual(["write-session"]);
+    expect(two.write_sessions).toBe(1);
+  });
+
+  test("--agent narrows the rows the way the core filter does", async () => {
+    seedBoth();
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2026-03-01",
+      "--until",
+      "2026-03-04",
+      "--agent",
+      "beta",
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as DestinationsReply;
+    expect(payload.destinations.map((d) => d.target)).toEqual(["Notes/One.md"]);
+    // Only the filtered events' kinds are named.
+    expect(payload.destinations[0]!.kinds).toEqual(["note-write"]);
+  });
+
+  test("the plain render prints one line per destination and the coverage note", async () => {
+    seedBoth();
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2026-03-01",
+      "--until",
+      "2026-03-04",
+    ]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("Notes/One.md");
+    expect(r.stdout).toContain("Notes/Two.md");
+    expect(r.stdout).toContain(WRITE_DESTINATION_COVERAGE_NOTE);
+  });
+
+  test("an empty window reports zero rows and exits 0", async () => {
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2031-01-01",
+      "--until",
+      "2031-01-02",
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as DestinationsReply;
+    expect(payload.total_matched).toBe(0);
+    expect(payload.destinations).toEqual([]);
+  });
+});
