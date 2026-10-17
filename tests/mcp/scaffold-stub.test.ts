@@ -174,4 +174,22 @@ describe("list cursor pagination", () => {
   test("a malformed cursor is refused as invalid params", async () => {
     await expect(call({ action: "list", cursor: "!!!" })).rejects.toThrow(/malformed cursor/);
   });
+
+  test("limit 0 is an empty page with an exhausted walk, not an internal error", async () => {
+    // The schema admits limit: 0 (minimum: 0, "maximum targets returned"),
+    // and before cursors existed a zero limit answered an empty list. The
+    // offset-cursor helper only takes positive limits, so the pagination
+    // adoption must not turn a schema-valid zero into an unhandled
+    // OffsetCursorError surfacing as INTERNAL_ERROR.
+    note("One.md", "[[dangling-one]]\n");
+    note("Two.md", "[[dangling-two]]\n");
+    const { indexVault, resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
+
+    const res = await call({ action: "list", limit: 0 });
+    expect(res["state"]).toBe("measured");
+    expect(res["targets"]).toEqual([]);
+    expect(res["total"]).toBe(2);
+    expect(res["next_cursor"]).toBeNull();
+  });
 });

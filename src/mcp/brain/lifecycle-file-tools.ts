@@ -291,7 +291,16 @@ async function toolBrainScaffoldStub(
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
       ...(readable !== undefined ? { readable } : {}),
     });
-    const page = pageSlice(scan.targets, offset, limit ?? Math.max(scan.targets.length, 1));
+    // The schema admits `limit: 0` and the pre-cursor surface answered it
+    // with an empty list, so a schema-valid zero keeps that meaning: an
+    // empty page with the walk already exhausted. `pageSlice` only takes
+    // a positive limit, and letting its OffsetCursorError escape would
+    // surface as INTERNAL_ERROR - an internal failure for a request the
+    // schema calls well-formed.
+    const page =
+      limit === 0
+        ? { items: [], total: scan.targets.length, next_cursor: null as string | null }
+        : pageSlice(scan.targets, offset, limit ?? Math.max(scan.targets.length, 1));
     return {
       action,
       state: scan.state,
