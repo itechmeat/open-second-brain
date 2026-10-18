@@ -368,6 +368,35 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(context).not.toContain("yesterdays early line");
   });
 
+  test("a future-dated foreign line does not park the cursor past today", async () => {
+    // A foreign writer can stamp a log file with a future date. The scan
+    // must still read and surface it, but the watermark must never park
+    // on a date beyond today: parked at the skew, every real date under
+    // it reads as already-seen and the lane goes silent for exactly the
+    // days it exists for, until the clock catches up. The skew rides the
+    // clock, not a constant, so the test cannot age into a real date.
+    const skew = new Date(Date.now() + 45 * 86_400_000).toISOString().slice(0, 10);
+    seed("agent-a", "a line stamped in the future", { timestamp: `${skew}T09:00:00Z` });
+    seed("agent-a", "todays real line");
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(first.exit).toBe(0);
+    // The scan still reads the future-dated file: the line surfaces.
+    expect(emitted(first)).toContain("a line stamped in the future");
+    // The watermark parked on a real date - the newest one the log
+    // actually carries - never on the skew.
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as { date: string };
+    expect(cursor.date <= new Date().toISOString().slice(0, 10)).toBe(true);
+
+    // A line landing later on a real date between today and the skew
+    // must still surface instead of reading as covered by the parked
+    // cursor.
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    seed("agent-a", "tomorrows real line", { timestamp: `${tomorrow}T09:00:00Z` });
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toContain("tomorrows real line");
+  });
+
   test("a date evicted from the window is still skipped whole", async () => {
     // Six dates: the cursor keeps per-shard marks for the newest three
     // before its date, so 10-10 and 10-13 are evicted - and a brand-new

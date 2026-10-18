@@ -237,6 +237,16 @@ async function main(): Promise<void> {
     // than the cursor date and outside that window is skipped whole.
     const collected: Array<{ entry: BrainLogEntry }> = [];
     let lastSeen: CatchupPosition | null = null;
+    // The last scanned position dated today or earlier. A foreign line
+    // stamped with a future-skewed date is newer in merge order than
+    // everything real, so the watermark must not take its date - parked
+    // past today, every real date under it would read as already-seen
+    // (`date < cursor.date` with no window mark) and the lane would go
+    // silent until the clock caught up. The clamp parks on the newest
+    // position that exists as of today instead; lines on later dates
+    // resurface next run, which is the cheap direction to be wrong in.
+    const today = new Date().toISOString().slice(0, 10);
+    let lastSeenParked: CatchupPosition | null = null;
     // Null prototypes: shard ids are foreign input and DEVICE_ID_RE
     // admits Object.prototype member names ("constructor", "valueOf"),
     // which a plain {} inherits as if they were marks - the mark then
@@ -256,6 +266,7 @@ async function main(): Promise<void> {
         const entry = entries[i]!;
         const position: CatchupPosition = { date, shardId, line };
         lastSeen = position;
+        if (date <= today) lastSeenParked = position;
         // Self by payload attribution against the resolved identity,
         // both sides trimmed (resolveSelfIdentity trims its value); in
         // the device-id fallback also by shard, because that is the only
@@ -329,9 +340,16 @@ async function main(): Promise<void> {
     // cannot grow with the log.
     const nothingFitTheCap = collected.length > 0 && shown.length === 0;
     if (lastSeen !== null && !nothingFitTheCap) {
+      // The clamp: park on the newest position dated today or earlier.
+      // When every scanned line is future-dated there is no such
+      // position, so the cursor parks on the bare date with no marks -
+      // nothing seen is vouched for, and the skewed lines resurface
+      // until the clock catches up, the honest price of not going
+      // silent for exactly the days the skew covers.
+      const parked = lastSeenParked ?? { date: today, shardId: "", line: 0 };
       const days: Record<string, Record<string, number>> = {};
       const windowDates = Object.keys(perDateMarks)
-        .filter((d) => d < lastSeen!.date)
+        .filter((d) => d < parked.date)
         .toSorted()
         .slice(-LOG_CATCHUP_WINDOW_DATES);
       for (const d of windowDates) {
@@ -339,10 +357,10 @@ async function main(): Promise<void> {
         if (Object.keys(marks).length > 0) days[d] = marks;
       }
       writeLogCatchupCursor(vault, self.value, {
-        date: lastSeen.date,
-        shardId: lastSeen.shardId,
-        line: lastSeen.line,
-        shards: perDateMarks[lastSeen.date] ?? {},
+        date: parked.date,
+        shardId: parked.shardId,
+        line: parked.line,
+        shards: perDateMarks[parked.date] ?? {},
         days,
       });
     }
