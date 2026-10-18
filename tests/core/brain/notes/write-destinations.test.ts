@@ -3,9 +3,10 @@
  * t_69fec179).
  *
  * Seeds go through `appendLogEvent` only - never hand-written logs - so
- * the fixtures stay in lockstep with production output. The one exception
- * is the unreadable-day case, which writes a corrupt JSONL line on
- * purpose: a torn line is the warning path the reader exists to survive.
+ * the fixtures stay in lockstep with production output. The exceptions
+ * are hand-written shard lines on purpose: the unreadable-day torn line
+ * is the warning path the reader exists to survive, and the sub-second
+ * foreign line exercises a timestamp shape the writer never stamps.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -261,6 +262,33 @@ describe("listWriteDestinations", () => {
     });
     expect(result.destinations.map((d) => d.target)).toEqual(["Aye.md", "Zed.md"]);
     expect([...result.destinations[1]!.agents]).toEqual(["beta", "alpha"]);
+  });
+
+  test("last_write orders by instant when a sub-second foreign line meets a whole-second one", () => {
+    // The JSONL reader admits foreign sub-second timestamps the writer
+    // never stamps, and a plain string compare orders `…56.789Z` before
+    // `…56Z` - the exact reason `log-window.ts` compares instants. The
+    // hand-written shard line is the second fixture exception: a foreign
+    // line is by definition not production output.
+    seedNoteWrite({ timestamp: "2026-03-04T12:34:56Z", agent: "a", target: "Same.md" });
+    const shards = listLogShardFiles(vault);
+    expect(shards.length).toBeGreaterThan(0);
+    appendFileSync(
+      shards[0]!.path,
+      `${JSON.stringify({
+        ts: "2026-03-04T12:34:56.789Z",
+        kind: "note-write",
+        payload: { target: "Same.md", agent: "foreign" },
+      })}\n`,
+      "utf8",
+    );
+    const result = listWriteDestinations(vault, {
+      until: "2026-03-04",
+      now: new Date("2026-03-04T12:00:00Z"),
+    });
+    expect(result.destinations).toHaveLength(1);
+    expect(result.destinations[0]!.note_writes).toBe(2);
+    expect(result.destinations[0]!.last_write).toBe("2026-03-04T12:34:56.789Z");
   });
 
   test("filters by agent, device and exact path", () => {

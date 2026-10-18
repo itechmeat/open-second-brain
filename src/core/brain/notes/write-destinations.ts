@@ -278,7 +278,12 @@ export function listWriteDestinations(
         acc.deviceSeen.add(device);
         acc.devices.push(device);
       }
-      if (entry.timestamp > acc.lastWrite) acc.lastWrite = entry.timestamp;
+      // Newest touch by instant, not by string: the JSONL reader admits
+      // foreign sub-second timestamps, and a string compare orders
+      // `…56.789Z` before `…56Z` (the `log-window.ts` rule). Both sides
+      // parse - `timestampInWindow` already rejected NaN against the
+      // never-null effective since - so the original spelling survives.
+      if (Date.parse(entry.timestamp) > Date.parse(acc.lastWrite)) acc.lastWrite = entry.timestamp;
     });
   }
 
