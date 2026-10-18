@@ -231,4 +231,11 @@ describe("untrustedFramingHeader", () => {
     const header = untrustedFramingHeader("  ");
     expect(header).toContain(`origin="${UNTRUSTED_SOURCE_TAG}"`);
   });
+
+  test("escapes the origin attribute so a quote or bracket cannot break the header", () => {
+    const header = untrustedFramingHeader(`evil" onload="y>more`);
+    expect(header.includes("\n")).toBe(false);
+    expect(header).toContain(`origin="evil&quot; onload=&quot;y&gt;more"`);
+    expect(header).not.toContain(`origin="evil"`);
+  });
 });

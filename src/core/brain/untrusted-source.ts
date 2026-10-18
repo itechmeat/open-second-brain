@@ -129,12 +129,13 @@ export const UNTRUSTED_RECORDS_CLAUSE =
  *
  * The label rides the same `origin` attribute the full fence stamps, so
  * a reader treats both framings as the same provenance marker. The label
- * is neutralized and single-lined first, so the header stays exactly one
- * line whatever a caller passes, and an empty label falls back to the
- * delimiter tag itself.
+ * is neutralized and single-lined first, then attribute-escaped exactly
+ * as the fence escapes its own `origin`, so the header stays exactly one
+ * line whatever a caller passes and a hostile label cannot break out of
+ * the attribute. An empty label falls back to the delimiter tag itself.
  */
 export function untrustedFramingHeader(origin: string): string {
-  const label = neutralizeSingleLine(origin).trim() || UNTRUSTED_SOURCE_TAG;
+  const label = escapeAttribute(neutralizeSingleLine(origin).trim()) || UNTRUSTED_SOURCE_TAG;
   return `[${UNTRUSTED_SOURCE_TAG} origin="${label}"] ${UNTRUSTED_RECORDS_CLAUSE}.`;
 }
 
