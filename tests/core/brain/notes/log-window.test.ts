@@ -38,30 +38,32 @@ describe("parseWindowBound", () => {
   });
 
   test("a relative day is refused naming the flag", () => {
-    expect(() => parseWindowBound("yesterday", "since", DAY_START_SUFFIX)).toThrow(
-      LogWindowBoundError,
-    );
+    let caught: unknown;
     try {
       parseWindowBound("yesterday", "since", DAY_START_SUFFIX);
     } catch (err) {
-      const boundError = err as LogWindowBoundError;
-      expect(boundError.edge).toBe("since");
-      expect(boundError.value).toBe("yesterday");
-      expect(boundError.message).toContain("--since");
+      caught = err;
     }
+    // Asserted OUTSIDE the catch: inside, a parse that never throws skips
+    // every assertion and the test passes vacuously.
+    expect(caught).toBeInstanceOf(LogWindowBoundError);
+    const boundError = caught as LogWindowBoundError;
+    expect(boundError.edge).toBe("since");
+    expect(boundError.value).toBe("yesterday");
+    expect(boundError.message).toContain("--since");
   });
 
   test("a locale date spelling is refused naming the flag", () => {
-    expect(() => parseWindowBound("03/01/2026", "until", DAY_END_SUFFIX)).toThrow(
-      LogWindowBoundError,
-    );
+    let caught: unknown;
     try {
       parseWindowBound("03/01/2026", "until", DAY_END_SUFFIX);
     } catch (err) {
-      const boundError = err as LogWindowBoundError;
-      expect(boundError.edge).toBe("until");
-      expect(boundError.message).toContain("--until");
+      caught = err;
     }
+    expect(caught).toBeInstanceOf(LogWindowBoundError);
+    const boundError = caught as LogWindowBoundError;
+    expect(boundError.edge).toBe("until");
+    expect(boundError.message).toContain("--until");
   });
 
   test("a right-shaped but impossible calendar date is refused", () => {
