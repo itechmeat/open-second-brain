@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { HYGIENE_AUDIT_DIR } from "../../src/core/brain/audit-dirs.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -402,6 +403,72 @@ describe("o2b brain entity merge", () => {
     // A doctor re-run after apply is clean of duplicate-entity findings.
     const doctor = await runCli(["brain", "doctor", "--json"], { env: env() });
     expect(doctor.stdout).not.toContain("duplicate-entity");
+  });
+
+  test("merges are attributed to the configured agent, not 'unknown'", async () => {
+    const auditText = (): string => {
+      const auditDir = join(vault, "Brain", "log", HYGIENE_AUDIT_DIR);
+      return readdirSync(auditDir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => readFileSync(join(auditDir, f), "utf8"))
+        .join("\n");
+    };
+
+    // No --agent at all: the config's agent_name attributes the merge.
+    const { keepId, dropId } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", hash, "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    expect(auditText()).toContain('"actor":"test-agent"');
+    expect(auditText()).not.toContain('"actor":"unknown"');
+
+    // A blank --agent normalizes away to the configured agent too - it is
+    // not a null actor smuggled into the audit record.
+    const second = await runCli(["brain", "entity", "set", "people", "Grace Hopper"], {
+      env: env(),
+    });
+    expect(second.returncode).toBe(0);
+    const third = await runCli(["brain", "entity", "set", "people", "Grace"], { env: env() });
+    expect(third.returncode).toBe(0);
+    const secondPreview = await runCli(
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-grace-hopper",
+        "ent-people-grace",
+        "--dry-run",
+        "--json",
+      ],
+      { env: env() },
+    );
+    const { plan_hash: secondHash } = JSON.parse(secondPreview.stdout) as { plan_hash: string };
+    const blankAgent = await runCli(
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-grace-hopper",
+        "ent-people-grace",
+        "--force",
+        "--expect-hash",
+        secondHash,
+        "--agent",
+        "   ",
+        "--json",
+      ],
+      { env: env() },
+    );
+    expect(blankAgent.returncode).toBe(0);
+    expect(auditText()).not.toContain('"actor":"unknown"');
+    expect(auditText()).toContain('"actor":"test-agent"');
   });
 
   test("--json without --force refuses as structured consent-required JSON", async () => {

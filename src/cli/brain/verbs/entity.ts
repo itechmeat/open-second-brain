@@ -462,12 +462,17 @@ async function entityMerge(argv: string[]): Promise<number> {
   if (positional.length !== 2) {
     return fail("brain entity merge requires <keep> and <drop> (ids, names or aliases)");
   }
-  const { vault } = brainVerbContext(flags);
+  const { config, vault } = brainVerbContext(flags);
   const refs = { keep: positional[0]!, drop: positional[1]! };
   const json = flags["json"] === true;
   const force = flags["force"] === true;
   const dryRun = flags["dry-run"] === true;
   const expectHash = normalizeFlagString(flags["expect-hash"]);
+  // The acting identity, resolved the way the sibling entity verbs do:
+  // an explicit --agent wins, a blank one normalizes away, and the
+  // configured agent_name attributes what is left - never "unknown"
+  // while a config names an agent, and never a null actor at all.
+  const agent = normalizeFlagString(flags["agent"]) ?? resolveAgentName(config);
 
   let plan: EntityMergePlan;
   try {
@@ -564,7 +569,7 @@ async function entityMerge(argv: string[]): Promise<number> {
       expectHash,
       bypassEntityGuard: force,
       now: new Date(),
-      ...(flags["agent"] !== undefined ? { agent: normalizeFlagString(flags["agent"])! } : {}),
+      agent,
     });
     if (json) {
       okJson({
