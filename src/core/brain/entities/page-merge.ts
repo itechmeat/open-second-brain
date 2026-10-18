@@ -183,7 +183,7 @@ function resolveSubject(
   // and refuses with the same named error.
   const inCategory = (e: BrainEntity) => category === undefined || e.category === category;
   const byId = index.entities.filter((e) => e.id === trimmed && inCategory(e));
-  if (byId.length === 1) return assertMergeable(byId[0]!, side);
+  if (byId.length === 1) return assertMergeable(byId[0]!);
 
   const normalized = normalizeEntityName(trimmed);
   if (normalized.length === 0) throw notFound();
@@ -229,7 +229,7 @@ function resolveSubject(
   throw notFound();
 }
 
-function assertMergeable(entity: BrainEntity, side: "keep" | "drop"): BrainEntity {
+function assertMergeable(entity: BrainEntity): BrainEntity {
   if (entity.status === BRAIN_ENTITY_STATUS.quarantine) {
     throw new EntityMergeError(
       "quarantine-record",
@@ -251,7 +251,6 @@ function assertMergeable(entity: BrainEntity, side: "keep" | "drop"): BrainEntit
       `${entity.id} has status '${entity.status}', which this merge does not admit`,
     );
   }
-  void side;
   return entity;
 }
 
