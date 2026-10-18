@@ -28,6 +28,7 @@ import { listLogDates, listLogShardFiles, readLogDay, type LogShardFile } from "
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../../origin-channel.ts";
+import { DATE_LENGTH, DAY_END_SUFFIX, DAY_START_SUFFIX, parseWindowBound } from "./log-window.ts";
 import { isNoteWriteOp, type NoteWriteOp } from "./write-record.ts";
 
 /** One recorded note write, projected from its log event. */
@@ -75,28 +76,6 @@ export interface ListNoteWritesResult {
   readonly writes: ReadonlyArray<NoteWriteRecord>;
   /** Every parse warning the underlying log days reported. */
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
-}
-
-/** Characters of an ISO-8601 timestamp that spell its date. */
-const DATE_LENGTH = 10;
-
-/** A bare `YYYY-MM-DD`, which both bounds accept as shorthand for a day. */
-const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** How a bare date is completed at each end of the window. */
-const DAY_START_SUFFIX = "T00:00:00Z";
-const DAY_END_SUFFIX = "T23:59:59Z";
-
-/**
- * Complete a bound to a comparable timestamp.
- *
- * A bare `--until 2026-03-04` means "through the end of the fourth", not
- * "up to midnight starting it" - the second reading would return nothing
- * for the very day an operator just named, which is the kind of empty
- * that reads as "no writes" rather than as "wrong bound".
- */
-function completeBound(value: string, suffix: string): string {
-  return ISO_DATE_ONLY_RE.test(value) ? `${value}${suffix}` : value;
 }
 
 /** Payload value as a string, or null when the key is absent or a list. */
@@ -171,8 +150,10 @@ export function listNoteWrites(
   vault: string,
   filter: ListNoteWritesFilter = {},
 ): ListNoteWritesResult {
-  const since = filter.since === undefined ? null : completeBound(filter.since, DAY_START_SUFFIX);
-  const until = filter.until === undefined ? null : completeBound(filter.until, DAY_END_SUFFIX);
+  const since =
+    filter.since === undefined ? null : parseWindowBound(filter.since, "since", DAY_START_SUFFIX);
+  const until =
+    filter.until === undefined ? null : parseWindowBound(filter.until, "until", DAY_END_SUFFIX);
   const shards: ReadonlyArray<LogShardFile> = listLogShardFiles(vault);
   const warnings: BrainLogParseWarning[] = [];
   const writes: NoteWriteRecord[] = [];

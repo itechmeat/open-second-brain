@@ -7,6 +7,7 @@ import {
   type NoteRevertSelector,
 } from "../../../core/brain/notes/revert.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../core/brain/notes/write-log.ts";
+import { LogWindowBoundError } from "../../../core/brain/notes/log-window.ts";
 import {
   listWriteDestinations,
   type WriteDestinationRow,
@@ -84,6 +85,22 @@ const DIGEST_PREVIEW_LENGTH = 8;
 /** What the table prints where a fact is absent rather than empty. */
 const ABSENT_COLUMN = "-";
 
+/**
+ * Run one ledger read, mapping the shared window parser's named error to
+ * a usage error that blames the mistyped flag. The readers throw
+ * `LogWindowBoundError` for a `--since` / `--until` in neither accepted
+ * spelling; here - where the flags came from a human - that is a usage
+ * error, not a crash and never a silent empty.
+ */
+function ledgerResult<T>(read: () => T): T | number {
+  try {
+    return read();
+  } catch (err) {
+    if (err instanceof LogWindowBoundError) return usageError(err.message);
+    throw err;
+  }
+}
+
 function listWrites(
   flags: Record<string, string | boolean | string[] | undefined>,
   json: boolean,
@@ -102,14 +119,17 @@ function listWrites(
   const since = normalizeFlagString(flags["since"]);
   const until = normalizeFlagString(flags["until"]);
 
-  const result = listNoteWrites(vault, {
-    ...(agent !== null ? { agent } : {}),
-    ...(device !== null ? { device } : {}),
-    ...(path !== null ? { path } : {}),
-    ...(since !== null ? { since } : {}),
-    ...(until !== null ? { until } : {}),
-    ...(op !== null ? { op } : {}),
-  });
+  const result = ledgerResult(() =>
+    listNoteWrites(vault, {
+      ...(agent !== null ? { agent } : {}),
+      ...(device !== null ? { device } : {}),
+      ...(path !== null ? { path } : {}),
+      ...(since !== null ? { since } : {}),
+      ...(until !== null ? { until } : {}),
+      ...(op !== null ? { op } : {}),
+    }),
+  );
+  if (typeof result === "number") return result;
 
   if (json) {
     okJson({
@@ -181,14 +201,17 @@ function destinations(
   const since = normalizeFlagString(flags["since"]);
   const until = normalizeFlagString(flags["until"]);
 
-  const result = listWriteDestinations(vault, {
-    ...(agent !== null ? { agent } : {}),
-    ...(device !== null ? { device } : {}),
-    ...(path !== null ? { path } : {}),
-    ...(since !== null ? { since } : {}),
-    ...(until !== null ? { until } : {}),
-    ...(limit !== undefined ? { limit } : {}),
-  });
+  const result = ledgerResult(() =>
+    listWriteDestinations(vault, {
+      ...(agent !== null ? { agent } : {}),
+      ...(device !== null ? { device } : {}),
+      ...(path !== null ? { path } : {}),
+      ...(since !== null ? { since } : {}),
+      ...(until !== null ? { until } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    }),
+  );
+  if (typeof result === "number") return result;
 
   const warnings = result.warnings.map((w) => ({
     path: w.path,
@@ -320,6 +343,9 @@ function revert(
     // The code first, then the sentence: an operator scripting around
     // this reads one token, and the rest of the line is for the human.
     if (err instanceof NoteRevertError) return fail(`${err.code}: ${err.message}`);
+    // The planner reads the same window bounds as the list surface, so a
+    // malformed --since / --until is the same usage error here.
+    if (err instanceof LogWindowBoundError) return usageError(err.message);
     throw err;
   }
 }

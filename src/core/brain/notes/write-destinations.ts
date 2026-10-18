@@ -32,6 +32,7 @@ import { listLogDates, listLogShardFiles, readLogDay } from "../log-jsonl.ts";
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import type { WriteSessionStatus } from "../write-session/types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
+import { DATE_LENGTH, DAY_END_SUFFIX, DAY_START_SUFFIX, parseWindowBound } from "./log-window.ts";
 
 /** Which recorded write kinds a destination's rows cover. */
 export const WRITE_DESTINATION_KIND = Object.freeze({
@@ -121,15 +122,8 @@ export interface WriteDestinationsResult {
   readonly coverage_note: string;
 }
 
-/** Characters of an ISO-8601 timestamp that spell its date. */
-const DATE_LENGTH = 10;
-
-/** A bare `YYYY-MM-DD`, which both bounds accept as shorthand for a day. */
-const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** How a bare date is completed at each end of the window. */
-const DAY_START_SUFFIX = "T00:00:00Z";
-const DAY_END_SUFFIX = "T23:59:59Z";
+/** Whole days one UTC day apart, for the default-window cutoff. */
+const DAY_MS = 86_400_000;
 
 /**
  * The only write-session audit status that records a write. The audit
@@ -142,13 +136,6 @@ const DAY_END_SUFFIX = "T23:59:59Z";
  * is exactly what a per-destination tally is for.
  */
 const WRITE_SESSION_DONE_STATUS = "done" as const satisfies WriteSessionStatus;
-
-/** Whole days one UTC day apart, for the default-window cutoff. */
-const DAY_MS = 86_400_000;
-
-function completeBound(value: string, suffix: string): string {
-  return ISO_DATE_ONLY_RE.test(value) ? `${value}${suffix}` : value;
-}
 
 /** The default window's lower bound as an ISO date: today minus (days - 1). */
 function defaultSinceDate(days: number, now: Date): string {
@@ -223,8 +210,10 @@ export function listWriteDestinations(
   vault: string,
   filter: WriteDestinationsFilter = {},
 ): WriteDestinationsResult {
-  const since = filter.since === undefined ? null : completeBound(filter.since, DAY_START_SUFFIX);
-  const until = filter.until === undefined ? null : completeBound(filter.until, DAY_END_SUFFIX);
+  const since =
+    filter.since === undefined ? null : parseWindowBound(filter.since, "since", DAY_START_SUFFIX);
+  const until =
+    filter.until === undefined ? null : parseWindowBound(filter.until, "until", DAY_END_SUFFIX);
   // The default window's anchor is the upper bound when the caller named
   // one, and the present only when it did not: "the last seven days" of a
   // query about March is the seven days ending in March, never the seven

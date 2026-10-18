@@ -180,4 +180,26 @@ describe("o2b brain writes destinations", () => {
     expect(payload.total_matched).toBe(0);
     expect(payload.destinations).toEqual([]);
   });
+
+  test("a malformed bound is a usage error naming the flag, not a silent empty", async () => {
+    seedBoth();
+    for (const [flag, value] of [
+      ["--since", "yesterday"],
+      ["--until", "03/01/2026"],
+    ] as const) {
+      const r = await runCli([
+        "brain",
+        "writes",
+        "destinations",
+        "--vault",
+        vault,
+        flag,
+        value,
+        "--json",
+      ]);
+      expect(r.returncode).toBe(2);
+      expect(r.stderr).toContain(flag);
+      expect(r.stderr).toContain(value);
+    }
+  });
 });

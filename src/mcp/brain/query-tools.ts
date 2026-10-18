@@ -29,6 +29,7 @@ import {
 } from "../../core/brain/notes/revert.ts";
 import { listNoteWrites } from "../../core/brain/notes/write-log.ts";
 import { listWriteDestinations } from "../../core/brain/notes/write-destinations.ts";
+import { LogWindowBoundError } from "../../core/brain/notes/log-window.ts";
 import {
   NOTE_WRITE_OP,
   NOTE_WRITE_OPS,
@@ -358,6 +359,24 @@ const BRAIN_WRITES_ACTIONS: ReadonlyArray<string> = Object.freeze(
 const BRAIN_WRITES_DEFAULT_LIMIT = 50;
 const BRAIN_WRITES_MAX_LIMIT = 500;
 
+/**
+ * Run one write-ledger read, mapping the shared window parser's named
+ * error to `INVALID_PARAMS` blaming the mistyped argument. The readers
+ * throw `LogWindowBoundError` for a `since`/`until` in neither accepted
+ * spelling; that is client-resolvable input, and an uncaught throw here
+ * would surface as a server fault instead of the caller's mistake.
+ */
+function ledgerRead<T>(tool: string, read: () => T): T {
+  try {
+    return read();
+  } catch (err) {
+    if (err instanceof LogWindowBoundError) {
+      throw new MCPError(INVALID_PARAMS, `${tool}: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 async function toolBrainWrites(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -386,14 +405,16 @@ async function toolBrainWrites(
   const limit = coerceInt(args, "limit", BRAIN_WRITES_DEFAULT_LIMIT, 1, BRAIN_WRITES_MAX_LIMIT);
   const offset = cursorOffsetArg("brain_writes", args);
 
-  const result = listNoteWrites(ctx.vault, {
-    ...(agent !== null ? { agent } : {}),
-    ...(device !== null ? { device } : {}),
-    ...(path !== null ? { path } : {}),
-    ...(since !== null ? { since } : {}),
-    ...(until !== null ? { until } : {}),
-    ...(rawOp !== null ? { op: rawOp } : {}),
-  });
+  const result = ledgerRead("brain_writes", () =>
+    listNoteWrites(ctx.vault, {
+      ...(agent !== null ? { agent } : {}),
+      ...(device !== null ? { device } : {}),
+      ...(path !== null ? { path } : {}),
+      ...(since !== null ? { since } : {}),
+      ...(until !== null ? { until } : {}),
+      ...(rawOp !== null ? { op: rawOp } : {}),
+    }),
+  );
   // The log never opens the notes it names, so the reach rule is asked
   // per target here: at remote reach a write to a page reserved against
   // remote reads (or one whose file is gone - an unreadable claim fails
@@ -446,6 +467,11 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
   } catch (err) {
     if (err instanceof NoteRevertError) {
       throw new MCPError(INVALID_PARAMS, `brain_writes: ${err.code}: ${err.message}`);
+    }
+    // The planner reads the same window bounds as the list surface, so a
+    // malformed since / until is the same client-resolvable mistake here.
+    if (err instanceof LogWindowBoundError) {
+      throw new MCPError(INVALID_PARAMS, `brain_writes: ${err.message}`);
     }
     throw err;
   }
@@ -512,13 +538,15 @@ async function toolBrainWriteDestinations(
   );
   const offset = cursorOffsetArg("brain_write_destinations", args);
 
-  const result = listWriteDestinations(ctx.vault, {
-    ...(agent !== null ? { agent } : {}),
-    ...(device !== null ? { device } : {}),
-    ...(path !== null ? { path } : {}),
-    ...(since !== null ? { since } : {}),
-    ...(until !== null ? { until } : {}),
-  });
+  const result = ledgerRead("brain_write_destinations", () =>
+    listWriteDestinations(ctx.vault, {
+      ...(agent !== null ? { agent } : {}),
+      ...(device !== null ? { device } : {}),
+      ...(path !== null ? { path } : {}),
+      ...(since !== null ? { since } : {}),
+      ...(until !== null ? { until } : {}),
+    }),
+  );
   const view = reachView(ctx.vault, contextReach(ctx));
   const rows = view.filtersNothing
     ? result.destinations

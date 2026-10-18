@@ -16,6 +16,7 @@ import { WRITE_DESTINATION_COVERAGE_NOTE } from "../../src/core/brain/notes/writ
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
@@ -192,6 +193,24 @@ describe("brain_write_destinations listing", () => {
       ((await call({ since: "2031-01-01", until: "2031-01-02" })) as unknown as DestinationsReply)
         .total_matched,
     ).toBe(0);
+  });
+
+  test("a malformed bound is INVALID_PARAMS naming the argument, not a silent empty", async () => {
+    seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "One.md");
+    for (const [field, value] of [
+      ["since", "yesterday"],
+      ["until", "03/01/2026"],
+    ] as const) {
+      const thrown = await call({ [field]: value }).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(thrown).toBeInstanceOf(MCPError);
+      const mcpError = thrown as MCPError;
+      expect(mcpError.code).toBe(INVALID_PARAMS);
+      expect(mcpError.message).toContain(field);
+      expect(mcpError.message).toContain(value);
+    }
   });
 
   test("limit + cursor round-trip reports total_matched across pages", async () => {
