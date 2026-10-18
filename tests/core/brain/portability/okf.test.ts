@@ -335,6 +335,96 @@ describe("v0.2 emission", () => {
 });
 
 /**
+ * The OKF v0.2 spec's only ALWAYS-REQUIRED per-concept key is `type`
+ * (non-empty). The export therefore emits a derived `type` on every page
+ * - the preserved foreign type when the page came from a foreign
+ * producer, else the page's own structural kind - and carries a native
+ * frontmatter `type` through the producer namespace (`okf_type_raw`,
+ * beside `okf_status_raw`) so an own-producer trusted import restores it
+ * exactly instead of keeping the derived projection.
+ */
+describe("v0.2 type emission", () => {
+  test("every exported page carries a non-empty derived type", () => {
+    note("Notes/Plain.md", "---\ntitle: Plain\n---\nbody.\n");
+    note("Notes/Typed.md", "---\ntitle: Typed\nkind: book\n---\nbody.\n");
+    note("Brain/sources/src-paper.md", "---\ntitle: Paper\nkind: brain-source\n---\ncited.\n");
+    const bundle = buildOkfBundle(vault);
+    expect(bundle.manifest.pages.length).toBe(3);
+    for (const p of bundle.manifest.pages) {
+      const page = fileOf(bundle.files, p.bundle_path);
+      const m = /^type: "(.+)"$/m.exec(page);
+      expect(m).not.toBeNull();
+      expect(m![1]!.length).toBeGreaterThan(0);
+    }
+    // The derived type is the page's own kind, not its structural lane:
+    // the sources-lane page keeps the kind its frontmatter declares.
+    expect(fileOf(bundle.files, "concepts/Plain.md")).toContain('type: "note"');
+    expect(fileOf(bundle.files, "concepts/Typed.md")).toContain('type: "book"');
+    expect(fileOf(bundle.files, "references/src-paper.md")).toContain('type: "brain-source"');
+  });
+
+  test("a foreign page's preserved raw type is the derived type on re-export", () => {
+    note("Imported/Foo.md", "---\ntitle: Foo\nokf_type: encyclopedia-entry\n---\nbody\n");
+    const bundle = buildOkfBundle(vault);
+    expect(fileOf(bundle.files, "concepts/Foo.md")).toContain('type: "encyclopedia-entry"');
+  });
+
+  test("a native type is carried raw and restored byte-exact through a trusted import", () => {
+    // The derived emission is a projection (foreign type, else the
+    // structural kind); a native `type` the operator wrote must not be
+    // shadowed by it. The native value rides `okf_type_raw` beside the
+    // derived block, and an own-producer trusted import restores it
+    // exactly - the same contract as `okf_status_raw`.
+    note("Notes/Beta.md", "---\ntitle: Beta\ntype: glossary-entry\n---\nbody.\n");
+    const bundle = buildOkfBundle(vault);
+    const beta = fileOf(bundle.files, "concepts/Beta.md");
+    expect(beta).toContain("okf_type_raw: glossary-entry");
+    // The derived emission names the kind; the native value rides raw.
+    expect(beta).toContain('type: "note"');
+    expect(beta).not.toContain("type: glossary-entry");
+
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-type-rt-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-type-rt-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(false);
+      const result = importOkfBundle(dest, parsed, { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Notes/Beta.md"), "utf8");
+      expect(landed).toContain("type: glossary-entry");
+      expect(landed).not.toContain('type: "note"');
+      expect(landed).not.toContain("okf_type_raw");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a plain page round-trips without its derived type materializing", () => {
+    // Absent okf_type_raw beside the marker means the field never had a
+    // value - the okf_raw interplay is unchanged by the new pair.
+    note("Notes/Plain.md", "---\ntitle: Plain\n---\nbody.\n");
+    const bundle = buildOkfBundle(vault);
+    expect(fileOf(bundle.files, "concepts/Plain.md")).toContain('type: "note"');
+
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const result = importOkfBundle(dest, readOkfBundle(dir), { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
+      expect(landed).not.toContain("type:");
+      expect(landed).toContain("title: Plain");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
  * OKF v0.2 import acceptance (t_ffdb4fac): the reader admits a bundle
  * whose manifest carries the Open Second Brain dialect `schema: "1"` OR
  * one that declares NO manifest schema while its bundle-root index

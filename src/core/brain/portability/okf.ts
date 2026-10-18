@@ -22,8 +22,9 @@
  * field — never from natural-language heuristics — so the split is
  * deterministic and language-agnostic. Each bundle page file carries the
  * page's frontmatter and body **verbatim** plus the OKF v0.2 derived
- * keys (`status`, `sources`, `generated` — recomputed on every export)
- * and the `okf_raw` marker declaring the raw native keys riding beside
+ * keys (`type`, `status`, `sources`, `generated` — recomputed on every
+ * export; `type` is the spec's one always-required per-concept key) and
+ * the `okf_raw` marker declaring the raw native keys riding beside
  * them; the manifest carries the *derived* standard fields (kind,
  * citations, status, sources, freshness) computed from current page
  * state.
@@ -136,13 +137,17 @@ const REVIEW_KEY = "okf_review";
 
 /**
  * Frontmatter keys carrying a page's NATIVE `status` / `sources` /
- * `generated` values beside the derived v0.2 block. The v0.2 status enum
- * is closed (`draft | stable | deprecated`) and the derived sources are
- * re-translated from citations, so exporting the native values in place
- * would silently rewrite them: a quarantined page would export as
- * `stable` and un-quarantine on import, workflow statuses like `done` or
- * `active` would be lost, and user-written source lists would be
- * replaced. The raw keys ride the same `okf_` producer namespace as
+ * `generated` / `type` values beside the derived v0.2 block. The v0.2
+ * status enum is closed (`draft | stable | deprecated`) and the derived
+ * sources are re-translated from citations, so exporting the native
+ * values in place would silently rewrite them: a quarantined page would
+ * export as `stable` and un-quarantine on import, workflow statuses like
+ * `done` or `active` would be lost, and user-written source lists would
+ * be replaced. The same holds for `type`, the spec's one always-required
+ * per-concept key: the export emits it DERIVED (the preserved foreign
+ * type, else the structural kind), so a native `type` the operator wrote
+ * rides the raw namespace instead of being shadowed by the projection.
+ * The raw keys ride the same `okf_` producer namespace as
  * {@link FOREIGN_TYPE_KEY} / {@link PRODUCER_KEY}; an own-producer
  * import restores them and drops the derived block (see
  * {@link restoreRawOkfKeys}) - trusted round-trip and review staging
@@ -151,6 +156,7 @@ const REVIEW_KEY = "okf_review";
 const RAW_STATUS_KEY = "okf_status_raw";
 const RAW_SOURCES_KEY = "okf_sources_raw";
 const RAW_GENERATED_KEY = "okf_generated_raw";
+const RAW_TYPE_KEY = "okf_type_raw";
 
 /**
  * The raw/native key pairs the producer namespace carries beside the
@@ -164,6 +170,7 @@ const RAW_OKF_KEYS: ReadonlyArray<{ readonly raw: string; readonly native: strin
     { raw: RAW_STATUS_KEY, native: "status" },
     { raw: RAW_SOURCES_KEY, native: "sources" },
     { raw: RAW_GENERATED_KEY, native: "generated" },
+    { raw: RAW_TYPE_KEY, native: "type" },
   ]);
 
 /**
@@ -636,16 +643,19 @@ function okfFlowScalar(value: string): string {
 
 /**
  * Serialise one bundle page file: the page's own frontmatter and body
- * verbatim, plus the OKF v0.2 per-page keys (`status`, `sources`,
- * `generated`) as DERIVED fields. The derived keys are recomputed from
- * current page state on every export and never carried through from a
- * previous bundle, so re-exporting an imported page re-derives them
- * instead of stacking a foreign bundle's values a second time. Because
- * the derived block is a projection - a closed status enum, sources
- * re-translated from citations - the page's NATIVE values ride beside it
- * under the producer namespace (`okf_status_raw`, `okf_sources_raw`,
- * `okf_generated_raw`), so a trusted own-producer import can restore
- * what the projection cannot name.
+ * verbatim, plus the OKF v0.2 per-page keys (`type`, `status`,
+ * `sources`, `generated`) as DERIVED fields. The derived keys are
+ * recomputed from current page state on every export and never carried
+ * through from a previous bundle, so re-exporting an imported page
+ * re-derives them instead of stacking a foreign bundle's values a second
+ * time. Because the derived block is a projection - a closed status
+ * enum, sources re-translated from citations, a type taken from the
+ * preserved foreign type or the structural kind - the page's NATIVE
+ * values ride beside it under the producer namespace (`okf_status_raw`,
+ * `okf_sources_raw`, `okf_generated_raw`, `okf_type_raw`), so a trusted
+ * own-producer import can restore what the projection cannot name. The
+ * derived `type` is the spec's one always-required per-concept key, so
+ * every page carries it even when its frontmatter never did.
  *
  * The derived block is rendered by hand in YAML flow style because the
  * shared frontmatter writer emits scalars and inline arrays only - and
@@ -690,6 +700,13 @@ function renderOkfPageFile(
   // formatFrontmatter with an empty body is exactly "---\n<keys>---\n";
   // drop the closing fence, append the derived block, re-close.
   let out = formatFrontmatter(carried, "").slice(0, -"---\n".length);
+  // `type` is the spec's only always-required per-concept key (non-empty),
+  // so the derived block opens with it: the preserved foreign type when
+  // the page was imported from a foreign producer, else the page's own
+  // structural kind - the honest fields the page walk collected. A native
+  // `type` is NOT shadowed by this projection: it rode out under
+  // okf_type_raw above, and the own-producer restore puts it back.
+  out += `type: ${okfFlowScalar(page.foreign_type ?? page.kind)}\n`;
   out += `status: ${page.status}\n`;
   if (sources.length > 0) {
     out += "sources:\n";
