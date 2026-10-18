@@ -119,6 +119,14 @@ export function parseWindowBound(
  * or a since that drops one it should include - is exactly the kind of
  * wrong this module exists to make loud. A null bound leaves that end
  * unbounded.
+ *
+ * A timestamp that parses to nothing is outside every bounded window:
+ * the JSONL reader admits a value by shape, so a right-shaped but
+ * impossible instant (month 13, hour 99) reaches here as NaN, every NaN
+ * comparison is false, and an unguarded predicate would fail open -
+ * answering "inside" for any window and riding the bad entry into every
+ * bounded read, revert plans included. Only a fully unbounded window,
+ * which filters nothing, still shows it.
  */
 export function timestampInWindow(
   timestamp: string,
@@ -126,6 +134,7 @@ export function timestampInWindow(
   until: string | null,
 ): boolean {
   const at = Date.parse(timestamp);
+  if (!Number.isFinite(at)) return since === null && until === null;
   if (since !== null && at < Date.parse(since)) return false;
   if (until !== null && at > Date.parse(until)) return false;
   return true;

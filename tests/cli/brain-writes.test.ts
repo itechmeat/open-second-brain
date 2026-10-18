@@ -136,6 +136,32 @@ describe("o2b brain writes", () => {
     expect(res.stdout).toContain("no recorded note writes");
   });
 
+  test("a bounded window excludes a shape-valid but unparseable timestamp", async () => {
+    // The JSONL reader admits a timestamp by shape, so a foreign line can
+    // carry an impossible instant (hour 99) that `Date.parse` turns into
+    // NaN. The window must treat that as outside every bounded read, not
+    // let NaN's all-false comparisons wave it into the plan.
+    seedWrite({ timestamp: "2026-03-04T01:00:00Z", agent: "claude", target: "A.md", op: "create" });
+    seedWrite({
+      timestamp: "2026-03-04T99:99:99Z",
+      agent: "claude",
+      target: "B.md",
+      op: "update",
+    });
+
+    const res = await runCli(
+      ["brain", "writes", "list", "--since", "2026-03-03", "--until", "2026-03-05", "--json"],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as {
+      count: number;
+      writes: ReadonlyArray<Record<string, unknown>>;
+    };
+    expect(payload.count).toBe(1);
+    expect(payload.writes[0]).toMatchObject({ target: "A.md" });
+  });
+
   test("an unknown --op is refused by name and lists the vocabulary", async () => {
     const res = await runCli(["brain", "writes", "--op", "delete"], { env: env() });
     expect(res.returncode).toBe(2);

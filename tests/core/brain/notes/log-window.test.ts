@@ -139,4 +139,23 @@ describe("timestampInWindow", () => {
     expect(timestampInWindow(WHOLE, "2026-03-05T00:00:00Z", null)).toBe(false);
     expect(timestampInWindow(WHOLE, null, "2026-03-03T00:00:00Z")).toBe(false);
   });
+
+  // The JSONL reader admits a timestamp by SHAPE, so a foreign line can
+  // carry a right-shaped but impossible instant (month 13, hour 99) that
+  // `Date.parse` turns into NaN - and every NaN comparison is false, so
+  // an unguarded predicate answers "inside" for any window and the bad
+  // entry rides into every bounded read, revert plans included.
+  const IMPOSSIBLE = "2026-13-45T99:99:99Z";
+
+  test("an unparseable timestamp is outside every bounded window", () => {
+    expect(timestampInWindow(IMPOSSIBLE, "2026-01-01T00:00:00Z", "2026-12-31T23:59:59Z")).toBe(
+      false,
+    );
+    expect(timestampInWindow(IMPOSSIBLE, "2026-01-01T00:00:00Z", null)).toBe(false);
+    expect(timestampInWindow(IMPOSSIBLE, null, "2026-12-31T23:59:59Z")).toBe(false);
+  });
+
+  test("an unparseable timestamp stays visible only to an unbounded window", () => {
+    expect(timestampInWindow(IMPOSSIBLE, null, null)).toBe(true);
+  });
 });
