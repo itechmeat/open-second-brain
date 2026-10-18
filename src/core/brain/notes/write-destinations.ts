@@ -156,11 +156,12 @@ function eventAgent(entry: BrainLogEntry): string {
 /**
  * One recorded destination touch projected from either kind, or null for
  * an event that names no target, is neither kind - or is a write-session
- * audit row for a session that never committed.
+ * audit row for a session that never committed. The device is not
+ * projected because it is not the event's to tell: it is read off the
+ * shard the entry arrived in, at the call site.
  */
 function projectTouch(
   entry: BrainLogEntry,
-  device: string,
 ): { kind: WriteDestinationKind; target: string; agent: string } | null {
   const target = stringField(entry, "target");
   if (target === null || target.length === 0) return null;
@@ -234,7 +235,7 @@ export function listWriteDestinations(
     day.entries.forEach((entry, index) => {
       const device = day.entryShardIds[index] ?? "";
       if (filter.device !== undefined && device !== filter.device) return;
-      const touch = projectTouch(entry, device);
+      const touch = projectTouch(entry);
       if (touch === null) return;
       if (filter.agent !== undefined && touch.agent !== filter.agent) return;
       if (filter.path !== undefined && touch.target !== filter.path) return;
