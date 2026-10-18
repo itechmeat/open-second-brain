@@ -20,6 +20,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
+import { logCatchupCursorPath } from "../../hooks/lib/log-cursor-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -131,8 +132,9 @@ function logFingerprint(): string {
   return parts.join("\u0000");
 }
 
-function cursorPath(): string {
-  return join(vault, DERIVED_STORE_DIR, "log-catchup.cursor.json");
+/** The cursor file for one identity on this vault (the hook's own path rule). */
+function cursorPath(identity = "agent-b"): string {
+  return logCatchupCursorPath(vault, identity);
 }
 
 describe("log-catchup hook (SessionStart)", () => {
@@ -194,6 +196,87 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(cursor.shardId).toBe("");
     expect(cursor.line).toBe(0);
     expect(cursor.shards[""]).toBe(0);
+  });
+
+  test("a backfilled line with an earlier timestamp still surfaces and marks its true file index", async () => {
+    // A shard whose timestamps go backwards (backfill, clock skew) does
+    // not merge in file order, so an index COUNTED in merge order does
+    // not name the entry's position in the file. The watermark must ride
+    // the true per-shard file index, or this backfill - file line 1 but
+    // merge-first at 10:03 - reads as "line 0, already seen" and is lost.
+    seed("agent-a", "the on-time line", { timestamp: "2026-10-17T10:05:00Z" });
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(emitted(first)).not.toBeNull();
+    seed("agent-a", "the backfilled line", { timestamp: "2026-10-17T10:03:00Z" });
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    const context = emitted(second);
+    expect(context).not.toBeNull();
+    expect(context).toContain("the backfilled line");
+    // The mark carries the true file index of the backfill, not the
+    // merge-order count.
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      shards: Record<string, number>;
+    };
+    expect(cursor.shards[""]).toBe(1);
+  });
+
+  test("each identity on one vault keeps its own cursor", async () => {
+    // Several runtimes share a device and a vault but carry different
+    // VAULT_AGENT_NAMEs; a vault-wide cursor would let whichever runs
+    // first advance the watermark past lines the others never saw.
+    seed("agent-a", "a line meant for agent b");
+    seed("agent-c", "a line meant for agent a");
+    expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
+    expect(existsSync(cursorPath("agent-b"))).toBe(true);
+    // Agent b's cursor must not speak for agent a: no file yet, and the
+    // line addressed to a is still there when a's turn comes.
+    expect(existsSync(cursorPath("agent-a"))).toBe(false);
+    const asA = await runHook(SESSION_START, flagOn("agent-a"));
+    const contextA = emitted(asA);
+    expect(contextA).not.toBeNull();
+    expect(contextA).toContain("a line meant for agent a");
+    expect(existsSync(cursorPath("agent-a"))).toBe(true);
+  });
+
+  test("a legacy vault-wide cursor file is ignored, and the identity file replaces it", async () => {
+    // Lenient migration: the pre-identity file named what SOME identity
+    // on this device last saw, so reading it could hide lines from the
+    // identity now asking. A fresh start replays history under the
+    // lane's caps instead of risking that silence.
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    mkdirSync(dirname(cursorPath()), { recursive: true });
+    writeFileSync(
+      cursorPath().replace(/log-catchup\.[^/]*\.cursor\.json$/, "log-catchup.cursor.json"),
+      JSON.stringify({
+        date: NOW.slice(0, 10),
+        shardId: "",
+        line: 99,
+        shards: { "": 99 },
+      }),
+      "utf8",
+    );
+    seed("agent-a", "buried by the legacy watermark if it were read");
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("buried by the legacy watermark if it were read");
+    expect(existsSync(cursorPath("agent-b"))).toBe(true);
+  });
+
+  test("an identity name that could traverse is sanitized in the cursor file name", async () => {
+    seed("agent-a", "a line under a hostile identity");
+    const hostile = await runHook(SESSION_START, flagOn("../../evil"));
+    expect(hostile.exit).toBe(0);
+    expect(emitted(hostile)).not.toBeNull();
+    // The written cursor stays inside the derived store under the
+    // sanitized name; nothing escaped the vault directory.
+    expect(existsSync(cursorPath(".._.._evil"))).toBe(true);
+    const escaped = readdirSync(join(vault, DERIVED_STORE_DIR)).filter((name) =>
+      name.endsWith(".json"),
+    );
+    expect(escaped).toEqual(["log-catchup..._.._evil.cursor.json"]);
   });
 
   test("a same-second line in a different shard is not skipped", async () => {

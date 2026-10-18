@@ -1,15 +1,35 @@
 /**
  * Cross-agent log catch-up cursor state (t_3b44cd9a).
  *
- * One overwrite-only file, `<vault>/.open-second-brain/log-catchup.cursor.json`,
- * holding the watermark of what the catch-up lane last showed the agent
- * on this device: the `(date, shardId, line)` merge-order position of the
- * last entry seen, plus the per-shard high-water line marks for that
- * date. Vault-global and un-synced derived state, beside
+ * One overwrite-only file per reading identity,
+ * `<vault>/.open-second-brain/log-catchup.<identity>.cursor.json`,
+ * holding the watermark of what the catch-up lane last showed THAT
+ * identity on this device: the `(date, shardId, line)` merge-order
+ * position of the last entry seen, plus the per-shard high-water line
+ * marks for that date. Vault-local and un-synced derived state, beside
  * `backlog-nudge.count` and for the same reasons: the watermark belongs
  * to this device's reading progress, so syncing it would make devices
  * fight over each other's cursors, and per-session hook-state is the
  * wrong lifetime for "since my last look".
+ *
+ * WHY PER IDENTITY. Several runtimes (claude/codex/grok) share one
+ * device and one vault while carrying different `VAULT_AGENT_NAME`s. A
+ * single vault-wide file would let whichever runtime runs first advance
+ * the watermark past lines the others never saw - each identity reads
+ * the log through its own self-filter, so "last look" is a fact about
+ * the identity, not about the device. The identity is sanitized into
+ * the file name (`[^A-Za-z0-9._-]` -> `_`) because a configured agent
+ * name is arbitrary operator input and the file name must stay inside
+ * the derived store.
+ *
+ * WHY THE PRE-IDENTITY FILE IS NOT MIGRATED. The old un-namespaced
+ * `log-catchup.cursor.json` recorded what SOME identity on this device
+ * last saw, with no record of which - adopting it could hide lines from
+ * the identity now asking, which is the one failure this lane cannot
+ * take. So an existing legacy file is simply never read: every identity
+ * starts fresh and replays history once under the lane's caps (bounded,
+ * fail-open) rather than risk that silence. The file is left in place;
+ * nothing reads it again.
  *
  * WHY THE PER-SHARD MARKS BESIDE THE TUPLE. `readLogDay` merges a day's
  * shards sorted by (timestamp, shardId, line), so a new line appended to
@@ -42,8 +62,18 @@ import {
 } from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
 
-/** The single state file name, directly under {@link DERIVED_STORE_DIR}. */
-export const LOG_CATCHUP_CURSOR_FILENAME = "log-catchup.cursor.json";
+/** Stem of the per-identity state file, under {@link DERIVED_STORE_DIR}. */
+export const LOG_CATCHUP_CURSOR_STEM = "log-catchup";
+
+/**
+ * The single state file name for one identity, directly under
+ * {@link DERIVED_STORE_DIR}: `log-catchup.<identity>.cursor.json` with
+ * every character outside `[A-Za-z0-9._-]` replaced by `_`, so a hostile
+ * or exotic agent name cannot escape the derived store.
+ */
+export function logCatchupCursorFilename(identity: string): string {
+  return `${LOG_CATCHUP_CURSOR_STEM}.${identity.replace(/[^A-Za-z0-9._-]/g, "_")}.cursor.json`;
+}
 
 /**
  * The watermark: the merge-order position of the last entry seen on
@@ -67,18 +97,18 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Absolute path of the cursor file for one vault. */
-export function logCatchupCursorPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, LOG_CATCHUP_CURSOR_FILENAME);
+/** Absolute path of the cursor file for one identity on one vault. */
+export function logCatchupCursorPath(vault: string, identity: string): string {
+  return join(vault, DERIVED_STORE_DIR, logCatchupCursorFilename(identity));
 }
 
 /**
- * The cursor last recorded for the vault, or `null` when nothing usable
- * is recorded: the file is absent, unreadable, not a regular file, or
- * does not carry the watermark shape. Never throws.
+ * The cursor last recorded for `identity` on the vault, or `null` when
+ * nothing usable is recorded: the file is absent, unreadable, not a
+ * regular file, or does not carry the watermark shape. Never throws.
  */
-export function readLogCatchupCursor(vault: string): LogCatchupCursor | null {
-  const read = readRegularFileNoFollow(logCatchupCursorPath(vault));
+export function readLogCatchupCursor(vault: string, identity: string): LogCatchupCursor | null {
+  const read = readRegularFileNoFollow(logCatchupCursorPath(vault, identity));
   if (read.status !== "ok") return null;
   try {
     const parsed: unknown = JSON.parse(read.text);
@@ -89,7 +119,7 @@ export function readLogCatchupCursor(vault: string): LogCatchupCursor | null {
     if (!isNonNegativeInteger(raw["line"])) return null;
     const shards = raw["shards"];
     if (shards === null || typeof shards !== "object" || Array.isArray(shards)) return null;
-    const marks: Record<string, number> = {};
+    const marks: Record<string, number> = Object.create(null);
     for (const [shard, mark] of Object.entries(shards as Record<string, unknown>)) {
       if (!isNonNegativeInteger(mark)) return null;
       marks[shard] = mark;
@@ -107,7 +137,11 @@ export function readLogCatchupCursor(vault: string): LogCatchupCursor | null {
  * store is itself a symbolic link - a vault received from elsewhere
  * could point it at any directory. Never throws.
  */
-export function writeLogCatchupCursor(vault: string, cursor: LogCatchupCursor): boolean {
+export function writeLogCatchupCursor(
+  vault: string,
+  identity: string,
+  cursor: LogCatchupCursor,
+): boolean {
   try {
     if (!DATE_SHAPE_RE.test(cursor.date)) return false;
     if (typeof cursor.shardId !== "string") return false;
@@ -116,7 +150,7 @@ export function writeLogCatchupCursor(vault: string, cursor: LogCatchupCursor): 
       if (!isNonNegativeInteger(mark)) return false;
     }
     if (derivedDirIsSymlinked(vault, DERIVED_STORE_DIR)) return false;
-    const path = logCatchupCursorPath(vault);
+    const path = logCatchupCursorPath(vault, identity);
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteText(path, `${JSON.stringify(cursor)}\n`);
     return true;

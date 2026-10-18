@@ -24,9 +24,12 @@
  * placeholder on an unconfigured install - so the fallback matches the
  * entry's shard id, which IS the device id.
  *
- * Cursor. `(date, shardId, line)` watermark plus per-shard high-water
- * marks (hooks/lib/log-cursor-state.ts, overwrite-only derived state,
- * un-synced). The lane is a PURE read of the log: entries are discovered
+ * Cursor. A per-identity `(date, shardId, line)` watermark plus
+ * per-shard high-water marks (hooks/lib/log-cursor-state.ts,
+ * overwrite-only derived state, un-synced): the runtimes sharing this
+ * vault carry different agent names, so "since my last look" is a fact
+ * about the identity, not the device. The lane is a PURE read of the
+ * log: entries are discovered
  * through `listLogDates` and read through `readLogDay` and nothing is
  * ever appended to `Brain/log` - session-capture owns the lifecycle
  * event, and this lane must stay distinguishable from it.
@@ -184,7 +187,10 @@ async function main(): Promise<void> {
 
     const self = resolveSelfIdentity();
     if (self === null) return;
-    const cursor = readLogCatchupCursor(vault);
+    // The watermark is per identity, not per device: several runtimes
+    // share this vault with different agent names, and whoever runs
+    // first must not read the log past lines the others never saw.
+    const cursor = readLogCatchupCursor(vault, self.value);
 
     // One walk over the log, oldest date first, starting at the cursor
     // date when one exists. `readLogDay` merges each day's shards in
@@ -273,7 +279,7 @@ async function main(): Promise<void> {
     // with nothing to show writes nothing, and a crash between the emit
     // and the write replays history next session rather than skipping it.
     if (lastSeen !== null) {
-      writeLogCatchupCursor(vault, {
+      writeLogCatchupCursor(vault, self.value, {
         date: lastSeen.position.date,
         shardId: lastSeen.position.shardId,
         line: lastSeen.position.line,
