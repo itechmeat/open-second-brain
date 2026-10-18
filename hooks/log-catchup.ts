@@ -85,6 +85,19 @@ const CATCHUP_BODY_FIELDS: ReadonlyArray<string> = Object.freeze([
   "reason",
 ]);
 
+/**
+ * Hard cap on ONE rendered catch-up line, ellipsis included. Local to
+ * the lane (the other `LOG_CATCHUP_*` caps live in
+ * `policy/blocks/active.ts`, which owns the block-level budget):
+ * `neutralizeSingleLine` never bounds length, and the block-level trim
+ * loop drops oldest-first - without a per-line bound, one over-long
+ * foreign line would first push every shorter line out of the block and
+ * then not fit itself, muting the lane entirely while the frozen cursor
+ * rescans the same history every session. With the cap every line fits,
+ * so the newest line always survives the trim.
+ */
+export const LOG_CATCHUP_MAX_LINE_CHARS = 500;
+
 /** Label for a log line that carries no `agent` attribution. */
 const UNATTRIBUTED_AGENT_LABEL = "unattributed";
 
@@ -157,6 +170,16 @@ function entryText(entry: BrainLogEntry): string {
     if (typeof value === "string" && value.length > 0) return value;
   }
   return entry.eventType;
+}
+
+/**
+ * One rendered line, never longer than {@link LOG_CATCHUP_MAX_LINE_CHARS}
+ * (the ellipsis counts toward the cap). Applies to the composed text, so
+ * a hostile `agent` label is bounded by the same guarantee as the body.
+ */
+function truncateRenderedLine(text: string): string {
+  if (text.length <= LOG_CATCHUP_MAX_LINE_CHARS) return text;
+  return `${text.slice(0, LOG_CATCHUP_MAX_LINE_CHARS - 1)}…`;
 }
 
 /** The attributed, neutralized label an entry renders under. */
@@ -260,7 +283,9 @@ async function main(): Promise<void> {
     const render = (items: ReadonlyArray<{ entry: BrainLogEntry }>): string => {
       const activityItems: ReadonlyArray<ActivityItem> = items.map(({ entry }) => ({
         kind: "note",
-        text: `${entryAgentLabel(entry)}: ${neutralizeSingleLine(entryText(entry))}`,
+        text: truncateRenderedLine(
+          `${entryAgentLabel(entry)}: ${neutralizeSingleLine(entryText(entry))}`,
+        ),
         timestamp: entry.timestamp,
       }));
       const header =

@@ -198,6 +198,33 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(cursor.shards[""]).toBe(0);
   });
 
+  test("an over-long foreign line renders truncated and shorter lines still show", async () => {
+    // neutralizeSingleLine does not bound length, so one untrusted
+    // 10k-char line would blow the whole block budget; the char-cap trim
+    // loop peels oldest-first, drops every shorter line, then cannot fit
+    // the long one either - the lane goes silent forever and the frozen
+    // cursor rescans the same history every session. A per-line cap must
+    // keep every rendered line fittable.
+    seed("agent-a", "a short line that must survive");
+    const hugeText = `huge ${"x".repeat(10000)}`;
+    seed("agent-a", hugeText, { timestamp: "2026-10-17T10:01:00Z" });
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("a short line that must survive");
+    // The long line shows its head, truncated under the per-line cap -
+    // never the full 10k characters.
+    expect(context).toContain("huge xxxxxxxxxxxxxxxxxxxx");
+    expect(context).not.toContain(hugeText);
+    expect(context).not.toContain("x".repeat(600));
+    // The watermark still covers both scanned lines.
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      shards: Record<string, number>;
+    };
+    expect(cursor.shards[""]).toBe(1);
+  });
+
   test("a shard named like an Object.prototype member still gets a cursor", async () => {
     // DEVICE_ID_RE admits lowercase names such as "constructor" and
     // "valueOf"; shard-keyed plain objects inherit those members, so the
@@ -399,15 +426,15 @@ describe("log-catchup hook (SessionStart)", () => {
   });
 
   test("the char cap drops the oldest lines first and the cursor still covers every scanned line", async () => {
-    // Eight well-under-the-line-cap lines whose rendered block blows
-    // past LOG_CATCHUP_MAX_CHARS: the trim loop must peel the oldest
-    // lines off the front, count each as older, and still advance the
-    // watermark past every line it scanned - trimming the render must
-    // not freeze the cursor, or the dropped lines would resurface next
-    // session.
-    for (let i = 0; i < 8; i++) {
+    // Fourteen long lines whose rendered block (each truncated to the
+    // per-line cap) still blows past LOG_CATCHUP_MAX_CHARS: the trim
+    // loop must peel the oldest lines off the front, count each as
+    // older, and still advance the watermark past every line it
+    // scanned - trimming the render must not freeze the cursor, or the
+    // dropped lines would resurface next session.
+    for (let i = 0; i < 14; i++) {
       seed("agent-a", `charcap line ${i} ${"x".repeat(1500)}`, {
-        timestamp: `2026-10-17T10:0${i}:00Z`,
+        timestamp: `2026-10-17T10:${String(i).padStart(2, "0")}:00Z`,
       });
     }
     const r = await runHook(SESSION_START, flagOn("agent-b"));
@@ -415,13 +442,13 @@ describe("log-catchup hook (SessionStart)", () => {
     const context = emitted(r);
     expect(context).not.toBeNull();
     // Oldest dropped first: the front of the scan is gone, the newest
-    // line survives.
-    expect(context).not.toContain("charcap line 0");
-    expect(context).not.toContain("charcap line 1");
-    expect(context).not.toContain("charcap line 4");
-    expect(context).toContain("charcap line 7");
-    // The line cap alone would have shown all 8, so any "older" count
-    // in the header is the char-trim loop's own growth.
+    // line survives. (Pin the dropped lines with their first x so the
+    // substring cannot match the two-digit line numbers.)
+    expect(context).not.toContain("charcap line 0 x");
+    expect(context).not.toContain("charcap line 1 x");
+    expect(context).toContain("charcap line 13");
+    // Any "older" count in the header is the char-trim loop's own work
+    // (the line cap alone would have shown all 14).
     const older = context?.match(/\((\d+) older not shown\)/);
     expect(older).not.toBeNull();
     expect(Number(older![1])).toBeGreaterThanOrEqual(1);
@@ -430,8 +457,8 @@ describe("log-catchup hook (SessionStart)", () => {
       line: number;
       shards: Record<string, number>;
     };
-    expect(cursor.line).toBe(7);
-    expect(cursor.shards[""]).toBe(7);
+    expect(cursor.line).toBe(13);
+    expect(cursor.shards[""]).toBe(13);
   });
 
   test("a missing or corrupt cursor fails soft and the lane still exits 0", async () => {
