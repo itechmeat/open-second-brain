@@ -204,7 +204,7 @@ describe("listWriteDestinations", () => {
     // The until day itself is the seventh day of the default window.
     expect(result.window).toEqual({
       since: "2026-02-26T00:00:00Z",
-      until: "2026-03-04T23:59:59Z",
+      until: "2026-03-04T23:59:59.999Z",
     });
     expect(result.destinations.map((d) => d.target)).toEqual(["Old.md"]);
   });

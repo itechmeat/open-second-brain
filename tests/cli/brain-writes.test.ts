@@ -162,6 +162,24 @@ describe("o2b brain writes", () => {
     expect(payload.writes[0]).toMatchObject({ target: "A.md" });
   });
 
+  test("a bare-date --until includes the day's last fractional second", async () => {
+    // The reader admits sub-second foreign lines, so an entry inside the
+    // bound day's final second can carry a fraction; `--until 2026-03-04`
+    // promises "through the end of the fourth" and must keep it.
+    seedWrite({
+      timestamp: "2026-03-04T23:59:59.500Z",
+      agent: "claude",
+      target: "A.md",
+      op: "append",
+    });
+
+    const res = await runCli(["brain", "writes", "list", "--until", "2026-03-04", "--json"], {
+      env: env(),
+    });
+    expect(res.returncode).toBe(0);
+    expect(JSON.parse(res.stdout)).toMatchObject({ count: 1 });
+  });
+
   test("an unknown --op is refused by name and lists the vocabulary", async () => {
     const res = await runCli(["brain", "writes", "--op", "delete"], { env: env() });
     expect(res.returncode).toBe(2);

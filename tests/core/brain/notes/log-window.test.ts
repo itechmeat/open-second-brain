@@ -25,7 +25,12 @@ describe("parseWindowBound", () => {
   });
 
   test("a bare date completes through the end of the day at the upper end", () => {
-    expect(parseWindowBound("2026-03-04", "until", DAY_END_SUFFIX)).toBe("2026-03-04T23:59:59Z");
+    // The suffix reaches past the whole last second, because the reader
+    // admits sub-second foreign lines: an entry at 23:59:59.500Z is
+    // still "through the end of the fourth".
+    expect(parseWindowBound("2026-03-04", "until", DAY_END_SUFFIX)).toBe(
+      "2026-03-04T23:59:59.999Z",
+    );
   });
 
   test("a canonical UTC timestamp passes through verbatim at either end", () => {
@@ -157,5 +162,13 @@ describe("timestampInWindow", () => {
 
   test("an unparseable timestamp stays visible only to an unbounded window", () => {
     expect(timestampInWindow(IMPOSSIBLE, null, null)).toBe(true);
+  });
+
+  test("a bare-date until includes the day's last fractional second", () => {
+    // The completed bound must reach past the whole-second entries it
+    // used to end at, or an entry in the day's final fraction falls
+    // outside the very day the bound promised to include.
+    const until = parseWindowBound("2026-03-04", "until", DAY_END_SUFFIX);
+    expect(timestampInWindow("2026-03-04T23:59:59.500Z", null, until)).toBe(true);
   });
 });

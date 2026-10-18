@@ -35,8 +35,14 @@ import { neutralizeSingleLine } from "../untrusted-source.ts";
 /** How a bare date is completed at the window's lower end. */
 export const DAY_START_SUFFIX = "T00:00:00Z";
 
-/** How a bare date is completed at the window's upper end: through the day. */
-export const DAY_END_SUFFIX = "T23:59:59Z";
+/**
+ * How a bare date is completed at the window's upper end: through the
+ * day. The suffix reaches past the whole last second because the JSONL
+ * reader admits sub-second foreign lines - ending at `…59Z` would drop
+ * an entry inside the bound day's final fraction, and "through the end
+ * of the fourth" has to mean all of it.
+ */
+export const DAY_END_SUFFIX = "T23:59:59.999Z";
 
 /** Characters of an ISO-8601 timestamp that spell its date. */
 export const DATE_LENGTH = 10;
