@@ -198,6 +198,23 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(cursor.shards[""]).toBe(0);
   });
 
+  test("a shard named like an Object.prototype member still gets a cursor", async () => {
+    // DEVICE_ID_RE admits lowercase names such as "constructor" and
+    // "valueOf"; shard-keyed plain objects inherit those members, so the
+    // mark for such a shard silently becomes a function and the cursor
+    // write fails validation - the lane goes silent and rescans forever.
+    seed("agent-a", "a line from the constructor shard", { deviceId: "constructor" });
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(emitted(first)).not.toBeNull();
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      shards: Record<string, number>;
+    };
+    expect(cursor.shards["constructor"]).toBe(0);
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toBeNull();
+  });
+
   test("a backfilled line with an earlier timestamp still surfaces and marks its true file index", async () => {
     // A shard whose timestamps go backwards (backfill, clock skew) does
     // not merge in file order, so an index COUNTED in merge order does

@@ -214,11 +214,16 @@ async function main(): Promise<void> {
     // than the cursor date and outside that window is skipped whole.
     const collected: Array<{ entry: BrainLogEntry }> = [];
     let lastSeen: CatchupPosition | null = null;
-    let perDateMarks: Record<string, Record<string, number>> = {};
+    // Null prototypes: shard ids are foreign input and DEVICE_ID_RE
+    // admits Object.prototype member names ("constructor", "valueOf"),
+    // which a plain {} inherits as if they were marks - the mark then
+    // reads as a function, the write fails its shape validation and the
+    // lane goes silent while rescanning history every session.
+    let perDateMarks: Record<string, Record<string, number>> = Object.create(null);
     for (const date of listLogDates(vault)) {
       if (cursor !== null && date < cursor.date && cursor.days[date] === undefined) continue;
       const { entries, entryShardIds, entryLines } = readLogDay(vault, date);
-      const shardMarks: Record<string, number> = {};
+      const shardMarks: Record<string, number> = Object.create(null);
       perDateMarks[date] = shardMarks;
       for (let i = 0; i < entries.length; i++) {
         const shardId = entryShardIds[i] ?? "";
