@@ -324,7 +324,7 @@ describe("log-catchup hook (SessionStart)", () => {
     // on this device last saw, so reading it could hide lines from the
     // identity now asking. A fresh start replays history under the
     // lane's caps instead of risking that silence.
-    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const { mkdirSync } = await import("node:fs");
     mkdirSync(dirname(cursorPath()), { recursive: true });
     writeFileSync(
       cursorPath().replace(/log-catchup\.[^/]*\.cursor\.json$/, "log-catchup.cursor.json"),
@@ -707,7 +707,7 @@ describe("log-catchup hook (SessionStart)", () => {
 
   test("a missing or corrupt cursor fails soft and the lane still exits 0", async () => {
     seed("agent-a", "read me despite the broken cursor");
-    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const { mkdirSync } = await import("node:fs");
     mkdirSync(dirname(cursorPath()), { recursive: true });
     writeFileSync(cursorPath(), "{ not json", "utf8");
     const r = await runHook(SESSION_START, flagOn("agent-b"));
