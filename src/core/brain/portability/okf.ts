@@ -1097,10 +1097,24 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
  * `stable`, a completion status comes back itself, user-written sources
  * survive, and a page that never carried a status (or sources) again
  * does not. Raw values replace the derived ones wholesale; a missing
- * raw key means the source page never carried the field, so the derived
- * value is dropped rather than landed.
+ * raw key BESIDE a present one means the source page never carried that
+ * field, so the derived value is dropped rather than landed.
+ *
+ * A page carrying NO raw key at all is a legacy bundle's page (exported
+ * before the raw keys existed - sealed knowledge-pack halves accepted on
+ * purpose included): its natives are the frontmatter already in place,
+ * and reading their absence as "never had a value" deleted them. The
+ * restore is skipped for such a page, so a legacy quarantine survives
+ * its own round-trip.
  */
 function restoreRawOkfKeys(meta: FrontmatterMap): void {
+  if (
+    meta[RAW_STATUS_KEY] === undefined &&
+    meta[RAW_SOURCES_KEY] === undefined &&
+    meta[RAW_GENERATED_KEY] === undefined
+  ) {
+    return;
+  }
   const rawStatus = meta[RAW_STATUS_KEY];
   if (typeof rawStatus === "string" && rawStatus.trim() !== "") meta["status"] = rawStatus;
   else delete meta["status"];

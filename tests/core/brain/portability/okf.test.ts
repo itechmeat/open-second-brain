@@ -481,12 +481,15 @@ describe("v0.2 import acceptance", () => {
       const landedG = readFileSync(join(dest, "Notes/G.md"), "utf8");
       expect(landedG).toContain("generated: hand-written");
       expect(landedG).not.toContain("open-second-brain/");
-      // A page with no status lands with no status - the derived default
-      // and the derived sources block are dropped with it.
+      // A page whose source carried none of the three fields exports no
+      // raw keys - the zero-raw-key shape of a legacy bundle. The import
+      // leaves such a page untouched (the derived block rides along)
+      // rather than reading absent raw keys as "the field never had a
+      // value"; the next export re-derives the block either way.
       const landedPlain = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
-      expect(landedPlain).not.toContain("status:");
-      expect(landedPlain).not.toContain("sources:");
-      expect(landedPlain).not.toContain("generated:");
+      expect(landedPlain).toContain("status: stable");
+      expect(landedPlain).toContain("concepts/Q.md");
+      expect(landedPlain).toContain("open-second-brain/");
       expect(landedPlain).toContain("see [[Q]].");
       // User-written sources come back; the derived flow map does not.
       // The writer quotes array items on re-render - the DATA is what is
@@ -499,6 +502,62 @@ describe("v0.2 import acceptance", () => {
       const re = buildOkfBundle(dest);
       const reQ = fileOf(re.files, "concepts/Q.md");
       expect(reQ.split(re.manifest.generated_at).join(bundle.manifest.generated_at)).toBe(qPage);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a legacy own-producer page (no raw keys) keeps its natives on a trusted import", () => {
+    // Bundles exported before the okf_*_raw keys existed carried the
+    // page's native status / sources / generated in place. Reading ABSENT
+    // raw keys as "the field never had a value" deleted exactly those
+    // natives, so a legacy bundle's trusted round-trip lost every page's
+    // status, quarantine included. A zero-raw-key page must import
+    // untouched; only a raw-carrying page gets the restore.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-dest-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      const manifest = {
+        schema: OKF_SCHEMA_VERSION,
+        producer: OKF_PRODUCER,
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Legacy",
+        log_days: 0,
+        pages: [
+          {
+            id: "Topic",
+            path: "Notes/Topic.md",
+            class: "concept",
+            bundle_path: "concepts/Topic.md",
+            kind: "note",
+            citations: [],
+            status: "deprecated",
+            sources: [],
+            aliases: [],
+            freshness: null,
+            foreign_type: null,
+            producer_meta: {},
+          },
+        ],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      writeFileSync(
+        join(dir, "concepts/Topic.md"),
+        "---\ntitle: Topic\nstatus: quarantine\nsources: [https://example.com/orig]\ngenerated: by-hand\n---\nBody.\n",
+        "utf8",
+      );
+      const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(false);
+      const result = importOkfBundle(dest, parsed, { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Notes/Topic.md"), "utf8");
+      expect(landed).toContain("status: quarantine");
+      expect(landed).toContain('sources: ["https://example.com/orig"]');
+      expect(landed).toContain("generated: by-hand");
+      expect(landed).not.toContain("okf_status_raw");
+      expect(landed).toContain("Body.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
