@@ -512,7 +512,7 @@ describe("applyEntityMerge", () => {
       now: NOW,
     });
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
-    expect(plan.inbound_edges_retarged).toBe(1);
+    expect(plan.inbound_edges_retargeted).toBe(1);
     applyEntityMerge(
       vault,
       { keep: keepId, drop: dropId },
@@ -545,7 +545,7 @@ describe("applyEntityMerge", () => {
       now: NOW,
     });
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
-    expect(plan.inbound_edges_retarged).toBe(1);
+    expect(plan.inbound_edges_retargeted).toBe(1);
     applyEntityMerge(
       vault,
       { keep: keepId, drop: dropId },

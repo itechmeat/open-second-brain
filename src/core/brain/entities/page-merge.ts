@@ -124,7 +124,7 @@ export interface EntityMergePlan {
   /** Dropped-page relation edges unioned into the survivor's frontmatter. */
   readonly relations_absorbed: number;
   /** Other entities' edges retargeted from the dropped id to the survivor. */
-  readonly inbound_edges_retarged: number;
+  readonly inbound_edges_retargeted: number;
   /** Survivor edges pointing at the dropped id, removed as self-relations. */
   readonly cyclic_edges_removed: number;
 }
@@ -406,7 +406,7 @@ export function planEntityMerge(
     }
   }
   const cyclicRemoved = relationEdges(keepMeta).filter((e) => e.target === drop.id).length;
-  const inboundRetarged = index.entities.filter(
+  const inboundRetargeted = index.entities.filter(
     (entity) =>
       entity.id !== keep.id &&
       entity.id !== drop.id &&
@@ -427,7 +427,7 @@ export function planEntityMerge(
     aliases_merged: Object.freeze(aliasesMerged),
     body_folded: drop.body.trim().length > 0,
     relations_absorbed: relationsAbsorbed,
-    inbound_edges_retarged: inboundRetarged,
+    inbound_edges_retargeted: inboundRetargeted,
     cyclic_edges_removed: cyclicRemoved,
   });
 }
@@ -591,7 +591,7 @@ export function applyEntityMerge(
       alias_added: plan.alias_added ?? "",
       body_folded: String(plan.body_folded),
       relations_absorbed: String(plan.relations_absorbed),
-      inbound_edges_retarged: String(plan.inbound_edges_retarged),
+      inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
       plan_hash: verified,
       snapshot_run_id: gated.snapshot.runId,
     },
