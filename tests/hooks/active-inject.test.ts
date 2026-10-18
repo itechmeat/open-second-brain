@@ -635,7 +635,9 @@ describe("active-inject hook: tiered injection budgeting", () => {
     expect(injected).toContain("brain_context");
     expect(injected).not.toContain("Injection truncated");
     // The framed whole - header included - stays within the configured
-    // budget: the framing is charged, never stacked on top.
+    // budget: the framing is charged, never stacked on top. The header
+    // must actually be present, or the slice below reads as vacuous.
+    expect(injected.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY))).toBeGreaterThan(-1);
     const memory = injected.slice(injected.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY)));
     expect(memory.length).toBeLessThanOrEqual(1000);
     // Exactly the top three ranked bullets survive in each tiered section.
@@ -747,6 +749,9 @@ describe("active-inject hook: untrusted-source guard on the memory lanes", () =>
     writeActive(`---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n${body}\n`);
 
     const injected = await inject();
+    // The header must actually be present, or the slice below reads as
+    // vacuous (a vanished header slices from -1 and always fits).
+    expect(injected.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY))).toBeGreaterThan(-1);
     const memory = injected.slice(injected.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY)));
     expect(memory.length).toBeLessThanOrEqual(budget);
   });

@@ -204,10 +204,30 @@ describe("planEntityMerge", () => {
   });
 
   test("an empty drop body still merges when the survivor body anchors the pair", () => {
-    const { keepId, dropId } = seedPair();
+    // The survivor body anchors BOTH records of the pair ("ada lovelace"
+    // and "ada" both hit the guard's anchor rule) while the empty drop
+    // body anchors nothing: one-sided anchors are not the disjoint shape
+    // the guard blocks, and with nothing to fold the plan skips the fold.
+    const keep = upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      body: "Ada Lovelace and Ada are the same person.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop = upsertEntity(vault, {
+      category: "people",
+      name: "Ada",
+      body: "",
+      agent: "test-agent",
+      now: NOW,
+    });
     // Resolution by the OLD name after a successful merge resolves to the
-    // survivor, asserted in the apply tests; here only the plan guards run.
-    expect(() => planEntityMerge(vault, { keep: keepId, drop: dropId })).not.toThrow();
+    // survivor, asserted in the apply tests; here the plan guards run.
+    const plan = planEntityMerge(vault, { keep: keep.entity.id, drop: drop.entity.id });
+    expect(plan.keep_id).toBe(keep.entity.id);
+    expect(plan.drop_id).toBe(drop.entity.id);
+    expect(plan.body_folded).toBe(false);
   });
 
   test("guards: same id, missing subjects and category mismatch refuse by code", () => {
