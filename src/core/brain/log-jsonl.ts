@@ -56,14 +56,17 @@ export interface ReadLogDayResult {
    */
   readonly entryShardIds: ReadonlyArray<string>;
   /**
-   * The 0-based index each entry in {@link entries} occupies WITHIN ITS
-   * OWN SHARD FILE - the real file position, not the merge position -
-   * at the same index. The merge orders by (timestamp, shardId, line),
-   * so when a shard's timestamps go backwards (backfill, clock skew)
-   * its merge positions diverge from its file positions; a consumer
-   * that must name a durable position inside the shard file (the log
-   * catch-up watermark) reads this, because appends only ever extend a
-   * shard file and a file index never needs retraction.
+   * The 0-based index each entry in {@link entries} occupies among its
+   * own shard's PARSED entries, in file order - not the merge position,
+   * and not the physical file line: rows that fail to parse (reported
+   * as warnings) are uncounted, so a shard with skipped rows numbers
+   * its entries against a shorter prefix than the file really has. The
+   * merge orders by (timestamp, shardId, line), so when a shard's
+   * timestamps go backwards (backfill, clock skew) its merge positions
+   * diverge from these; a consumer that must name a durable position
+   * within one shard's read (the log catch-up watermark) reads this,
+   * because appends only ever extend a shard file and the parsed-entry
+   * index never needs retraction.
    *
    * A parallel array for the same reason {@link entryShardIds} is: the
    * shard-internal line belongs beside the shard id, and neither is a

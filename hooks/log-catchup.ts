@@ -221,14 +221,14 @@ async function main(): Promise<void> {
     // One walk over the log, oldest date first, starting at the oldest
     // date the cursor can still vouch about. `readLogDay` merges each
     // day's shards in (timestamp, shardId, line) order and also returns
-    // each entry's real index within its own shard file (`entryLines`),
-    // which is what both the filter and the watermark need: appends only
-    // ever extend a shard file, so the file index never needs
-    // retraction, while a merge-order count scrambles as soon as a
-    // shard's timestamps go backwards. The per-shard mark is therefore
-    // the MAXIMUM file index seen, not the last merge position. The
-    // watermark rides the last entry seen, so a trailing date with no
-    // entries cannot orphan the write.
+    // each entry's index within its own shard's parsed entries
+    // (`entryLines`), which is what both the filter and the watermark
+    // need: appends only ever extend a shard file, so the parsed-entry
+    // index never needs retraction, while a merge-order count scrambles
+    // as soon as a shard's timestamps go backwards. The per-shard mark
+    // is therefore the MAXIMUM parsed-entry index seen, not the last
+    // merge position. The watermark rides the last entry seen, so a
+    // trailing date with no entries cannot orphan the write.
     //
     // The skip decision is per (date, shard), not per date: a shard that
     // syncs in late for an earlier date (the normal cross-device case)
