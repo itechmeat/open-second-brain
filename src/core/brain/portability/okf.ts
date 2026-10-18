@@ -816,16 +816,16 @@ function indexOkfVersion(dir: string): string | null {
  * Read an OKF bundle directory: parse `okf.json`, validate the schema,
  * then parse each manifest-listed page file. Two bundle generations are
  * accepted: a manifest carrying the Open Second Brain dialect
- * `schema: "1"`, and a bundle whose bundle-root `index.md` declares
- * `okf_version: "0.2"` (the OKF v0.2 marker this export writes beside
- * the dialect schema). Dual acceptance is what keeps sealed
- * knowledge-pack halves exported before v0.2 emission importable, and
- * what lets a v0.2-declared half whose manifest names a non-dialect
- * schema through the same gate. Everything else is refused by name. A
- * page whose file is missing or unreadable is skipped (the manifest is
- * the source of truth for what *should* be there; a partial bundle
- * still imports what it has). An unsupported schema or absent manifest
- * throws {@link OkfError}.
+ * `schema: "1"`, and a bundle that declares NO schema at all while its
+ * bundle-root `index.md` declares `okf_version: "0.2"` (the OKF v0.2
+ * marker this export writes beside the dialect schema). A PRESENT
+ * non-dialect schema is refused whatever the index says: this export's
+ * own index always declares the version, so treating the declaration as
+ * sufficient on its own would admit every future dialect bump under v1
+ * assumptions. Everything else is refused by name. A page whose file is
+ * missing or unreadable is skipped (the manifest is the source of truth
+ * for what *should* be there; a partial bundle still imports what it
+ * has). An unsupported schema or absent manifest throws {@link OkfError}.
  */
 export function readOkfBundle(dir: string): ParsedOkfBundle {
   const manifestPath = join(dir, OKF_MANIFEST_FILENAME);
@@ -841,7 +841,22 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
   if (parsed === null || typeof parsed !== "object") {
     throw new OkfError("okf.json must be a JSON object");
   }
-  if (parsed.schema !== OKF_SCHEMA_VERSION && indexOkfVersion(dir) !== OKF_VERSION) {
+  if (parsed.schema === OKF_SCHEMA_VERSION) {
+    // The dialect path. Sealed knowledge-pack halves exported before
+    // v0.2 emission take it, so it never depends on an index file.
+  } else if (
+    (parsed.schema === undefined || parsed.schema === "") &&
+    indexOkfVersion(dir) === OKF_VERSION
+  ) {
+    // The version-declaration path: no manifest schema, and the bundle
+    // root says OKF v0.2. Version-level only - the gate never reads the
+    // producer.
+  } else if (parsed.schema === undefined || parsed.schema === "") {
+    throw new OkfError(
+      `unsupported OKF schema: no schema ${OKF_SCHEMA_VERSION} in ${OKF_MANIFEST_FILENAME} ` +
+        `and no okf_version ${OKF_VERSION} declaration in index.md`,
+    );
+  } else {
     throw new OkfError(
       `unsupported OKF schema: expected ${OKF_SCHEMA_VERSION}, got ${String(parsed.schema)}`,
     );

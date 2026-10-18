@@ -333,17 +333,22 @@ describe("v0.2 emission", () => {
 /**
  * OKF v0.2 import acceptance (t_ffdb4fac): the reader admits a bundle
  * whose manifest carries the Open Second Brain dialect `schema: "1"` OR
- * whose bundle-root index declares `okf_version: "0.2"`, preserves the
- * on-disk schema value instead of stamping its own constant, and still
- * refuses everything else by name. Dual acceptance is what keeps sealed
- * knowledge-pack halves (which carry no okf_version declaration from
- * before v0.2 emission) importable.
+ * one that declares NO manifest schema while its bundle-root index
+ * declares `okf_version: "0.2"`, preserves the on-disk schema value
+ * instead of stamping its own constant, and still refuses everything
+ * else by name. The index path is version-level only: the gate never
+ * reads the producer. A PRESENT non-dialect schema is refused even
+ * beside a v0.2 index - otherwise every future dialect bump would slip
+ * through under v1 assumptions, because this export's own index always
+ * declares okf_version.
  */
 describe("v0.2 import acceptance", () => {
   /**
    * Hand-build a bundle in `dir` in the singlePageBundle pattern, with
    * caller-chosen manifest `schema` and index `okf_version` markers
-   * (either may be null to omit the marker entirely).
+   * (either may be null to omit the marker entirely). The producer is a
+   * foreign one throughout: the gate is version-level, not producer-
+   * keyed, so every acceptance test doubles as the wrong-producer pin.
    */
   function bundleWithMarkers(
     dir: string,
@@ -383,16 +388,39 @@ describe("v0.2 import acceptance", () => {
     writeFileSync(join(dir, "concepts/Topic.md"), "---\ntitle: Topic\n---\nBody.\n", "utf8");
   }
 
-  test("a bundle whose index declares okf_version 0.2 is accepted beside the dialect schema", () => {
+  test("a schema-less bundle whose index declares okf_version 0.2 is accepted at the gate", () => {
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-v02-"));
     try {
-      bundleWithMarkers(dir, "0.2", "0.2");
+      bundleWithMarkers(dir, null, "0.2");
       const parsed = readOkfBundle(dir);
       expect(parsed.foreign).toBe(true);
       expect(parsed.pages.length).toBe(1);
       // The parsed manifest reports the ON-DISK declaration, not a
-      // hardcoded constant.
-      expect(parsed.manifest.schema).toBe("0.2");
+      // hardcoded constant: no schema was declared, so the reader shows "".
+      expect(parsed.manifest.schema).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a present non-dialect schema is refused even beside a v0.2 index", () => {
+    // The index always declares okf_version on this export's own bundles,
+    // so an OR that treats the declaration as sufficient would accept a
+    // future dialect schema "2" under v1 assumptions.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-v02-refuse-"));
+    try {
+      bundleWithMarkers(dir, "2", "0.2");
+      expect(() => readOkfBundle(dir)).toThrow("unsupported OKF schema: expected 1, got 2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a schema-less bundle whose index declares no version is refused by name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-v02-none-"));
+    try {
+      bundleWithMarkers(dir, null, null);
+      expect(() => readOkfBundle(dir)).toThrow("unsupported OKF schema");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -440,7 +468,7 @@ describe("v0.2 import acceptance", () => {
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-pack-dest-"));
     try {
       const okfManifest = {
-        schema: "0.2",
+        schema: "",
         producer: OKF_PRODUCER,
         generated_at: "2026-06-01T00:00:00Z",
         vault_basename: "Packed",
