@@ -189,29 +189,27 @@ async function main(): Promise<void> {
 
     // One walk over the log, oldest date first, starting at the cursor
     // date when one exists. `readLogDay` merges each day's shards in
-    // (timestamp, shardId, line) order; counting entries per shard as
-    // they stream through reproduces each entry's shard-internal line
-    // index, which is what both the filter and the watermark need. The
-    // watermark snapshot rides the last entry seen, so a trailing
-    // date with no entries cannot orphan the write.
+    // (timestamp, shardId, line) order and also returns each entry's
+    // real index within its own shard file (`entryLines`), which is
+    // what both the filter and the watermark need: appends only ever
+    // extend a shard file, so the file index never needs retraction,
+    // while a merge-order count scrambles as soon as a shard's
+    // timestamps go backwards. The per-shard mark is therefore the
+    // MAXIMUM file index seen, not the last merge position. The
+    // watermark snapshot rides the last entry seen, so a trailing date
+    // with no entries cannot orphan the write.
     const collected: Array<{ entry: BrainLogEntry }> = [];
     let lastSeen: { position: CatchupPosition; marks: Record<string, number> } | null = null;
     let shardMarks: Record<string, number> = {};
-    let lineCounts: Record<string, number> = {};
     for (const date of listLogDates(vault)) {
       if (cursor !== null && date < cursor.date) continue;
-      const { entries, entryShardIds } = readLogDay(vault, date);
+      const { entries, entryShardIds, entryLines } = readLogDay(vault, date);
       shardMarks = {};
-      lineCounts = {};
       for (let i = 0; i < entries.length; i++) {
         const shardId = entryShardIds[i] ?? "";
-        // The running per-shard count IS the current entry's 0-based
-        // index; the watermark marks keep the last-seen index, not the
-        // count - the filter admits an entry strictly past the mark, so
-        // storing the count would skip the very next appended line.
-        const line = lineCounts[shardId] ?? 0;
-        lineCounts[shardId] = line + 1;
-        shardMarks[shardId] = line;
+        const line = entryLines[i] ?? i;
+        const mark = shardMarks[shardId];
+        shardMarks[shardId] = mark === undefined || line > mark ? line : mark;
         const entry = entries[i]!;
         const position: CatchupPosition = {
           date,

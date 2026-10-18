@@ -93,6 +93,25 @@ describe("readLogDay shard merge", () => {
     expect(out.entries.map((e) => e.body["text"])).toEqual(["first", "second"]);
   });
 
+  test("entryLines names each entry's real index within its own shard file", () => {
+    // Backwards timestamps: the merge order (ts, shardId, line) differs
+    // from the file order, so the exposed index must be the FILE
+    // position - the thing appends extend - not the merge position.
+    writeShard("2026-06-01.mac1234.jsonl", [
+      jsonlRow("2026-06-01T10:00:05Z", "late-ts-first-file-line"),
+      jsonlRow("2026-06-01T10:00:01Z", "backfilled-second-file-line"),
+    ]);
+    writeShard("2026-06-01.vps5678.jsonl", [jsonlRow("2026-06-01T10:00:03Z", "vps")]);
+    const out = readLogDay(vault, "2026-06-01");
+    expect(out.entries.map((e) => e.body["text"])).toEqual([
+      "backfilled-second-file-line",
+      "vps",
+      "late-ts-first-file-line",
+    ]);
+    expect(out.entryShardIds).toEqual(["mac1234", "vps5678", "mac1234"]);
+    expect(out.entryLines).toEqual([1, 0, 0]);
+  });
+
   test("a malformed shard row surfaces as a warning without dropping other shards", () => {
     writeShard("2026-06-01.mac1234.jsonl", ["{not json"]);
     writeShard("2026-06-01.vps5678.jsonl", [jsonlRow("2026-06-01T10:00:00Z", "good")]);

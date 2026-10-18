@@ -54,6 +54,21 @@ export interface ReadLogDayResult {
    * in the payload.
    */
   readonly entryShardIds: ReadonlyArray<string>;
+  /**
+   * The 0-based index each entry in {@link entries} occupies WITHIN ITS
+   * OWN SHARD FILE - the real file position, not the merge position -
+   * at the same index. The merge orders by (timestamp, shardId, line),
+   * so when a shard's timestamps go backwards (backfill, clock skew)
+   * its merge positions diverge from its file positions; a consumer
+   * that must name a durable position inside the shard file (the log
+   * catch-up watermark) reads this, because appends only ever extend a
+   * shard file and a file index never needs retraction.
+   *
+   * A parallel array for the same reason {@link entryShardIds} is: the
+   * shard-internal line belongs beside the shard id, and neither is a
+   * field every `BrainLogEntry` producer can fill.
+   */
+  readonly entryLines: ReadonlyArray<number>;
   readonly source: "jsonl" | "markdown-fallback";
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
 }
@@ -184,7 +199,7 @@ export function readLogDay(
   const validDate = validateIsoDate(date);
   const shards = (preloadedShards ?? listLogShardFiles(vault)).filter((f) => f.date === validDate);
   if (shards.length === 0) {
-    return { entries: [], entryShardIds: [], source: "jsonl", warnings: [] };
+    return { entries: [], entryShardIds: [], entryLines: [], source: "jsonl", warnings: [] };
   }
 
   // Group by shard id; per shard prefer .jsonl over .md.
@@ -216,15 +231,19 @@ export function readLogDay(
   }
 
   // The merge orders by (timestamp, shard id, line) and returns values
-  // only, so the shard id rides inside the value to come out beside its
-  // entry at the same index.
+  // only, so the shard id and the shard-internal file line ride inside
+  // the value to come out beside their entry at the same index.
   const merged = mergeShardedRows(
-    tagged.map((row) => ({ ...row, value: { entry: row.value, shardId: row.shardId } })),
+    tagged.map((row) => ({
+      ...row,
+      value: { entry: row.value, shardId: row.shardId, line: row.line },
+    })),
     (row) => row.entry.timestamp,
   );
   return {
     entries: merged.map((row) => row.entry),
     entryShardIds: merged.map((row) => row.shardId),
+    entryLines: merged.map((row) => row.line),
     source: usedMarkdown ? "markdown-fallback" : "jsonl",
     warnings,
   };
