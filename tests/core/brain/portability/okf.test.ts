@@ -440,6 +440,47 @@ describe("v0.2 import acceptance", () => {
     }
   });
 
+  /**
+   * Rewrite the bundle's manifest so `schema` is an EXPLICIT JSON null -
+   * a writer that nulls the field declares no schema just as surely as
+   * one that omits it, and the gate must not read null as a PRESENT
+   * wrong schema.
+   */
+  function withExplicitNullSchema(dir: string): void {
+    const manifestPath = join(dir, "okf.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+    manifest["schema"] = null;
+    writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+  }
+
+  test("a null manifest schema beside a v0.2 index is treated as absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-nullschema-"));
+    try {
+      bundleWithMarkers(dir, null, "0.2");
+      withExplicitNullSchema(dir);
+      const parsed = readOkfBundle(dir);
+      expect(parsed.pages.length).toBe(1);
+      // The on-disk declaration is still what the parsed manifest shows:
+      // null is no string schema, so the reader reports "".
+      expect(parsed.manifest.schema).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a null schema with no index declaration is refused naming the expectation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-nullschema-none-"));
+    try {
+      bundleWithMarkers(dir, null, null);
+      withExplicitNullSchema(dir);
+      expect(() => readOkfBundle(dir)).toThrow(
+        "unsupported OKF schema: no schema 1 in okf.json and no okf_version 0.2 declaration in index.md",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a trusted own-producer round-trip restores native frontmatter, not the derived block", () => {
     // The v0.2 derived keys are recomputed on every export, and the
     // closed status enum cannot name this system's own statuses. The

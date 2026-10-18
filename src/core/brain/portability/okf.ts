@@ -885,17 +885,20 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
   if (parsed === null || typeof parsed !== "object") {
     throw new OkfError("okf.json must be a JSON object");
   }
+  // A null schema declares nothing, exactly like an absent or empty one:
+  // a writer that nulls the field is not naming a schema, and falling
+  // through to the by-name refusal would report "expected 1, got null"
+  // even beside a v0.2 index declaration.
+  const schemaAbsent =
+    parsed.schema === undefined || parsed.schema === null || parsed.schema === "";
   if (parsed.schema === OKF_SCHEMA_VERSION) {
     // The dialect path. Sealed knowledge-pack halves exported before
     // v0.2 emission take it, so it never depends on an index file.
-  } else if (
-    (parsed.schema === undefined || parsed.schema === "") &&
-    indexOkfVersion(dir) === OKF_VERSION
-  ) {
+  } else if (schemaAbsent && indexOkfVersion(dir) === OKF_VERSION) {
     // The version-declaration path: no manifest schema, and the bundle
     // root says OKF v0.2. Version-level only - the gate never reads the
     // producer.
-  } else if (parsed.schema === undefined || parsed.schema === "") {
+  } else if (schemaAbsent) {
     throw new OkfError(
       `unsupported OKF schema: no schema ${OKF_SCHEMA_VERSION} in ${OKF_MANIFEST_FILENAME} ` +
         `and no okf_version ${OKF_VERSION} declaration in index.md`,
