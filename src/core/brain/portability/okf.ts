@@ -535,7 +535,11 @@ function sourceResolver(pages: ReadonlyArray<OkfPage>): (citation: string) => Ok
       const direct = byPath.get(citation) ?? byPath.get(`${citation}.md`);
       return direct === undefined ? null : { resource: direct.bundle_path, id: direct.id };
     }
-    const stems = byStem.get(citation);
+    // The stem map keys on stems, but a citation may keep its extension
+    // (`[[Dup.md]]` names the same page `[[Dup]]` does), so a direct miss
+    // falls back to stem(citation). Exact-unique either way: the
+    // colliding-basename case still drops rather than guess.
+    const stems = byStem.get(citation) ?? byStem.get(stem(citation));
     if (stems === undefined || stems.length !== 1) return null;
     return { resource: stems[0]!.bundle_path, id: stems[0]!.id };
   };

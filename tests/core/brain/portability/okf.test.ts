@@ -257,6 +257,29 @@ describe("v0.2 emission", () => {
     expect(citer).not.toContain("resource:");
   });
 
+  test("an extension-bearing basename citation resolves through the stem map", () => {
+    // `[[Dup.md]]` names the same page `[[Dup]]` does: the citation keeps
+    // its extension while the stem map keys on stems, so the resolver
+    // falls back to stem(citation) instead of dropping a resolvable page.
+    note("Notes/Dup.md", "---\ntitle: Dup\n---\nleaf.\n");
+    note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[Dup.md]].\n");
+    const bundle = buildOkfBundle(vault);
+    const citer = fileOf(bundle.files, "concepts/Citer.md");
+    expect(citer).toContain("- {resource: concepts/Dup.md, id: Dup}");
+    const entry = bundle.manifest.pages.find((p) => p.path === "Notes/Citer.md");
+    expect(entry?.sources).toEqual([{ resource: "concepts/Dup.md", id: "Dup" }]);
+  });
+
+  test("an extension-bearing ambiguous basename citation is still dropped", () => {
+    note("A/Dup.md", "---\ntitle: one\n---\nx\n");
+    note("B/Dup.md", "---\ntitle: two\n---\ny\n");
+    note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[Dup.md]].\n");
+    const bundle = buildOkfBundle(vault);
+    const citer = fileOf(bundle.files, "concepts/Citer.md");
+    expect(citer).not.toContain("sources:");
+    expect(citer).not.toContain("resource:");
+  });
+
   test("lifecycle maps conservatively onto draft | stable | deprecated", () => {
     note("Notes/Done.md", "---\ntitle: Done\nstatus: done\n---\nx\n");
     note("Notes/Archived.md", "---\ntitle: Archived\nstatus: archived\n---\nx\n");
