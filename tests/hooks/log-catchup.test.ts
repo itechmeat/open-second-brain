@@ -197,11 +197,15 @@ describe("log-catchup hook (SessionStart)", () => {
   });
 
   test("a same-second line in a different shard is not skipped", async () => {
-    seed("agent-a", "first device line");
+    // Run 1's cursor must sit on the HIGHER-sorting shard for this test
+    // to exercise the interleaving: the dev-z line parks the cursor at
+    // shard "dev-z", then run 2's dev-a line lands at the same second,
+    // so the merge order places it BEFORE the cursor tuple. A bare
+    // (date, shardId, line) comparison would call it already seen and
+    // skip it; only the per-shard marks - "dev-a" has no mark yet -
+    // admit it.
+    seed("agent-a", "first device line", { deviceId: "dev-z" });
     expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
-    // Another device's shard lands a line at the SAME second after B's
-    // cursor was written. The per-shard high-water marks must admit it:
-    // the merge order interleaves shards, so a bare tuple would drop it.
     seed("agent-a", "same-second line from another shard", { deviceId: "dev-a" });
     const r = await runHook(SESSION_START, flagOn("agent-b"));
     expect(r.exit).toBe(0);
