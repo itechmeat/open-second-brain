@@ -917,7 +917,8 @@ export const VERB_HELP: Record<string, string> = {
     "                                                     preview echoes the plan hash; apply\n" +
     "                                                     verifies it before any write; a TTY gets\n" +
     "                                                     a y/N prompt, agents pass --force\n" +
-    "                                                     (--json needs it)\n" +
+    "                                                     (--json needs it); --force also\n" +
+    "                                                     bypasses the text-level merge guard\n" +
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
     "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
     "malformed nodes and their edges. merge folds a duplicate page into the survivor: the\n" +

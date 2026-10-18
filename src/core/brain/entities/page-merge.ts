@@ -127,6 +127,15 @@ export interface EntityMergePlan {
   readonly inbound_edges_retargeted: number;
   /** Survivor edges pointing at the dropped id, removed as self-relations. */
   readonly cyclic_edges_removed: number;
+  /**
+   * Whether this plan was built with the text-level merge guard bypassed
+   * (`--force`). Part of the hashed plan on purpose: the bypass is a fact
+   * about the merge the caller consented to, so a pair previewed under the
+   * guard and applied with `--force` re-plans to a different hash and
+   * refuses as stale, forcing a re-preview that is honest about the bypass
+   * instead of widening it silently under a hash taken without it.
+   */
+  readonly guard_bypassed: boolean;
 }
 
 /** What a verified, applied merge did, and where the recovery point is. */
@@ -428,6 +437,7 @@ export function planEntityMerge(
     relations_absorbed: relationsAbsorbed,
     inbound_edges_retargeted: inboundRetargeted,
     cyclic_edges_removed: cyclicRemoved,
+    guard_bypassed: opts.bypassEntityGuard === true,
   });
 }
 

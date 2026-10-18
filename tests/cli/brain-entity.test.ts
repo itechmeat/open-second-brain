@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { HYGIENE_AUDIT_DIR } from "../../src/core/brain/audit-dirs.ts";
+import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -373,8 +374,11 @@ describe("o2b brain entity merge", () => {
 
   test("apply with the echoed hash and --force merges without prompting", async () => {
     const { keepId, dropId, dropPath } = await seedMergePair();
+    // The preview runs at the same --force stance as the apply: the plan
+    // hash seals whether the guard ran, so a hash is only spendable at the
+    // stance it was previewed in.
     const preview = await runCli(
-      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run", "--json"],
       { env: env() },
     );
     const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
@@ -417,7 +421,7 @@ describe("o2b brain entity merge", () => {
     // No --agent at all: the config's agent_name attributes the merge.
     const { keepId, dropId } = await seedMergePair();
     const preview = await runCli(
-      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run", "--json"],
       { env: env() },
     );
     const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
@@ -444,6 +448,7 @@ describe("o2b brain entity merge", () => {
         "merge",
         "ent-people-grace-hopper",
         "ent-people-grace",
+        "--force",
         "--dry-run",
         "--json",
       ],
@@ -537,7 +542,7 @@ describe("o2b brain entity merge", () => {
   test("an unexpected failure answers a JSON caller with structured internal-error", async () => {
     const { keepId, dropId } = await seedMergePair();
     const preview = await runCli(
-      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run", "--json"],
       { env: env() },
     );
     const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
@@ -612,6 +617,72 @@ describe("o2b brain entity merge", () => {
     );
     expect(out.returncode).toBe(0);
     expect(out.stdout).toContain(`--vault '${spacedVault}'`);
+  });
+
+  test("a guard-on preview refuses an apply that passes --force, naming the difference", async () => {
+    // The plan hash seals whether the text-level merge guard ran, so a
+    // hash previewed under the guard is not spendable at a --force apply:
+    // the caller must re-preview honestly at the stance it will apply in,
+    // instead of widening the bypass silently under a previewed hash.
+    const { keepId, dropId, dropPath } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const payload = JSON.parse(preview.stdout) as {
+      plan_hash: string;
+      plan: { guard_bypassed: boolean };
+    };
+    expect(payload.plan.guard_bypassed).toBe(false);
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", payload.plan_hash],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("hash-mismatch");
+    // The refusal names the difference: the guard stance the live plan ran with.
+    expect(out.stderr).toContain("guard_bypassed: true");
+    expect(existsSync(dropPath)).toBe(true);
+  });
+
+  test("the echoed apply command carries --force exactly when the preview ran with it", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const plain = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
+      env: env(),
+    });
+    expect(plain.returncode).toBe(0);
+    const plainApply = plain.stdout.split("\n").find((l) => l.startsWith("  apply: "))!;
+    expect(plainApply).toContain("--expect-hash ");
+    expect(plainApply).not.toContain("--force");
+
+    const forced = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run"],
+      { env: env() },
+    );
+    expect(forced.returncode).toBe(0);
+    const forcedApply = forced.stdout.split("\n").find((l) => l.startsWith("  apply: "))!;
+    expect(forcedApply.endsWith(" --force")).toBe(true);
+  });
+
+  test("a --force preview states that it bypasses the text-level merge guard", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const forced = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run"],
+      { env: env() },
+    );
+    expect(forced.returncode).toBe(0);
+    expect(forced.stdout).toContain("text-level merge guard");
+    expect(forced.stdout).toContain("bypass");
+    // The guarded stance is stated only when it is the truth.
+    const plain = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
+      env: env(),
+    });
+    expect(plain.stdout).not.toContain("bypass");
+  });
+
+  test("the entity help states that --force bypasses the text-level merge guard", () => {
+    expect(VERB_HELP.entity).toContain("--force");
+    expect(VERB_HELP.entity).toContain("bypasses the text-level merge guard");
   });
 
   test("a guard-tripping pair merges end-to-end under --force; the hash gate still binds", async () => {

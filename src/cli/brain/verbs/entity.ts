@@ -415,6 +415,11 @@ function mergePlanLines(plan: EntityMergePlan, hash: string, applyCommand: strin
     `  body: ${plan.body_folded ? "folded into the survivor" : "archived (nothing to fold)"}`,
     `  relations absorbed: ${plan.relations_absorbed}; inbound edges retargeted: ` +
       `${plan.inbound_edges_retargeted}; cyclic edges removed: ${plan.cyclic_edges_removed}`,
+    // The bypass is a fact about this plan, stated where the consent is
+    // given - never left to be inferred from a flag in the echo.
+    ...(plan.guard_bypassed
+      ? ["  guard: --force bypasses the text-level merge guard for this merge"]
+      : []),
     `  plan-hash: ${hash}`,
     `  apply: ${applyCommand}`,
   ];
@@ -558,7 +563,9 @@ async function runEntityMerge(
       new EntityMergeError(
         "hash-mismatch",
         `--expect-hash ${expectHash} does not describe this vault's merge plan any more ` +
-          `(${hash}); re-run the preview`,
+          `(${hash}); the plan hash also seals whether the text-level merge guard ran ` +
+          `(guard_bypassed: ${plan.guard_bypassed}), so a preview taken with a different ` +
+          "--force stance hashes differently - re-run the preview exactly as you will apply",
       ),
       json,
     );

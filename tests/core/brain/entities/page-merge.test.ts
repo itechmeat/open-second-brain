@@ -613,6 +613,40 @@ describe("applyEntityMerge", () => {
     expect(vaultFingerprint(vault)).toBe(before);
   });
 
+  test("the plan records whether the guard ran, and the hash seals it", () => {
+    const { keepId, dropId } = seedPair();
+    const guarded = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    expect(guarded.guard_bypassed).toBe(false);
+    const bypassed = planEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { bypassEntityGuard: true },
+    );
+    expect(bypassed.guard_bypassed).toBe(true);
+    // The bypass is part of the hashed plan: the same pair previewed under
+    // the guard and re-planned with it bypassed hashes differently, so the
+    // previewed hash is only spendable at the stance it was taken in.
+    expect(entityMergePlanHash(guarded)).not.toBe(entityMergePlanHash(bypassed));
+    // A hash previewed with the guard ON does not apply with it OFF (here:
+    // the bypassed re-plan) - the apply refuses as stale before any write.
+    const before = vaultFingerprint(vault);
+    expect(
+      codeOf(() =>
+        applyEntityMerge(
+          vault,
+          { keep: keepId, drop: dropId },
+          {
+            expectHash: entityMergePlanHash(guarded),
+            bypassEntityGuard: true,
+            now: NOW,
+            agent: "test-agent",
+          },
+        ),
+      ),
+    ).toBe("hash-mismatch");
+    expect(vaultFingerprint(vault)).toBe(before);
+  });
+
   test("the plan hash seals page content: a post-preview body edit refuses the apply", () => {
     const { keepId, dropId } = seedPair();
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
