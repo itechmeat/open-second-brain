@@ -233,6 +233,20 @@ describe("planEntityMerge", () => {
     ).toBe("quarantine-record");
   });
 
+  test("a drop page listing its own name as an alias still merges", () => {
+    const { keepId, dropId } = seedPair();
+    // `upsertEntity` refuses a self-name alias, but a hand edit or an older
+    // build can land one: the dropped page then holds its own name in the
+    // alias map, and the claimed-alias check must not read that as a third
+    // party's claim on the merge's own subject.
+    const drop = getEntity(vault, { query: "Ada" })!;
+    const [meta, body] = parseFrontmatter(drop.path);
+    writeFrontmatterAtomic(drop.path, { ...meta, aliases: ["Ada"] }, body, { overwrite: true });
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    expect(plan.alias_added).toBe("Ada");
+  });
+
   test("a guarded pair plans only through the explicit bypass option", () => {
     const { keepId, dropId } = seedGuardedPair();
     expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(

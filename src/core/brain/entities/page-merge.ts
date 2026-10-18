@@ -313,7 +313,10 @@ export function planEntityMerge(
   const aliasAdded = survivorAnswers ? null : drop.name;
   if (aliasAdded !== null) {
     const aliasHolder = index.byAlias.get(dropNormalized);
-    if (aliasHolder !== undefined && aliasHolder.id !== keep.id) {
+    // Keep and drop are both exempt: keep's claim folds into the merge,
+    // and a drop that lists its own name as an alias claims itself, not
+    // the alias of some third record.
+    if (aliasHolder !== undefined && aliasHolder.id !== keep.id && aliasHolder.id !== drop.id) {
       throw new EntityMergeError(
         "alias-claimed",
         `alias ${JSON.stringify(drop.name)} is already claimed by ${aliasHolder.id} ` +
