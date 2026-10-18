@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { IS_WINDOWS } from "../helpers/platform.ts";
+
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { HYGIENE_AUDIT_DIR } from "../../src/core/brain/audit-dirs.ts";
 import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
@@ -620,46 +622,53 @@ describe("o2b brain entity merge", () => {
     expect(out.stdout).toContain(`--vault '${spacedVault}'`);
   });
 
-  test("the echoed apply command round-trips a vault path a shell would mangle", async () => {
-    // Entity ids echo bare, so the hostile characters ride the --vault
-    // flag: a synced copy whose directory name carries a bang, spaces and
-    // both quote kinds. Pasting the echo back must resolve to THAT
-    // directory, which the parse side of the round-trip checks word by
-    // word against the original path.
-    const hostileVault = join(tmp, `synced! v'ault "x"`);
-    const hostileConfig = join(tmp, "hostile.yaml");
-    writeFileSync(hostileConfig, `vault: ${hostileVault}\nagent_name: test-agent\n`);
-    bootstrapBrain(hostileVault, { configPath: hostileConfig });
-    const hostileEnv = () => ({ OPEN_SECOND_BRAIN_CONFIG: hostileConfig });
-    const keep = await runCli(["brain", "entity", "set", "people", "Ada Lovelace"], {
-      env: hostileEnv(),
-    });
-    expect(keep.returncode).toBe(0);
-    const drop = await runCli(["brain", "entity", "set", "people", "Ada"], { env: hostileEnv() });
-    expect(drop.returncode).toBe(0);
-    const out = await runCli(
-      [
-        "brain",
-        "entity",
-        "merge",
-        "ent-people-ada-lovelace",
-        "ent-people-ada",
-        "--dry-run",
-        "--vault",
-        hostileVault,
-      ],
-      { env: hostileEnv() },
-    );
-    expect(out.returncode).toBe(0);
-    const apply = out.stdout.split("\n").find((l) => l.startsWith("  apply: "))!;
-    const words = splitPosixShellWords(apply.slice("  apply: ".length));
-    // o2b brain entity merge <keep> <drop> --vault <vault> --expect-hash <hash>
-    expect(words).toHaveLength(10);
-    expect(words[4]).toBe("ent-people-ada-lovelace");
-    expect(words[5]).toBe("ent-people-ada");
-    expect(words[7]).toBe(hostileVault);
-    expect(words[9]).toMatch(/^[0-9a-f]{64}$/);
-  });
+  // The paste-back echo is a POSIX-shell contract, and this scenario needs
+  // a double quote inside a directory name, which no Windows file system
+  // allows: the hostile vault cannot exist there, so there is no Windows
+  // case to run.
+  test.skipIf(IS_WINDOWS)(
+    "the echoed apply command round-trips a vault path a shell would mangle",
+    async () => {
+      // Entity ids echo bare, so the hostile characters ride the --vault
+      // flag: a synced copy whose directory name carries a bang, spaces and
+      // both quote kinds. Pasting the echo back must resolve to THAT
+      // directory, which the parse side of the round-trip checks word by
+      // word against the original path.
+      const hostileVault = join(tmp, `synced! v'ault "x"`);
+      const hostileConfig = join(tmp, "hostile.yaml");
+      writeFileSync(hostileConfig, `vault: ${hostileVault}\nagent_name: test-agent\n`);
+      bootstrapBrain(hostileVault, { configPath: hostileConfig });
+      const hostileEnv = () => ({ OPEN_SECOND_BRAIN_CONFIG: hostileConfig });
+      const keep = await runCli(["brain", "entity", "set", "people", "Ada Lovelace"], {
+        env: hostileEnv(),
+      });
+      expect(keep.returncode).toBe(0);
+      const drop = await runCli(["brain", "entity", "set", "people", "Ada"], { env: hostileEnv() });
+      expect(drop.returncode).toBe(0);
+      const out = await runCli(
+        [
+          "brain",
+          "entity",
+          "merge",
+          "ent-people-ada-lovelace",
+          "ent-people-ada",
+          "--dry-run",
+          "--vault",
+          hostileVault,
+        ],
+        { env: hostileEnv() },
+      );
+      expect(out.returncode).toBe(0);
+      const apply = out.stdout.split("\n").find((l) => l.startsWith("  apply: "))!;
+      const words = splitPosixShellWords(apply.slice("  apply: ".length));
+      // o2b brain entity merge <keep> <drop> --vault <vault> --expect-hash <hash>
+      expect(words).toHaveLength(10);
+      expect(words[4]).toBe("ent-people-ada-lovelace");
+      expect(words[5]).toBe("ent-people-ada");
+      expect(words[7]).toBe(hostileVault);
+      expect(words[9]).toMatch(/^[0-9a-f]{64}$/);
+    },
+  );
 
   test("a clean pair previewed without --force applies with --force", async () => {
     // The standard agent flow: preview at the plain stance (the guard ran
