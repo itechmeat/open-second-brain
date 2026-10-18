@@ -29,7 +29,7 @@ import { HYGIENE_AUDIT_DIR } from "../../../../src/core/brain/audit-dirs.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { getEntity } from "../../../../src/core/brain/entities/registry.ts";
 import { normalizeRelationTarget } from "../../../../src/core/graph/frontmatter-relations.ts";
-import { parseFrontmatter } from "../../../../src/core/vault.ts";
+import { parseFrontmatter, writeFrontmatterAtomic } from "../../../../src/core/vault.ts";
 
 let vault: string;
 let configHome: string;
@@ -295,6 +295,30 @@ describe("applyEntityMerge", () => {
       ),
     ).toBe("hash-mismatch");
     expect(vaultFingerprint(vault)).toBe(before);
+  });
+
+  test("the plan hash seals page content: a post-preview body edit refuses the apply", () => {
+    const { keepId, dropId } = seedPair();
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    // The digests are part of the plan, so the echoed hash covers the bytes.
+    expect(plan.keep_digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(plan.drop_digest).toMatch(/^[0-9a-f]{64}$/);
+    const hash = entityMergePlanHash(plan);
+    // Rewrite the drop page's body AFTER the operator read the plan: the
+    // counts and booleans are unchanged, but the prose moved underneath.
+    const dropAbs = join(vault, plan.drop_path);
+    const [meta, body] = parseFrontmatter(dropAbs);
+    writeFrontmatterAtomic(dropAbs, meta, `${body.trimEnd()}\n\nUnreviewed late edit.\n`, {
+      overwrite: true,
+    });
+    __clearEntityIndexCache();
+    // A hash over ids and counts alone would still match; the sealed one
+    // must refuse before any write.
+    expect(
+      codeOf(() =>
+        applyEntityMerge(vault, { keep: keepId, drop: dropId }, { expectHash: hash, now: NOW }),
+      ),
+    ).toBe("hash-mismatch");
   });
 
   test("with the echoed hash it archives the old page, adds the alias and folds the body", () => {

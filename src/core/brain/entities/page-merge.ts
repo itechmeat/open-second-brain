@@ -27,7 +27,7 @@
  * Brain `merge` log event are appended after the bytes land.
  */
 
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
@@ -93,6 +93,15 @@ export interface EntityMergePlan {
   /** Vault-relative paths, so the plan is stable across synced machines. */
   readonly keep_path: string;
   readonly drop_path: string;
+  /**
+   * SHA-256 over each page file's current bytes, read at plan time. The
+   * ids and counts below describe the vault; these seal it: any edit to
+   * either page between the preview and the apply shifts the re-planned
+   * hash, and the apply refuses as stale instead of folding prose the
+   * operator never read.
+   */
+  readonly keep_digest: string;
+  readonly drop_digest: string;
   /**
    * The dropped page's display name, added to the survivor's aliases;
    * null when the survivor already answers to it (the duplicate-name
@@ -355,6 +364,8 @@ export function planEntityMerge(
     drop_name: drop.name,
     keep_path: vaultRelative(keep.path, vault),
     drop_path: vaultRelative(drop.path, vault),
+    keep_digest: sha256Hex(readFileSync(keep.path)),
+    drop_digest: sha256Hex(readFileSync(drop.path)),
     alias_added: aliasAdded,
     body_folded: drop.body.trim().length > 0,
     relations_absorbed: relationsAbsorbed,
