@@ -27,7 +27,7 @@ import {
   planNoteRevert,
   type NoteRevertSelector,
 } from "../../core/brain/notes/revert.ts";
-import { listNoteWrites } from "../../core/brain/notes/write-log.ts";
+import { listNoteWrites, isLegacyPairDevice } from "../../core/brain/notes/write-log.ts";
 import { listWriteDestinations } from "../../core/brain/notes/write-destinations.ts";
 import { LogWindowBoundError } from "../../core/brain/notes/log-window.ts";
 import {
@@ -378,16 +378,16 @@ function ledgerRead<T>(tool: string, read: () => T): T {
 }
 
 /**
- * One device selector from an argument, shared by `brain_writes` and
- * `brain_write_destinations`. The empty (or whitespace-only) string is
- * the legacy un-sharded pair and IS a filter value, so it is read before
- * `coerceStr`, which treats emptiness as absence - both schemas promise
- * `device: ""` selects the un-sharded log, and a coercion-first reading
- * made that unreachable.
+ * One device selector from an argument, shared by `brain_writes`,
+ * `brain_write_destinations` and the `plan_revert` selector. The empty
+ * (or whitespace-only) string is the legacy un-sharded pair and IS a
+ * filter value, so it is read through the shared
+ * {@link isLegacyPairDevice} before `coerceStr`, which treats emptiness
+ * as absence - both schemas promise `device: ""` selects the un-sharded
+ * log, and a coercion-first reading made that unreachable.
  */
 function deviceArg(args: Record<string, unknown>): string | null {
-  const raw = args["device"];
-  if (typeof raw === "string" && raw.trim() === "") return "";
+  if (isLegacyPairDevice(args["device"])) return "";
   return coerceStr(args, "device", false);
 }
 
@@ -468,9 +468,14 @@ async function toolBrainWrites(
  * operator's terminal.
  */
 function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<string, unknown> {
+  // The device rides the same empty-aware selector as the list action:
+  // `device: ""` names the legacy un-sharded pair, and a selector that
+  // dropped the empty string beside a path would revert that path's
+  // writes from EVERY device while looking device-scoped.
+  const device = deviceArg(args);
   const selector: NoteRevertSelector = {
     ...selectorArg(args, "agent"),
-    ...selectorArg(args, "device"),
+    ...(device !== null ? { device } : {}),
     ...selectorArg(args, "path"),
     ...selectorArg(args, "since"),
     ...selectorArg(args, "until"),
@@ -587,10 +592,12 @@ async function toolBrainWriteDestinations(
   };
 }
 
-/** One selector field, present only when the caller supplied it. */
+/** One selector field, present only when the caller supplied it. The
+ *  device is NOT read here: it goes through {@link deviceArg}, whose
+ *  empty string is the legacy un-sharded pair, not absence. */
 function selectorArg(
   args: Record<string, unknown>,
-  key: "agent" | "device" | "path" | "since" | "until",
+  key: "agent" | "path" | "since" | "until",
 ): Partial<Record<typeof key, string>> {
   const value = coerceStr(args, key, false);
   return value === null ? {} : { [key]: value };

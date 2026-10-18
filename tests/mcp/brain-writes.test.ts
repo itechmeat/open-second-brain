@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { recordNoteWrite, storeBeforeImage } from "../../src/core/brain/notes/write-record.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
@@ -222,6 +224,67 @@ describe("brain_writes action plan_revert", () => {
   }
 
   const TARGET = "notes/A.md";
+
+  /** One raw note-write row appended to a named device's shard. */
+  function seedWriteOnDevice(opts: {
+    readonly timestamp: string;
+    readonly target: string;
+    readonly deviceId: string;
+  }): void {
+    appendLogEvent(
+      vault,
+      {
+        timestamp: opts.timestamp,
+        eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
+        agent: "claude",
+        body: {
+          write_id: `nw_${opts.timestamp.replace(/\D/g, "")}_${opts.deviceId}_${opts.target}`,
+          op: "update",
+          target: opts.target,
+          hash_before: "a".repeat(64),
+          hash_after: "b".repeat(64),
+          bytes_before: "10",
+          bytes_after: "20",
+          agent: "claude",
+        },
+      },
+      { deviceId: opts.deviceId },
+    );
+  }
+
+  test('device "" is a bounded selector scoped to the legacy un-sharded shard', async () => {
+    // coerceStr treats emptiness as absence, so the empty device used to
+    // fall out of the selector and the call was refused as unbounded -
+    // pushing a caller toward the path-only selector that reverts every
+    // device's writes. The empty string is a filter value, the same
+    // contract the list action already keeps. The call answers at the
+    // reach that filters nothing: the seeded rows name a file this test
+    // never wrote, and at the fail-closed default reach the entry is
+    // withheld rather than planned - this test pins the selector.
+    seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
+    seedWriteOnDevice({ timestamp: "2026-03-04T02:00:00Z", target: TARGET, deviceId: "laptop" });
+
+    const reply = (await tool("brain_writes").handler(
+      { ...ctx, reach: "local" },
+      { action: "plan_revert", device: "" },
+    )) as Record<string, unknown>;
+    expect(reply["selector"]).toEqual({ device: "" });
+    const entries = reply["entries"] as ReadonlyArray<{ writes: ReadonlyArray<string> }>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.writes).toHaveLength(1);
+  });
+
+  test('device "" beside a path keeps the device filter the path alone would drop', async () => {
+    seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
+    seedWriteOnDevice({ timestamp: "2026-03-04T02:00:00Z", target: TARGET, deviceId: "laptop" });
+
+    const reply = await call("brain_writes", {
+      action: "plan_revert",
+      device: "",
+      path: TARGET,
+    });
+    expect(reply["selector"]).toEqual({ device: "", path: TARGET });
+  });
 
   test("returns the entries and the digest, and no apply path", async () => {
     seedNote({ target: TARGET, bytes: "v0", agent: "seed", at: "2026-03-04T01:00:00Z" });

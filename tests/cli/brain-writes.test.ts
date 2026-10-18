@@ -241,6 +241,79 @@ describe("o2b brain writes revert", () => {
     seedNote({ target: TARGET, bytes: "v2", agent: "claude", at: "2026-03-04T03:00:00Z" });
   }
 
+  /** One raw note-write row appended to a named device's shard. */
+  function seedWriteOnDevice(opts: {
+    readonly timestamp: string;
+    readonly target: string;
+    readonly deviceId: string;
+  }): void {
+    appendLogEvent(
+      vault,
+      {
+        timestamp: opts.timestamp,
+        eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
+        agent: "claude",
+        body: {
+          write_id: `nw_${opts.timestamp.replace(/\D/g, "")}_${opts.deviceId}_${opts.target}`,
+          op: "update",
+          target: opts.target,
+          hash_before: "a".repeat(64),
+          hash_after: "b".repeat(64),
+          bytes_before: "10",
+          bytes_after: "20",
+          agent: "claude",
+        },
+      },
+      { deviceId: opts.deviceId },
+    );
+  }
+
+  test('revert --device "" is a bounded selector scoped to the legacy un-sharded pair', async () => {
+    // normalizeFlagString treats emptiness as absence, so the empty device
+    // used to fall out of the selector: a bare `--device ""` was refused
+    // as unbounded, and `--device "" --path X` silently reverted X's
+    // writes from EVERY device. The empty string is a filter value - the
+    // same contract `list` and `destinations` already keep.
+    seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
+    seedWriteOnDevice({ timestamp: "2026-03-04T02:00:00Z", target: TARGET, deviceId: "laptop" });
+
+    const res = await runCli(["brain", "writes", "revert", "--device", "", "--json"], {
+      env: env(),
+    });
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as {
+      selector: Record<string, unknown>;
+      entries: ReadonlyArray<{ writes: ReadonlyArray<string> }>;
+    };
+    expect(payload.selector).toEqual({ device: "" });
+    // Only the un-sharded write is selected; the laptop write on the same
+    // target is not part of this plan.
+    expect(payload.entries).toHaveLength(1);
+    expect(payload.entries[0]!.writes).toHaveLength(1);
+  });
+
+  test('revert --device "" beside --path keeps the device filter, not just the path', async () => {
+    seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
+    seedWriteOnDevice({ timestamp: "2026-03-04T02:00:00Z", target: TARGET, deviceId: "laptop" });
+
+    const res = await runCli(
+      ["brain", "writes", "revert", "--device", "", "--path", TARGET, "--json"],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as { selector: Record<string, unknown> };
+    expect(payload.selector).toEqual({ device: "", path: TARGET });
+  });
+
+  test("the echoed --apply invocation quotes an empty --device", async () => {
+    seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
+    const res = await runCli(["brain", "writes", "revert", "--device", ""], { env: env() });
+    expect(res.returncode).toBe(0);
+    // Unquoted, the echo renders `--device ` - an invocation that pastes
+    // back with the flag dropped and plans every device on re-read.
+    expect(res.stdout).toContain('revert --device ""');
+  });
+
   test("prints the plan, the digest and the exact --apply invocation", async () => {
     seedTwoUpdatesByA();
     const res = await runCli(["brain", "writes", "revert", "--agent", "claude"], { env: env() });

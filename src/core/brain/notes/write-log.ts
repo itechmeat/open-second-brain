@@ -66,7 +66,13 @@ export interface NoteWriteRecord {
 export interface ListNoteWritesFilter {
   /** Exact agent identity. */
   readonly agent?: string;
-  /** Exact device id; the empty string selects the legacy un-sharded pair. */
+  /**
+   * Exact device id; the empty string selects the legacy un-sharded pair.
+   * Read one raw flag or argument into this field through
+   * {@link isLegacyPairDevice}: a coercion that treats emptiness as
+   * absence turns the pair's name into "no filter", and a device-scoped
+   * read or revert silently widens to every device.
+   */
   readonly device?: string;
   /** Exact vault-relative target path. */
   readonly path?: string;
@@ -82,6 +88,19 @@ export interface ListNoteWritesResult {
   readonly writes: ReadonlyArray<NoteWriteRecord>;
   /** Every parse warning the underlying log days reported. */
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
+}
+
+/**
+ * Whether one raw `--device` / `device` argument names the legacy
+ * un-sharded pair: an empty or whitespace-only string. The pair's name
+ * IS a filter value ({@link ListNoteWritesFilter.device}), so every
+ * surface must test this before any coercion that treats emptiness as
+ * absence - the shared rule behind the CLI's `deviceSelector` and the
+ * MCP `deviceArg`, which the revert selector once skipped and silently
+ * reverted every device's writes.
+ */
+export function isLegacyPairDevice(raw: unknown): raw is string {
+  return typeof raw === "string" && raw.trim() === "";
 }
 
 /** Payload value as a string, or null when the key is absent or a list. */

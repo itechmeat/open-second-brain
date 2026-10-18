@@ -6,7 +6,11 @@ import {
   type NoteRevertEntry,
   type NoteRevertSelector,
 } from "../../../core/brain/notes/revert.ts";
-import { listNoteWrites, type NoteWriteRecord } from "../../../core/brain/notes/write-log.ts";
+import {
+  listNoteWrites,
+  isLegacyPairDevice,
+  type NoteWriteRecord,
+} from "../../../core/brain/notes/write-log.ts";
 import { LogWindowBoundError } from "../../../core/brain/notes/log-window.ts";
 import {
   listWriteDestinations,
@@ -104,16 +108,16 @@ function ledgerResult<T>(read: () => T): T | number {
 /**
  * One device selector from a flag. The empty (or whitespace-only) string
  * is the legacy un-sharded pair and IS a filter value, so it is read
- * before `normalizeFlagString`, which treats emptiness as absence - the
- * schema and the help text both promise `--device ""` selects the
- * un-sharded log, and a coercion-first reading made that unreachable.
+ * through the shared {@link isLegacyPairDevice} before
+ * `normalizeFlagString`, which treats emptiness as absence - the schema
+ * and the help text both promise `--device ""` selects the un-sharded
+ * log, and a coercion-first reading made that unreachable.
  */
 function deviceSelector(
   flags: Record<string, string | boolean | string[] | undefined>,
 ): string | null {
-  const raw = flags["device"];
-  if (typeof raw === "string" && raw.trim() === "") return "";
-  return normalizeFlagString(raw);
+  if (isLegacyPairDevice(flags["device"])) return "";
+  return normalizeFlagString(flags["device"]);
 }
 
 function listWrites(
@@ -349,9 +353,14 @@ function revert(
   flags: Record<string, string | boolean | string[] | undefined>,
   json: boolean,
 ): number {
+  // The device rides the same empty-aware selector as list and
+  // destinations: `--device ""` names the legacy un-sharded pair, and a
+  // selector that dropped the empty string beside `--path` would revert
+  // the path's writes from EVERY device while looking device-scoped.
+  const device = deviceSelector(flags);
   const selector: NoteRevertSelector = {
     ...selectorField(flags, "agent"),
-    ...selectorField(flags, "device"),
+    ...(device !== null ? { device } : {}),
     ...selectorField(flags, "path"),
     ...selectorField(flags, "since"),
     ...selectorField(flags, "until"),
@@ -377,16 +386,30 @@ function revert(
 /** One selector field, present only when the flag carried a value. */
 function selectorField(
   flags: Record<string, string | boolean | string[] | undefined>,
-  key: "agent" | "device" | "path" | "since" | "until",
+  key: "agent" | "path" | "since" | "until",
 ): Partial<Record<typeof key, string>> {
   const value = normalizeFlagString(flags[key]);
   return value === null ? {} : { [key]: value };
 }
 
+/**
+ * One shell-safe argv token. Bare when the shell cannot split, glob or
+ * expand it; double-quoted otherwise, so an empty `--device` pastes back
+ * as `--device ""` instead of `--device ` - an unquoted echo renders the
+ * flag with a dropped value, and a shell folds that to no flag at all,
+ * which here means a plan over every device.
+ */
+function shellToken(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
 /** The plan's own `--apply` line, so the digest never has to be retyped. */
 function applyInvocation(selector: NoteRevertSelector, digest: string): string {
   const parts = ["o2b", "brain", "writes", "revert"];
-  for (const [key, value] of Object.entries(selector)) parts.push(`--${key}`, String(value));
+  for (const [key, value] of Object.entries(selector)) {
+    parts.push(`--${key}`, shellToken(value));
+  }
   parts.push("--apply", digest);
   return parts.join(" ");
 }
