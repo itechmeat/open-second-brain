@@ -392,7 +392,9 @@ async function main(): Promise<void> {
     // cursor untouched, so nothing is silently dropped forever. A first
     // run's unscanned days are counted too and named in the header: a
     // day the window never parsed is not "shown later", it was not read
-    // at all, and the count is the only honest way to say so.
+    // at all, and the count is the only honest way to say so - including
+    // when the window held nothing foreign, where the count rides out on
+    // a header-only block of its own (the emit below).
     const newest = collected.slice(-LOG_CATCHUP_MAX_LINES);
     let olderCount = collected.length - newest.length;
     const now = new Date();
@@ -424,13 +426,27 @@ async function main(): Promise<void> {
       olderCount += 1;
       block = render(shown);
     }
-    // The emit happens only for a block with something in it; the
-    // watermark below decides separately.
+    // The emit happens only for a block with something in it - or, when
+    // nothing foreign was collected but older days went unscanned, for
+    // the header-only block that reports them: those days were not
+    // parsed and will not be revisited once the cursor parks below, so
+    // the count is the only report they ever get. The count cannot
+    // collide with the nothing-fit-the-cap case (that arises only when
+    // lines WERE collected, and holds the cursor instead), and the park
+    // below keeps the header-only report to exactly one emission.
     if (shown.length > 0) {
       const out = {
         hookSpecificOutput: {
           hookEventName,
           additionalContext: block,
+        },
+      };
+      process.stdout.write(JSON.stringify(out) + "\n");
+    } else if (collected.length === 0 && unscannedOlderDays > 0) {
+      const out = {
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: render([]),
         },
       };
       process.stdout.write(JSON.stringify(out) + "\n");

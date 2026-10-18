@@ -509,6 +509,31 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(emitted(second)).toBeNull();
   });
 
+  test("a first run with nothing foreign to show still reports the unscanned days", async () => {
+    // The unscanned-day count used to surface only inside a rendered
+    // block: a first run whose every window line is the reader's own
+    // collected nothing, emitted nothing, parked the cursor - and the
+    // older days were dropped forever, never reported. A header-only
+    // block carries the count instead, exactly once: the park below is
+    // what keeps the next session silent.
+    for (const d of ["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15"]) {
+      seed("agent-b", `self-authored old history from ${d}`, { timestamp: `${d}T09:00:00Z` });
+    }
+    seed("agent-b", "my own recent line", { timestamp: "2026-10-17T09:00:00Z" });
+
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("5 older day(s) not scanned");
+    expect(context).toContain("0 log line(s)");
+    expect(context).not.toContain("self-authored old history");
+    // One honest report, not a per-session nag: the cursor parked.
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toBeNull();
+  });
+
   test("a date evicted from the window is still skipped whole", async () => {
     // Six dates: the cursor keeps per-shard marks for the newest three
     // before its date, so 10-10 and 10-13 are evicted - and a brand-new
