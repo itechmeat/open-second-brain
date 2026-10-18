@@ -401,35 +401,59 @@ describe("v0.2 type emission", () => {
     }
   });
 
-  test("a plain page round-trips with the spec's derived type and without the rest of the block", () => {
-    // The bare okf_raw marker declares the old status/sources/generated
-    // set - it predates the type pair, so it never declared `type`: the
-    // derived type (the spec's one always-required key, honestly derived
-    // from the page's kind) lands as a native, while the closed-enum
-    // status and the re-translated sources still strip rather than
-    // materialize. Absent okf_type_raw beside the marker therefore means
-    // "the export derived this type" - never "delete a native type": a
-    // page whose export rode a REAL native type verbatim keeps it.
+  test("a plain page round-trips without the derived block, from the first export", () => {
+    // A fresh export declares its full coverage - the derived type
+    // included - so the trusted import strips the WHOLE derived block
+    // from a page that never carried one natively. Under the bare-true
+    // marker the type pair went undeclared, and the derived type
+    // survived the import as a real native field: one step of drift,
+    // locked in by every export after it. Absent okf_type_raw beside a
+    // marker naming `type` means "the export derived this type" - never
+    // "delete a native type": a page whose export rode a REAL native
+    // type verbatim keeps it (the legacy marker below).
     note("Notes/Plain.md", "---\ntitle: Plain\n---\nbody.\n");
     const bundle = buildOkfBundle(vault);
-    expect(fileOf(bundle.files, "concepts/Plain.md")).toContain('type: "note"');
+    const plain = fileOf(bundle.files, "concepts/Plain.md");
+    expect(plain).toContain('type: "note"');
+    // The marker names exactly the natives the exporter manages, inline.
+    expect(plain).toContain("okf_raw: [status, sources, generated, type]");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-dest-"));
+    const dir2 = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-rt-"));
+    const dest2 = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-rt-dest-"));
     try {
       writeOkfBundle(dir, bundle);
       const result = importOkfBundle(dest, readOkfBundle(dir), { trusted: true });
       expect(result.errors).toEqual([]);
       const landed = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
-      expect(landed).toContain("type: note");
+      expect(landed).not.toContain("type:");
       expect(landed).not.toContain("okf_type_raw");
       expect(landed).not.toContain("status:");
       expect(landed).not.toContain("sources:");
       expect(landed).not.toContain("generated:");
+      expect(landed).not.toContain("okf_raw");
       expect(landed).toContain("title: Plain");
+
+      // The round-trip converges from the first export: the imported
+      // page re-exports with the derived block beside a fresh full
+      // marker, and the next import strips it again - the derived type
+      // never accumulates into a native.
+      const second = buildOkfBundle(dest);
+      expect(fileOf(second.files, "concepts/Plain.md")).toContain(
+        "okf_raw: [status, sources, generated, type]",
+      );
+      writeOkfBundle(dir2, second);
+      const result2 = importOkfBundle(dest2, readOkfBundle(dir2), { trusted: true });
+      expect(result2.errors).toEqual([]);
+      const relanded = readFileSync(join(dest2, "Notes/Plain.md"), "utf8");
+      expect(relanded).not.toContain("type:");
+      expect(relanded).toContain("title: Plain");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
+      rmSync(dir2, { recursive: true, force: true });
+      rmSync(dest2, { recursive: true, force: true });
     }
   });
 });
@@ -912,8 +936,9 @@ describe("v0.2 import acceptance", () => {
     const qPage = fileOf(bundle.files, "concepts/Q.md");
     expect(qPage).toContain("status: stable");
     expect(qPage).toContain("okf_status_raw: quarantine");
-    // Every page of a fresh export declares raw-carrying, raw keys or not.
-    expect(qPage).toContain("okf_raw: true");
+    // Every page of a fresh export declares raw-carrying, raw keys or
+    // not, and names the natives the exporter manages.
+    expect(qPage).toContain("okf_raw: [status, sources, generated, type]");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest-"));
@@ -960,22 +985,18 @@ describe("v0.2 import acceptance", () => {
       expect(landedS).not.toContain("{resource:");
       // Re-export is deterministic: the restored state re-exports as the
       // same raw + derived shape, byte-identical modulo the shared
-      // generated instant - plus the one honest change the first
-      // round-trip made. The bare okf_raw marker never declared the type
-      // pair (it predates it), so the derived type - the spec's required
-      // key - landed as a native on import, and the second export carries
-      // it as a raw native beside the restored status.
+      // generated instant. The marker declared the type pair, so the
+      // first import stripped the derived type along with the rest of
+      // the block - nothing materialized, nothing to carry raw, and the
+      // round-trip converges from the first export instead of drifting
+      // one step into a native type.
       const re = buildOkfBundle(dest);
       const reQ = fileOf(re.files, "concepts/Q.md");
-      const expected = qPage.replace(
-        "okf_status_raw: quarantine\n",
-        "okf_status_raw: quarantine\nokf_type_raw: note\n",
-      );
-      expect(reQ.split(re.manifest.generated_at).join(bundle.manifest.generated_at)).toBe(expected);
+      expect(reQ.split(re.manifest.generated_at).join(bundle.manifest.generated_at)).toBe(qPage);
 
-      // From there the shape is stable: importing the re-export restores
-      // the materialized type from its raw key, and a third export is
-      // byte-identical to the second - the drift stops after one step.
+      // From there the shape is stable: importing the re-export strips
+      // the derived block again, and a third export is byte-identical to
+      // the second.
       const dir2 = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle2-"));
       const dest2 = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest2-"));
       try {
@@ -984,7 +1005,7 @@ describe("v0.2 import acceptance", () => {
         expect(result2.errors).toEqual([]);
         const landedQ2 = readFileSync(join(dest2, "Notes/Q.md"), "utf8");
         expect(landedQ2).toContain("status: quarantine");
-        expect(landedQ2).toContain("type: note");
+        expect(landedQ2).not.toContain("type:");
         const re2 = buildOkfBundle(dest2);
         expect(
           fileOf(re2.files, "concepts/Q.md")
@@ -1133,9 +1154,9 @@ describe("v0.2 import acceptance", () => {
     note("Notes/Plain.md", "---\ntitle: Plain\n---\nsee [[Q]].\n");
     const bundle = buildOkfBundle(vault);
     // The marker declares raw-carrying on every page of a fresh export,
-    // raw keys or not.
+    // raw keys or not, naming the full coverage the exporter manages.
     const plainPage = fileOf(bundle.files, "concepts/Plain.md");
-    expect(plainPage).toContain("okf_raw: true");
+    expect(plainPage).toContain("okf_raw: [status, sources, generated, type]");
     expect(plainPage).toContain("status: stable");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-plain-rt-"));

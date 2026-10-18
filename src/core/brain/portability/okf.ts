@@ -187,12 +187,13 @@ const RAW_OKF_KEYS: ReadonlyArray<{ readonly raw: string; readonly native: strin
  * next export carried the materialized status as a raw native,
  * permanent.
  *
- * The marker also declares what it covers: a bare `true` - the shape
- * every exporter stamped before the marker could carry a list - covers
- * only the old status/sources/generated set, and a list of native names
- * covers exactly what it names (see
- * {@link rawCarryDeclaredNatives}). The restore never drops a native
- * whose pair the marker did not declare.
+ * The marker IS its coverage: the exporter stamps the list of native
+ * names it manages, and the restore drops a derived value only for a
+ * pair the marker declares (see {@link rawCarryDeclaredNatives}). A
+ * bare `true` is what the pre-list exporters stamped, so it reads as
+ * the legacy shape and covers only the old status/sources/generated
+ * set - never `type`, whose pair did not exist yet when those exports
+ * carried a native type verbatim beside the marker.
  */
 const RAW_CARRY_KEY = "okf_raw";
 
@@ -712,8 +713,12 @@ function renderOkfPageFile(
   // The raw-carrying declaration, stamped fresh on every page of every
   // export: this is what tells the own-producer import that absent raw
   // keys mean "the field never had a value" rather than "a legacy
-  // bundle's page - leave the frontmatter alone".
-  carried[RAW_CARRY_KEY] = true;
+  // bundle's page - leave the frontmatter alone". It names exactly the
+  // natives this exporter manages - the derived `type` included - so
+  // the restore drops the whole derived block from a page that never
+  // carried one natively, and a bare `true` stays what it always was:
+  // a LEGACY page's marker, covering the pre-type-pair set only.
+  carried[RAW_CARRY_KEY] = RAW_OKF_KEYS.map(({ native }) => native);
   // formatFrontmatter with an empty body is exactly "---\n<keys>---\n";
   // drop the closing fence, append the derived block, re-close.
   let out = formatFrontmatter(carried, "").slice(0, -"---\n".length);
