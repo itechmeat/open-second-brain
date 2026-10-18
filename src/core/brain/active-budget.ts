@@ -78,9 +78,32 @@ export function activeTruncationNotice(report: SectionTruncationReport): string 
       ? ` Dropped: ${report.droppedKeys.map(sectionLabel).join(", ")}.`
       : "";
   return (
-    `_Injection truncated to budget: kept ${report.keptChars} of ${report.totalChars} ` +
+    `${TRUNCATION_NOTICE_OPEN} kept ${report.keptChars} of ${report.totalChars} ` +
     `characters.${dropped}${FULL_VIEW_POINTER}`
   );
+}
+
+/**
+ * The opening words of the drop notice `activeTruncationNotice` renders,
+ * spelled once so the notice and the notice-only test below can never
+ * drift apart - a copy of the wording elsewhere would silently disable
+ * the test the moment the sentence changed.
+ */
+const TRUNCATION_NOTICE_OPEN = "_Injection truncated to budget:";
+
+/**
+ * True when a BUDGETED body is nothing but the drop notice: every
+ * section was dropped whole and no content survived. The notice is
+ * always a body's TAIL (surviving content first, notice appended after
+ * a separator), so a body OPENING with the notice can only be the
+ * notice alone - or vault prose contrived to open with the notice's
+ * sentence AND overflow, which fails safe the same way (less injected,
+ * never over budget). Exported for the injection assembler, which skips
+ * such a body instead of framing a multi-hundred-character notice over
+ * the very budget the source is charged against.
+ */
+export function isTruncationNoticeOnly(body: string): boolean {
+  return body.startsWith(TRUNCATION_NOTICE_OPEN);
 }
 
 /**

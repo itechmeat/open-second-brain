@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { parseFrontmatterText } from "../../src/core/vault.ts";
 import { brainActivePath, brainLessonsPath } from "../../src/core/brain/paths.ts";
-import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import { budgetActiveBody, isTruncationNoticeOnly } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
   untrustedBindingFramingHeader,
@@ -107,21 +107,6 @@ function frameMemoryBody(origin: string, body: string): string {
 function framingOverhead(origin: string): number {
   return untrustedBindingFramingHeader(origin).length + 1;
 }
-
-/**
- * The opening words of the budgeter's truncation notice
- * (`activeTruncationNotice` in `active-budget.ts`), matched against a
- * BUDGETED body to detect the notice-only degenerate: every section
- * dropped, no content left, nothing but the notice surviving. Framing
- * and emitting that would put the header plus a multi-hundred-character
- * notice over the very budget the source is charged against, so the
- * source skips instead. A body that fit the budget passes through
- * byte-identical, so a matching opener on a body that did NOT fit can
- * only be the notice itself (or vault prose contrived to open with the
- * notice sentence AND overflow - skipped too, which fails safe: less
- * injected, never over budget).
- */
-const TRUNCATION_NOTICE_OPEN = "_Injection truncated to budget:";
 
 /** A fresh, empty meter for one assembly run. */
 export function createInjectionMeter(configuredBudgetChars: number): InjectionMeter {
@@ -339,8 +324,10 @@ function readActiveBody(
   // A budgeted body that is ONLY the truncation notice carries no
   // content at all: framed, header + notice would land over the budget
   // the source is charged against, so the source skips with it - the
-  // same honesty the sub-header floor practices, one rung up.
-  if (inner.startsWith(TRUNCATION_NOTICE_OPEN)) return "";
+  // same honesty the sub-header floor practices, one rung up. The
+  // predicate is the budgeter's own (`isTruncationNoticeOnly`), so the
+  // guard cannot drift from the wording it detects.
+  if (isTruncationNoticeOnly(inner)) return "";
   const framedActive = frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
   meter.budgetChars = meter.configuredBudgetChars;
   meter.sources.push({
@@ -384,7 +371,7 @@ function readLessonsBody(lessonsPath: string, budget: number): string | null {
     const overhead = framingOverhead(SOURCE_LESSONS_BODY);
     if (budget <= overhead) return null;
     const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), budget - overhead);
-    if (inner.startsWith(TRUNCATION_NOTICE_OPEN)) return null;
+    if (isTruncationNoticeOnly(inner)) return null;
     return frameMemoryBody(SOURCE_LESSONS_BODY, inner);
   } catch {
     return null;
