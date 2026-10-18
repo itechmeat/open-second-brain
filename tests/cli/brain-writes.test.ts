@@ -345,8 +345,18 @@ describe("o2b brain writes revert", () => {
       { env: env() },
     );
     expect(res.returncode).toBe(0);
-    const payload = JSON.parse(res.stdout) as { selector: Record<string, unknown> };
+    const payload = JSON.parse(res.stdout) as {
+      selector: Record<string, unknown>;
+      entries: ReadonlyArray<{ writes: ReadonlyArray<string> }>;
+    };
     expect(payload.selector).toEqual({ device: "", path: TARGET });
+    // The filter is pinned by its SELECTION, not its echo: the plan reads
+    // `plan.selector` back verbatim, so an echoed selector proves nothing
+    // about what the read selected. Only the un-sharded write may be
+    // planned - the laptop write on the same target would ride in here if
+    // the device filter were dropped between the echo and the read.
+    expect(payload.entries).toHaveLength(1);
+    expect(payload.entries[0]!.writes).toHaveLength(1);
   });
 
   test("the echoed --apply invocation quotes an empty --device", async () => {

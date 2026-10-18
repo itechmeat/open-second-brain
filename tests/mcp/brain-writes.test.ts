@@ -278,12 +278,24 @@ describe("brain_writes action plan_revert", () => {
     seedWriteOnDevice({ timestamp: "2026-03-04T01:00:00Z", target: TARGET, deviceId: "" });
     seedWriteOnDevice({ timestamp: "2026-03-04T02:00:00Z", target: TARGET, deviceId: "laptop" });
 
-    const reply = await call("brain_writes", {
-      action: "plan_revert",
-      device: "",
-      path: TARGET,
-    });
+    // Reach "local" explicitly, like the selector test above: the seeded
+    // rows name a file this test never wrote, and at the fail-closed
+    // default reach the entry is withheld rather than planned, which
+    // would make the selection assertions below pass vacuously.
+    const reply = (await tool("brain_writes").handler(
+      { ...ctx, reach: "local" },
+      { action: "plan_revert", device: "", path: TARGET },
+    )) as Record<string, unknown>;
     expect(reply["selector"]).toEqual({ device: "", path: TARGET });
+    // The filter is pinned by its SELECTION, not its echo: the reply
+    // reads `selector` back verbatim, so an echoed selector proves
+    // nothing about what the read selected. Only the un-sharded write
+    // may be planned - the laptop write on the same target would ride in
+    // here if the device filter were dropped between the echo and the
+    // read.
+    const entries = reply["entries"] as ReadonlyArray<{ writes: ReadonlyArray<string> }>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.writes).toHaveLength(1);
   });
 
   test("returns the entries and the digest, and no apply path", async () => {
