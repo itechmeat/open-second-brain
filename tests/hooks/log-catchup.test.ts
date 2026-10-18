@@ -23,7 +23,12 @@ import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
 import {
   logCatchupCursorFilename,
   logCatchupCursorPath,
+  LOG_CATCHUP_WINDOW_DATES,
 } from "../../hooks/lib/log-cursor-state.ts";
+import {
+  firstRunScanCutoffDate,
+  LOG_CATCHUP_FIRST_RUN_WINDOW_DATES,
+} from "../../hooks/log-catchup.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -465,6 +470,45 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(emitted(third)).not.toContain("a line stamped in the future");
   });
 
+  test("a first run with no cursor scans only the recent window and counts the older days honestly", async () => {
+    // The one unbounded scan left: with no cursor yet, the lane used to
+    // walk the WHOLE history - on a vault with years of daily log, the
+    // first SessionStart parsed every day only to render the newest 50
+    // lines. A first run now scans a bounded recent window and reports
+    // the rest as an honest count, instead of quietly parsing history
+    // no one will read or, worse, re-listing every shard per date.
+    for (const d of ["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15"]) {
+      seed("agent-a", `old history line from ${d}`, { timestamp: `${d}T09:00:00Z` });
+    }
+    seed("agent-a", "a recent line the window still reaches", {
+      timestamp: "2026-10-17T09:00:00Z",
+    });
+
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    // The recent tail surfaces; the unscanned history does not ride
+    // along (under the line cap it would, on a vault whose whole
+    // history fits the block).
+    expect(context).toContain("a recent line the window still reaches");
+    expect(context).not.toContain("old history line");
+    // The unscanned days are reported, not silently dropped.
+    expect(context).toContain("5 older day(s) not scanned");
+    // The run still parks the cursor, so the lane starts where it left
+    // off next time instead of re-deciding the window.
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      date: string;
+      shards: Record<string, number>;
+    };
+    expect(cursor.date).toBe("2026-10-17");
+    expect(cursor.shards[""]).toBe(0);
+    // And a second run stays silent: nothing new since the park.
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toBeNull();
+  });
+
   test("a date evicted from the window is still skipped whole", async () => {
     // Six dates: the cursor keeps per-shard marks for the newest three
     // before its date, so 10-10 and 10-13 are evicted - and a brand-new
@@ -670,5 +714,38 @@ describe("log-catchup hook (SessionStart)", () => {
     const r = await runHook(SESSION_START, { OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED: "true" });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+  });
+});
+
+describe("first-run scan window", () => {
+  test("a no-cursor run scans only the first-run window behind the newest real date", () => {
+    // The window rides the NEWEST date in the log that is today or
+    // earlier, not today itself: a vault whose newest entry is months
+    // old still catches up on its own recent tail instead of reporting
+    // its whole history unscanned. The +2 slack over the cursor window
+    // keeps the first run's reach a superset of what a parked cursor
+    // would still rescan.
+    expect(LOG_CATCHUP_FIRST_RUN_WINDOW_DATES).toBe(LOG_CATCHUP_WINDOW_DATES + 2);
+    const dates = [
+      "2026-01-05",
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-10-17",
+    ];
+    expect(firstRunScanCutoffDate(dates, "2026-10-18")).toBe("2026-10-12");
+    // The boundary is inclusive: a date exactly on the cutoff scans.
+    expect(firstRunScanCutoffDate(["2026-10-12"], "2026-10-18")).toBe("2026-10-07");
+    // A future-skewed newest date must not widen the window past every
+    // real day - the reference clamps to the newest date of today or
+    // earlier, the watermark parking clamp again.
+    expect(firstRunScanCutoffDate([...dates, "2026-12-02"], "2026-10-18")).toBe("2026-10-12");
+    // Every date future: the reference falls back to today, so the skew
+    // lines still surface instead of reading as unscanned history.
+    expect(firstRunScanCutoffDate(["2026-12-02"], "2026-10-18")).toBe("2026-10-13");
+    // An empty log has no window and no cutoff.
+    expect(firstRunScanCutoffDate([], "2026-10-18")).toBeNull();
   });
 });

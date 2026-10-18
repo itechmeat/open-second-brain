@@ -31,14 +31,17 @@
  * about the identity, not the device. The marks cover the cursor date,
  * a window of older dates and the future-dated dates a clock-skewed
  * writer may stamp, so every foreign line shows once. The lane is a
- * PURE read of the log: entries are discovered
- * through `listLogDates` and read through `readLogDay` and nothing is
+ * PURE read of the log: entries are discovered and read through the
+ * shared log-jsonl readers and nothing is
  * ever appended to `Brain/log` - session-capture owns the lifecycle
  * event, and this lane must stay distinguishable from it.
  *
  * Bounded, fail-open. The per-lane caps are constants
  * (`policy/blocks/active.ts`); the block rides the shared untrusted
- * fence because other agents' log text is untrusted vault content; and
+ * fence because other agents' log text is untrusted vault content; the
+ * scan itself is bounded - a parked cursor rescans only its calendar
+ * window and a first run only the recent window behind the newest log
+ * date, with older days counted and reported, never parsed; and
  * every path exits 0 - flag off is an immediate no-op with zero output.
  */
 
@@ -49,7 +52,7 @@ import {
   resolveLogCatchupEnabled,
   resolveVault,
 } from "../src/core/config.ts";
-import { listLogDates, readLogDay } from "../src/core/brain/log-jsonl.ts";
+import { listLogShardFiles, readLogDay } from "../src/core/brain/log-jsonl.ts";
 import type { BrainLogEntry } from "../src/core/brain/log.ts";
 import { fenceUntrustedContent, neutralizeSingleLine } from "../src/core/brain/untrusted-source.ts";
 import {
@@ -149,6 +152,52 @@ interface CatchupPosition {
 }
 
 /**
+ * A calendar cutoff `windowDates` behind `referenceDate` (UTC, date
+ * strings all the way through): the shared arithmetic behind the cursor
+ * window ({@link windowCutoffDate}) and the first-run window
+ * ({@link firstRunScanCutoffDate}).
+ */
+function dateCutoff(referenceDate: string, windowDates: number): string {
+  const d = new Date(`${referenceDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - windowDates);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * How far back a FIRST run (no cursor yet) scans: the cursor window
+ * plus two days of slack. A first run has no marks to vouch about
+ * anything, and without a bound it would parse the WHOLE history - on a
+ * vault with years of daily log, every SessionStart of a new identity
+ * read every day only to render the newest lines. Two days beyond the
+ * cursor window keep the first run's reach a superset of what a parked
+ * cursor would still rescan, so the hand-off from "no cursor" to
+ * "parked cursor" never narrows what a late-synced shard can surface in.
+ */
+export const LOG_CATCHUP_FIRST_RUN_WINDOW_DATES = LOG_CATCHUP_WINDOW_DATES + 2;
+
+/**
+ * The oldest date a no-cursor run still scans: the first-run window
+ * behind the NEWEST date in the log that is today or earlier (not
+ * behind today itself - a vault whose newest entry is months old should
+ * still catch up on its own recent tail, not report all of it
+ * unscanned). The clamp to real dates is the watermark parking clamp
+ * again: a clock-skewed writer's future date is newest in merge order
+ * but must not widen the window past every real day - referenced on the
+ * skew, the window would call ALL of today's history unscanned. When
+ * every date is future the reference falls back to today, so the skew
+ * lines still surface while nothing real is miscounted. `dates` must be
+ * sorted, as the derived date list is; null when the log has no dates
+ * at all. Dates older than the cutoff are counted and reported, never
+ * parsed.
+ */
+export function firstRunScanCutoffDate(dates: ReadonlyArray<string>, today: string): string | null {
+  if (dates.length === 0) return null;
+  const real = dates.filter((d) => d <= today);
+  const reference = real.length > 0 ? real[real.length - 1]! : today;
+  return dateCutoff(reference, LOG_CATCHUP_FIRST_RUN_WINDOW_DATES);
+}
+
+/**
  * The oldest date the cursor can still vouch per shard about: the
  * calendar window behind the cursor date. The `days` marks cover only
  * the dates that HAD files when the cursor last parked, so a filter
@@ -157,9 +206,7 @@ interface CatchupPosition {
  * the window is a range of calendar dates, not the recorded keys.
  */
 function windowCutoffDate(cursorDate: string): string {
-  const d = new Date(`${cursorDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - LOG_CATCHUP_WINDOW_DATES);
-  return d.toISOString().slice(0, 10);
+  return dateCutoff(cursorDate, LOG_CATCHUP_WINDOW_DATES);
 }
 
 /**
@@ -257,6 +304,14 @@ async function main(): Promise<void> {
     // merge position. The watermark rides the last entry seen, so a
     // trailing date with no entries cannot orphan the write.
     //
+    // The directory is listed ONCE and the shard list handed to every
+    // `readLogDay` (which filters it per date): listing per date would
+    // pay one `readdirSync` + sort per day of history on every run.
+    // Dates come from the same listing, so discovery and reading can
+    // never disagree about what the log directory holds.
+    const shardFiles = listLogShardFiles(vault);
+    const dates = [...new Set(shardFiles.map((f) => f.date))].toSorted();
+    //
     // The skip decision is per (date, shard), not per date: a shard that
     // syncs in late for an earlier date (the normal cross-device case)
     // must still surface, so the cursor keeps windowed marks
@@ -265,9 +320,10 @@ async function main(): Promise<void> {
     // whole. The bounds come from the calendar, not the recorded
     // `days` keys: a date that had no local file when the cursor parked
     // carries no marks, and keying the skip on the marks would drop its
-    // late-arriving shards permanently.
-    const collected: Array<{ entry: BrainLogEntry }> = [];
-    let lastSeen: CatchupPosition | null = null;
+    // late-arriving shards permanently. A FIRST run has no marks at all,
+    // so its bound is its own calendar window behind the newest date
+    // (`firstRunScanCutoffDate`); the older days are counted and
+    // reported, never parsed.
     // The last scanned position dated today or earlier. A foreign line
     // stamped with a future-skewed date is newer in merge order than
     // everything real, so the watermark must not take its date - parked
@@ -279,6 +335,10 @@ async function main(): Promise<void> {
     // skewed line is shown once instead of every session until the
     // clock reaches its date.
     const today = new Date().toISOString().slice(0, 10);
+    const firstRunCutoff = cursor === null ? firstRunScanCutoffDate(dates, today) : null;
+    let unscannedOlderDays = 0;
+    const collected: Array<{ entry: BrainLogEntry }> = [];
+    let lastSeen: CatchupPosition | null = null;
     let lastSeenParked: CatchupPosition | null = null;
     // Null prototypes: shard ids are foreign input and DEVICE_ID_RE
     // admits Object.prototype member names ("constructor", "valueOf"),
@@ -286,7 +346,7 @@ async function main(): Promise<void> {
     // reads as a function, the write fails its shape validation and the
     // lane goes silent while rescanning history every session.
     let perDateMarks: Record<string, Record<string, number>> = Object.create(null);
-    for (const date of listLogDates(vault)) {
+    for (const date of dates) {
       if (
         cursor !== null &&
         date < cursor.date &&
@@ -295,7 +355,11 @@ async function main(): Promise<void> {
       ) {
         continue;
       }
-      const { entries, entryShardIds, entryLines } = readLogDay(vault, date);
+      if (firstRunCutoff !== null && date < firstRunCutoff) {
+        unscannedOlderDays += 1;
+        continue;
+      }
+      const { entries, entryShardIds, entryLines } = readLogDay(vault, date, shardFiles);
       const shardMarks: Record<string, number> = Object.create(null);
       perDateMarks[date] = shardMarks;
       for (let i = 0; i < entries.length; i++) {
@@ -325,7 +389,10 @@ async function main(): Promise<void> {
     // rendered (the buildActivityTimeline limit/total shape). The char
     // cap then trims the same way - oldest lines drop first - and a
     // block that cannot fit even one line emits nothing and leaves the
-    // cursor untouched, so nothing is silently dropped forever.
+    // cursor untouched, so nothing is silently dropped forever. A first
+    // run's unscanned days are counted too and named in the header: a
+    // day the window never parsed is not "shown later", it was not read
+    // at all, and the count is the only honest way to say so.
     const newest = collected.slice(-LOG_CATCHUP_MAX_LINES);
     let olderCount = collected.length - newest.length;
     const now = new Date();
@@ -337,9 +404,12 @@ async function main(): Promise<void> {
         ),
         timestamp: entry.timestamp,
       }));
+      const notes: string[] = [];
+      if (olderCount > 0) notes.push(`${olderCount} older not shown`);
+      if (unscannedOlderDays > 0) notes.push(`${unscannedOlderDays} older day(s) not scanned`);
       const header =
         `Cross-agent catch-up: ${items.length} log line(s) from other agents since your last read` +
-        (olderCount > 0 ? ` (${olderCount} older not shown)` : "") +
+        (notes.length > 0 ? ` (${notes.join("; ")})` : "") +
         ":";
       return fenceUntrustedContent(
         `${header}\n${renderActivityTimeline(activityItems, now)}`,
