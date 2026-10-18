@@ -206,6 +206,28 @@ describe("o2b brain writes destinations", () => {
     expect(one.agents).toEqual(["alpha"]);
   });
 
+  test("an un-sharded touch renders as an absent cell, not a blank", async () => {
+    seedBoth();
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2026-03-01",
+      "--until",
+      "2026-03-04",
+    ]);
+    expect(r.returncode).toBe(0);
+    // One.md's devices are the un-sharded pair and laptop: the un-sharded
+    // empty string is an answer, and the row says so the way the list
+    // verb does - a dash, never a silent blank cell.
+    expect(r.stdout).toContain("device: -,laptop");
+    expect(r.stdout).not.toContain("device: ,");
+    expect(r.stdout).not.toContain("device:  ");
+  });
+
   test("a malformed bound is a usage error naming the flag, not a silent empty", async () => {
     seedBoth();
     for (const [flag, value] of [

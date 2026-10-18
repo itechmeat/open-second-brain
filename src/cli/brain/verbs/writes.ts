@@ -264,16 +264,25 @@ function destinations(
   return 0;
 }
 
-/** One row: target, both kinds' counts, who and on what, newest touch. */
+/** One provenance value: an empty string is absent, not a blank cell. */
+function provenanceCell(value: string): string {
+  return value === "" ? ABSENT_COLUMN : value;
+}
+
+/**
+ * One row: target, both kinds' counts, who and on what, newest touch.
+ * A row always has at least one contributing agent and device - the fold
+ * creates it from a touch that contributed both - so the empties that
+ * need the dash are the VALUES (the legacy un-sharded pair, an event
+ * with no agent), not the lists.
+ */
 function renderDestinationRow(row: WriteDestinationRow): string {
-  const device = row.devices.length === 0 ? ABSENT_COLUMN : row.devices.join(",");
-  const agent = row.agents.length === 0 ? ABSENT_COLUMN : row.agents.join(",");
   return [
     row.target,
     `${row.note_writes} note-write(s)`,
     `${row.write_sessions} write-session(s)`,
-    `agent: ${agent}`,
-    `device: ${device}`,
+    `agent: ${row.agents.map(provenanceCell).join(",")}`,
+    `device: ${row.devices.map(provenanceCell).join(",")}`,
     `last ${row.last_write}`,
   ].join("  ");
 }
