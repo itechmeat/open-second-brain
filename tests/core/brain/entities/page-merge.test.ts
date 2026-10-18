@@ -247,6 +247,76 @@ describe("planEntityMerge", () => {
     expect(plan.alias_added).toBe("Ada");
   });
 
+  test("the dropped page's aliases move to the survivor, deduplicated", () => {
+    const keep = upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      body: "Analytical engines.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop = upsertEntity(vault, {
+      category: "people",
+      name: "Ada",
+      agent: "test-agent",
+      now: NOW,
+    });
+    // Hand-write the alias list so it carries a duplicate variant: the plan
+    // must fold `the countess` into `The Countess` by normalized form.
+    const [meta, body] = parseFrontmatter(drop.entity.path);
+    writeFrontmatterAtomic(
+      drop.entity.path,
+      { ...meta, aliases: ["The Countess", "the countess", "Augusta Ada"] },
+      body,
+      { overwrite: true },
+    );
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keep.entity.id, drop: drop.entity.id });
+    // The display name leads, then the drop's own aliases in file order,
+    // duplicates by normalized form collapsed.
+    expect([...plan.aliases_merged]).toEqual(["Ada", "The Countess", "Augusta Ada"]);
+    applyEntityMerge(
+      vault,
+      { keep: keep.entity.id, drop: drop.entity.id },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    const survivor = getEntity(vault, { query: "Ada Lovelace" })!;
+    expect(survivor.aliases).toEqual(["Ada", "The Countess", "Augusta Ada"]);
+    // Every name the dropped page answered to keeps resolving - to the
+    // survivor, never to the archived file.
+    expect(getEntity(vault, { query: "The Countess" })!.id).toBe(keep.entity.id);
+    expect(getEntity(vault, { query: "Augusta Ada" })!.id).toBe(keep.entity.id);
+  });
+
+  test("an alias claimed by a third record refuses the plan by name", () => {
+    const { keepId, dropId } = seedPair();
+    const third = upsertEntity(vault, {
+      category: "people",
+      name: "Charles Babbage",
+      aliases: ["The Countess"],
+      agent: "test-agent",
+      now: NOW,
+    });
+    // Hand-add the contested alias to the drop page: upsert would refuse a
+    // duplicate claim, but a hand edit or an older build can land one.
+    const drop = getEntity(vault, { query: "Ada" })!;
+    const [meta, body] = parseFrontmatter(drop.path);
+    writeFrontmatterAtomic(drop.path, { ...meta, aliases: ["The Countess"] }, body, {
+      overwrite: true,
+    });
+    __clearEntityIndexCache();
+    let thrown: EntityMergeError | null = null;
+    try {
+      planEntityMerge(vault, { keep: keepId, drop: dropId });
+    } catch (err) {
+      thrown = err as EntityMergeError;
+    }
+    expect(thrown).toBeInstanceOf(EntityMergeError);
+    expect(thrown!.code).toBe("alias-claimed");
+    expect(thrown!.message).toContain("The Countess");
+    expect(thrown!.message).toContain(third.entity.id);
+  });
+
   test("a guarded pair plans only through the explicit bypass option", () => {
     const { keepId, dropId } = seedGuardedPair();
     expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(

@@ -106,8 +106,18 @@ export interface EntityMergePlan {
    * The dropped page's display name, added to the survivor's aliases;
    * null when the survivor already answers to it (the duplicate-name
    * collision folds to one identity key, so there is nothing to add).
+   * The human-facing summary - {@link aliases_merged} is the full,
+   * authoritative write list.
    */
   readonly alias_added: string | null;
+  /**
+   * Every alias the survivor gains, in write order: the dropped page's
+   * display name first (when new), then the aliases the dropped page
+   * held - deduplicated by normalized form, the survivor's own names
+   * skipped. Part of the hashed plan, so the operator previews exactly
+   * the alias set the apply writes.
+   */
+  readonly aliases_merged: ReadonlyArray<string>;
   /** True when the dropped page's body folds into the survivor's. */
   readonly body_folded: boolean;
   /** Dropped-page relation edges unioned into the survivor's frontmatter. */
@@ -302,28 +312,52 @@ export function planEntityMerge(
     );
   }
 
-  // The old name becomes an alias on the survivor - unless the survivor
-  // already answers to it, which is exactly the duplicate-identity case:
-  // both pages then claim one normalized key, and the alias list must not
-  // grow a duplicate of the survivor's own name.
-  const dropNormalized = normalizeEntityName(drop.name);
-  const survivorAnswers =
-    normalizeEntityName(keep.name) === dropNormalized ||
-    keep.aliases.some((a) => normalizeEntityName(a) === dropNormalized);
-  const aliasAdded = survivorAnswers ? null : drop.name;
-  if (aliasAdded !== null) {
-    const aliasHolder = index.byAlias.get(dropNormalized);
-    // Keep and drop are both exempt: keep's claim folds into the merge,
-    // and a drop that lists its own name as an alias claims itself, not
-    // the alias of some third record.
-    if (aliasHolder !== undefined && aliasHolder.id !== keep.id && aliasHolder.id !== drop.id) {
+  // Every name the dropped page answers to moves to the survivor - the
+  // display name first, then the aliases it held - so removing the page
+  // orphans no resolution. Dedup by normalized form, and skip the names
+  // the survivor already answers to (the duplicate-identity case folds to
+  // one key). Each candidate runs the claimed-alias check at PLAN time:
+  // keep and drop are exempt (keep's claim folds into the merge, and a
+  // drop listing its own name claims itself), any other canonical holder
+  // refuses by name - merging would duplicate the claim, not move it.
+  // The holders are scanned off the entity list, not `byAlias`: the map
+  // keeps only a duplicate claim's first claimant, which for a contested
+  // alias is often the drop itself - the claimant this check must exempt.
+  const keepNormalized = normalizeEntityName(keep.name);
+  const survivorAnswers = (raw: string): boolean => {
+    const normalized = normalizeEntityName(raw);
+    return (
+      normalized === keepNormalized ||
+      keep.aliases.some((a) => normalizeEntityName(a) === normalized)
+    );
+  };
+  const aliasHolderOf = (normalized: string): BrainEntity | undefined =>
+    index.entities.find(
+      (e) =>
+        e.id !== keep.id &&
+        e.id !== drop.id &&
+        entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
+        e.aliases.some((a) => normalizeEntityName(a) === normalized),
+    );
+  const seenAliases = new Set<string>();
+  const aliasesMerged: string[] = [];
+  for (const candidate of [drop.name, ...drop.aliases]) {
+    const normalized = normalizeEntityName(candidate);
+    if (normalized.length === 0 || seenAliases.has(normalized) || survivorAnswers(candidate)) {
+      continue;
+    }
+    seenAliases.add(normalized);
+    const holder = aliasHolderOf(normalized);
+    if (holder !== undefined) {
       throw new EntityMergeError(
         "alias-claimed",
-        `alias ${JSON.stringify(drop.name)} is already claimed by ${aliasHolder.id} ` +
-          `(${aliasHolder.path}) - resolve that claim first`,
+        `alias ${JSON.stringify(candidate)} is already claimed by ${holder.id} ` +
+          `(${holder.path}) - resolve that claim first`,
       );
     }
+    aliasesMerged.push(candidate);
   }
+  const aliasAdded = aliasesMerged.includes(drop.name) ? drop.name : null;
 
   // Text-level merge guard over the two bodies (t_e9692750): disjoint
   // guarded anchor sets are the one demonstrably unsafe fold. Bypassed
@@ -370,6 +404,7 @@ export function planEntityMerge(
     keep_digest: sha256Hex(readFileSync(keep.path)),
     drop_digest: sha256Hex(readFileSync(drop.path)),
     alias_added: aliasAdded,
+    aliases_merged: Object.freeze(aliasesMerged),
     body_folded: drop.body.trim().length > 0,
     relations_absorbed: relationsAbsorbed,
     inbound_edges_retarged: inboundRetarged,
@@ -423,20 +458,30 @@ export function applyEntityMerge(
     vault,
     BRAIN_SNAPSHOT_REASON.entityPrune,
     () => {
-      // 1. Survivor rewrite: alias in, dropped relation edges unioned in,
-      //    edges pointing at the dropped page removed (a self-relation the
-      //    registry would refuse), folded body appended.
+      // 1. Survivor rewrite: the dropped page's names in as aliases, its
+      //    relation edges unioned in, edges pointing at the dropped page
+      //    removed (a self-relation the registry would refuse), folded
+      //    body appended.
       const [keepMeta, keepBody] = parseFrontmatter(keep.path);
       const [dropMeta] = parseFrontmatter(drop.path);
       const nextMeta: FrontmatterMap = { ...keepMeta };
-      if (plan.alias_added !== null) {
+      if (plan.aliases_merged.length > 0) {
         const existing = nextMeta["aliases"];
         const aliases = Array.isArray(existing)
           ? [...existing]
           : typeof existing === "string" && existing.trim().length > 0
             ? [existing]
             : [];
-        aliases.push(plan.alias_added);
+        for (const alias of plan.aliases_merged) {
+          const normalized = normalizeEntityName(alias);
+          if (
+            normalized.length > 0 &&
+            aliases.some((a) => normalizeEntityName(String(a)) === normalized)
+          ) {
+            continue;
+          }
+          aliases.push(alias);
+        }
         nextMeta["aliases"] = aliases;
       }
       for (const [key, value] of Object.entries(dropMeta)) {
