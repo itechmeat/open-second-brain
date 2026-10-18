@@ -414,6 +414,35 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(emitted(second)).toContain("tomorrows real line");
   });
 
+  test("a future-skewed foreign line shows once, not again before the clock reaches its date", async () => {
+    // The clamp parks the cursor on a date of today or earlier, so a
+    // foreign line stamped with a future date stays newest in merge order
+    // and past the cursor for the whole skew period - without marks for
+    // the future dates, every SessionStart re-renders the skew line and
+    // it eats the block budget every run. The cursor must record the
+    // per-(date, shard) marks of the future dates it scanned, so a skewed
+    // line is shown once; a line appended later to the still-future date
+    // is past that shard's mark and surfaces normally.
+    const skew = new Date(Date.now() + 45 * 86_400_000).toISOString().slice(0, 10);
+    seed("agent-a", "todays real line");
+    seed("agent-a", "a line stamped in the future", { timestamp: `${skew}T09:00:00Z` });
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(first.exit).toBe(0);
+    expect(emitted(first)).toContain("a line stamped in the future");
+
+    // The clock is still short of the skew: the line must not reshow.
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toBeNull();
+
+    // A second line on the still-future date is past the shard's mark.
+    seed("agent-a", "a second line in the future", { timestamp: `${skew}T10:00:00Z` });
+    const third = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(third.exit).toBe(0);
+    expect(emitted(third)).toContain("a second line in the future");
+    expect(emitted(third)).not.toContain("a line stamped in the future");
+  });
+
   test("a date evicted from the window is still skipped whole", async () => {
     // Six dates: the cursor keeps per-shard marks for the newest three
     // before its date, so 10-10 and 10-13 are evicted - and a brand-new

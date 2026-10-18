@@ -85,19 +85,22 @@ export function logCatchupCursorFilename(identity: string): string {
 }
 
 /**
- * How many dates strictly OLDER than {@link LogCatchupCursor.date} keep
- * their per-shard marks in the `days` map. Delayed cross-device sync is
- * the normal case, so yesterday's late-arriving shard must still be
- * readable per (date, shard); the bound keeps the file small no matter
- * how far back the log goes.
+ * How many dates on either side of {@link LogCatchupCursor.date} keep
+ * their per-shard marks: the `days` map holds at most this many dates
+ * strictly OLDER than the cursor date, the `future` map at most this many
+ * dates strictly NEWER. Delayed cross-device sync is the normal case, so
+ * yesterday's late-arriving shard must still be readable per (date,
+ * shard); the bounds keep the file small no matter how far back the log
+ * goes or how far into the future a skewed writer stamps.
  */
 export const LOG_CATCHUP_WINDOW_DATES = 3;
 
 /**
  * The watermark: the merge-order position of the last entry seen on
  * {@link date}, plus the per-shard high-water line marks (0-based
- * indexes) for that date, plus {@link LOG_CATCHUP_WINDOW_DATES} older
- * dates of the same marks in {@link days}.
+ * indexes) for that date, plus at most {@link LOG_CATCHUP_WINDOW_DATES}
+ * older dates of the same marks in {@link days} and as many newer ones
+ * (a skewed writer's future dates) in {@link future}.
  */
 export interface LogCatchupCursor {
   /** ISO date (`YYYY-MM-DD`) the watermark sits on. */
@@ -116,6 +119,18 @@ export interface LogCatchupCursor {
    * {@link date} is skipped entirely.
    */
   readonly days: Readonly<Record<string, Readonly<Record<string, number>>>>;
+  /**
+   * The same marks for the scanned dates strictly NEWER than
+   * {@link date} - the dates a clock-skewed writer can stamp. The
+   * cursor itself never parks on a future date, so without these a
+   * skewed line would read as past the cursor every session until the
+   * clock reached its date. At most
+   * {@link LOG_CATCHUP_WINDOW_DATES} future dates, the OLDEST kept -
+   * the ones the clock reaches soonest. A date here decides per shard
+   * exactly like {@link shards}; when the clock reaches the date, the
+   * ordinary park-and-window handling takes it over.
+   */
+  readonly future: Readonly<Record<string, Readonly<Record<string, number>>>>;
 }
 
 const DATE_SHAPE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -140,6 +155,23 @@ function parseMarksMap(raw: unknown): Record<string, number> | null {
   return marks;
 }
 
+/**
+ * A date-keyed map of shard marks (`days` / `future`) read out of the
+ * file, on a null prototype. Every key must be an ISO date and every
+ * value a well-shaped marks map; anything else refuses the whole file.
+ */
+function parseDatedMarks(raw: unknown): Record<string, Record<string, number>> | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const dated: Record<string, Record<string, number>> = Object.create(null);
+  for (const [date, dayMarks] of Object.entries(raw as Record<string, unknown>)) {
+    if (!DATE_SHAPE_RE.test(date)) return null;
+    const parsed = parseMarksMap(dayMarks);
+    if (parsed === null) return null;
+    dated[date] = parsed;
+  }
+  return dated;
+}
+
 /** Absolute path of the cursor file for one identity on one vault. */
 export function logCatchupCursorPath(vault: string, identity: string): string {
   return join(vault, DERIVED_STORE_DIR, logCatchupCursorFilename(identity));
@@ -162,20 +194,33 @@ export function readLogCatchupCursor(vault: string, identity: string): LogCatchu
     if (!isNonNegativeInteger(raw["line"])) return null;
     const marks = parseMarksMap(raw["shards"]);
     if (marks === null) return null;
-    // `days` postdates the per-identity file: a cursor written before it
-    // existed simply covered one date, so absence reads as no window.
+    // `days` postdates the per-identity file and `future` postdates
+    // `days`: a cursor written before either existed simply covered
+    // less, so absence reads as an empty window.
     const rawDays = raw["days"];
-    const days: Record<string, Record<string, number>> = Object.create(null);
-    if (rawDays !== undefined) {
-      if (rawDays === null || typeof rawDays !== "object" || Array.isArray(rawDays)) return null;
-      for (const [date, dayMarks] of Object.entries(rawDays as Record<string, unknown>)) {
-        if (!DATE_SHAPE_RE.test(date)) return null;
-        const parsed = parseMarksMap(dayMarks);
-        if (parsed === null) return null;
-        days[date] = parsed;
-      }
+    let days: Record<string, Record<string, number>>;
+    if (rawDays === undefined) days = Object.create(null);
+    else {
+      const dated = parseDatedMarks(rawDays);
+      if (dated === null) return null;
+      days = dated;
     }
-    return { date: raw["date"], shardId: raw["shardId"], line: raw["line"], shards: marks, days };
+    const rawFuture = raw["future"];
+    let future: Record<string, Record<string, number>>;
+    if (rawFuture === undefined) future = Object.create(null);
+    else {
+      const dated = parseDatedMarks(rawFuture);
+      if (dated === null) return null;
+      future = dated;
+    }
+    return {
+      date: raw["date"],
+      shardId: raw["shardId"],
+      line: raw["line"],
+      shards: marks,
+      days,
+      future,
+    };
   } catch {
     return null;
   }
@@ -200,10 +245,12 @@ export function writeLogCatchupCursor(
     for (const mark of Object.values(cursor.shards)) {
       if (!isNonNegativeInteger(mark)) return false;
     }
-    for (const [date, dayMarks] of Object.entries(cursor.days)) {
-      if (!DATE_SHAPE_RE.test(date)) return false;
-      for (const mark of Object.values(dayMarks)) {
-        if (!isNonNegativeInteger(mark)) return false;
+    for (const dated of [cursor.days, cursor.future]) {
+      for (const [date, dayMarks] of Object.entries(dated)) {
+        if (!DATE_SHAPE_RE.test(date)) return false;
+        for (const mark of Object.values(dayMarks)) {
+          if (!isNonNegativeInteger(mark)) return false;
+        }
       }
     }
     if (derivedDirIsSymlinked(vault, DERIVED_STORE_DIR)) return false;

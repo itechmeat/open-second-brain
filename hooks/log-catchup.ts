@@ -28,8 +28,10 @@
  * per-shard high-water marks (hooks/lib/log-cursor-state.ts,
  * overwrite-only derived state, un-synced): the runtimes sharing this
  * vault carry different agent names, so "since my last look" is a fact
- * about the identity, not the device. The lane is a PURE read of the
- * log: entries are discovered
+ * about the identity, not the device. The marks cover the cursor date,
+ * a window of older dates and the future-dated dates a clock-skewed
+ * writer may stamp, so every foreign line shows once. The lane is a
+ * PURE read of the log: entries are discovered
  * through `listLogDates` and read through `readLogDay` and nothing is
  * ever appended to `Brain/log` - session-capture owns the lifecycle
  * event, and this lane must stay distinguishable from it.
@@ -147,18 +149,26 @@ interface CatchupPosition {
 }
 
 /**
- * Whether an entry read at `position` is past the cursor. Dates after
- * the cursor date are all new; on the cursor date the per-shard marks
- * decide - a shard with no mark yet is entirely new, otherwise the
- * entry is new when its line index is past that shard's mark; a window
- * date older than the cursor date reads the same decision off that
- * date's `days` marks. See the cursor module for why the marks, and
- * not the bare tuple, are what the filter reads.
+ * Whether an entry read at `position` is past the cursor. Dates before
+ * the cursor date read the decision off that date's `days` marks; the
+ * cursor date off `shards`; and a date AFTER the cursor - a skewed
+ * writer's future date, which the cursor never parks on - off the
+ * `future` marks, so a skewed line is shown once instead of every
+ * session until the clock reaches its date. A shard with no mark yet is
+ * entirely new; otherwise the entry is new when its line index is past
+ * that shard's mark, and a date with no marks at all is new only in the
+ * future direction (older dates outside the window are skipped whole
+ * before this runs). See the cursor module for why the marks, and not
+ * the bare tuple, are what the filter reads.
  */
 function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boolean {
-  if (position.date > cursor.date) return true;
-  const marks = position.date < cursor.date ? cursor.days[position.date] : cursor.shards;
-  if (marks === undefined) return false;
+  if (position.date === cursor.date) {
+    const mark = cursor.shards[position.shardId];
+    return mark === undefined || position.line > mark;
+  }
+  const marks =
+    position.date < cursor.date ? cursor.days[position.date] : cursor.future[position.date];
+  if (marks === undefined) return position.date > cursor.date;
   const mark = marks[position.shardId];
   return mark === undefined || position.line > mark;
 }
@@ -243,8 +253,10 @@ async function main(): Promise<void> {
     // past today, every real date under it would read as already-seen
     // (`date < cursor.date` with no window mark) and the lane would go
     // silent until the clock caught up. The clamp parks on the newest
-    // position that exists as of today instead; lines on later dates
-    // resurface next run, which is the cheap direction to be wrong in.
+    // position that exists as of today instead, and the skewed dates
+    // keep their own marks in the cursor's `future` map below, so a
+    // skewed line is shown once instead of every session until the
+    // clock reaches its date.
     const today = new Date().toISOString().slice(0, 10);
     let lastSeenParked: CatchupPosition | null = null;
     // Null prototypes: shard ids are foreign input and DEVICE_ID_RE
@@ -343,9 +355,10 @@ async function main(): Promise<void> {
       // The clamp: park on the newest position dated today or earlier.
       // When every scanned line is future-dated there is no such
       // position, so the cursor parks on the bare date with no marks -
-      // nothing seen is vouched for, and the skewed lines resurface
-      // until the clock catches up, the honest price of not going
-      // silent for exactly the days the skew covers.
+      // no real line is vouched for. The skewed dates themselves are
+      // marked in `future` above, so their lines show once each instead
+      // of every session, and what resurfaces until the clock catches
+      // up is only a genuinely new line appended to a future date.
       const parked = lastSeenParked ?? { date: today, shardId: "", line: 0 };
       const days: Record<string, Record<string, number>> = {};
       const windowDates = Object.keys(perDateMarks)
@@ -356,12 +369,29 @@ async function main(): Promise<void> {
         const marks = perDateMarks[d]!;
         if (Object.keys(marks).length > 0) days[d] = marks;
       }
+      // The scanned dates after the parked date keep their marks too -
+      // the future-skewed dates the clamp refuses to park on. Without
+      // them a skewed line, forever newest in merge order, would be
+      // re-collected every session for the whole skew period. The OLDEST
+      // future dates are the ones kept (the clock reaches them soonest);
+      // a skew beyond the window resurfaces, the same bounded honesty as
+      // the older-side window.
+      const future: Record<string, Record<string, number>> = {};
+      const futureDates = Object.keys(perDateMarks)
+        .filter((d) => d > parked.date)
+        .toSorted()
+        .slice(0, LOG_CATCHUP_WINDOW_DATES);
+      for (const d of futureDates) {
+        const marks = perDateMarks[d]!;
+        if (Object.keys(marks).length > 0) future[d] = marks;
+      }
       writeLogCatchupCursor(vault, self.value, {
         date: parked.date,
         shardId: parked.shardId,
         line: parked.line,
         shards: perDateMarks[parked.date] ?? {},
         days,
+        future,
       });
     }
   } finally {
