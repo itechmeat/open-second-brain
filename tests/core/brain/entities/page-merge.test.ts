@@ -192,6 +192,29 @@ describe("planEntityMerge", () => {
     );
   });
 
+  test("an id subject outside the expected category refuses like the name path", () => {
+    const { keepId, dropId } = seedPair();
+    expect(
+      codeOf(() =>
+        planEntityMerge(vault, { keep: keepId, keepCategory: "projects", drop: dropId }),
+      ),
+    ).toBe("keep-not-found");
+    expect(
+      codeOf(() =>
+        planEntityMerge(vault, { keep: keepId, drop: dropId, dropCategory: "projects" }),
+      ),
+    ).toBe("drop-not-found");
+    // The right category still resolves by id on both sides.
+    expect(() =>
+      planEntityMerge(vault, {
+        keep: keepId,
+        drop: dropId,
+        keepCategory: "people",
+        dropCategory: "people",
+      }),
+    ).not.toThrow();
+  });
+
   test("a quarantine-lane record is refused with a named reason", () => {
     seedPair();
     const quarantined = upsertEntity(vault, {

@@ -178,12 +178,15 @@ function resolveSubject(
   const trimmed = query.trim();
   if (trimmed.length === 0) throw notFound();
 
-  const byId = index.entities.filter((e) => e.id === trimmed);
+  // The requested category narrows the id path too: an id that resolves
+  // outside it is as missing as a name no record in the category holds,
+  // and refuses with the same named error.
+  const inCategory = (e: BrainEntity) => category === undefined || e.category === category;
+  const byId = index.entities.filter((e) => e.id === trimmed && inCategory(e));
   if (byId.length === 1) return assertMergeable(byId[0]!, side);
 
   const normalized = normalizeEntityName(trimmed);
   if (normalized.length === 0) throw notFound();
-  const inCategory = (e: BrainEntity) => category === undefined || e.category === category;
   const canonical = index.entities.filter(
     (e) =>
       entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
