@@ -186,8 +186,25 @@ const RAW_OKF_KEYS: ReadonlyArray<{ readonly raw: string; readonly native: strin
  * block - `status: stable` materializing where none existed - and the
  * next export carried the materialized status as a raw native,
  * permanent.
+ *
+ * The marker also declares what it covers: a bare `true` - the shape
+ * every exporter stamped before the marker could carry a list - covers
+ * only the old status/sources/generated set, and a list of native names
+ * covers exactly what it names (see
+ * {@link rawCarryDeclaredNatives}). The restore never drops a native
+ * whose pair the marker did not declare.
  */
 const RAW_CARRY_KEY = "okf_raw";
+
+/**
+ * The native fields a bare {@link RAW_CARRY_KEY} `true` covers: the
+ * three the exporters that stamped the bare shape managed. The `type`
+ * pair did not exist yet in those exports - a native `type` rode the
+ * page verbatim beside the marker - so `true` must never name it, or
+ * the restore would read a legacy page's absent `okf_type_raw` as "the
+ * field never had a value" and delete the real type.
+ */
+const RAW_CARRY_TRUE_NATIVES: ReadonlySet<string> = new Set(["status", "sources", "generated"]);
 
 const FRESHNESS_FIELDS = ["updated_at", "updated"] as const;
 
@@ -1242,6 +1259,25 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
 }
 
 /**
+ * Read the native-key coverage a page's {@link RAW_CARRY_KEY} marker
+ * declares. A bare `true` - the shape every exporter stamped before the
+ * marker could carry a list - covers exactly the old three-key set
+ * ({@link RAW_CARRY_TRUE_NATIVES}); a list of native names covers what
+ * it names, so an exporter managing a different set declares it instead
+ * of the import guessing. An unrecognized shape still says legacy
+ * raw-carrying. An ABSENT marker (a page whose raw keys survived while
+ * the marker was lost) declares nothing extra: the present raw keys
+ * restore their own pairs, and nothing else is dropped.
+ */
+function rawCarryDeclaredNatives(marker: FrontmatterValue | undefined): ReadonlySet<string> {
+  if (marker === undefined) return new Set();
+  if (Array.isArray(marker)) {
+    return new Set(marker.filter((item): item is string => typeof item === "string"));
+  }
+  return RAW_CARRY_TRUE_NATIVES;
+}
+
+/**
  * Restore the native frontmatter an own-producer export carried under
  * the producer namespace (the `okf_*_raw` keys), dropping the derived
  * v0.2 block the export wrote beside it. The operator's round-trip is
@@ -1249,11 +1285,12 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
  * quarantined again instead of silently promoted to the enum's
  * `stable`, a completion status comes back itself, user-written sources
  * survive, and a page that never carried a status (or sources) again
- * does not. Raw values replace the derived ones wholesale; a missing
- * raw key BESIDE a present one means the source page never carried that
- * field, so the derived value is dropped rather than landed - a
- * fresh-export plain page comes back plain instead of gaining the
- * `status: stable` the derived block would have materialized.
+ * does not. A raw key restores its native verbatim; a MISSING raw key
+ * drops its derived value only when the page's marker declared that
+ * pair (see {@link rawCarryDeclaredNatives}) - a fresh-export plain
+ * page comes back without the derived status it never had, while a
+ * legacy marker-bearing page keeps the native `type` its export rode
+ * verbatim beside a marker that predates the type pair.
  *
  * The restore runs only on a page that declares raw-carrying: the
  * {@link RAW_CARRY_KEY} marker, or - saying the same thing when the
@@ -1272,6 +1309,7 @@ function restoreRawOkfKeys(meta: FrontmatterMap): void {
   const marked =
     meta[RAW_CARRY_KEY] !== undefined || RAW_OKF_KEYS.some(({ raw }) => meta[raw] !== undefined);
   if (!marked) return;
+  const declared = rawCarryDeclaredNatives(meta[RAW_CARRY_KEY]);
   delete meta[RAW_CARRY_KEY];
   for (const { raw, native } of RAW_OKF_KEYS) {
     // Presence, not shape: the raw value round-tripped through the page
@@ -1279,7 +1317,7 @@ function restoreRawOkfKeys(meta: FrontmatterMap): void {
     // derived value with it verbatim - a numeric or whitespace status
     // included.
     if (meta[raw] !== undefined) meta[native] = meta[raw];
-    else delete meta[native];
+    else if (declared.has(native)) delete meta[native];
     delete meta[raw];
   }
 }
