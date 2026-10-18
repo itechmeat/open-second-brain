@@ -661,11 +661,14 @@ describe("o2b brain entity merge", () => {
     expect(words[9]).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("a guard-on preview refuses an apply that passes --force, naming the difference", async () => {
-    // The plan hash seals whether the text-level merge guard ran, so a
-    // hash previewed under the guard is not spendable at a --force apply:
-    // the caller must re-preview honestly at the stance it will apply in,
-    // instead of widening the bypass silently under a previewed hash.
+  test("a clean pair previewed without --force applies with --force", async () => {
+    // The standard agent flow: preview at the plain stance (the guard ran
+    // and passed), apply with --force for consent. guard_bypassed stamps
+    // only an override the guard would have refused, so a clean pair
+    // re-plans to the SAME hash at either stance and the apply lands -
+    // stamping the flag instead refused every merge with hash-mismatch
+    // and pushed agents into previewing under --force to get anything
+    // through.
     const { keepId, dropId, dropPath } = await seedMergePair();
     const preview = await runCli(
       ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
@@ -677,14 +680,83 @@ describe("o2b brain entity merge", () => {
     };
     expect(payload.plan.guard_bypassed).toBe(false);
     const out = await runCli(
-      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", payload.plan_hash],
+      [
+        "brain",
+        "entity",
+        "merge",
+        keepId,
+        dropId,
+        "--force",
+        "--expect-hash",
+        payload.plan_hash,
+        "--json",
+      ],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    expect((JSON.parse(out.stdout) as { applied: boolean }).applied).toBe(true);
+    expect(existsSync(dropPath)).toBe(false);
+  });
+
+  test("a pair that starts refusing cannot apply under a plain preview's hash", async () => {
+    // The keep body anchors Mary Somerville before her record exists: the
+    // preview's guard passes and stamps no bypass. Registering her flips
+    // the verdict without touching either previewed page, so applying
+    // with --force re-plans at a stance the preview never took - the hash
+    // refuses as stale, and the pair cannot ride a preview that claimed
+    // the guard ran.
+    const keep = await runCli(
+      [
+        "brain",
+        "entity",
+        "set",
+        "people",
+        "Ada Lovelace",
+        "--body",
+        "Mary Somerville wrote often.",
+      ],
+      { env: env() },
+    );
+    expect(keep.returncode).toBe(0);
+    const drop = await runCli(["brain", "entity", "set", "people", "Ada", "--json"], {
+      env: env(),
+    });
+    expect(drop.returncode).toBe(0);
+    const dropPayload = JSON.parse(drop.stdout) as { id: string; path: string };
+    const preview = await runCli(
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-ada-lovelace",
+        dropPayload.id,
+        "--dry-run",
+        "--json",
+      ],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const mary = await runCli(["brain", "entity", "set", "people", "Mary Somerville"], {
+      env: env(),
+    });
+    expect(mary.returncode).toBe(0);
+    const out = await runCli(
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-ada-lovelace",
+        dropPayload.id,
+        "--force",
+        "--expect-hash",
+        hash,
+        "--json",
+      ],
       { env: env() },
     );
     expect(out.returncode).toBe(1);
-    expect(out.stderr).toContain("hash-mismatch");
-    // The refusal names the difference: the guard stance the live plan ran with.
-    expect(out.stderr).toContain("guard_bypassed: true");
-    expect(existsSync(dropPath)).toBe(true);
+    expect(JSON.parse(out.stdout)).toMatchObject({ ok: false, code: "hash-mismatch" });
+    expect(existsSync(dropPayload.path)).toBe(true);
   });
 
   test("the echoed apply command carries --force exactly when the preview ran with it", async () => {
@@ -706,20 +778,62 @@ describe("o2b brain entity merge", () => {
     expect(forcedApply.endsWith(" --force")).toBe(true);
   });
 
-  test("a --force preview states that it bypasses the text-level merge guard", async () => {
-    const { keepId, dropId } = await seedMergePair();
+  test("a --force preview states the bypass only when the guard would refuse", async () => {
+    // The guard line keys on the plan's guard_bypassed stamp, not on the
+    // flag: a pair the guard refuses is previewable only under the
+    // override, and the consent the operator gives names it - while a
+    // clean pair merged under --force runs the guard and says nothing.
+    const keep = await runCli(
+      [
+        "brain",
+        "entity",
+        "set",
+        "people",
+        "Ada Lovelace",
+        "--body",
+        "Mary Somerville wrote often.",
+      ],
+      { env: env() },
+    );
+    expect(keep.returncode).toBe(0);
+    const drop = await runCli(
+      ["brain", "entity", "set", "people", "Ada", "--body", "Short note about Ada."],
+      { env: env() },
+    );
+    expect(drop.returncode).toBe(0);
+    const mary = await runCli(["brain", "entity", "set", "people", "Mary Somerville"], {
+      env: env(),
+    });
+    expect(mary.returncode).toBe(0);
     const forced = await runCli(
-      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run"],
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-ada-lovelace",
+        "ent-people-ada",
+        "--force",
+        "--dry-run",
+      ],
       { env: env() },
     );
     expect(forced.returncode).toBe(0);
     expect(forced.stdout).toContain("text-level merge guard");
     expect(forced.stdout).toContain("bypass");
-    // The guarded stance is stated only when it is the truth.
+    // A clean pair states no bypass at either stance: the guard passes,
+    // so the override never happened.
+    const { keepId, dropId } = await seedMergePair();
     const plain = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
       env: env(),
     });
+    expect(plain.returncode).toBe(0);
     expect(plain.stdout).not.toContain("bypass");
+    const forcedClean = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run"],
+      { env: env() },
+    );
+    expect(forcedClean.returncode).toBe(0);
+    expect(forcedClean.stdout).not.toContain("bypass");
   });
 
   test("the entity help states that --force bypasses the text-level merge guard", () => {
@@ -766,13 +880,19 @@ describe("o2b brain entity merge", () => {
     expect(JSON.parse(blocked.stdout)).toMatchObject({ ok: false, code: "entity-guard" });
     expect(existsSync(dropPath)).toBe(true);
 
-    // --force unblocks the guarded preview and still echoes the hash.
+    // --force unblocks the guarded preview and still echoes the hash; the
+    // plan stamps the override the guard refused.
     const preview = await runCli(
       ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run", "--json"],
       { env: env() },
     );
     expect(preview.returncode).toBe(0);
-    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const parsed = JSON.parse(preview.stdout) as {
+      plan_hash: string;
+      plan: { guard_bypassed: boolean };
+    };
+    expect(parsed.plan.guard_bypassed).toBe(true);
+    const { plan_hash: hash } = parsed;
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
 
     // The hash gate is a fact-check, not consent: --force does NOT bypass it.

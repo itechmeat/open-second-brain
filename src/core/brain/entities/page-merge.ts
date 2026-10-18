@@ -128,12 +128,17 @@ export interface EntityMergePlan {
   /** Survivor edges pointing at the dropped id, removed as self-relations. */
   readonly cyclic_edges_removed: number;
   /**
-   * Whether this plan was built with the text-level merge guard bypassed
-   * (`--force`). Part of the hashed plan on purpose: the bypass is a fact
-   * about the merge the caller consented to, so a pair previewed under the
-   * guard and applied with `--force` re-plans to a different hash and
-   * refuses as stale, forcing a re-preview that is honest about the bypass
-   * instead of widening it silently under a hash taken without it.
+   * Whether this plan overrode a refusal from the text-level merge guard.
+   * Stamped only when the guard WOULD have refused and the caller opted
+   * out (`--force`): a pair the guard passes stamps false and hashes
+   * identically at either stance, so the standard flow - preview without
+   * `--force`, apply with it for consent - re-plans to the hash the
+   * preview echoed. Part of the hashed plan on purpose: a pair that
+   * refuses stamps true, so a hash taken under the override is not
+   * spendable at a guarded re-plan (and the other way round) - the apply
+   * refuses as stale, forcing a re-preview that is honest about the
+   * override instead of widening or hiding it under a hash taken at
+   * another stance.
    */
   readonly guard_bypassed: boolean;
 }
@@ -381,20 +386,26 @@ export function planEntityMerge(
   const aliasAdded = aliasesMerged.includes(drop.name) ? drop.name : null;
 
   // Text-level merge guard over the two bodies (t_e9692750): disjoint
-  // guarded anchor sets are the one demonstrably unsafe fold. Bypassed
-  // explicitly (`--force`), never silently.
-  if (opts.bypassEntityGuard !== true) {
-    const verdict = guardEntityMerge({
-      keepText: keep.body,
-      dropText: drop.body,
-      entities: index.entities,
-    });
-    if (!verdict.allowed) {
+  // guarded anchor sets are the one demonstrably unsafe fold. The verdict
+  // is consulted even under an explicit bypass (`--force`), because the
+  // plan's guard_bypassed stamp means "the guard would have refused and
+  // the caller overrode it" - a clean pair stamps false and hashes
+  // identically at either stance, while a refused pair is plannable only
+  // through the override, and the hash seals which of the two happened.
+  const verdict = guardEntityMerge({
+    keepText: keep.body,
+    dropText: drop.body,
+    entities: index.entities,
+  });
+  let guardBypassed = false;
+  if (!verdict.allowed) {
+    if (opts.bypassEntityGuard !== true) {
       throw new EntityMergeError(
         "entity-guard",
         `${verdict.reason} - pass --force to merge anyway`,
       );
     }
+    guardBypassed = true;
   }
 
   const keepMeta = parseFrontmatter(keep.path)[0];
@@ -437,7 +448,7 @@ export function planEntityMerge(
     relations_absorbed: relationsAbsorbed,
     inbound_edges_retargeted: inboundRetargeted,
     cyclic_edges_removed: cyclicRemoved,
-    guard_bypassed: opts.bypassEntityGuard === true,
+    guard_bypassed: guardBypassed,
   });
 }
 

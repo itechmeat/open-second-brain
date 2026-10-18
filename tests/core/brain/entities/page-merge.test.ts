@@ -613,30 +613,76 @@ describe("applyEntityMerge", () => {
     expect(vaultFingerprint(vault)).toBe(before);
   });
 
-  test("the plan records whether the guard ran, and the hash seals it", () => {
+  test("the plan stamps the bypass only when the guard would refuse", () => {
+    // A clean pair: the guard passes, so a bypass-requested plan IS the
+    // guarded plan - same stamp, same hash. The standard agent flow
+    // (preview without --force, apply with it for consent) re-plans to
+    // the hash the preview echoed and lands.
     const { keepId, dropId } = seedPair();
     const guarded = planEntityMerge(vault, { keep: keepId, drop: dropId });
     expect(guarded.guard_bypassed).toBe(false);
-    const bypassed = planEntityMerge(
+    const bypassRequested = planEntityMerge(
       vault,
       { keep: keepId, drop: dropId },
       { bypassEntityGuard: true },
     );
+    expect(bypassRequested.guard_bypassed).toBe(false);
+    expect(entityMergePlanHash(bypassRequested)).toBe(entityMergePlanHash(guarded));
+
+    // A pair the guard refuses: only the bypassed plan exists, and it
+    // says so - the stamp names an override that happened, never a flag
+    // that was merely passed.
+    const { keepId: gKeep, dropId: gDrop } = seedGuardedPair();
+    const bypassed = planEntityMerge(
+      vault,
+      { keep: gKeep, drop: gDrop },
+      { bypassEntityGuard: true },
+    );
     expect(bypassed.guard_bypassed).toBe(true);
-    // The bypass is part of the hashed plan: the same pair previewed under
-    // the guard and re-planned with it bypassed hashes differently, so the
-    // previewed hash is only spendable at the stance it was taken in.
-    expect(entityMergePlanHash(guarded)).not.toBe(entityMergePlanHash(bypassed));
-    // A hash previewed with the guard ON does not apply with it OFF (here:
-    // the bypassed re-plan) - the apply refuses as stale before any write.
+  });
+
+  test("a pair that would refuse cannot apply under a preview that claimed no bypass", () => {
+    // The keep body anchors Mary Somerville before her record exists: at
+    // preview time the guard passes (nothing anchored to), and a later
+    // registration flips the verdict WITHOUT touching either page - the
+    // digest-sealed bytes are identical, only the guard stance moved.
+    const keep = upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      body: "Mary Somerville wrote often.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop = upsertEntity(vault, {
+      category: "people",
+      name: "Ada",
+      body: "Short note about Ada.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const previewed = planEntityMerge(vault, { keep: keep.entity.id, drop: drop.entity.id });
+    expect(previewed.guard_bypassed).toBe(false);
+    const previewHash = entityMergePlanHash(previewed);
+
+    upsertEntity(vault, {
+      category: "people",
+      name: "Mary Somerville",
+      agent: "test-agent",
+      now: NOW,
+    });
+    __clearEntityIndexCache();
+
+    // Applying with the bypass re-plans at a stance the preview never
+    // took: the plan now stamps guard_bypassed, the hash differs, and the
+    // apply refuses as stale before any write.
     const before = vaultFingerprint(vault);
     expect(
       codeOf(() =>
         applyEntityMerge(
           vault,
-          { keep: keepId, drop: dropId },
+          { keep: keep.entity.id, drop: drop.entity.id },
           {
-            expectHash: entityMergePlanHash(guarded),
+            expectHash: previewHash,
             bypassEntityGuard: true,
             now: NOW,
             agent: "test-agent",
@@ -644,6 +690,17 @@ describe("applyEntityMerge", () => {
         ),
       ),
     ).toBe("hash-mismatch");
+    expect(vaultFingerprint(vault)).toBe(before);
+    // Without the bypass the guard itself refuses, by its own code.
+    expect(
+      codeOf(() =>
+        applyEntityMerge(
+          vault,
+          { keep: keep.entity.id, drop: drop.entity.id },
+          { expectHash: previewHash, now: NOW },
+        ),
+      ),
+    ).toBe("entity-guard");
     expect(vaultFingerprint(vault)).toBe(before);
   });
 
