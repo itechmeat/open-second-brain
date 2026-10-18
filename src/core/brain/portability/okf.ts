@@ -22,9 +22,11 @@
  * field — never from natural-language heuristics — so the split is
  * deterministic and language-agnostic. Each bundle page file carries the
  * page's frontmatter and body **verbatim** plus the OKF v0.2 derived
- * keys (`status`, `sources`, `generated` — recomputed on every export);
- * the manifest carries the *derived* standard fields (kind, citations,
- * status, sources, freshness) computed from current page state.
+ * keys (`status`, `sources`, `generated` — recomputed on every export)
+ * and the `okf_raw` marker declaring the raw native keys riding beside
+ * them; the manifest carries the *derived* standard fields (kind,
+ * citations, status, sources, freshness) computed from current page
+ * state.
  *
  * Re-export honesty: when OSB imported a page from a *foreign* producer,
  * the page keeps that producer's raw type value (`okf_type:`) and any
@@ -149,6 +151,22 @@ const REVIEW_KEY = "okf_review";
 const RAW_STATUS_KEY = "okf_status_raw";
 const RAW_SOURCES_KEY = "okf_sources_raw";
 const RAW_GENERATED_KEY = "okf_generated_raw";
+
+/**
+ * The per-page marker that says "this bundle page was written by a
+ * raw-carrying exporter", stamped on EVERY page of a fresh export
+ * beside the derived block - raw keys or not. It is what lets the
+ * import distinguish a page the current exporter wrote with no native
+ * status / sources / generated (absent raw keys mean "the field never
+ * had a value": strip the derived block, the page lands plain) from a
+ * LEGACY bundle's page (no marker: the frontmatter already is the
+ * native state, leave it as-is). Without the marker, a fresh-export
+ * plain page took the legacy early-return and landed WITH the derived
+ * block - `status: stable` materializing where none existed - and the
+ * next export carried the materialized status as a raw native,
+ * permanent.
+ */
+const RAW_CARRY_KEY = "okf_raw";
 
 const FRESHNESS_FIELDS = ["updated_at", "updated"] as const;
 
@@ -631,6 +649,7 @@ function renderOkfPageFile(
   for (const [key, value] of Object.entries(page.frontmatter)) {
     if (key === "status" || key === "sources" || key === "generated") continue;
     if (key === RAW_STATUS_KEY || key === RAW_SOURCES_KEY || key === RAW_GENERATED_KEY) continue;
+    if (key === RAW_CARRY_KEY) continue;
     carried[key] = value;
   }
   // The native values ride the producer namespace beside the derived
@@ -653,6 +672,11 @@ function renderOkfPageFile(
   if (page.frontmatter["generated"] !== undefined) {
     carried[RAW_GENERATED_KEY] = page.frontmatter["generated"];
   }
+  // The raw-carrying declaration, stamped fresh on every page of every
+  // export: this is what tells the own-producer import that absent raw
+  // keys mean "the field never had a value" rather than "a legacy
+  // bundle's page - leave the frontmatter alone".
+  carried[RAW_CARRY_KEY] = true;
   // formatFrontmatter with an empty body is exactly "---\n<keys>---\n";
   // drop the closing fence, append the derived block, re-close.
   let out = formatFrontmatter(carried, "").slice(0, -"---\n".length);
@@ -1108,23 +1132,21 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
  * survive, and a page that never carried a status (or sources) again
  * does not. Raw values replace the derived ones wholesale; a missing
  * raw key BESIDE a present one means the source page never carried that
- * field, so the derived value is dropped rather than landed.
+ * field, so the derived value is dropped rather than landed - a
+ * fresh-export plain page comes back plain instead of gaining the
+ * `status: stable` the derived block would have materialized.
  *
- * A page carrying NO raw key at all is a legacy bundle's page (exported
- * before the raw keys existed - sealed knowledge-pack halves accepted on
- * purpose included): its natives are the frontmatter already in place,
- * and reading their absence as "never had a value" deleted them. The
- * restore is skipped for such a page, so a legacy quarantine survives
- * its own round-trip.
+ * The restore runs only on a page whose file carries the
+ * {@link RAW_CARRY_KEY} marker: a page WITHOUT it is a legacy bundle's
+ * (exported before the raw-carrying declaration existed - sealed
+ * knowledge-pack halves accepted on purpose included), its natives are
+ * the frontmatter already in place, and reading their absence as "never
+ * had a value" deleted them. The restore is skipped for such a page, so
+ * a legacy quarantine survives its own round-trip.
  */
 function restoreRawOkfKeys(meta: FrontmatterMap): void {
-  if (
-    meta[RAW_STATUS_KEY] === undefined &&
-    meta[RAW_SOURCES_KEY] === undefined &&
-    meta[RAW_GENERATED_KEY] === undefined
-  ) {
-    return;
-  }
+  if (meta[RAW_CARRY_KEY] === undefined) return;
+  delete meta[RAW_CARRY_KEY];
   // Presence, not shape: the raw value round-tripped through the page
   // file is whatever the export carried, and the restore replaces the
   // derived value with it verbatim - a numeric or whitespace status
@@ -1175,12 +1197,13 @@ function importFrontmatter(
     // lane, where restoring the recorded status promotes nothing.
     restoreRawOkfKeys(meta);
   } else {
-    // A foreign bundle's pages shed the raw keys: honoured on no path,
-    // kept on none either - a foreign bundle must not plant stray
-    // restore machinery into the vault.
+    // A foreign bundle's pages shed the raw keys and the raw-carry
+    // marker: honoured on no path, kept on none either - a foreign
+    // bundle must not plant stray restore machinery into the vault.
     delete meta[RAW_STATUS_KEY];
     delete meta[RAW_SOURCES_KEY];
     delete meta[RAW_GENERATED_KEY];
+    delete meta[RAW_CARRY_KEY];
   }
   if (foreign) {
     if (meta[PRODUCER_KEY] === undefined) meta[PRODUCER_KEY] = producer;

@@ -500,6 +500,8 @@ describe("v0.2 import acceptance", () => {
     const qPage = fileOf(bundle.files, "concepts/Q.md");
     expect(qPage).toContain("status: stable");
     expect(qPage).toContain("okf_status_raw: quarantine");
+    // Every page of a fresh export declares raw-carrying, raw keys or not.
+    expect(qPage).toContain("okf_raw: true");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest-"));
@@ -527,14 +529,16 @@ describe("v0.2 import acceptance", () => {
       expect(landedG).toContain("generated: hand-written");
       expect(landedG).not.toContain("open-second-brain/");
       // A page whose source carried none of the three fields exports no
-      // raw keys - the zero-raw-key shape of a legacy bundle. The import
-      // leaves such a page untouched (the derived block rides along)
-      // rather than reading absent raw keys as "the field never had a
-      // value"; the next export re-derives the block either way.
+      // raw keys - but its bundle file carries the okf_raw marker, so
+      // the import reads the absent raw keys as "the field never had a
+      // value" and strips the derived block: the plain page comes back
+      // plain, with no `status: stable` materialized out of nothing
+      // that the next export would carry as a raw native.
       const landedPlain = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
-      expect(landedPlain).toContain("status: stable");
-      expect(landedPlain).toContain("concepts/Q.md");
-      expect(landedPlain).toContain("open-second-brain/");
+      expect(landedPlain).not.toContain("status:");
+      expect(landedPlain).not.toContain("sources:");
+      expect(landedPlain).not.toContain("generated:");
+      expect(landedPlain).not.toContain("okf_raw");
       expect(landedPlain).toContain("see [[Q]].");
       // User-written sources come back; the derived flow map does not.
       // The writer quotes array items on re-render - the DATA is what is
@@ -553,13 +557,15 @@ describe("v0.2 import acceptance", () => {
     }
   });
 
-  test("a legacy own-producer page (no raw keys) keeps its natives on a trusted import", () => {
-    // Bundles exported before the okf_*_raw keys existed carried the
-    // page's native status / sources / generated in place. Reading ABSENT
-    // raw keys as "the field never had a value" deleted exactly those
-    // natives, so a legacy bundle's trusted round-trip lost every page's
-    // status, quarantine included. A zero-raw-key page must import
-    // untouched; only a raw-carrying page gets the restore.
+  test("a legacy own-producer page (no raw-carry marker) keeps its natives on a trusted import", () => {
+    // Bundles exported before the raw-carrying declaration existed
+    // carried the page's native status / sources / generated in place,
+    // with no okf_raw marker to say otherwise. The restore branch runs
+    // only on a marked page, so a marker-less page imports untouched:
+    // its frontmatter already IS the native state, and reading absent
+    // raw keys as "the field never had a value" would delete exactly
+    // those natives - a legacy bundle's trusted round-trip once lost
+    // every page's status, quarantine included.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-dest-"));
     try {
@@ -603,6 +609,47 @@ describe("v0.2 import acceptance", () => {
       expect(landed).toContain("generated: by-hand");
       expect(landed).not.toContain("okf_status_raw");
       expect(landed).toContain("Body.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh-export plain page round-trips without gaining the derived block", () => {
+    // A page whose source carried no status / sources / generated exports
+    // no raw keys - but it is still a raw-carrying exporter's page, and
+    // its bundle file says so with the okf_raw marker beside the derived
+    // block. The import must read the absent raw keys as "the field
+    // never had a value" and strip the derived block, so the plain page
+    // comes back plain. Reading the zero-raw-key shape as a legacy page
+    // instead materialized `status: stable` where none existed - and the
+    // next export then carried the materialized status as a raw native,
+    // permanent.
+    note("Notes/Plain.md", "---\ntitle: Plain\n---\nsee [[Q]].\n");
+    const bundle = buildOkfBundle(vault);
+    // The marker declares raw-carrying on every page of a fresh export,
+    // raw keys or not.
+    const plainPage = fileOf(bundle.files, "concepts/Plain.md");
+    expect(plainPage).toContain("okf_raw: true");
+    expect(plainPage).toContain("status: stable");
+
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-plain-rt-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-plain-rt-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(false);
+      const result = importOkfBundle(dest, parsed, { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
+      // The derived block is stripped, not landed: no status the closed
+      // enum materialized out of nothing, no generated stamp - and no
+      // marker machinery left behind either.
+      expect(landed).not.toContain("status:");
+      expect(landed).not.toContain("generated:");
+      expect(landed).not.toContain("okf_raw");
+      expect(landed).toContain("title: Plain");
+      expect(landed).toContain("see [[Q]].");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
