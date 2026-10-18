@@ -1746,6 +1746,21 @@ export function resolveBacklogNudgeEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Session-start cross-agent log catch-up gate (t_3b44cd9a). Default OFF:
+ * the SessionStart hook that replays the `Brain/log` lines other agents
+ * appended stays dormant unless `log_catchup_enabled: "true"` (or the
+ * matching env override). Flag off keeps the session preamble
+ * byte-identical and writes no cursor state.
+ */
+export function resolveLogCatchupEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED",
+    "log_catchup_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional gap-loop recurrence threshold override (A3). A valid positive
  * integer (env first, then config) wins; anything else returns undefined so
  * the caller falls back to the named-constant default. Env-overridable so an

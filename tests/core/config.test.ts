@@ -10,6 +10,7 @@ import {
   parseSimpleYaml,
   resolveAgentName,
   resolveBacklogNudgeEnabled,
+  resolveLogCatchupEnabled,
   resolveExposeHostPaths,
   resolveLinkOutputFormat,
   resolveDecisionRecallMaxPerSession,
@@ -47,6 +48,7 @@ beforeEach(() => {
     "OPEN_SECOND_BRAIN_RECALL_ADEQUACY_MIN_RESULTS",
     "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS",
     "OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED",
+    "OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED",
     "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION",
     "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS",
   ]) {
@@ -547,6 +549,37 @@ describe("resolveBacklogNudgeEnabled", () => {
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, 'backlog_nudge_enabled: "false"\n');
     expect(resolveBacklogNudgeEnabled(cfg)).toBe(true);
+  });
+});
+
+describe("resolveLogCatchupEnabled", () => {
+  test("defaults to false when nothing configured", () => {
+    expect(resolveLogCatchupEnabled(join(tmp, "missing.yaml"))).toBe(false);
+  });
+
+  test("reads true from config", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'log_catchup_enabled: "true"\n');
+    expect(resolveLogCatchupEnabled(cfg)).toBe(true);
+  });
+
+  test("accepts 1 as truthy", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'log_catchup_enabled: "1"\n');
+    expect(resolveLogCatchupEnabled(cfg)).toBe(true);
+  });
+
+  test("any other value stays false", () => {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'log_catchup_enabled: "yes"\n');
+    expect(resolveLogCatchupEnabled(cfg)).toBe(false);
+  });
+
+  test("env wins over config", () => {
+    process.env["OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED"] = "true";
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, 'log_catchup_enabled: "false"\n');
+    expect(resolveLogCatchupEnabled(cfg)).toBe(true);
   });
 });
 

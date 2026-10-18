@@ -38,10 +38,10 @@
  */
 
 import {
-  discoverConfig,
   isConfiguredAgentName,
   resolveAgentName,
   resolveDeviceId,
+  resolveLogCatchupEnabled,
   resolveVault,
 } from "../src/core/config.ts";
 import { listLogDates, readLogDay } from "../src/core/brain/log-jsonl.ts";
@@ -64,12 +64,6 @@ import {
   type LogCatchupCursor,
 } from "./lib/log-cursor-state.ts";
 
-/** Env override for the opt-in flag, read before the config key. */
-export const LOG_CATCHUP_ENV_FLAG = "OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED";
-
-/** The `_brain.yaml` key the opt-in resolves from when the env is unset. */
-export const LOG_CATCHUP_CONFIG_KEY = "log_catchup_enabled";
-
 /** `origin` label stamped on the catch-up block's untrusted-content fence. */
 const CATCHUP_FENCE_ORIGIN = "cross-agent-catch-up";
 
@@ -91,20 +85,12 @@ const CATCHUP_BODY_FIELDS: ReadonlyArray<string> = Object.freeze([
 const UNATTRIBUTED_AGENT_LABEL = "unattributed";
 
 /**
- * Whether the lane is on: the env flag first, then the config key, the
- * same env-then-config order every `resolveConfigFlag` reader uses.
- * Fail-soft - an unreadable config is off, not a crash.
+ * Whether the lane is on: the shared env-then-config resolver, the same
+ * one every default-OFF boolean gate reads through. Fail-open - the
+ * whole hook body runs under `main().catch`, so an unreadable config
+ * degrades to a silent exit-0 start, never a crashed session.
  */
-function logCatchupEnabled(): boolean {
-  const env = process.env[LOG_CATCHUP_ENV_FLAG]?.trim();
-  if (env) return env === "true" || env === "1";
-  try {
-    const value = discoverConfig().data[LOG_CATCHUP_CONFIG_KEY]?.trim();
-    return value === "true" || value === "1";
-  } catch {
-    return false;
-  }
-}
+const logCatchupEnabled = resolveLogCatchupEnabled;
 
 /**
  * The identity this run filters its own lines by, and the source that
