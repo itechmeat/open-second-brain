@@ -96,11 +96,16 @@ export function neutralizeUntrustedText(text: string): string {
  * consumer's one-item-per-line structure or smuggle a forged block
  * boundary past review.
  *
+ * The collapse also catches U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH
+ * SEPARATOR): the control strip does not remove them, but many consumers
+ * treat them as line breaks, so a value carrying one is not one line
+ * whatever its LF count says.
+ *
  * Promoted here from two byte-identical private copies (recall-inject,
  * navmap) so every lane neutralizes single-line values the same way.
  */
 export function neutralizeSingleLine(text: string): string {
-  return neutralizeUntrustedText(text).replace(/[\n\t]+/g, " ");
+  return neutralizeUntrustedText(text).replace(/[\n\t\u2028\u2029]+/g, " ");
 }
 
 /**

@@ -180,6 +180,16 @@ describe("neutralizeSingleLine", () => {
     expect(neutralizeSingleLine("one\n\n\ntwo\t\tthree")).toBe("one two three");
   });
 
+  test("collapses U+2028/U+2029 line separators like newlines", () => {
+    // Many consumers treat the Unicode line/paragraph separators as line
+    // breaks, so a value carrying them is not one line even though it
+    // holds no LF: the collapse must catch them too.
+    const ls = String.fromCodePoint(0x2028);
+    const ps = String.fromCodePoint(0x2029);
+    expect(neutralizeSingleLine(`one${ls}two${ps}${ps}three\tfour`)).toBe("one two three four");
+    expect(neutralizeSingleLine(`a${ls}${ps}b`)).toBe("a b");
+  });
+
   test("strips control, zero-width and bidi characters before the collapse", () => {
     const dirty = `be${ZWSP}fore${C0}\nafter${RLO}end`;
     expect(neutralizeSingleLine(dirty)).toBe("before afterend");
