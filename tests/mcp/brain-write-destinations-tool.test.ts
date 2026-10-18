@@ -105,6 +105,7 @@ interface DestinationsReply {
   readonly total_matched: number;
   readonly returned: number;
   readonly destinations: ReadonlyArray<Record<string, unknown>>;
+  readonly window: { readonly since: string | null; readonly until: string | null };
   readonly warnings: ReadonlyArray<unknown>;
   readonly coverage_note: string;
   readonly next_cursor: string | null;
@@ -153,6 +154,35 @@ describe("brain_write_destinations listing", () => {
     expect(one["note_writes"]).toBe(1);
     expect(one["write_sessions"]).toBe(1);
     expect(one["kinds"]).toEqual(["note-write", "write-session"]);
+  });
+
+  test("the payload carries the exact covered window, implicit lower bound included", async () => {
+    seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "One.md");
+    // With `until` given, the default 7-day lower bound is anchored on it:
+    // the query is about the period ending 2026-03-04, so the window opens
+    // six days earlier at that day's start.
+    const reply = (await call({
+      since: "2026-03-01",
+      until: "2026-03-04",
+    })) as unknown as DestinationsReply;
+    expect(reply.window).toEqual({
+      since: "2026-03-01T00:00:00Z",
+      until: "2026-03-04T23:59:59.999Z",
+    });
+
+    const anchored = (await call({ until: "2026-03-04" })) as unknown as DestinationsReply;
+    expect(anchored.window).toEqual({
+      since: "2026-02-26T00:00:00Z",
+      until: "2026-03-04T23:59:59.999Z",
+    });
+
+    // No bounds: the upper end is now, and the payload says so instead of
+    // letting a null read as an unbounded walk.
+    const unbounded = (await call({})) as unknown as DestinationsReply;
+    expect(unbounded.window).toEqual({
+      since: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T00:00:00Z$/),
+      until: null,
+    });
   });
 
   test("filters agent, device, path and the time window", async () => {

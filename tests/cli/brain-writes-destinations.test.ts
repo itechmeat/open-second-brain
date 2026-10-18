@@ -89,6 +89,7 @@ interface DestinationsReply {
   readonly destinations: DestinationRow[];
   readonly total_matched: number;
   readonly returned: number;
+  readonly window: { readonly since: string | null; readonly until: string | null };
   readonly coverage_note: string;
   readonly warnings: unknown[];
 }
@@ -112,6 +113,13 @@ describe("o2b brain writes destinations", () => {
     const payload = JSON.parse(r.stdout) as DestinationsReply;
     expect(payload.total_matched).toBe(2);
     expect(payload.coverage_note).toBe(WRITE_DESTINATION_COVERAGE_NOTE);
+    // The window the walk covered rides the answer: the requested bounds
+    // completed to timestamps, so a JSON caller can read the coverage it
+    // is looking at instead of inferring it from the flags it sent.
+    expect(payload.window).toEqual({
+      since: "2026-03-01T00:00:00Z",
+      until: "2026-03-04T23:59:59.999Z",
+    });
     const one = payload.destinations.find((d) => d.target === "Notes/One.md")!;
     expect(one.note_writes).toBe(2);
     expect(one.agents).toEqual(["alpha", "beta"]);
@@ -160,6 +168,18 @@ describe("o2b brain writes destinations", () => {
     expect(r.stdout).toContain("Notes/One.md");
     expect(r.stdout).toContain("Notes/Two.md");
     expect(r.stdout).toContain(WRITE_DESTINATION_COVERAGE_NOTE);
+    // The covered window is one explicit line, both ends completed to
+    // timestamps - a bare-date until reads through the end of its day.
+    expect(r.stdout).toContain("window: 2026-03-01T00:00:00Z .. 2026-03-04T23:59:59.999Z");
+  });
+
+  test("the plain render names the window's open upper end as now", async () => {
+    seedBoth();
+    const r = await runCli(["brain", "writes", "destinations", "--vault", vault]);
+    expect(r.returncode).toBe(0);
+    // No --until: the walk ran to the present, and the line says so rather
+    // than printing a null.
+    expect(r.stdout).toMatch(/window: \d{4}-\d{2}-\d{2}T00:00:00Z \.\. now/);
   });
 
   test("an empty window reports zero rows and exits 0", async () => {

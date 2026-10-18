@@ -583,6 +583,10 @@ async function toolBrainWriteDestinations(
       devices: [...d.devices],
     })),
     coverage_note: result.coverage_note,
+    // The window the walk actually covered, both ends completed to
+    // timestamps: the default lower bound is computed, not sent, so a
+    // caller reading only its own arguments would misread the coverage.
+    window: { since: result.window.since, until: result.window.until },
     warnings: result.warnings.map((w) => ({
       path: w.path,
       line: w.lineNumber,

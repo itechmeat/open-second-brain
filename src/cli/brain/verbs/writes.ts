@@ -248,6 +248,10 @@ function destinations(
       total_matched: result.total_matched,
       returned: result.destinations.length,
       coverage_note: result.coverage_note,
+      // The window the walk actually covered, both ends completed to
+      // timestamps: the default lower bound is computed, not sent, so a
+      // caller reading only its own arguments would misread the coverage.
+      window: { since: result.window.since, until: result.window.until },
       warnings,
     });
     return 0;
@@ -258,6 +262,7 @@ function destinations(
   } else {
     for (const row of result.destinations) ok(renderDestinationRow(row));
   }
+  ok(windowLine(result.window));
   // The coverage note is part of the answer, not a footnote: derived
   // write sites emit no event of either kind, so a short list must not
   // read as a complete one.
@@ -289,6 +294,21 @@ function renderDestinationRow(row: WriteDestinationRow): string {
     `device: ${row.devices.map(provenanceCell).join(",")}`,
     `last ${row.last_write}`,
   ].join("  ");
+}
+
+/**
+ * The covered window as one line, beside the JSON payload's `window`:
+ * both ends completed to timestamps, because the default lower bound is
+ * computed from the anchor rather than sent. A null upper end means the
+ * walk ran to the present, and the line says `now` instead of printing a
+ * null; the reader always completes the lower end (the type keeps the
+ * reader's shape), so its null arm is unreachable from this surface.
+ */
+function windowLine(window: {
+  readonly since: string | null;
+  readonly until: string | null;
+}): string {
+  return `window: ${window.since ?? "open"} .. ${window.until ?? "now"}`;
 }
 
 function pruneImages(
