@@ -96,7 +96,12 @@ export interface WriteDestinationsFilter {
   readonly until?: string;
   /** Maximum rows returned; `total_matched` still reports the full count. */
   readonly limit?: number;
-  /** Instant the default window is measured from; defaults to now. */
+  /**
+   * Instant the default window is measured from; defaults to now. When
+   * `until` is given, the default window is anchored on `until` instead -
+   * an `--until` naming a past period asks about THAT period, and a lower
+   * bound measured from the present would answer a clean, wrong empty.
+   */
   readonly now?: Date;
 }
 
@@ -183,7 +188,8 @@ interface DestinationAccumulator {
  * ordered by target.
  *
  * The date range narrows which log days are opened at all (default: the
- * last seven days including today); the remaining predicates run per
+ * last seven days including today, or ending at `until` when the caller
+ * names one); the remaining predicates run per
  * event because they key on payload fields the file layout cannot answer.
  * Both bounds accept a bare `YYYY-MM-DD`, completed to the day's start
  * and end - an `--until` naming a day means "through the end of it".
@@ -200,9 +206,14 @@ export function listWriteDestinations(
 ): WriteDestinationsResult {
   const since = filter.since === undefined ? null : completeBound(filter.since, DAY_START_SUFFIX);
   const until = filter.until === undefined ? null : completeBound(filter.until, DAY_END_SUFFIX);
+  // The default window's anchor is the upper bound when the caller named
+  // one, and the present only when it did not: "the last seven days" of a
+  // query about March is the seven days ending in March, never the seven
+  // days before the question was asked.
+  const windowAnchor = until !== null ? new Date(until) : (filter.now ?? new Date());
   const effectiveSince =
     since ??
-    `${defaultSinceDate(DEFAULT_WRITE_DESTINATION_WINDOW_DAYS, filter.now ?? new Date())}${DAY_START_SUFFIX}`;
+    `${defaultSinceDate(DEFAULT_WRITE_DESTINATION_WINDOW_DAYS, windowAnchor)}${DAY_START_SUFFIX}`;
   const shards = listLogShardFiles(vault);
   const warnings: BrainLogParseWarning[] = [];
   const byTarget = new Map<string, DestinationAccumulator>();

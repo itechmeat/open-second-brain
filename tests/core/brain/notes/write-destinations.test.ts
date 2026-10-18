@@ -155,6 +155,29 @@ describe("listWriteDestinations", () => {
     expect(result.coverage_note.length).toBeGreaterThan(40);
   });
 
+  test("an until-only query anchors the default window on until, not on the present", () => {
+    seedNoteWrite({ timestamp: "2026-02-25T01:00:00Z", agent: "a", target: "Ancient.md" });
+    seedNoteWrite({ timestamp: "2026-03-04T01:00:00Z", agent: "a", target: "Old.md" });
+    // No `now` at all: the wall clock is years past the seeded day, so a
+    // now-anchored default would answer a clean, wrong empty.
+    const result = listWriteDestinations(vault, { until: "2026-03-04" });
+    // The until day itself is the seventh day of the default window.
+    expect(result.window).toEqual({
+      since: "2026-02-26T00:00:00Z",
+      until: "2026-03-04T23:59:59Z",
+    });
+    expect(result.destinations.map((d) => d.target)).toEqual(["Old.md"]);
+  });
+
+  test("a given now does not drag an until-only window back to the present", () => {
+    seedNoteWrite({ timestamp: "2026-03-04T01:00:00Z", agent: "a", target: "Old.md" });
+    const result = listWriteDestinations(vault, {
+      until: "2026-03-04",
+      now: new Date("2031-01-01T00:00:00Z"),
+    });
+    expect(result.destinations.map((d) => d.target)).toEqual(["Old.md"]);
+  });
+
   test("the default window covers seven days and since/until narrow the walk", () => {
     expect(DEFAULT_WRITE_DESTINATION_WINDOW_DAYS).toBe(7);
     seedNoteWrite({ timestamp: "2026-03-01T01:00:00Z", agent: "a", target: "Old.md" });
