@@ -111,6 +111,23 @@ if (process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] === undefined) {
   process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] = cacheRoot;
 }
 
+// The `install --check` handshake asks a host what it registered by running
+// its real CLI (`codex mcp list`, `copilot mcp list`). The Copilot CLI ships
+// a Node runtime of its own that enables the V8 compile cache, and with
+// NODE_COMPILE_CACHE unset Node defaults that to `<tmpdir>/node-compile-cache`
+// - under the inherited TMPDIR, which below is the guarded per-run root. On
+// a machine with copilot installed (none on CI, where the probe skips as
+// binary-missing) the run then failed blaming a temp entry no test minted.
+// The foreign runtime honors Node's own variable, so the suite points the
+// cache at a root of its own with the same teardown: the write lands where
+// the leftover guard does not look, and the guard itself stays as strict as
+// it was - every other leftover still fails the run.
+if (process.env["NODE_COMPILE_CACHE"] === undefined) {
+  const nodeCacheRoot = mkdtempSync(join(tmpdir(), "osb-test-node-compile-cache-"));
+  afterAll(() => rmSync(nodeCacheRoot, REMOVE_TREE));
+  process.env["NODE_COMPILE_CACHE"] = nodeCacheRoot;
+}
+
 // The embedding settings resolve from `OPEN_SECOND_BRAIN_EMBEDDING_*`
 // twins of the config keys (model, provider, key, price pair, cost gate).
 // A developer who exports one for daily use would otherwise change what
