@@ -101,6 +101,21 @@ function ledgerResult<T>(read: () => T): T | number {
   }
 }
 
+/**
+ * One device selector from a flag. The empty (or whitespace-only) string
+ * is the legacy un-sharded pair and IS a filter value, so it is read
+ * before `normalizeFlagString`, which treats emptiness as absence - the
+ * schema and the help text both promise `--device ""` selects the
+ * un-sharded log, and a coercion-first reading made that unreachable.
+ */
+function deviceSelector(
+  flags: Record<string, string | boolean | string[] | undefined>,
+): string | null {
+  const raw = flags["device"];
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  return normalizeFlagString(raw);
+}
+
 function listWrites(
   flags: Record<string, string | boolean | string[] | undefined>,
   json: boolean,
@@ -114,7 +129,7 @@ function listWrites(
   const op: NoteWriteOp | null = rawOp;
   const { vault } = brainVerbContext(flags);
   const agent = normalizeFlagString(flags["agent"]);
-  const device = normalizeFlagString(flags["device"]);
+  const device = deviceSelector(flags);
   const path = normalizeFlagString(flags["path"]);
   const since = normalizeFlagString(flags["since"]);
   const until = normalizeFlagString(flags["until"]);
@@ -196,7 +211,7 @@ function destinations(
   }
   const { vault } = brainVerbContext(flags);
   const agent = normalizeFlagString(flags["agent"]);
-  const device = normalizeFlagString(flags["device"]);
+  const device = deviceSelector(flags);
   const path = normalizeFlagString(flags["path"]);
   const since = normalizeFlagString(flags["since"]);
   const until = normalizeFlagString(flags["until"]);

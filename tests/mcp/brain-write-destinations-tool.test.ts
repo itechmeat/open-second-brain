@@ -195,6 +195,18 @@ describe("brain_write_destinations listing", () => {
     ).toBe(0);
   });
 
+  test('device "" selects the legacy un-sharded shard, not everything', async () => {
+    seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "One.md");
+    seedNoteWrite("2026-03-04T02:00:00Z", "beta", "One.md", "laptop");
+    const reply = (await call({
+      device: "",
+      since: "2026-03-01",
+      until: "2026-03-04",
+    })) as unknown as DestinationsReply;
+    expect(reply.total_matched).toBe(1);
+    expect(reply.destinations[0]!["agents"]).toEqual(["alpha"]);
+  });
+
   test("a malformed bound is INVALID_PARAMS naming the argument, not a silent empty", async () => {
     seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "One.md");
     for (const [field, value] of [

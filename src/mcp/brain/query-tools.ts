@@ -377,6 +377,20 @@ function ledgerRead<T>(tool: string, read: () => T): T {
   }
 }
 
+/**
+ * One device selector from an argument, shared by `brain_writes` and
+ * `brain_write_destinations`. The empty (or whitespace-only) string is
+ * the legacy un-sharded pair and IS a filter value, so it is read before
+ * `coerceStr`, which treats emptiness as absence - both schemas promise
+ * `device: ""` selects the un-sharded log, and a coercion-first reading
+ * made that unreachable.
+ */
+function deviceArg(args: Record<string, unknown>): string | null {
+  const raw = args["device"];
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  return coerceStr(args, "device", false);
+}
+
 async function toolBrainWrites(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -398,7 +412,7 @@ async function toolBrainWrites(
     );
   }
   const agent = coerceStr(args, "agent", false);
-  const device = coerceStr(args, "device", false);
+  const device = deviceArg(args);
   const path = coerceStr(args, "path", false);
   const since = coerceStr(args, "since", false);
   const until = coerceStr(args, "until", false);
@@ -525,7 +539,7 @@ async function toolBrainWriteDestinations(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const agent = coerceStr(args, "agent", false);
-  const device = coerceStr(args, "device", false);
+  const device = deviceArg(args);
   const path = coerceStr(args, "path", false);
   const since = coerceStr(args, "since", false);
   const until = coerceStr(args, "until", false);

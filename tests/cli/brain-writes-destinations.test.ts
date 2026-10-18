@@ -181,6 +181,31 @@ describe("o2b brain writes destinations", () => {
     expect(payload.destinations).toEqual([]);
   });
 
+  test("--device '' selects the legacy un-sharded shard, not everything", async () => {
+    seedBoth();
+    const r = await runCli([
+      "brain",
+      "writes",
+      "destinations",
+      "--vault",
+      vault,
+      "--since",
+      "2026-03-01",
+      "--until",
+      "2026-03-04",
+      "--device",
+      "",
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as DestinationsReply;
+    // Both targets have an un-sharded touch, but One.md's laptop write by
+    // beta must drop out of the row the empty-string filter produces.
+    expect(payload.total_matched).toBe(2);
+    const one = payload.destinations.find((d) => d.target === "Notes/One.md")!;
+    expect(one.agents).toEqual(["alpha"]);
+  });
+
   test("a malformed bound is a usage error naming the flag, not a silent empty", async () => {
     seedBoth();
     for (const [flag, value] of [
