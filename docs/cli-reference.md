@@ -950,6 +950,28 @@ re-nagged, and a drained backlog is recorded without being announced.
 Under its deadline the hook degrades to silence, never to a fabricated
 number; flag off keeps the session preamble byte-identical (since
 v1.86.0).
+
+Cross-agent catch-up: `log_catchup_enabled` (env
+`OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED`, default off; resolved from the
+machine-local `config.yaml`, not the vault's `_brain.yaml`) turns on a
+SessionStart hook that hands the agent the `Brain/log` lines OTHER
+agents appended since its identity's last look on this device - the
+newest 50 as one fenced `additionalContext` block, a count of older
+ones, every line attributed to the agent that wrote it. "Me" resolves
+the config-resolved agent name, else the device id, and self-authored
+lines are filtered. The per-identity watermark (`(date, shardId, line)`
+plus per-shard high-water marks, one overwrite-only un-synced file under
+`.open-second-brain/`) is rewritten on every run that scanned the log,
+silent runs included, and keeps a three-date window of marks, so a
+shard that syncs in late still surfaces once. The scan is bounded from
+both ends: a parked cursor rescans only its calendar window, and a
+first run - no watermark yet - scans only the recent window behind the
+newest log date, reporting anything older honestly as an
+"`N` older day(s) not scanned" count instead of parsing years of
+history to render the newest lines. The lane is a pure read -
+`Brain/log` is byte-identical after every run - and exits 0 on every
+path (since v1.88.0).
+
 `o2b partner codegraph report` and `o2b doctor` aggregate codegraph
 status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
