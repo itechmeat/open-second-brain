@@ -17,6 +17,7 @@ import { recordNoteWrite, storeBeforeImage } from "../../src/core/brain/notes/wr
 import { writeImagePath } from "../../src/core/brain/paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { splitPosixShellWords } from "../helpers/posix-shell-words.ts";
 
 let tmp: string;
 let vault: string;
@@ -368,6 +369,37 @@ describe("o2b brain writes revert", () => {
     // echo quotes POSIX-style, so the empty value renders as two single
     // quotes.
     expect(res.stdout).toContain("revert --device ''");
+  });
+
+  test("the echoed --apply invocation quotes words bash would leave bare", async () => {
+    // `+` rides bash's own safe-word list, so a per-verb escaper that
+    // copied that list left `claude+v2` bare. The shared escaper's plain
+    // set is deliberately narrower - one set, one behavior to audit -
+    // so anything outside it costs one quoting spell.
+    seedWrite({
+      timestamp: "2026-03-04T01:00:00Z",
+      agent: "claude+v2",
+      target: TARGET,
+      op: "update",
+    });
+    const res = await runCli(["brain", "writes", "revert", "--agent", "claude+v2"], { env: env() });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("revert --agent 'claude+v2'");
+  });
+
+  test("the echoed --apply invocation round-trips a hostile --agent", async () => {
+    // A bang, spaces and both quote kinds in one value: the echo must
+    // paste back into exactly the selector that was planned, which the
+    // parse side of the round-trip checks word by word.
+    const hostile = `cl'aude "the" younger!`;
+    seedWrite({ timestamp: "2026-03-04T01:00:00Z", agent: hostile, target: TARGET, op: "update" });
+    const res = await runCli(["brain", "writes", "revert", "--agent", hostile], { env: env() });
+    expect(res.returncode).toBe(0);
+    const apply = res.stdout.split("\n").find((l) => l.startsWith("o2b brain writes revert"))!;
+    const words = splitPosixShellWords(apply);
+    expect(words.slice(0, 6)).toEqual(["o2b", "brain", "writes", "revert", "--agent", hostile]);
+    expect(words[6]).toBe("--apply");
+    expect(words[7]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("prints the plan, the digest and the exact --apply invocation", async () => {

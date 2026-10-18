@@ -32,6 +32,7 @@ import {
   parse,
   usageError,
 } from "../helpers.ts";
+import { shellWord } from "../../cron-recipe.ts";
 
 /**
  * `o2b brain writes` - the operator's view of who wrote what
@@ -412,29 +413,11 @@ function selectorField(
   return value === null ? {} : { [key]: value };
 }
 
-/**
- * One shell-safe argv token. Bare when the shell cannot split, glob or
- * expand it; single-quoted otherwise, so an empty `--device` pastes back
- * as `--device ''` instead of `--device ` - an unquoted echo renders the
- * flag with a dropped value, and a shell folds that to no flag at all,
- * which here means a plan over every device.
- *
- * The quoting is the POSIX single-quote form rather than double quotes
- * because an interactive bash history-expands `!` inside double quotes
- * even when the escaper never mentions it; inside single quotes nothing
- * expands, so the only character needing a spell is the quote itself
- * (`'\''` - close, escaped quote, reopen).
- */
-function shellToken(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 /** The plan's own `--apply` line, so the digest never has to be retyped. */
 function applyInvocation(selector: NoteRevertSelector, digest: string): string {
   const parts = ["o2b", "brain", "writes", "revert"];
   for (const [key, value] of Object.entries(selector)) {
-    parts.push(`--${key}`, shellToken(value));
+    parts.push(`--${key}`, shellWord(value));
   }
   parts.push("--apply", digest);
   return parts.join(" ");

@@ -23,6 +23,7 @@ import {
   RECIPE_FORMATS,
   renderCronRecipe,
   renderSystemdTimer,
+  shellWord,
   type CronRecipeSpec,
 } from "../../src/cli/cron-recipe.ts";
 
@@ -239,5 +240,24 @@ describe("parseRecipeFormat", () => {
   test("an unknown format is refused by name, naming both formats", () => {
     const message = refusal(() => parseRecipeFormat("launchd"));
     expect(message).toBe('unknown recipe format "launchd": expected cron or systemd');
+  });
+});
+
+describe("shellWord", () => {
+  test("a plain word echoes bare; anything a shell could act on is single-quoted", () => {
+    // The plain set is deliberately narrower than bash's own safe-word
+    // list: ids, dates and paths echo bare, and every other byte costs
+    // one quoting spell instead of one shell reading.
+    expect(shellWord("ent-people-ada-lovelace")).toBe("ent-people-ada-lovelace");
+    expect(shellWord("2026-03-04")).toBe("2026-03-04");
+    expect(shellWord("Notes/One.md")).toBe("Notes/One.md");
+    expect(shellWord("claude+v2")).toBe("'claude+v2'");
+    expect(shellWord("2026-03-04T00:00:00Z")).toBe("'2026-03-04T00:00:00Z'");
+    expect(shellWord("Ada Lovelace!")).toBe("'Ada Lovelace!'");
+    expect(shellWord("")).toBe("''");
+  });
+
+  test("a quote inside the value survives the paste-back", () => {
+    expect(shellWord("O'Brien")).toBe("'O'\\''Brien'");
   });
 });

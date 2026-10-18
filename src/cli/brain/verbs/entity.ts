@@ -42,18 +42,7 @@ import {
   readSingleLine,
   usageError,
 } from "../helpers.ts";
-import { shellQuote } from "../../cron-recipe.ts";
-
-/**
- * A word a POSIX shell needs no quoting for (the same plain set the
- * search verb bakes into its flags): ids like `ent-people-ada` echo bare,
- * anything a shell would split gets single-quoted.
- */
-const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
-
-function shellSafe(value: string): string {
-  return PLAIN_SHELL_WORD.test(value) ? value : shellQuote(value);
-}
+import { shellWord } from "../../cron-recipe.ts";
 
 function entityPayload(entity: BrainEntity): Record<string, unknown> {
   return {
@@ -529,8 +518,8 @@ async function runEntityMerge(
   // the paste resolved instead of the one that was previewed.
   const vaultFlag = normalizeFlagString(flags["vault"]);
   const applyCommand =
-    `o2b brain entity merge ${shellSafe(refs.keep)} ${shellSafe(refs.drop)}` +
-    (vaultFlag !== null ? ` --vault ${shellSafe(vaultFlag)}` : "") +
+    `o2b brain entity merge ${shellWord(refs.keep)} ${shellWord(refs.drop)}` +
+    (vaultFlag !== null ? ` --vault ${shellWord(vaultFlag)}` : "") +
     ` --expect-hash ${hash}` +
     (force ? " --force" : "");
   const planLines = mergePlanLines(plan, hash, applyCommand);
