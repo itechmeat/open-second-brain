@@ -584,6 +584,9 @@ export function applyEntityMerge(
       dropped: plan.drop_id,
       category: plan.category,
       alias_added: plan.alias_added ?? "",
+      // The full moved set, not just the display name: the aliases the
+      // dropped page held are nowhere else in the trail.
+      aliases_merged: JSON.stringify(plan.aliases_merged),
       body_folded: String(plan.body_folded),
       relations_absorbed: String(plan.relations_absorbed),
       inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
@@ -604,6 +607,9 @@ export function applyEntityMerge(
       drop_id: plan.drop_id,
       category: plan.category,
       alias_added: plan.alias_added ?? "",
+      // Mirrors the audit record: the full moved alias set, not just the
+      // display name the alias_added field carries.
+      aliases_merged: JSON.stringify(plan.aliases_merged),
       body_folded: String(plan.body_folded),
       relations_absorbed: String(plan.relations_absorbed),
       cyclic_edges_removed: String(plan.cyclic_edges_removed),

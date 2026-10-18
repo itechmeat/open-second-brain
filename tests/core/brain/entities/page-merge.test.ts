@@ -753,6 +753,61 @@ describe("applyEntityMerge", () => {
     expect(mergeEvents[0]!.body["cyclic_edges_removed"]).toBe("1");
   });
 
+  test("the merged alias list is named in the audit record and the log event", () => {
+    const keep = upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      body: "Analytical engines.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop = upsertEntity(vault, {
+      category: "people",
+      name: "Ada",
+      agent: "test-agent",
+      now: NOW,
+    });
+    // An extra alias from the dropped page's own list: alias_added names
+    // only the display name, so the audit trail is where the rest of the
+    // moved set must show up.
+    const [meta, body] = parseFrontmatter(drop.entity.path);
+    writeFrontmatterAtomic(drop.entity.path, { ...meta, aliases: ["The Countess"] }, body, {
+      overwrite: true,
+    });
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keep.entity.id, drop: drop.entity.id });
+    expect([...plan.aliases_merged]).toEqual(["Ada", "The Countess"]);
+    applyEntityMerge(
+      vault,
+      { keep: keep.entity.id, drop: drop.entity.id },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+
+    // The reliability audit record carries the full list, serialized as
+    // JSON beside alias_added.
+    const auditDir = join(vault, "Brain", "log", HYGIENE_AUDIT_DIR);
+    const records = readdirSync(auditDir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .flatMap((f) =>
+        readFileSync(join(auditDir, f), "utf8")
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as { action: string; details: Record<string, string> }),
+      );
+    const mergeRecord = records.find((r) => r.action === "entity_merge");
+    expect(mergeRecord).toBeDefined();
+    expect(JSON.parse(mergeRecord!.details["aliases_merged"])).toEqual(["Ada", "The Countess"]);
+
+    // The Brain log event carries the same full list.
+    const day = readLogDay(vault, "2026-10-17");
+    const mergeEvents = day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.merge);
+    expect(mergeEvents.length).toBe(1);
+    expect(JSON.parse(String(mergeEvents[0]!.body["aliases_merged"]))).toEqual([
+      "Ada",
+      "The Countess",
+    ]);
+  });
+
   test("the apply appends the audit record and a merge log event", () => {
     const { keepId, dropId } = seedPair();
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
