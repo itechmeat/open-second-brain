@@ -402,8 +402,8 @@ describe("o2b brain entity merge", () => {
     expect(doctor.stdout).not.toContain("duplicate-entity");
   });
 
-  test("--json without --force refuses (the interactive prompt cannot render)", async () => {
-    const { keepId, dropId } = await seedMergePair();
+  test("--json without --force refuses as structured consent-required JSON", async () => {
+    const { keepId, dropId, dropPath } = await seedMergePair();
     const preview = await runCli(
       ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
       { env: env() },
@@ -414,7 +414,14 @@ describe("o2b brain entity merge", () => {
       { env: env() },
     );
     expect(out.returncode).toBe(1);
-    expect(out.stderr).toContain("--json without --force");
+    // A JSON caller gets a structured refusal on stdout, not fail() prose
+    // on stderr: the code is the stable consent vocabulary.
+    const payload = JSON.parse(out.stdout) as { ok: boolean; code: string; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.code).toBe("consent-required");
+    expect(payload.message).toContain("--json without --force");
+    expect(out.stderr).toBe("");
+    expect(existsSync(dropPath)).toBe(true);
   });
 
   test("non-TTY stdin without --force refuses instead of prompting", async () => {

@@ -419,6 +419,9 @@ function entityMergeRefusal(exc: unknown, json: boolean): number {
   return fail(`brain entity merge failed: ${(exc as Error).message}`);
 }
 
+/** Refusal code for a merge nobody consented to: consent missing, not wrong. */
+const CONSENT_REQUIRED_CODE = "consent-required";
+
 /**
  * `o2b brain entity merge <keep> <drop>` (actionable-now batch, A2 /
  * t_28a8789d): preview-and-apply repair for two entity pages that denote
@@ -505,14 +508,24 @@ async function entityMerge(argv: string[]): Promise<number> {
   }
 
   if (!force) {
+    // Either consent refusal keeps its prose line for a human, but a JSON
+    // caller gets the structured shape on stdout - same contract as every
+    // other refusal this verb emits.
+    const consentRefusal = (message: string): number => {
+      if (json) {
+        okJson({ ok: false, code: CONSENT_REQUIRED_CODE, message });
+        return 1;
+      }
+      return fail(message);
+    };
     if (json) {
-      return fail(
+      return consentRefusal(
         "brain entity merge: --json without --force is not supported (interactive prompt " +
           "cannot render)",
       );
     }
     if (!process.stdin.isTTY) {
-      return fail(
+      return consentRefusal(
         "brain entity merge: --force required when stdin is not a TTY (cannot prompt for " +
           "confirmation)",
       );
