@@ -775,23 +775,25 @@ function listedFindings(
 /**
  * The annotation: exactly one line block listing the unverified spans
  * with their verdicts, duplicate-free, in answer order, under the
- * findings cap. The spans are answer text - untrusted by definition - so
- * the shared records-not-instructions framing line sits between the
- * header and the first finding.
+ * findings cap. The hook's own trusted lines - the count header, the
+ * overflow line and the advisory footer - come FIRST, because the
+ * records-not-instructions framing line hands everything FOLLOWING it
+ * to the reader as data: the frame is the last trusted line the
+ * annotation emits, and the spans beneath it are answer text.
  */
 function annotation(findings: ReadonlyArray<AnswerQuoteSpanFinding>): string {
   const listed = listedFindings(findings);
   const lines = [
     `Open Second Brain quote check: ${findings.length} quoted span(s) were not found in the notes this turn had:`,
-    untrustedFramingHeader(QUOTE_CHECK_FRAMING_ORIGIN),
-    ...listed.map((finding) => findingLine(finding.span, finding.verdict)),
   ];
   if (listed.length < findings.length) {
     lines.push(`... and ${findings.length - listed.length} more unverified span(s) not listed.`);
   }
   lines.push(
     "Advisory only; the answer is not blocked. Verify the quotes against the note, or reword.",
+    untrustedFramingHeader(QUOTE_CHECK_FRAMING_ORIGIN),
   );
+  for (const finding of listed) lines.push(findingLine(finding.span, finding.verdict));
   return lines.join("\n");
 }
 

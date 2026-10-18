@@ -252,14 +252,42 @@ describe("answer-quote-check hook - annotation rendering", () => {
     // One aggregate annotation, never one annotation per span.
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    expect(lines).toHaveLength(5); // header + framing + two findings + footer
-    // The quoted spans are answer text, so the annotation frames them as
-    // data before listing any finding.
-    expect(lines[1]).toBe(untrustedFramingHeader("quoted-answer-spans"));
-    expect(lines[2]).toContain("[not-in-note]");
-    expect(lines[2]).toContain("reuses pooled capital");
+    expect(lines).toHaveLength(5); // count header + advisory footer + framing + two findings
+    // The hook's own trusted lines come first: the framing line hands
+    // everything FOLLOWING it to the reader as data.
+    expect(lines[0]).toContain("2 quoted span(s)");
+    expect(lines[1]).toContain("Advisory only");
+    expect(lines[2]).toBe(untrustedFramingHeader("quoted-answer-spans"));
     expect(lines[3]).toContain("[not-in-note]");
-    expect(lines[3]).toContain("secures pooled validators");
+    expect(lines[3]).toContain("reuses pooled capital");
+    expect(lines[4]).toContain("[not-in-note]");
+    expect(lines[4]).toContain("secures pooled validators");
+  });
+
+  test("trusted lines precede the framing header and findings follow it", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        'Per Brain/notes/restaking.md: it "reuses pooled capital" and it "secures pooled validators".',
+      ),
+    ]);
+    const run = await runHook();
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    const lines = found[0]!.split("\n");
+    const framingAt = lines.indexOf(untrustedFramingHeader("quoted-answer-spans"));
+    expect(framingAt).toBeGreaterThan(-1);
+    // Above the frame: only the hook's own voice - the count header and
+    // the advisory footer, never a finding. Below it: only findings.
+    const above = lines.slice(0, framingAt).join("\n");
+    expect(above).toContain("quoted span(s)");
+    expect(above).toContain("Advisory only");
+    expect(above).not.toContain("[not-in-note]");
+    const below = lines.slice(framingAt + 1);
+    expect(below).toHaveLength(2);
+    for (const line of below) expect(line).toContain("[not-in-note]");
   });
 
   test("quoted spans render control and bidi character machinery stripped", async () => {
@@ -298,11 +326,13 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const found = annotations(run);
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    // Header, framing line, exactly one flattened finding line, footer:
-    // the span's newlines never become annotation structure.
+    // Count header, advisory footer, framing line, then exactly one
+    // flattened finding line: the span's newlines never become annotation
+    // structure, and the frame is the last trusted line.
     expect(lines).toHaveLength(4);
-    expect(lines[2]).toContain("[not-in-note]");
-    expect(lines[2]).toContain("fake line");
+    expect(lines[2]).toBe(untrustedFramingHeader("quoted-answer-spans"));
+    expect(lines[3]).toContain("[not-in-note]");
+    expect(lines[3]).toContain("fake line");
     expect(lines.some((line) => line.startsWith("- [verified]"))).toBe(false);
   });
 
@@ -320,7 +350,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const run = await runHook();
     const found = annotations(run);
     expect(found.length).toBe(1);
-    const finding = found[0]!.split("\n")[2]!;
+    const finding = found[0]!.split("\n")[3]!;
     expect(finding.startsWith('- [not-in-note] "')).toBe(true);
     expect(finding.length).toBeLessThan(QUOTE_SPAN_PREVIEW_MAX_CHARS + 40);
   });
@@ -340,13 +370,15 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const found = annotations(run);
     expect(found.length).toBe(1);
     const lines = found[0]!.split("\n");
-    // Header + framing + the capped findings + one overflow line + footer.
+    // Count header + overflow line + advisory footer + framing + the
+    // capped findings: every trusted line sits above the frame.
     expect(lines).toHaveLength(ANSWER_QUOTE_MAX_FINDINGS + 4);
     expect(lines[0]).toContain(`${spans.length} quoted span(s)`);
-    expect(lines[ANSWER_QUOTE_MAX_FINDINGS + 2]).toContain(
-      `and ${spans.length - ANSWER_QUOTE_MAX_FINDINGS} more`,
-    );
-    expect(lines[lines.length - 1]).toContain("Advisory only");
+    expect(lines[1]).toContain(`and ${spans.length - ANSWER_QUOTE_MAX_FINDINGS} more`);
+    expect(lines[2]).toContain("Advisory only");
+    expect(lines[3]).toBe(untrustedFramingHeader("quoted-answer-spans"));
+    expect(lines[4]).toContain("[not-in-note]");
+    expect(lines[lines.length - 1]).toContain("[not-in-note]");
   });
 });
 
