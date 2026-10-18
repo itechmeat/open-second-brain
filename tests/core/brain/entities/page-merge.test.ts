@@ -561,6 +561,46 @@ describe("applyEntityMerge", () => {
     expect(mary.relations.map((r) => r.target)).toEqual([keepId]);
   });
 
+  test("an inbound page's unrelated relation fields stay untouched", () => {
+    const { keepId, dropId } = seedPair();
+    upsertEntity(vault, {
+      category: "people",
+      name: "Mary Somerville",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const mary = getEntity(vault, { query: "Mary Somerville" })!;
+    const [meta, body] = parseFrontmatter(mary.path);
+    // One field points at the dropped page; the other two never did - a
+    // scalar naming someone else, and an empty field.
+    writeFrontmatterAtomic(
+      mary.path,
+      { ...meta, depends_on: `[[${dropId}]]`, related: "[[Bridge]]", contradicts: "" },
+      body,
+      { overwrite: true },
+    );
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    applyEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    const [after] = parseFrontmatter(mary.path);
+    // The rewrite touches only the field that pointed at the dropped page;
+    // a scalar stays scalar and an empty field stays empty.
+    expect(after["related"]).toBe("[[Bridge]]");
+    expect(after["contradicts"]).toBe("");
+    expect(after["depends_on"]).toEqual([`[[${keepId}]]`]);
+    // The retargeted edge is present, and the untouched field still reads
+    // as its own edge - nothing was dropped to make the rewrite convenient.
+    expect(
+      getEntity(vault, { query: "Mary Somerville" })!
+        .relations.map((r) => r.target)
+        .toSorted(),
+    ).toEqual(["Bridge", keepId]);
+  });
+
   test("the apply appends the audit record and a merge log event", () => {
     const { keepId, dropId } = seedPair();
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });

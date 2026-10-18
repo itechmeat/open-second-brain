@@ -542,6 +542,10 @@ export function applyEntityMerge(
         for (const [key, value] of Object.entries(metaNext)) {
           if (!relationFromFrontmatterField(key)) continue;
           const items = Array.isArray(value) ? value : value === "" ? [] : [value];
+          // A field nothing in it points at the dropped page is left
+          // exactly as it reads: no scalar arrayified, no empty field
+          // rewritten into an empty list.
+          if (!items.some((item) => normalizeRelationTarget(String(item)) === drop.id)) continue;
           const mapped = items.map((item) =>
             normalizeRelationTarget(String(item)) === drop.id ? `[[${keep.id}]]` : String(item),
           );
@@ -558,7 +562,6 @@ export function applyEntityMerge(
         metaNext["updated_at"] = stamp;
         writeFrontmatterAtomic(entity.path, metaNext, body, { overwrite: true });
       }
-
       // 3. The old page is archived - removed BEHIND the recovery point
       //    this callback runs under, never as a bare delete.
       rmSync(drop.path, { force: true });
