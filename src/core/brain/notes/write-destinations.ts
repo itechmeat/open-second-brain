@@ -190,6 +190,13 @@ interface DestinationAccumulator {
   lastWrite: string;
 }
 
+/** Rows order by target; a named comparator because a fold owes its order a name. */
+function byTargetAsc(a: DestinationAccumulator, b: DestinationAccumulator): number {
+  if (a.target < b.target) return -1;
+  if (a.target > b.target) return 1;
+  return 0;
+}
+
 /**
  * Every destination the recorded writes touched inside the window,
  * ordered by target.
@@ -270,23 +277,21 @@ export function listWriteDestinations(
     });
   }
 
-  const rows = [...byTarget.values()]
-    .toSorted((a, b) => (a.target < b.target ? -1 : a.target > b.target ? 1 : 0))
-    .map((acc) => {
-      const kinds = WRITE_DESTINATION_KINDS.filter((kind) =>
-        kind === WRITE_DESTINATION_KIND.noteWrite ? acc.noteWrites > 0 : acc.writeSessions > 0,
-      );
-      return Object.freeze({
-        target: acc.target,
-        kinds: Object.freeze(kinds),
-        note_writes: acc.noteWrites,
-        write_sessions: acc.writeSessions,
-        writes: acc.noteWrites + acc.writeSessions,
-        agents: Object.freeze([...acc.agents]),
-        devices: Object.freeze([...acc.devices]),
-        last_write: acc.lastWrite,
-      });
+  const rows = [...byTarget.values()].toSorted(byTargetAsc).map((acc) => {
+    const kinds = WRITE_DESTINATION_KINDS.filter((kind) =>
+      kind === WRITE_DESTINATION_KIND.noteWrite ? acc.noteWrites > 0 : acc.writeSessions > 0,
+    );
+    return Object.freeze({
+      target: acc.target,
+      kinds: Object.freeze(kinds),
+      note_writes: acc.noteWrites,
+      write_sessions: acc.writeSessions,
+      writes: acc.noteWrites + acc.writeSessions,
+      agents: Object.freeze([...acc.agents]),
+      devices: Object.freeze([...acc.devices]),
+      last_write: acc.lastWrite,
     });
+  });
 
   const limit =
     filter.limit === undefined || !Number.isInteger(filter.limit) || filter.limit < 1
