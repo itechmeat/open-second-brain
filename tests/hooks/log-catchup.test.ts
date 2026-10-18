@@ -568,6 +568,28 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(existsSync(cursorPath())).toBe(false);
   });
 
+  test("the header names the recent window on a first run, the last read after it", async () => {
+    // "Since your last read" names a read that never happened on a first
+    // run: with no cursor there is no last look, and the lower bound is
+    // the first-run window, not a watermark.
+    seed("agent-a", "a line for the first run");
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(first.exit).toBe(0);
+    const firstContext = emitted(first);
+    expect(firstContext).not.toBeNull();
+    expect(firstContext).toContain("in the recent window");
+    expect(firstContext).not.toContain("since your last read");
+
+    // Once the cursor exists the bound really is the last read.
+    seed("agent-a", "a line for the second run");
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    const secondContext = emitted(second);
+    expect(secondContext).not.toBeNull();
+    expect(secondContext).toContain("since your last read");
+    expect(secondContext).not.toContain("in the recent window");
+  });
+
   test("a date evicted from the window is still skipped whole", async () => {
     // Six dates: the cursor keeps per-shard marks for the newest three
     // before its date, so 10-10 and 10-13 are evicted - and a brand-new

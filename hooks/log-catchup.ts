@@ -375,8 +375,13 @@ async function main(): Promise<void> {
       const notes: string[] = [];
       if (olderCount > 0) notes.push(`${olderCount} older not shown`);
       if (unscannedOlderDays > 0) notes.push(`${unscannedOlderDays} older day(s) not scanned`);
+      // The lower bound the header names: a cursor run reads since its
+      // last look, but a FIRST run has no last look - "since your last
+      // read" would name a read that never happened, so the phrase says
+      // where the bound actually comes from: the recent window.
+      const scopePhrase = cursor === null ? "in the recent window" : "since your last read";
       const header =
-        `Cross-agent catch-up: ${items.length} log line(s) from other agents since your last read` +
+        `Cross-agent catch-up: ${items.length} log line(s) from other agents ${scopePhrase}` +
         (notes.length > 0 ? ` (${notes.join("; ")})` : "") +
         ":";
       return fenceUntrustedContent(
