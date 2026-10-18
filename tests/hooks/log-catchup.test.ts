@@ -290,6 +290,21 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(context).not.toContain("my own line from another device");
   });
 
+  test("agent identity compares trimmed on both sides", async () => {
+    // The configured name can arrive padded through the env and the
+    // entry attribution padded through the log; both sides must
+    // normalize before the comparison or the agent's own line reads as
+    // foreign.
+    seed(" agent-b ", "my paddedly attributed line");
+    seed("agent-a", "someone else's plainly attributed line");
+    const r = await runHook(SESSION_START, flagOn("  agent-b  "));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("someone else's plainly attributed line");
+    expect(context).not.toContain("my paddedly attributed line");
+  });
+
   test("an event that cannot carry additionalContext gets nothing", async () => {
     seed("agent-a", "quiet on this event");
     const r = await runHook({ hook_event_name: "PostToolUse" }, flagOn("agent-b"));

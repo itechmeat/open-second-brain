@@ -234,12 +234,14 @@ async function main(): Promise<void> {
           timestamp: entry.timestamp,
         };
         lastSeen = { position, marks: { ...shardMarks } };
-        // Self by payload attribution against the resolved identity; in
+        // Self by payload attribution against the resolved identity,
+        // both sides trimmed (resolveSelfIdentity trims its value); in
         // the device-id fallback also by shard, because that is the only
         // place the device id appears (see the SelfIdentity doc). A
         // configured agent name never consults the shard.
         const selfOwned =
-          entry.agent === self.value || (self.fromDeviceFallback && shardId === self.value);
+          (entry.agent ?? "").trim() === self.value ||
+          (self.fromDeviceFallback && shardId === self.value);
         if (!selfOwned && (cursor === null || isAfterCursor(position, cursor))) {
           collected.push({ entry });
         }
