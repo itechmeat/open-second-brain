@@ -755,8 +755,40 @@ describe("o2b brain entity merge", () => {
       { env: env() },
     );
     expect(out.returncode).toBe(1);
-    expect(JSON.parse(out.stdout)).toMatchObject({ ok: false, code: "hash-mismatch" });
+    const refused = JSON.parse(out.stdout) as { ok: boolean; code: string; message: string };
+    expect(refused).toMatchObject({ ok: false, code: "hash-mismatch" });
+    // The flipped stance cannot even plan this pair any more, so the
+    // refusal tells the plain stale-plan story: the vault moved.
+    expect(refused.message).toContain("vault changed since the preview");
     expect(existsSync(dropPayload.path)).toBe(true);
+  });
+
+  test("a vault-changed mismatch refuses with the plain stale-plan story", async () => {
+    // A body edited after the preview shifts the sealed digests - the
+    // common mismatch, nothing to do with the guard stance. Naming the
+    // --force interplay on every mismatch sent operators chasing a
+    // stance problem that did not exist.
+    const { keepId, dropId } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    const edit = await runCli(
+      ["brain", "entity", "set", "people", "Ada", "--body", "Edited after the preview."],
+      { env: env() },
+    );
+    expect(edit.returncode).toBe(0);
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", hash, "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    const payload = JSON.parse(out.stdout) as { ok: boolean; code: string; message: string };
+    expect(payload).toMatchObject({ ok: false, code: "hash-mismatch" });
+    expect(payload.message).toContain("vault changed since the preview");
+    expect(payload.message).not.toContain("guard");
+    expect(out.stderr).toBe("");
   });
 
   test("the echoed apply command carries --force exactly when the preview ran with it", async () => {

@@ -548,13 +548,31 @@ async function runEntityMerge(
     );
   }
   if (expectHash !== hash) {
+    // One re-plan at the FLIPPED guard stance tells the two refusal
+    // stories apart: a hash only the other stance produces means the
+    // preview was taken with a different --force and the vault still
+    // agrees with it - a stance difference, and the refusal names it.
+    // Anything else (including a pair the flipped stance cannot even
+    // plan, because the guard refuses it unbypassed) is a vault that
+    // moved under the operator, and says so plainly.
+    let stanceShifted = false;
+    try {
+      const flipped = planEntityMerge(vault, refs, { bypassEntityGuard: !force });
+      stanceShifted = entityMergePlanHash(flipped) === expectHash;
+    } catch {
+      stanceShifted = false;
+    }
     return entityMergeRefusal(
       new EntityMergeError(
         "hash-mismatch",
-        `--expect-hash ${expectHash} does not describe this vault's merge plan any more ` +
-          `(${hash}); the plan hash also seals whether the text-level merge guard ran ` +
-          `(guard_bypassed: ${plan.guard_bypassed}), so a preview taken with a different ` +
-          "--force stance hashes differently - re-run the preview exactly as you will apply",
+        stanceShifted
+          ? `--expect-hash ${expectHash} does not describe this vault's merge plan any more ` +
+              `(${hash}); the plan hash also seals whether the text-level merge guard ran ` +
+              `(guard_bypassed: ${plan.guard_bypassed}), so a preview taken with a different ` +
+              "--force stance hashes differently - re-run the preview exactly as you will apply"
+          : `--expect-hash ${expectHash} does not describe this vault's merge plan any more ` +
+              `(${hash}); the vault changed since the preview - re-run the preview and apply ` +
+              "the hash it echoes",
       ),
       json,
     );
