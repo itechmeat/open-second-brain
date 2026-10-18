@@ -90,6 +90,18 @@ function writeLessons(body: string): void {
   writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
 }
 
+/** Run `fn` with the runtime-notice channel off, restoring the env after. */
+function withRuntimeNoticesOff(fn: () => void): void {
+  const priorNotices = process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
+  process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = "false";
+  try {
+    fn();
+  } finally {
+    if (priorNotices === undefined) delete process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
+    else process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = priorNotices;
+  }
+}
+
 interface ReceiptRecord {
   readonly kind: string;
   readonly payload: Record<string, unknown>;
@@ -283,17 +295,48 @@ describe("active-inject injection meter", () => {
     // bytes that never reached the payload.
     writeActive(ACTIVE_BODY);
     writeLessons(LESSONS_BODY);
-    const priorNotices = process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
-    process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = "false";
-    try {
+    withRuntimeNoticesOff(() => {
       const meter = createInjectionMeter(8000);
       const assembled = assembleActiveContext(vault, 0, meter);
       expect(assembled).toBe("");
       expect(meter.sources.map((s) => s.name)).toEqual([]);
       expect(meter.budgetChars).toBeNull();
-    } finally {
-      if (priorNotices === undefined) delete process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
-      else process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = priorNotices;
-    }
+    });
+  });
+
+  test("a budget exactly equal to the framing overhead emits nothing", () => {
+    // The floor is `<=`, not `<`: at exactly the header's overhead the
+    // inner budget is 0, where the budgeter answers with the truncation
+    // notice alone - and header + notice framed lands far over the very
+    // budget the source is charged against. The source skips instead.
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    withRuntimeNoticesOff(() => {
+      const overhead = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY).length + 1;
+      const meter = createInjectionMeter(8000);
+      const assembled = assembleActiveContext(vault, overhead, meter);
+      expect(assembled).toBe("");
+      expect(meter.sources.map((s) => s.name)).toEqual([]);
+      expect(meter.budgetChars).toBeNull();
+    });
+  });
+
+  test("a budget barely above the framing overhead does not emit a framed truncation notice", () => {
+    // With the header paid, a few spare characters cannot hold any
+    // content, so the budgeter's answer is the truncation notice alone.
+    // Framing it would emit header + multi-hundred-character notice over
+    // budget, so a source whose budgeted inner body is nothing but the
+    // notice skips whole - "never emitted over budget" holds with room
+    // to spare, not only below the header.
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    withRuntimeNoticesOff(() => {
+      const budget = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY).length + 1 + 8;
+      const meter = createInjectionMeter(8000);
+      const assembled = assembleActiveContext(vault, budget, meter);
+      expect(assembled).toBe("");
+      expect(assembled.length).toBeLessThanOrEqual(budget);
+      expect(meter.sources.map((s) => s.name)).toEqual([]);
+    });
   });
 });

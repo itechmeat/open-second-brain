@@ -108,6 +108,21 @@ function framingOverhead(origin: string): number {
   return untrustedBindingFramingHeader(origin).length + 1;
 }
 
+/**
+ * The opening words of the budgeter's truncation notice
+ * (`activeTruncationNotice` in `active-budget.ts`), matched against a
+ * BUDGETED body to detect the notice-only degenerate: every section
+ * dropped, no content left, nothing but the notice surviving. Framing
+ * and emitting that would put the header plus a multi-hundred-character
+ * notice over the very budget the source is charged against, so the
+ * source skips instead. A body that fit the budget passes through
+ * byte-identical, so a matching opener on a body that did NOT fit can
+ * only be the notice itself (or vault prose contrived to open with the
+ * notice sentence AND overflow - skipped too, which fails safe: less
+ * injected, never over budget).
+ */
+const TRUNCATION_NOTICE_OPEN = "_Injection truncated to budget:";
+
 /** A fresh, empty meter for one assembly run. */
 export function createInjectionMeter(configuredBudgetChars: number): InjectionMeter {
   return {
@@ -289,9 +304,12 @@ function readActiveBody(
   // A budget that cannot hold even the framing header skips the source
   // whole: emitting the header alone would push the framed remainder
   // past the very budget it is charged against, and metering it would
-  // name bytes that never reached the payload. The lessons reader
-  // applies the same floor to its own header.
-  if (budget < framingOverhead(SOURCE_ACTIVE_BODY)) return "";
+  // name bytes that never reached the payload. The floor is `<=` - at
+  // exactly the overhead the inner budget is 0 and the budgeter answers
+  // with the truncation notice alone, which is over budget framed. The
+  // lessons reader applies the same floor to its own header.
+  const overhead = framingOverhead(SOURCE_ACTIVE_BODY);
+  if (budget <= overhead) return "";
 
   // Injection budget (token-diet): a large preference set must not flood
   // the session preamble. Resolved once in `resolveInjectionLimits`,
@@ -303,7 +321,6 @@ function readActiveBody(
   // ceiling is recorded, not the `budget` argument: that is what is left
   // after the scoped rules were charged, and the receipt reports the two
   // separately (`inject_budget_chars`, `scoped_rules_chars`).
-  meter.budgetChars = meter.configuredBudgetChars;
 
   // Auto-load the lessons digest alongside active.md so the agent gets
   // the unified, signed, recency-scored corpus (preferences + dead-ends)
@@ -313,17 +330,19 @@ function readActiveBody(
   const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
 
   // Untrusted vault content: neutralize (control/bidi/zero-width strip,
-  // delimiter escape) BEFORE budgeting, and set the result under the light
+  // delimiter escape) BEFORE budgeting, and set under the light
   // framing header. The header's overhead comes out of this body's budget
   // first, so the tier ladder works on the room that is actually left and
   // the framed whole stays within the budget it is charged against.
-  const framedActive = frameMemoryBody(
-    SOURCE_ACTIVE_BODY,
-    budgetActiveBody(
-      neutralizeUntrustedText(trimmed),
-      Math.max(0, budget - framingOverhead(SOURCE_ACTIVE_BODY)),
-    ),
-  );
+  const innerBudget = budget - overhead;
+  const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), innerBudget);
+  // A budgeted body that is ONLY the truncation notice carries no
+  // content at all: framed, header + notice would land over the budget
+  // the source is charged against, so the source skips with it - the
+  // same honesty the sub-header floor practices, one rung up.
+  if (inner.startsWith(TRUNCATION_NOTICE_OPEN)) return "";
+  const framedActive = frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
+  meter.budgetChars = meter.configuredBudgetChars;
   meter.sources.push({
     name: SOURCE_ACTIVE_BODY,
     text: framedActive,
@@ -357,13 +376,16 @@ function readLessonsBody(lessonsPath: string, budget: number): string | null {
     const trimmed = body.trim();
     if (trimmed.length === 0) return null;
     // The active body's floor, applied to this header: a body whose
-    // framing cannot fit is skipped rather than emitted over budget.
-    if (budget < framingOverhead(SOURCE_LESSONS_BODY)) return null;
-    const innerBudget = Math.max(0, budget - framingOverhead(SOURCE_LESSONS_BODY));
-    return frameMemoryBody(
-      SOURCE_LESSONS_BODY,
-      budgetActiveBody(neutralizeUntrustedText(trimmed), innerBudget),
-    );
+    // framing cannot fit - or whose budgeted remainder would be nothing
+    // but the truncation notice - is skipped rather than emitted over
+    // budget. The floor is `<=` for the same reason: at exactly the
+    // overhead the inner budget is 0 and the budgeter answers with the
+    // notice alone.
+    const overhead = framingOverhead(SOURCE_LESSONS_BODY);
+    if (budget <= overhead) return null;
+    const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), budget - overhead);
+    if (inner.startsWith(TRUNCATION_NOTICE_OPEN)) return null;
+    return frameMemoryBody(SOURCE_LESSONS_BODY, inner);
   } catch {
     return null;
   }
