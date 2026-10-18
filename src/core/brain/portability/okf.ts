@@ -945,6 +945,16 @@ const SPEC_DIR_CLASS: Readonly<Record<string, OkfPageClass>> = Object.freeze(
 const SPEC_RESERVED_PATHS: ReadonlySet<string> = new Set(["index.md", "log.md"]);
 
 /**
+ * The producer label a manifest-less spec bundle reports: there is no
+ * manifest to declare one, so the parsed manifest names the walk
+ * honestly instead of guessing a producer from the tree. Named because
+ * the bundle is FOREIGN by construction - a walk with no manifest can
+ * never be this system's own dialect - and the old inline comparison
+ * against {@link OKF_PRODUCER} restated that fact as a tautology.
+ */
+const SPEC_BUNDLE_PRODUCER = "unknown";
+
+/**
  * Read a manifest-less, spec-shaped OKF v0.2 bundle: the spec defines a
  * bundle as a plain directory tree of markdown and requires NO machine
  * manifest, so the page list is built by walking the tree. Reserved
@@ -954,13 +964,14 @@ const SPEC_RESERVED_PATHS: ReadonlySet<string> = new Set(["index.md", "log.md"])
  * each walked page's own `type` frontmatter is recorded as its foreign
  * type - the producer's raw type value, which the import's provenance
  * stamp preserves. There is no manifest to declare a producer, so the
- * parsed manifest reads `producer: "unknown"` and the bundle is FOREIGN:
- * every page imports through the foreign path (machinery stripped, raw
- * keys shed, provenance stamped, review-staged by default) - the walk
- * never restores machinery keys on a spec bundle's word.
+ * parsed manifest reports {@link SPEC_BUNDLE_PRODUCER} and the bundle is
+ * FOREIGN by construction: every page imports through the foreign path
+ * (machinery stripped, raw keys shed, provenance stamped, review-staged
+ * by default) - the walk never restores machinery keys on a spec
+ * bundle's word.
  */
 function readSpecOkfBundle(dir: string): ParsedOkfBundle {
-  const producer = "unknown";
+  const producer = SPEC_BUNDLE_PRODUCER;
   const entries: OkfManifestPage[] = [];
   const pages: ParsedOkfPage[] = [];
   for (const abs of listMarkdown(dir, [])) {
@@ -1007,7 +1018,10 @@ function readSpecOkfBundle(dir: string): ParsedOkfBundle {
       pages: entries,
       log_days: 0,
     },
-    foreign: producer !== OKF_PRODUCER,
+    // No manifest, no own-producer claim to honour: the walk's output is
+    // foreign by construction - stating it directly instead of resting
+    // on a literal-vs-constant comparison that could only ever be true.
+    foreign: true,
     pages,
   };
 }
