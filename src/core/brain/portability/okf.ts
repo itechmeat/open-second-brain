@@ -512,7 +512,9 @@ const URL_TARGET_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
  *
  * 1. a URL target is carried as-is;
  * 2. a path-shaped target must name a collected page (with or without
- *    the `.md` suffix) - otherwise it is dropped, never guessed;
+ *    the `.md` suffix) - otherwise it is dropped, never guessed. The
+ *    entry carries the page's id only when that stem is unique; a
+ *    colliding basename has no stable id to name;
  * 3. a bare basename resolves only when EXACTLY ONE page carries that
  *    stem: the colliding-basename case (two `Dup.md` pages) is dropped
  *    rather than guessed.
@@ -533,7 +535,14 @@ function sourceResolver(pages: ReadonlyArray<OkfPage>): (citation: string) => Ok
     if (URL_TARGET_RE.test(citation)) return { resource: citation };
     if (citation.includes("/")) {
       const direct = byPath.get(citation) ?? byPath.get(`${citation}.md`);
-      return direct === undefined ? null : { resource: direct.bundle_path, id: direct.id };
+      if (direct === undefined) return null;
+      // The path resolves the page, but its stem names an id only when it
+      // is unique: two colliding basenames are both id "Dup", and the id
+      // field is a stable key. The entry carries the bundle path alone -
+      // same refuse-to-guess rule as the basename branch.
+      const stems = byStem.get(direct.id);
+      if (stems !== undefined && stems.length > 1) return { resource: direct.bundle_path };
+      return { resource: direct.bundle_path, id: direct.id };
     }
     // The stem map keys on stems, but a citation may keep its extension
     // (`[[Dup.md]]` names the same page `[[Dup]]` does), so a direct miss

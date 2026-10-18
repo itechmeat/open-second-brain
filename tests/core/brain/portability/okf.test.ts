@@ -269,6 +269,23 @@ describe("v0.2 emission", () => {
     expect(citer).not.toContain("resource:");
   });
 
+  test("a path citation into colliding stems emits the resource without an id", () => {
+    // The path resolves the page (bundle_path names exactly one file), but
+    // the stem does not name an id: A/Dup.md and B/Dup.md are both id
+    // "Dup". The id field is documented as a stable key, so the entry
+    // carries the resource only - same refuse-to-guess rule as the
+    // basename branch.
+    note("A/Dup.md", "---\ntitle: one\n---\nx\n");
+    note("B/Dup.md", "---\ntitle: two\n---\ny\n");
+    note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[B/Dup]].\n");
+    const bundle = buildOkfBundle(vault);
+    const citer = fileOf(bundle.files, "concepts/Citer.md");
+    expect(citer).toContain('- {resource: "concepts/Dup-2.md"}');
+    expect(citer).not.toContain("id:");
+    const entry = bundle.manifest.pages.find((p) => p.path === "Notes/Citer.md");
+    expect(entry?.sources).toEqual([{ resource: "concepts/Dup-2.md" }]);
+  });
+
   test("an extension-bearing basename citation resolves through the stem map", () => {
     // `[[Dup.md]]` names the same page `[[Dup]]` does: the citation keeps
     // its extension while the stem map keys on stems, so the resolver
