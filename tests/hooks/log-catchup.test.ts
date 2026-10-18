@@ -255,6 +255,41 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(context).not.toContain("the device's own line");
   });
 
+  test("device fallback filters own lines by shard when the writer stamped the placeholder agent", async () => {
+    // The writer-realistic shape: an unconfigured install stamps the
+    // payload `agent` with the `resolveAgentName` placeholder ("agent")
+    // and puts its device id in the shard name - the payload never
+    // carries the device id. Fallback authorship must therefore be read
+    // off the shard (the shard id IS the device id), or the install
+    // replays its own lines back as cross-agent catch-up.
+    seed("agent", "the device's own writer-realistic line", { deviceId: "dev-b" });
+    seed("agent-a", "a genuinely other agent's line", { deviceId: "dev-c" });
+    const r = await runHook(SESSION_START, {
+      OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED: "true",
+      VAULT_DIR: vault,
+      O2B_DEVICE_ID: "dev-b",
+    });
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("a genuinely other agent's line");
+    expect(context).not.toContain("the device's own writer-realistic line");
+  });
+
+  test("a configured agent name stays the identity even across device shards", async () => {
+    // When an agent name is configured it is the identity: a same-name
+    // line from another device's shard is still self, and the shard id
+    // is not consulted at all.
+    seed("agent-b", "my own line from another device", { deviceId: "dev-other" });
+    seed("agent-a", "another agent's cross-device line", { deviceId: "dev-other" });
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("another agent's cross-device line");
+    expect(context).not.toContain("my own line from another device");
+  });
+
   test("an event that cannot carry additionalContext gets nothing", async () => {
     seed("agent-a", "quiet on this event");
     const r = await runHook({ hook_event_name: "PostToolUse" }, flagOn("agent-b"));

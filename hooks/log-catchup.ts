@@ -16,7 +16,13 @@
  * same way every Brain writer does: the config-resolved agent name, and
  * - when no name is configured - this device's device id. Lines authored
  * by that identity are filtered out; with neither resolvable the lane
- * stays silent rather than replay the agent its own lines back.
+ * stays silent rather than replay the agent its own lines back. The two
+ * identity sources read authorship differently: a configured agent name
+ * matches the payload `agent` field (so a same-name line from another
+ * device is still self), while the device id exists only in the shard
+ * name - writers stamp `agent` with the agent name, the "agent"
+ * placeholder on an unconfigured install - so the fallback matches the
+ * entry's shard id, which IS the device id.
  *
  * Cursor. `(date, shardId, line)` watermark plus per-shard high-water
  * marks (hooks/lib/log-cursor-state.ts, overwrite-only derived state,
@@ -101,17 +107,29 @@ function logCatchupEnabled(): boolean {
 }
 
 /**
- * The identity this run filters its own lines by: the config-resolved
- * agent name when one is actually configured, else the device id. Null
- * when neither resolves - the lane cannot tell self from other, so it
- * stays silent instead of replaying the agent its own lines.
+ * The identity this run filters its own lines by, and the source that
+ * produced it: the config-resolved agent name when one is actually
+ * configured, else the device id. Null when neither resolves - the lane
+ * cannot tell self from other, so it stays silent instead of replaying
+ * the agent its own lines.
  */
-function resolveSelfIdentity(): string | null {
+interface SelfIdentity {
+  readonly value: string;
+  /**
+   * True when `value` is the device id, not a configured agent name.
+   * The payload cannot carry the answer in this mode - every writer
+   * stamps `agent` with an agent name, never the device id - so
+   * authorship is read off the shard name instead.
+   */
+  readonly fromDeviceFallback: boolean;
+}
+
+function resolveSelfIdentity(): SelfIdentity | null {
   const name = resolveAgentName().trim();
-  if (isConfiguredAgentName(name)) return name;
+  if (isConfiguredAgentName(name)) return { value: name, fromDeviceFallback: false };
   try {
     const device = resolveDeviceId().trim();
-    if (device.length > 0) return device;
+    if (device.length > 0) return { value: device, fromDeviceFallback: true };
   } catch {
     // absorbed: an unresolvable device id leaves the null path below
   }
@@ -216,7 +234,13 @@ async function main(): Promise<void> {
           timestamp: entry.timestamp,
         };
         lastSeen = { position, marks: { ...shardMarks } };
-        if (entry.agent !== self && (cursor === null || isAfterCursor(position, cursor))) {
+        // Self by payload attribution against the resolved identity; in
+        // the device-id fallback also by shard, because that is the only
+        // place the device id appears (see the SelfIdentity doc). A
+        // configured agent name never consults the shard.
+        const selfOwned =
+          entry.agent === self.value || (self.fromDeviceFallback && shardId === self.value);
+        if (!selfOwned && (cursor === null || isAfterCursor(position, cursor))) {
           collected.push({ entry });
         }
       }
