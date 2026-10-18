@@ -67,6 +67,8 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
+  dateCutoff,
+  firstRunScanCutoffDate,
   LOG_CATCHUP_WINDOW_DATES,
   readLogCatchupCursor,
   writeLogCatchupCursor,
@@ -152,58 +154,13 @@ interface CatchupPosition {
 }
 
 /**
- * A calendar cutoff `windowDates` behind `referenceDate` (UTC, date
- * strings all the way through): the shared arithmetic behind the cursor
- * window ({@link windowCutoffDate}) and the first-run window
- * ({@link firstRunScanCutoffDate}).
- */
-function dateCutoff(referenceDate: string, windowDates: number): string {
-  const d = new Date(`${referenceDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - windowDates);
-  return d.toISOString().slice(0, 10);
-}
-
-/**
- * How far back a FIRST run (no cursor yet) scans: the cursor window
- * plus two days of slack. A first run has no marks to vouch about
- * anything, and without a bound it would parse the WHOLE history - on a
- * vault with years of daily log, every SessionStart of a new identity
- * read every day only to render the newest lines. Two days beyond the
- * cursor window keep the first run's reach a superset of what a parked
- * cursor would still rescan, so the hand-off from "no cursor" to
- * "parked cursor" never narrows what a late-synced shard can surface in.
- */
-export const LOG_CATCHUP_FIRST_RUN_WINDOW_DATES = LOG_CATCHUP_WINDOW_DATES + 2;
-
-/**
- * The oldest date a no-cursor run still scans: the first-run window
- * behind the NEWEST date in the log that is today or earlier (not
- * behind today itself - a vault whose newest entry is months old should
- * still catch up on its own recent tail, not report all of it
- * unscanned). The clamp to real dates is the watermark parking clamp
- * again: a clock-skewed writer's future date is newest in merge order
- * but must not widen the window past every real day - referenced on the
- * skew, the window would call ALL of today's history unscanned. When
- * every date is future the reference falls back to today, so the skew
- * lines still surface while nothing real is miscounted. `dates` must be
- * sorted, as the derived date list is; null when the log has no dates
- * at all. Dates older than the cutoff are counted and reported, never
- * parsed.
- */
-export function firstRunScanCutoffDate(dates: ReadonlyArray<string>, today: string): string | null {
-  if (dates.length === 0) return null;
-  const real = dates.filter((d) => d <= today);
-  const reference = real.length > 0 ? real[real.length - 1]! : today;
-  return dateCutoff(reference, LOG_CATCHUP_FIRST_RUN_WINDOW_DATES);
-}
-
-/**
  * The oldest date the cursor can still vouch per shard about: the
  * calendar window behind the cursor date. The `days` marks cover only
  * the dates that HAD files when the cursor last parked, so a filter
  * bounded by the marks would treat a date whose shards had not synced
  * yet as outside the window and drop its late-arriving lines forever -
- * the window is a range of calendar dates, not the recorded keys.
+ * the window is a range of calendar dates, not the recorded keys. The
+ * arithmetic is the cursor module's shared {@link dateCutoff}.
  */
 function windowCutoffDate(cursorDate: string): string {
   return dateCutoff(cursorDate, LOG_CATCHUP_WINDOW_DATES);

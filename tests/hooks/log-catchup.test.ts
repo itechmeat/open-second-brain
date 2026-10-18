@@ -21,14 +21,12 @@ import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
 import {
+  firstRunScanCutoffDate,
   logCatchupCursorFilename,
   logCatchupCursorPath,
+  LOG_CATCHUP_FIRST_RUN_WINDOW_DATES,
   LOG_CATCHUP_WINDOW_DATES,
 } from "../../hooks/lib/log-cursor-state.ts";
-import {
-  firstRunScanCutoffDate,
-  LOG_CATCHUP_FIRST_RUN_WINDOW_DATES,
-} from "../../hooks/log-catchup.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
