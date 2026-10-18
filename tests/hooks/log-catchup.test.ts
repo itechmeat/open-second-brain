@@ -385,6 +385,28 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(context).not.toContain("yesterdays early line");
   });
 
+  test("a shard that syncs in late for a date with no local file still surfaces", async () => {
+    // The windowed marks only cover dates that HAD files when the cursor
+    // last parked, but the window itself is a range of calendar dates:
+    // one device can own a whole day whose shard reaches this device
+    // only after the cursor already moved past it. Keying the date skip
+    // on the recorded `days` marks (instead of the calendar window)
+    // would drop that day's lines forever - the normal cross-device
+    // case the lane exists for.
+    seed("agent-a", "todays line", { timestamp: "2026-10-17T09:00:00Z", deviceId: "dev-a" });
+    expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
+    seed("agent-a", "late shard for a day that had no local file", {
+      timestamp: "2026-10-16T09:00:00Z",
+      deviceId: "dev-c",
+    });
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("late shard for a day that had no local file");
+    expect(context).not.toContain("todays line");
+  });
+
   test("a future-dated foreign line does not park the cursor past today", async () => {
     // A foreign writer can stamp a log file with a future date. The scan
     // must still read and surface it, but the watermark must never park

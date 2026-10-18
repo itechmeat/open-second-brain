@@ -149,6 +149,20 @@ interface CatchupPosition {
 }
 
 /**
+ * The oldest date the cursor can still vouch per shard about: the
+ * calendar window behind the cursor date. The `days` marks cover only
+ * the dates that HAD files when the cursor last parked, so a filter
+ * bounded by the marks would treat a date whose shards had not synced
+ * yet as outside the window and drop its late-arriving lines forever -
+ * the window is a range of calendar dates, not the recorded keys.
+ */
+function windowCutoffDate(cursorDate: string): string {
+  const d = new Date(`${cursorDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - LOG_CATCHUP_WINDOW_DATES);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
  * Whether an entry read at `position` is past the cursor. Dates before
  * the cursor date read the decision off that date's `days` marks; the
  * cursor date off `shards`; and a date AFTER the cursor - a skewed
@@ -156,10 +170,11 @@ interface CatchupPosition {
  * `future` marks, so a skewed line is shown once instead of every
  * session until the clock reaches its date. A shard with no mark yet is
  * entirely new; otherwise the entry is new when its line index is past
- * that shard's mark, and a date with no marks at all is new only in the
- * future direction (older dates outside the window are skipped whole
- * before this runs). See the cursor module for why the marks, and not
- * the bare tuple, are what the filter reads.
+ * that shard's mark, and a date with no marks at all is new in the
+ * future direction or within the calendar window behind the cursor
+ * (dates older than the window are skipped whole before this runs).
+ * See the cursor module for why the marks, and not the bare tuple, are
+ * what the filter reads.
  */
 function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boolean {
   if (position.date === cursor.date) {
@@ -168,7 +183,9 @@ function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boo
   }
   const marks =
     position.date < cursor.date ? cursor.days[position.date] : cursor.future[position.date];
-  if (marks === undefined) return position.date > cursor.date;
+  if (marks === undefined) {
+    return position.date > cursor.date || position.date >= windowCutoffDate(cursor.date);
+  }
   const mark = marks[position.shardId];
   return mark === undefined || position.line > mark;
 }
@@ -244,7 +261,11 @@ async function main(): Promise<void> {
     // syncs in late for an earlier date (the normal cross-device case)
     // must still surface, so the cursor keeps windowed marks
     // (LOG_CATCHUP_WINDOW_DATES dates back) and only a date both older
-    // than the cursor date and outside that window is skipped whole.
+    // than the cursor date and outside that calendar window is skipped
+    // whole. The bounds come from the calendar, not the recorded
+    // `days` keys: a date that had no local file when the cursor parked
+    // carries no marks, and keying the skip on the marks would drop its
+    // late-arriving shards permanently.
     const collected: Array<{ entry: BrainLogEntry }> = [];
     let lastSeen: CatchupPosition | null = null;
     // The last scanned position dated today or earlier. A foreign line
@@ -266,7 +287,14 @@ async function main(): Promise<void> {
     // lane goes silent while rescanning history every session.
     let perDateMarks: Record<string, Record<string, number>> = Object.create(null);
     for (const date of listLogDates(vault)) {
-      if (cursor !== null && date < cursor.date && cursor.days[date] === undefined) continue;
+      if (
+        cursor !== null &&
+        date < cursor.date &&
+        cursor.days[date] === undefined &&
+        date < windowCutoffDate(cursor.date)
+      ) {
+        continue;
+      }
       const { entries, entryShardIds, entryLines } = readLogDay(vault, date);
       const shardMarks: Record<string, number> = Object.create(null);
       perDateMarks[date] = shardMarks;
