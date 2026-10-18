@@ -456,7 +456,10 @@ export function applyEntityMerge(
 
       // 2. Inbound relation edges: retarget the dropped id to the survivor
       //    so no `broken-entity-relation` survives the merge and no edge
-      //    information is lost.
+      //    information is lost. A field holding BOTH sides of the pair maps
+      //    onto `[[keep]]` twice, so the map dedups by normalized target -
+      //    first occurrence wins, order preserved (the same union rule the
+      //    survivor's own absorbed edges follow).
       for (const entity of index.entities) {
         if (entity.id === keep.id || entity.id === drop.id) continue;
         if (!entity.relations.some((edge) => edge.target === drop.id)) continue;
@@ -465,9 +468,18 @@ export function applyEntityMerge(
         for (const [key, value] of Object.entries(metaNext)) {
           if (!relationFromFrontmatterField(key)) continue;
           const items = Array.isArray(value) ? value : value === "" ? [] : [value];
-          metaNext[key] = items.map((item) =>
+          const mapped = items.map((item) =>
             normalizeRelationTarget(String(item)) === drop.id ? `[[${keep.id}]]` : String(item),
           );
+          const seen = new Set<string>();
+          const deduped: string[] = [];
+          for (const item of mapped) {
+            const target = normalizeRelationTarget(item);
+            if (target !== null && seen.has(target)) continue;
+            if (target !== null) seen.add(target);
+            deduped.push(item);
+          }
+          metaNext[key] = deduped;
         }
         metaNext["updated_at"] = stamp;
         writeFrontmatterAtomic(entity.path, metaNext, body, { overwrite: true });

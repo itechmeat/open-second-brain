@@ -28,6 +28,8 @@ import { listSnapshots } from "../../../../src/core/brain/snapshot.ts";
 import { HYGIENE_AUDIT_DIR } from "../../../../src/core/brain/audit-dirs.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { getEntity } from "../../../../src/core/brain/entities/registry.ts";
+import { normalizeRelationTarget } from "../../../../src/core/graph/frontmatter-relations.ts";
+import { parseFrontmatter } from "../../../../src/core/vault.ts";
 
 let vault: string;
 let configHome: string;
@@ -322,6 +324,45 @@ describe("applyEntityMerge", () => {
       { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
     );
     const mary = getEntity(vault, { query: "Mary Somerville" })!;
+    expect(mary.relations.map((r) => r.target)).toEqual([keepId]);
+  });
+
+  test("an inbound field holding both sides lands as ONE survivor edge", () => {
+    const { keepId, dropId } = seedPair();
+    upsertEntity(vault, {
+      category: "people",
+      name: "Mary Somerville",
+      agent: "test-agent",
+      now: NOW,
+    });
+    // Mary links to BOTH pages of the pair - a field the retarget maps onto
+    // `[[keep]]` twice unless it dedups by normalized target.
+    relateEntities(vault, {
+      from: { query: "Mary Somerville" },
+      relation: "related",
+      to: { query: "Ada Lovelace" },
+      now: NOW,
+    });
+    relateEntities(vault, {
+      from: { query: "Mary Somerville" },
+      relation: "related",
+      to: { query: "Ada" },
+      now: NOW,
+    });
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    expect(plan.inbound_edges_retarged).toBe(1);
+    applyEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    // Read the raw frontmatter: the field holds the survivor exactly once -
+    // first occurrence kept, order preserved - never a duplicated edge.
+    const mary = getEntity(vault, { query: "Mary Somerville" })!;
+    const [meta] = parseFrontmatter(mary.path);
+    const raw = meta["related"];
+    const items = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+    expect(items.map((i) => normalizeRelationTarget(i))).toEqual([keepId]);
     expect(mary.relations.map((r) => r.target)).toEqual([keepId]);
   });
 
