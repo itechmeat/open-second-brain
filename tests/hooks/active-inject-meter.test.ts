@@ -342,7 +342,9 @@ describe("active-inject injection meter", () => {
       const meter = createInjectionMeter(8000);
       const assembled = assembleActiveContext(vault, budget, meter);
       expect(assembled).toBe("");
-      expect(assembled.length).toBeLessThanOrEqual(budget);
+      // Nothing was emitted, so nothing was measured under the ceiling:
+      // the receipt's budget block stays out, like the siblings above.
+      expect(meter.budgetChars).toBeNull();
       expect(meter.sources.map((s) => s.name)).toEqual([]);
     });
   });
