@@ -231,6 +231,42 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(context).toContain("5 older");
   });
 
+  test("the char cap drops the oldest lines first and the cursor still covers every scanned line", async () => {
+    // Eight well-under-the-line-cap lines whose rendered block blows
+    // past LOG_CATCHUP_MAX_CHARS: the trim loop must peel the oldest
+    // lines off the front, count each as older, and still advance the
+    // watermark past every line it scanned - trimming the render must
+    // not freeze the cursor, or the dropped lines would resurface next
+    // session.
+    for (let i = 0; i < 8; i++) {
+      seed("agent-a", `charcap line ${i} ${"x".repeat(1500)}`, {
+        timestamp: `2026-10-17T10:0${i}:00Z`,
+      });
+    }
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    // Oldest dropped first: the front of the scan is gone, the newest
+    // line survives.
+    expect(context).not.toContain("charcap line 0");
+    expect(context).not.toContain("charcap line 1");
+    expect(context).not.toContain("charcap line 4");
+    expect(context).toContain("charcap line 7");
+    // The line cap alone would have shown all 8, so any "older" count
+    // in the header is the char-trim loop's own growth.
+    const older = context?.match(/\((\d+) older not shown\)/);
+    expect(older).not.toBeNull();
+    expect(Number(older![1])).toBeGreaterThanOrEqual(1);
+    // The watermark advanced past ALL scanned lines despite the trim.
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      line: number;
+      shards: Record<string, number>;
+    };
+    expect(cursor.line).toBe(7);
+    expect(cursor.shards[""]).toBe(7);
+  });
+
   test("a missing or corrupt cursor fails soft and the lane still exits 0", async () => {
     seed("agent-a", "read me despite the broken cursor");
     const { mkdirSync, writeFileSync } = await import("node:fs");
