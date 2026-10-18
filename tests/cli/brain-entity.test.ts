@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -532,6 +533,40 @@ describe("o2b brain entity merge", () => {
     });
     expect(out.returncode).toBe(0);
     expect(out.stdout).toContain("cyclic edges removed: 1");
+  });
+
+  test("an unexpected failure answers a JSON caller with structured internal-error", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    // Swap the vault's identity marker underneath the live process: the
+    // write gate refuses below the verb's own refusal vocabulary - the
+    // store changed, not a merge decision. Nothing has been written when
+    // it fires.
+    const marker = join(vault, "Brain", "vault-id.json");
+    writeFileSync(
+      marker,
+      JSON.stringify({
+        schema_version: 1,
+        vault_id: "tampered-away-from-the-pinned-id",
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    );
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", hash, "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    const payload = JSON.parse(out.stdout) as { ok: boolean; code: string; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.code).toBe("internal-error");
+    // The error's own message, one line - never a stack.
+    expect(payload.message.split("\n").length).toBe(1);
+    expect(payload.message.length).toBeGreaterThan(0);
+    expect(out.stderr).toBe("");
   });
 
   test("the echoed apply command shell-quotes subjects a shell would split", async () => {

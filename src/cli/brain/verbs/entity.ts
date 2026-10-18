@@ -32,6 +32,7 @@ import {
 } from "../../../core/brain/entities/lexicon.ts";
 import {
   brainVerbContext,
+  CliError,
   fail,
   info,
   normalizeFlagString,
@@ -428,11 +429,16 @@ function entityMergeRefusal(exc: unknown, json: boolean): number {
     }
     return fail(`brain entity merge: ${exc.message}`);
   }
-  return fail(`brain entity merge failed: ${(exc as Error).message}`);
+  // Not a merge refusal - vault identity, snapshot gate, fs. Rethrow so
+  // the verb-level wrapper answers a JSON caller on stdout.
+  throw exc;
 }
 
 /** Refusal code for a merge nobody consented to: consent missing, not wrong. */
 const CONSENT_REQUIRED_CODE = "consent-required";
+
+/** The parsed-flag shape `parse` returns, restated for the run helper. */
+type EntityMergeFlags = Record<string, string | boolean | string[] | undefined>;
 
 /**
  * `o2b brain entity merge <keep> <drop>` (actionable-now batch, A2 /
@@ -449,6 +455,11 @@ const CONSENT_REQUIRED_CODE = "consent-required";
  * The apply itself never bare-deletes: the old page is archived behind
  * the destructive-snapshot gate, the old name becomes an alias on the
  * survivor, and no claim is rewritten.
+ *
+ * The body runs under one more gate: a failure below the verb's own
+ * refusal vocabulary (vault identity, the snapshot gate, the filesystem)
+ * still owes a `--json` caller a structured line on stdout instead of
+ * prose on a channel the caller never reads.
  */
 async function entityMerge(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -459,12 +470,33 @@ async function entityMerge(argv: string[]): Promise<number> {
     agent: { type: "string" },
     json: { type: "boolean" },
   });
+  const json = flags["json"] === true;
+  try {
+    return await runEntityMerge(flags, positional, json);
+  } catch (exc) {
+    // A missing or empty --vault stays a usage-level CliError with its own
+    // top-level formatting; everything else is an internal failure, and
+    // the message travels alone - never a stack.
+    if (exc instanceof CliError) throw exc;
+    const message = exc instanceof Error ? exc.message : String(exc);
+    if (json) {
+      okJson({ ok: false, code: "internal-error", message });
+      return 1;
+    }
+    return fail(`brain entity merge failed: ${message}`);
+  }
+}
+
+async function runEntityMerge(
+  flags: EntityMergeFlags,
+  positional: string[],
+  json: boolean,
+): Promise<number> {
   if (positional.length !== 2) {
     return fail("brain entity merge requires <keep> and <drop> (ids, names or aliases)");
   }
   const { config, vault } = brainVerbContext(flags);
   const refs = { keep: positional[0]!, drop: positional[1]! };
-  const json = flags["json"] === true;
   const force = flags["force"] === true;
   const dryRun = flags["dry-run"] === true;
   const expectHash = normalizeFlagString(flags["expect-hash"]);
