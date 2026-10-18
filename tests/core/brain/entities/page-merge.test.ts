@@ -29,7 +29,11 @@ import {
   entityMergePlanHash,
   planEntityMerge,
 } from "../../../../src/core/brain/entities/page-merge.ts";
-import { relateEntities, upsertEntity } from "../../../../src/core/brain/entities/registry.ts";
+import {
+  archiveEntity,
+  relateEntities,
+  upsertEntity,
+} from "../../../../src/core/brain/entities/registry.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { listSnapshots } from "../../../../src/core/brain/snapshot.ts";
@@ -295,6 +299,45 @@ describe("planEntityMerge", () => {
     expect(
       codeOf(() => planEntityMerge(vault, { keep: quarantined.entity.id, drop: keep!.id })),
     ).toBe("quarantine-record");
+  });
+
+  test("subjects found by name refuse through the shared status gate", () => {
+    seedPair();
+    const quarantined = upsertEntity(vault, {
+      category: "people",
+      name: "Ada Unverified",
+      agent: "test-agent",
+      now: NOW,
+      untrustedOrigin: true,
+    });
+    let thrown: EntityMergeError | null = null;
+    try {
+      planEntityMerge(vault, { keep: "Ada Lovelace", drop: "Ada Unverified" });
+    } catch (err) {
+      thrown = err as EntityMergeError;
+    }
+    expect(thrown).toBeInstanceOf(EntityMergeError);
+    expect(thrown!.code).toBe("quarantine-record");
+    // The refusal names the record and its lane - the shared gate's words,
+    // not a hard-coded "archived" guess at the status.
+    expect(thrown!.message).toContain(quarantined.entity.id);
+    expect(thrown!.message).toContain("quarantine-lane record");
+
+    // An archived holder found by name refuses as inactive, naming the
+    // record.
+    const drop = getEntity(vault, { query: "Ada" })!;
+    archiveEntity(vault, { query: "Ada" }, { now: NOW });
+    __clearEntityIndexCache();
+    let archivedThrown: EntityMergeError | null = null;
+    try {
+      planEntityMerge(vault, { keep: "Ada Lovelace", drop: "Ada" });
+    } catch (err) {
+      archivedThrown = err as EntityMergeError;
+    }
+    expect(archivedThrown).toBeInstanceOf(EntityMergeError);
+    expect(archivedThrown!.code).toBe("inactive-record");
+    expect(archivedThrown!.message).toContain(drop.id);
+    expect(archivedThrown!.message).toContain("archived");
   });
 
   test("a drop page listing its own name as an alias still merges", () => {

@@ -236,7 +236,9 @@ function resolveSubject(
     );
   }
 
-  // Nothing canonical: name the non-canonical holder when there is one.
+  // Nothing canonical: name the non-canonical holder through the one gate
+  // every subject passes, so the real status names itself - hard-coding
+  // "archived" here would misreport any status this vocabulary grows.
   const held = index.entities.filter(
     (e) =>
       inCategory(e) &&
@@ -244,19 +246,8 @@ function resolveSubject(
         e.aliases.some((a) => normalizeEntityName(a) === normalized)),
   );
   if (held.length > 0) {
-    const record = held[0]!;
-    if (record.status === BRAIN_ENTITY_STATUS.quarantine) {
-      throw new EntityMergeError(
-        "quarantine-record",
-        `${record.id} holds ${JSON.stringify(query)} in quarantine, where untrusted intake put ` +
-          "it; release it first (brain entity archive --restore) and merge afterwards",
-      );
-    }
-    throw new EntityMergeError(
-      "inactive-record",
-      `${record.id} is archived; restore it (brain entity archive --restore) or merge the ` +
-        "canonical records only",
-    );
+    assertMergeable(held[0]!); // throws, naming the holder's actual status
+    throw notFound(); // unreachable: held holds only non-canonical records
   }
   throw notFound();
 }
