@@ -132,6 +132,23 @@ const IMPORTED_AT_KEY = "okf_imported_at";
 /** Frontmatter key marking a staged (un-promoted) review candidate. */
 const REVIEW_KEY = "okf_review";
 
+/**
+ * Frontmatter keys carrying a page's NATIVE `status` / `sources` /
+ * `generated` values beside the derived v0.2 block. The v0.2 status enum
+ * is closed (`draft | stable | deprecated`) and the derived sources are
+ * re-translated from citations, so exporting the native values in place
+ * would silently rewrite them: a quarantined page would export as
+ * `stable` and un-quarantine on import, workflow statuses like `done` or
+ * `active` would be lost, and user-written source lists would be
+ * replaced. The raw keys ride the same `okf_` producer namespace as
+ * {@link FOREIGN_TYPE_KEY} / {@link PRODUCER_KEY}; a trusted own-producer
+ * import restores them and drops the derived block (see
+ * {@link restoreRawOkfKeys}); foreign bundles import as-is.
+ */
+const RAW_STATUS_KEY = "okf_status_raw";
+const RAW_SOURCES_KEY = "okf_sources_raw";
+const RAW_GENERATED_KEY = "okf_generated_raw";
+
 const FRESHNESS_FIELDS = ["updated_at", "updated"] as const;
 
 // ----- Export ---------------------------------------------------------------
@@ -590,7 +607,12 @@ function okfFlowScalar(value: string): string {
  * `generated`) as DERIVED fields. The derived keys are recomputed from
  * current page state on every export and never carried through from a
  * previous bundle, so re-exporting an imported page re-derives them
- * instead of stacking a foreign bundle's values a second time.
+ * instead of stacking a foreign bundle's values a second time. Because
+ * the derived block is a projection - a closed status enum, sources
+ * re-translated from citations - the page's NATIVE values ride beside it
+ * under the producer namespace (`okf_status_raw`, `okf_sources_raw`,
+ * `okf_generated_raw`), so a trusted own-producer import can restore
+ * what the projection cannot name.
  *
  * The derived block is rendered by hand in YAML flow style because the
  * shared frontmatter writer emits scalars and inline arrays only - and
@@ -607,7 +629,22 @@ function renderOkfPageFile(
   const carried: FrontmatterMap = {};
   for (const [key, value] of Object.entries(page.frontmatter)) {
     if (key === "status" || key === "sources" || key === "generated") continue;
+    if (key === RAW_STATUS_KEY || key === RAW_SOURCES_KEY || key === RAW_GENERATED_KEY) continue;
     carried[key] = value;
+  }
+  // The native values ride the producer namespace beside the derived
+  // block: the derived status maps onto a closed enum and the derived
+  // sources are re-translated from citations, so exporting them in place
+  // would rewrite what the operator wrote. Recomputed from current page
+  // state on every export and never carried through from a previous
+  // bundle - the same honesty rule as the derived block.
+  const rawStatus = stringField(page.frontmatter, "status");
+  if (rawStatus !== null) carried[RAW_STATUS_KEY] = rawStatus;
+  if (page.frontmatter["sources"] !== undefined) {
+    carried[RAW_SOURCES_KEY] = page.frontmatter["sources"];
+  }
+  if (page.frontmatter["generated"] !== undefined) {
+    carried[RAW_GENERATED_KEY] = page.frontmatter["generated"];
   }
   // formatFrontmatter with an empty body is exactly "---\n<keys>---\n";
   // drop the closing fence, append the derived block, re-close.
@@ -1052,15 +1089,43 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
 }
 
 /**
+ * Restore the native frontmatter an own-producer export carried under
+ * the producer namespace (the `okf_*_raw` keys), dropping the derived
+ * v0.2 block the export wrote beside it. The operator's round-trip is
+ * "restore the recorded state": a page quarantined before export lands
+ * quarantined again instead of silently promoted to the enum's
+ * `stable`, a completion status comes back itself, user-written sources
+ * survive, and a page that never carried a status (or sources) again
+ * does not. Raw values replace the derived ones wholesale; a missing
+ * raw key means the source page never carried the field, so the derived
+ * value is dropped rather than landed.
+ */
+function restoreRawOkfKeys(meta: FrontmatterMap): void {
+  const rawStatus = meta[RAW_STATUS_KEY];
+  if (typeof rawStatus === "string" && rawStatus.trim() !== "") meta["status"] = rawStatus;
+  else delete meta["status"];
+  delete meta[RAW_STATUS_KEY];
+  if (meta[RAW_SOURCES_KEY] !== undefined) meta["sources"] = meta[RAW_SOURCES_KEY];
+  else delete meta["sources"];
+  delete meta[RAW_SOURCES_KEY];
+  if (meta[RAW_GENERATED_KEY] !== undefined) meta["generated"] = meta[RAW_GENERATED_KEY];
+  else delete meta["generated"];
+  delete meta[RAW_GENERATED_KEY];
+}
+
+/**
  * Compose the frontmatter a page lands with. Standard fields are taken
  * from the bundle file verbatim. This system's machinery keys (they are
  * server-stamped, not caller-supplied - see
  * {@link FOREIGN_MACHINERY_KEYS}) are stripped unless the operator
- * vouched for an own-producer bundle with `--trusted`. A bundle that
- * declares a foreign producer additionally gets provenance stamped
- * (producer + raw foreign type) without clobbering any such key the page
- * already carries — preserving, never overwriting, producer-specific
- * metadata. Review-staged pages also get `okf_review: pending`.
+ * vouched for an own-producer bundle with `--trusted` - the one path on
+ * which the native values the export carried under the producer
+ * namespace are restored instead (see {@link restoreRawOkfKeys}). A
+ * bundle that declares a foreign producer additionally gets provenance
+ * stamped (producer + raw foreign type) without clobbering any such key
+ * the page already carries — preserving, never overwriting,
+ * producer-specific metadata. Review-staged pages also get
+ * `okf_review: pending`.
  */
 function importFrontmatter(
   page: ParsedOkfPage,
@@ -1072,6 +1137,9 @@ function importFrontmatter(
   const meta: FrontmatterMap = { ...page.frontmatter };
   if (!trusted || foreign) {
     for (const key of FOREIGN_MACHINERY_KEYS) delete meta[key];
+  }
+  if (trusted && !foreign) {
+    restoreRawOkfKeys(meta);
   }
   if (foreign) {
     if (meta[PRODUCER_KEY] === undefined) meta[PRODUCER_KEY] = producer;

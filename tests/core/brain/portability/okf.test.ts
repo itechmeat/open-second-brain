@@ -436,27 +436,122 @@ describe("v0.2 import acceptance", () => {
     }
   });
 
-  test("a v0.2 bundle round-trips through importOkfBundle", () => {
-    note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nsee [[Beta]].\n");
-    note("Notes/Beta.md", "---\ntitle: Beta\n---\nleaf.\n");
+  test("a trusted own-producer round-trip restores native frontmatter, not the derived block", () => {
+    // The v0.2 derived keys are recomputed on every export, and the
+    // closed status enum cannot name this system's own statuses. The
+    // export therefore carries the native values under the producer
+    // namespace (okf_status_raw / okf_sources_raw / okf_generated_raw)
+    // beside the derived block, and a trusted own-producer import
+    // restores them and drops the derived block: a page quarantined
+    // before export is quarantined again instead of being silently
+    // promoted to the enum's `stable` by its own round-trip.
+    note("Notes/Q.md", "---\ntitle: Q\nstatus: quarantine\n---\nbody.\n");
+    note("Notes/Done.md", "---\ntitle: Done\nstatus: done\n---\nbody.\n");
+    note("Notes/G.md", "---\ntitle: G\ngenerated: hand-written\n---\nbody.\n");
+    note("Notes/Plain.md", "---\ntitle: Plain\n---\nsee [[Q]].\n");
+    note("Notes/S.md", "---\ntitle: S\nsources: [https://example.com/orig]\n---\nsee [[Q]].\n");
     const bundle = buildOkfBundle(vault);
+    // The export carries the raw values beside the derived block.
+    const qPage = fileOf(bundle.files, "concepts/Q.md");
+    expect(qPage).toContain("status: stable");
+    expect(qPage).toContain("okf_status_raw: quarantine");
+
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest-"));
     try {
       writeOkfBundle(dir, bundle);
       const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(false);
       const result = importOkfBundle(dest, parsed, { trusted: true });
       expect(result.errors).toEqual([]);
-      expect(result.written).toContain("Notes/Alpha.md");
-      const landed = readFileSync(join(dest, "Notes/Alpha.md"), "utf8");
-      // The v0.2 per-page keys ride the round-trip as foreign-but-
-      // tolerated frontmatter: never stripped, never re-stamped. The
-      // block values land as this parser's string form of the flow maps
-      // (quoted on re-write), so the assertions pin the DATA, not the
-      // quoting shape.
+      expect(result.written).toContain("Notes/Q.md");
+      // Quarantine survives: the derived `stable` is dropped, the raw
+      // status is restored, and no namespaced key is left behind.
+      const landedQ = readFileSync(join(dest, "Notes/Q.md"), "utf8");
+      expect(landedQ).toContain("status: quarantine");
+      expect(landedQ).not.toContain("status: stable");
+      expect(landedQ).not.toContain("okf_status_raw");
+      expect(landedQ).not.toContain("generated:");
+      expect(landedQ).toContain("body.");
+      // Completion states come back too: `done` is `done`, not `stable`.
+      const landedDone = readFileSync(join(dest, "Notes/Done.md"), "utf8");
+      expect(landedDone).toContain("status: done");
+      expect(landedDone).not.toContain("status: stable");
+      // A native generated value is restored, not the derived block.
+      const landedG = readFileSync(join(dest, "Notes/G.md"), "utf8");
+      expect(landedG).toContain("generated: hand-written");
+      expect(landedG).not.toContain("open-second-brain/");
+      // A page with no status lands with no status - the derived default
+      // and the derived sources block are dropped with it.
+      const landedPlain = readFileSync(join(dest, "Notes/Plain.md"), "utf8");
+      expect(landedPlain).not.toContain("status:");
+      expect(landedPlain).not.toContain("sources:");
+      expect(landedPlain).not.toContain("generated:");
+      expect(landedPlain).toContain("see [[Q]].");
+      // User-written sources come back; the derived flow map does not.
+      // The writer quotes array items on re-render - the DATA is what is
+      // pinned, in its deterministic written form.
+      const landedS = readFileSync(join(dest, "Notes/S.md"), "utf8");
+      expect(landedS).toContain('sources: ["https://example.com/orig"]');
+      expect(landedS).not.toContain("{resource:");
+      // Re-export is deterministic: the same raw + derived shape as the
+      // first export, byte-identical modulo the shared generated instant.
+      const re = buildOkfBundle(dest);
+      const reQ = fileOf(re.files, "concepts/Q.md");
+      expect(reQ.split(re.manifest.generated_at).join(bundle.manifest.generated_at)).toBe(qPage);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a foreign bundle's derived keys ride a trusted import verbatim", () => {
+    // Foreign bundles import as-is: the derived block is the bundle's
+    // own data, never restored away and never re-stamped, and no raw
+    // keys are read on a foreign producer's word.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-v02-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-v02-dest-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      const manifest = {
+        schema: OKF_SCHEMA_VERSION,
+        producer: "some-other-wiki",
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Foreign",
+        log_days: 0,
+        pages: [
+          {
+            id: "Topic",
+            path: "Concepts/Topic.md",
+            class: "concept",
+            bundle_path: "concepts/Topic.md",
+            kind: "note",
+            citations: [],
+            status: "stable",
+            sources: [],
+            aliases: [],
+            freshness: null,
+            foreign_type: null,
+            producer_meta: {},
+          },
+        ],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      writeFileSync(
+        join(dir, "concepts/Topic.md"),
+        '---\ntitle: Topic\nstatus: stable\nsources:\n  - {resource: "concepts/Other.md", id: "Other"}\ngenerated: {by: "some-other-wiki/9", at: "2026-06-01T00:00:00Z"}\n---\nBody.\n',
+        "utf8",
+      );
+      const result = importOkfBundle(dest, readOkfBundle(dir), {
+        trusted: true,
+        now: new Date(0),
+      });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Concepts/Topic.md"), "utf8");
       expect(landed).toContain("status: stable");
-      expect(landed).toContain("concepts/Beta.md");
-      expect(landed).toContain(bundle.manifest.generated_at);
+      expect(landed).toContain("concepts/Other.md");
+      expect(landed).toContain("some-other-wiki/9");
+      expect(landed).not.toContain("okf_status_raw");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
