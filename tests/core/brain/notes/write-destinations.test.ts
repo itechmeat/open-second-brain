@@ -63,9 +63,14 @@ interface WriteSessionSeed {
   readonly agent: string;
   readonly target: string;
   readonly deviceId?: string;
+  /** Terminal status; defaults to `done` (the committed case). */
+  readonly status?: "done" | "failed";
+  /** The terminal-failure reason `auditTerminal` records for a failed session. */
+  readonly reason?: string;
 }
 
 function seedWriteSession(input: WriteSessionSeed): void {
+  const status = input.status ?? "done";
   appendLogEvent(
     vault,
     {
@@ -75,10 +80,11 @@ function seedWriteSession(input: WriteSessionSeed): void {
       body: {
         session_id: `ws_${input.timestamp.replace(/\D/g, "")}`,
         kind: "artifact",
-        status: "done",
+        status,
         target: input.target,
         attempts: "1",
         review: "not-required",
+        ...(status === "failed" && input.reason !== undefined ? { reason: input.reason } : {}),
       },
     },
     { deviceId: input.deviceId ?? "" },
@@ -131,6 +137,40 @@ describe("listWriteDestinations", () => {
     expect(row.kinds).toEqual([WRITE_DESTINATION_KIND.writeSession]);
     expect(row.note_writes).toBe(0);
     expect(row.write_sessions).toBe(1);
+  });
+
+  test("a failed write-session audit is not a write; only done sessions count", () => {
+    // `auditTerminal` emits a failed row for a session that died before
+    // anything landed (abandoned / retry-cap / expired): no bytes moved,
+    // so the aggregate must not claim a write.
+    seedWriteSession({
+      timestamp: "2026-03-04T01:00:00Z",
+      agent: "alpha",
+      target: "Notes/One.md",
+      status: "failed",
+      reason: "abandoned",
+    });
+    seedWriteSession({
+      timestamp: "2026-03-04T02:00:00Z",
+      agent: "alpha",
+      target: "Notes/One.md",
+    });
+    seedWriteSession({
+      timestamp: "2026-03-04T03:00:00Z",
+      agent: "alpha",
+      target: "Notes/Ghost.md",
+      status: "failed",
+      reason: "retry-cap",
+    });
+    const result = listWriteDestinations(vault, {
+      until: "2026-03-04",
+      now: new Date("2026-03-04T12:00:00Z"),
+    });
+    expect(result.destinations.map((d) => d.target)).toEqual(["Notes/One.md"]);
+    const row = result.destinations[0]!;
+    expect(row.write_sessions).toBe(1);
+    expect(row.writes).toBe(1);
+    expect(row.last_write).toBe("2026-03-04T02:00:00Z");
   });
 
   test("events of neither recorded kind never create a row, and the note says so", () => {

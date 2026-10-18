@@ -8,10 +8,12 @@
  *
  *   - `note-write` events (one per recorded note write, written by the
  *     note seams after the bytes land), and
- *   - `write-session` audit rows (one per TERMINAL write-session
- *     transition - the write-session lane emits NO note-write events,
- *     which is exactly why this reader walks both kinds instead of
- *     reusing `listNoteWrites`, whose projection is note-write only).
+ *   - `write-session` audit rows - one per TERMINAL write-session
+ *     transition, of which only the `done` rows record a write (a
+ *     `failed` session landed nothing); the write-session lane emits NO
+ *     note-write events, which is exactly why this reader walks both
+ *     kinds instead of reusing `listNoteWrites`, whose projection is
+ *     note-write only.
  *
  * LOG-DERIVED ON QUERY, like every read aggregate over the log
  * (`listNoteWrites`, `buildTimelineIndex`, the today dashboard): the
@@ -28,6 +30,7 @@
 
 import { listLogDates, listLogShardFiles, readLogDay } from "../log-jsonl.ts";
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
+import type { WriteSessionStatus } from "../write-session/types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 
 /** Which recorded write kinds a destination's rows cover. */
@@ -128,6 +131,18 @@ const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_START_SUFFIX = "T00:00:00Z";
 const DAY_END_SUFFIX = "T23:59:59Z";
 
+/**
+ * The only write-session audit status that records a write. The audit
+ * lane emits one row per TERMINAL transition (`auditTerminal` in
+ * `src/core/brain/write-session/engine.ts`, statuses spelled by
+ * `WriteSessionStatus` in `src/core/brain/write-session/types.ts`), and
+ * the `failed` terminal - abandon, retry cap, TTL expiry - is a session
+ * that died before anything landed. Counting it would claim a write
+ * that never happened; separating a failed session from a committed one
+ * is exactly what a per-destination tally is for.
+ */
+const WRITE_SESSION_DONE_STATUS = "done" as const satisfies WriteSessionStatus;
+
 /** Whole days one UTC day apart, for the default-window cutoff. */
 const DAY_MS = 86_400_000;
 
@@ -153,7 +168,8 @@ function eventAgent(entry: BrainLogEntry): string {
 
 /**
  * One recorded destination touch projected from either kind, or null for
- * an event that names no target (or is neither kind).
+ * an event that names no target, is neither kind - or is a write-session
+ * audit row for a session that never committed.
  */
 function projectTouch(
   entry: BrainLogEntry,
@@ -165,7 +181,10 @@ function projectTouch(
   if (entry.eventType === BRAIN_LOG_EVENT_KIND.noteWrite) {
     return { kind: WRITE_DESTINATION_KIND.noteWrite, target, agent };
   }
-  if (entry.eventType === BRAIN_LOG_EVENT_KIND.writeSession) {
+  if (
+    entry.eventType === BRAIN_LOG_EVENT_KIND.writeSession &&
+    stringField(entry, "status") === WRITE_SESSION_DONE_STATUS
+  ) {
     return { kind: WRITE_DESTINATION_KIND.writeSession, target, agent };
   }
   return null;
