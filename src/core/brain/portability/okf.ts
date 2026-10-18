@@ -661,8 +661,10 @@ function renderOkfPageFile(
 ): string {
   const carried: FrontmatterMap = {};
   for (const [key, value] of Object.entries(page.frontmatter)) {
-    if (key === "status" || key === "sources" || key === "generated") continue;
-    if (RAW_OKF_KEYS.some(({ raw }) => raw === key)) continue;
+    // Both sides of every pair are skipped: the native field is re-derived
+    // below, and the raw carrier is re-stamped from the current state - the
+    // pair list is the one source of what must not ride through verbatim.
+    if (RAW_OKF_KEYS.some(({ raw, native }) => raw === key || native === key)) continue;
     if (key === RAW_CARRY_KEY) continue;
     carried[key] = value;
   }
