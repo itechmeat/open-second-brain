@@ -617,6 +617,88 @@ describe("v0.2 import acceptance", () => {
     }
   });
 
+  test("an own-producer bundle staged untrusted keeps its real status and sheds the raw keys", () => {
+    // The restore keys on the PRODUCER, not on the operator's vouch: a
+    // staged page is already marked okf_review: pending, so restoring the
+    // native status there cannot promote anything into the live vault -
+    // while skipping the restore is the exact regression the raw keys
+    // exist to fix (a quarantined page lands `stable` on review).
+    note("Notes/Q.md", "---\ntitle: Q\nstatus: quarantine\n---\nbody.\n");
+    const bundle = buildOkfBundle(vault);
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-review-rt-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-review-rt-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const result = importOkfBundle(dest, readOkfBundle(dir));
+      expect(result.mode).toBe("review");
+      expect(result.errors).toEqual([]);
+      const staged = readFileSync(join(dest, OKF_REVIEW_REL, "Notes/Q.md"), "utf8");
+      expect(staged).toContain("status: quarantine");
+      expect(staged).not.toContain("status: stable");
+      expect(staged).toContain("okf_review: pending");
+      expect(staged).not.toContain("okf_status_raw");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a foreign bundle cannot plant the raw machinery keys", () => {
+    // okf_status_raw / okf_sources_raw / okf_generated_raw are this
+    // system's restore machinery: a foreign producer's word neither
+    // triggers the restore nor leaves the keys behind as stray machinery
+    // in the vault - the page imports verbatim minus the namespace.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-raw-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-raw-dest-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      const manifest = {
+        schema: OKF_SCHEMA_VERSION,
+        producer: "some-other-wiki",
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Foreign",
+        log_days: 0,
+        pages: [
+          {
+            id: "Topic",
+            path: "Concepts/Topic.md",
+            class: "concept",
+            bundle_path: "concepts/Topic.md",
+            kind: "note",
+            citations: [],
+            status: "stable",
+            sources: [],
+            aliases: [],
+            freshness: null,
+            foreign_type: null,
+            producer_meta: {},
+          },
+        ],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      writeFileSync(
+        join(dir, "concepts/Topic.md"),
+        "---\ntitle: Topic\nstatus: stable\nokf_status_raw: quarantine\nokf_sources_raw: [planted]\nokf_generated_raw: forged\n---\nBody.\n",
+        "utf8",
+      );
+      const result = importOkfBundle(dest, readOkfBundle(dir), {
+        trusted: true,
+        now: new Date(0),
+      });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Concepts/Topic.md"), "utf8");
+      expect(landed).toContain("status: stable");
+      expect(landed).not.toContain("okf_status_raw");
+      expect(landed).not.toContain("okf_sources_raw");
+      expect(landed).not.toContain("okf_generated_raw");
+      expect(landed).not.toContain("planted");
+      expect(landed).not.toContain("forged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
   test("a sealed knowledge-pack half carrying a v0.2 okf.json installs", () => {
     const packDir = mkdtempSync(join(tmpdir(), "o2b-okf-pack-"));
     const dest = mkdtempSync(join(tmpdir(), "o2b-okf-pack-dest-"));

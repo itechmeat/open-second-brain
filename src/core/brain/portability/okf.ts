@@ -141,9 +141,10 @@ const REVIEW_KEY = "okf_review";
  * `stable` and un-quarantine on import, workflow statuses like `done` or
  * `active` would be lost, and user-written source lists would be
  * replaced. The raw keys ride the same `okf_` producer namespace as
- * {@link FOREIGN_TYPE_KEY} / {@link PRODUCER_KEY}; a trusted own-producer
+ * {@link FOREIGN_TYPE_KEY} / {@link PRODUCER_KEY}; an own-producer
  * import restores them and drops the derived block (see
- * {@link restoreRawOkfKeys}); foreign bundles import as-is.
+ * {@link restoreRawOkfKeys}) - trusted round-trip and review staging
+ * alike - while foreign bundles import as-is and shed the keys.
  */
 const RAW_STATUS_KEY = "okf_status_raw";
 const RAW_SOURCES_KEY = "okf_sources_raw";
@@ -1132,13 +1133,16 @@ function restoreRawOkfKeys(meta: FrontmatterMap): void {
  * from the bundle file verbatim. This system's machinery keys (they are
  * server-stamped, not caller-supplied - see
  * {@link FOREIGN_MACHINERY_KEYS}) are stripped unless the operator
- * vouched for an own-producer bundle with `--trusted` - the one path on
- * which the native values the export carried under the producer
- * namespace are restored instead (see {@link restoreRawOkfKeys}). A
- * bundle that declares a foreign producer additionally gets provenance
- * stamped (producer + raw foreign type) without clobbering any such key
- * the page already carries — preserving, never overwriting,
- * producer-specific metadata. Review-staged pages also get
+ * vouched for an own-producer bundle with `--trusted`. The native values
+ * the export carried under the producer namespace are restored on every
+ * OWN-producer path - the trusted round-trip and review staging alike,
+ * where the staged page's `okf_review: pending` already keeps it out of
+ * the live vault (see {@link restoreRawOkfKeys}). A bundle that declares
+ * a foreign producer imports verbatim instead, shedding the raw keys so
+ * no foreign page lands speaking this system's machinery namespace, and
+ * gets provenance stamped (producer + raw foreign type) without
+ * clobbering any such key the page already carries - preserving, never
+ * overwriting, producer-specific metadata. Review-staged pages also get
  * `okf_review: pending`.
  */
 function importFrontmatter(
@@ -1152,8 +1156,19 @@ function importFrontmatter(
   if (!trusted || foreign) {
     for (const key of FOREIGN_MACHINERY_KEYS) delete meta[key];
   }
-  if (trusted && !foreign) {
+  if (!foreign) {
+    // The raw keys are this system's namespace, so the restore keys on
+    // the producer alone - not on the operator's vouch. A forged
+    // own-producer claim without --trusted still lands in the review
+    // lane, where restoring the recorded status promotes nothing.
     restoreRawOkfKeys(meta);
+  } else {
+    // A foreign bundle's pages shed the raw keys: honoured on no path,
+    // kept on none either - a foreign bundle must not plant stray
+    // restore machinery into the vault.
+    delete meta[RAW_STATUS_KEY];
+    delete meta[RAW_SOURCES_KEY];
+    delete meta[RAW_GENERATED_KEY];
   }
   if (foreign) {
     if (meta[PRODUCER_KEY] === undefined) meta[PRODUCER_KEY] = producer;
