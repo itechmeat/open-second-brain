@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
-import { untrustedFramingHeader } from "../../src/core/brain/untrusted-source.ts";
+import { untrustedBindingFramingHeader } from "../../src/core/brain/untrusted-source.ts";
 import {
   assembleActiveContext,
   createInjectionMeter,
@@ -193,16 +193,21 @@ describe("active-inject injection meter", () => {
     // Each metered source is the framing header line plus the neutralized
     // body block, exactly as the join in the emitted context carries them.
     expect(activeItem["bytes"]).toBe(
-      Buffer.byteLength(`${untrustedFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`, "utf8"),
-    );
-    expect(lessonsItem["bytes"]).toBe(
       Buffer.byteLength(
-        `${untrustedFramingHeader(SOURCE_LESSONS_BODY)}\n${LESSONS_TRIMMED}`,
+        `${untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`,
         "utf8",
       ),
     );
-    expect(injected).toContain(`${untrustedFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`);
-    expect(injected).toContain(untrustedFramingHeader(SOURCE_LESSONS_BODY));
+    expect(lessonsItem["bytes"]).toBe(
+      Buffer.byteLength(
+        `${untrustedBindingFramingHeader(SOURCE_LESSONS_BODY)}\n${LESSONS_TRIMMED}`,
+        "utf8",
+      ),
+    );
+    expect(injected).toContain(
+      `${untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY)}\n${ACTIVE_TRIMMED}`,
+    );
+    expect(injected).toContain(untrustedBindingFramingHeader(SOURCE_LESSONS_BODY));
   });
 
   test("records the budget the sources were measured against", async () => {

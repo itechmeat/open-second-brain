@@ -39,7 +39,7 @@ import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
-  untrustedFramingHeader,
+  untrustedBindingFramingHeader,
 } from "../../src/core/brain/untrusted-source.ts";
 import { SOURCE_ACTIVE_BODY, SOURCE_LESSONS_BODY } from "../../hooks/lib/active-context.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
@@ -107,9 +107,9 @@ function writeLessons(body: string): void {
  * overhead charged against `budget` before the budget core runs.
  */
 function expectedFramedBody(origin: string, fmBody: string, budget: number): string {
-  const overhead = untrustedFramingHeader(origin).length + 1;
+  const overhead = untrustedBindingFramingHeader(origin).length + 1;
   const inner = Math.max(0, budget - overhead);
-  return `${untrustedFramingHeader(origin)}\n${budgetActiveBody(neutralizeUntrustedText(fmBody.trim()), inner)}`;
+  return `${untrustedBindingFramingHeader(origin)}\n${budgetActiveBody(neutralizeUntrustedText(fmBody.trim()), inner)}`;
 }
 
 /** The active.md body as the assembly renders it: frontmatter dropped, guarded, budgeted. */

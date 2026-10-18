@@ -34,7 +34,7 @@ import { brainActivePath, brainLessonsPath } from "../../src/core/brain/paths.ts
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
-  untrustedFramingHeader,
+  untrustedBindingFramingHeader,
 } from "../../src/core/brain/untrusted-source.ts";
 import {
   INJECT_BUDGET_CHARS_DEFAULT,
@@ -86,12 +86,15 @@ export function joinBlocks(blocks: ReadonlyArray<string>): string {
  * the header line, then the body. A full fence is deliberately not used
  * here - the wrapper pair would be charged to `inject_budget_chars` and
  * the tier ladder would answer by evicting sections - so the provenance
- * rides as the shared one-line records-not-instructions header instead.
- * The header line IS part of the metered source, so per-source
- * attribution names the guarded bytes.
+ * rides as the shared one-line header instead. The clause is the MEMORY
+ * lanes' binding clause, not the foreign lanes' records-not-instructions
+ * disclaimer: these bodies ARE the product's rules lane, and a preamble
+ * telling the model to read them as data would have it ignore the
+ * preferences the lane exists to deliver. The header line IS part of the
+ * metered source, so per-source attribution names the guarded bytes.
  */
 function frameMemoryBody(origin: string, body: string): string {
-  return `${untrustedFramingHeader(origin)}\n${body}`;
+  return `${untrustedBindingFramingHeader(origin)}\n${body}`;
 }
 
 /**
@@ -102,7 +105,7 @@ function frameMemoryBody(origin: string, body: string): string {
  * to pay for the framing.
  */
 function framingOverhead(origin: string): number {
-  return untrustedFramingHeader(origin).length + 1;
+  return untrustedBindingFramingHeader(origin).length + 1;
 }
 
 /** A fresh, empty meter for one assembly run. */

@@ -32,7 +32,7 @@ import {
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
-  untrustedFramingHeader,
+  untrustedBindingFramingHeader,
 } from "../../src/core/brain/untrusted-source.ts";
 import { SOURCE_ACTIVE_BODY } from "../../hooks/lib/active-context.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
@@ -229,7 +229,7 @@ describe("active-inject scoped rules - budget", () => {
     // The framed guarded body: the header's overhead comes out of the
     // budget the scoped block left, then the neutralized body is budgeted
     // into the rest, exactly as the assembly composes it.
-    const framedHeader = untrustedFramingHeader(SOURCE_ACTIVE_BODY);
+    const framedHeader = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY);
     const activeBudget = Math.max(0, 1000 - expected.text.length - (framedHeader.length + 1));
     expect(
       context.endsWith(
@@ -337,7 +337,7 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
 
     const scopedStart = context.indexOf(SCOPED_RULES_HEADER);
     // The memory body opens with its framing header, not the digest title.
-    const activeStart = context.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY));
+    const activeStart = context.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY));
     expect(scopedStart).toBeGreaterThan(-1);
     expect(activeStart).toBeGreaterThan(scopedStart);
     const scopedBlock = context.slice(scopedStart, activeStart).trimEnd();
@@ -350,7 +350,7 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     // budget plus the memory body's own truncation notice.
     const budgeted = context.slice(scopedStart);
     const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
-    const framedHeader = untrustedFramingHeader(SOURCE_ACTIVE_BODY);
+    const framedHeader = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY);
     const activeBudget = 800 - scopedBlock.length - (framedHeader.length + 1);
     const activeOut = `${framedHeader}\n${budgetActiveBody(neutralizeUntrustedText(trimmedActive), activeBudget)}`;
     expect(budgeted.endsWith(activeOut)).toBe(true);
@@ -385,7 +385,7 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     expect(budgeted.length).toBeLessThanOrEqual(500);
     // The memory framing does not fit what is left: no header, no body,
     // nothing after the scoped block at all.
-    expect(context.indexOf(untrustedFramingHeader(SOURCE_ACTIVE_BODY))).toBe(-1);
+    expect(context.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY))).toBe(-1);
     expect(context).not.toContain(ACTIVE_HEAD);
     expect(context.trimEnd()).toBe(
       context.slice(0, scopedStart).trimEnd() + "\n\n" + budgeted.trimEnd(),
