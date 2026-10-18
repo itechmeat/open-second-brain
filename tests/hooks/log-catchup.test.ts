@@ -11,7 +11,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -530,6 +538,34 @@ describe("log-catchup hook (SessionStart)", () => {
     const second = await runHook(SESSION_START, flagOn("agent-b"));
     expect(second.exit).toBe(0);
     expect(emitted(second)).toBeNull();
+  });
+
+  test("a first run whose window holds nothing parseable stays silent", async () => {
+    // The header-only report rode on the park that follows it - but a
+    // window whose newest shard parses to zero entries parks nothing:
+    // lastSeen never moves, the cursor is never written, and every
+    // SessionStart repeated the block over the same unscanned days. The
+    // report fires only when the cursor will actually be written, so a
+    // vault whose readable history all sits outside the window stays
+    // silent instead of nagging, and reports once the moment a scan
+    // actually advances the watermark.
+    for (const d of ["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15"]) {
+      seed("agent-a", `foreign history from ${d}`, { timestamp: `${d}T09:00:00Z` });
+    }
+    // The newest date in the log is real but unreadable: the shard the
+    // first-run window scans holds no parseable line at all.
+    writeFileSync(join(vault, "Brain", "log", "2026-10-17.jsonl"), "not json at all\n", "utf8");
+
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(first.exit).toBe(0);
+    expect(emitted(first)).toBeNull();
+    expect(existsSync(cursorPath())).toBe(false);
+    // The silence holds: the second run sees the same vault, and the
+    // block does not come back.
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(emitted(second)).toBeNull();
+    expect(existsSync(cursorPath())).toBe(false);
   });
 
   test("a date evicted from the window is still skipped whole", async () => {

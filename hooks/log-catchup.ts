@@ -399,7 +399,13 @@ async function main(): Promise<void> {
     // the count is the only report they ever get. The count cannot
     // collide with the nothing-fit-the-cap case (that arises only when
     // lines WERE collected, and holds the cursor instead), and the park
-    // below keeps the header-only report to exactly one emission.
+    // below is what keeps the header-only report to exactly one
+    // emission - so the block emits only when that park will actually
+    // happen (`lastSeen` set): a window whose every shard parses to
+    // zero entries parks nothing, and repeating the report each
+    // SessionStart over days no scan ever reaches would be a nag with
+    // no end. Once a scan advances the watermark, the report rides out
+    // exactly once on the park.
     if (shown.length > 0) {
       const out = {
         hookSpecificOutput: {
@@ -408,7 +414,7 @@ async function main(): Promise<void> {
         },
       };
       process.stdout.write(JSON.stringify(out) + "\n");
-    } else if (collected.length === 0 && unscannedOlderDays > 0) {
+    } else if (collected.length === 0 && unscannedOlderDays > 0 && lastSeen !== null) {
       const out = {
         hookSpecificOutput: {
           hookEventName,
