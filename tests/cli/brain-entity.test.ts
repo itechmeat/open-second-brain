@@ -757,9 +757,12 @@ describe("o2b brain entity merge", () => {
     expect(out.returncode).toBe(1);
     const refused = JSON.parse(out.stdout) as { ok: boolean; code: string; message: string };
     expect(refused).toMatchObject({ ok: false, code: "hash-mismatch" });
-    // The flipped stance cannot even plan this pair any more, so the
-    // refusal tells the plain stale-plan story: the vault moved.
+    // The refusal tells the plain stale-plan story - the vault moved -
+    // whatever the --force stance the preview or the apply took: a
+    // guarded pair hashes differently only through the override stamp,
+    // and the message never names a stance story on top.
     expect(refused.message).toContain("vault changed since the preview");
+    expect(refused.message).not.toContain("--force");
     expect(existsSync(dropPayload.path)).toBe(true);
   });
 
