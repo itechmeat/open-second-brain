@@ -153,6 +153,20 @@ const RAW_SOURCES_KEY = "okf_sources_raw";
 const RAW_GENERATED_KEY = "okf_generated_raw";
 
 /**
+ * The raw/native key pairs the producer namespace carries beside the
+ * derived v0.2 block, in one list: `raw` is the exported carrier,
+ * `native` the frontmatter field it preserves. The export's carry and
+ * strip, the foreign shed and the import restore all walk THIS, so the
+ * set cannot drift between the sites that must agree on it.
+ */
+const RAW_OKF_KEYS: ReadonlyArray<{ readonly raw: string; readonly native: string }> =
+  Object.freeze([
+    { raw: RAW_STATUS_KEY, native: "status" },
+    { raw: RAW_SOURCES_KEY, native: "sources" },
+    { raw: RAW_GENERATED_KEY, native: "generated" },
+  ]);
+
+/**
  * The per-page marker that says "this bundle page was written by a
  * raw-carrying exporter", stamped on EVERY page of a fresh export
  * beside the derived block - raw keys or not. It is what lets the
@@ -648,7 +662,7 @@ function renderOkfPageFile(
   const carried: FrontmatterMap = {};
   for (const [key, value] of Object.entries(page.frontmatter)) {
     if (key === "status" || key === "sources" || key === "generated") continue;
-    if (key === RAW_STATUS_KEY || key === RAW_SOURCES_KEY || key === RAW_GENERATED_KEY) continue;
+    if (RAW_OKF_KEYS.some(({ raw }) => raw === key)) continue;
     if (key === RAW_CARRY_KEY) continue;
     carried[key] = value;
   }
@@ -663,14 +677,8 @@ function renderOkfPageFile(
   // list - is exactly the value the closed enum cannot name, so reading
   // it through the string-only field would drop the one raw key that
   // preserves it.
-  if (page.frontmatter["status"] !== undefined) {
-    carried[RAW_STATUS_KEY] = page.frontmatter["status"];
-  }
-  if (page.frontmatter["sources"] !== undefined) {
-    carried[RAW_SOURCES_KEY] = page.frontmatter["sources"];
-  }
-  if (page.frontmatter["generated"] !== undefined) {
-    carried[RAW_GENERATED_KEY] = page.frontmatter["generated"];
+  for (const { raw, native } of RAW_OKF_KEYS) {
+    if (page.frontmatter[native] !== undefined) carried[raw] = page.frontmatter[native];
   }
   // The raw-carrying declaration, stamped fresh on every page of every
   // export: this is what tells the own-producer import that absent raw
@@ -1147,19 +1155,15 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
 function restoreRawOkfKeys(meta: FrontmatterMap): void {
   if (meta[RAW_CARRY_KEY] === undefined) return;
   delete meta[RAW_CARRY_KEY];
-  // Presence, not shape: the raw value round-tripped through the page
-  // file is whatever the export carried, and the restore replaces the
-  // derived value with it verbatim - a numeric or whitespace status
-  // included, exactly like sources and generated below.
-  if (meta[RAW_STATUS_KEY] !== undefined) meta["status"] = meta[RAW_STATUS_KEY];
-  else delete meta["status"];
-  delete meta[RAW_STATUS_KEY];
-  if (meta[RAW_SOURCES_KEY] !== undefined) meta["sources"] = meta[RAW_SOURCES_KEY];
-  else delete meta["sources"];
-  delete meta[RAW_SOURCES_KEY];
-  if (meta[RAW_GENERATED_KEY] !== undefined) meta["generated"] = meta[RAW_GENERATED_KEY];
-  else delete meta["generated"];
-  delete meta[RAW_GENERATED_KEY];
+  for (const { raw, native } of RAW_OKF_KEYS) {
+    // Presence, not shape: the raw value round-tripped through the page
+    // file is whatever the export carried, and the restore replaces the
+    // derived value with it verbatim - a numeric or whitespace status
+    // included.
+    if (meta[raw] !== undefined) meta[native] = meta[raw];
+    else delete meta[native];
+    delete meta[raw];
+  }
 }
 
 /**
@@ -1200,9 +1204,7 @@ function importFrontmatter(
     // A foreign bundle's pages shed the raw keys and the raw-carry
     // marker: honoured on no path, kept on none either - a foreign
     // bundle must not plant stray restore machinery into the vault.
-    delete meta[RAW_STATUS_KEY];
-    delete meta[RAW_SOURCES_KEY];
-    delete meta[RAW_GENERATED_KEY];
+    for (const { raw } of RAW_OKF_KEYS) delete meta[raw];
     delete meta[RAW_CARRY_KEY];
   }
   if (foreign) {
