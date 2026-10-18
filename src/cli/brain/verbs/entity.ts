@@ -413,7 +413,7 @@ function mergePlanLines(plan: EntityMergePlan, hash: string, applyCommand: strin
     `  alias added: ${plan.alias_added ?? "none - the survivor already answers to that name"}`,
     `  body: ${plan.body_folded ? "folded into the survivor" : "archived (nothing to fold)"}`,
     `  relations absorbed: ${plan.relations_absorbed}; inbound edges retargeted: ` +
-      `${plan.inbound_edges_retargeted}`,
+      `${plan.inbound_edges_retargeted}; cyclic edges removed: ${plan.cyclic_edges_removed}`,
     `  plan-hash: ${hash}`,
     `  apply: ${applyCommand}`,
   ];

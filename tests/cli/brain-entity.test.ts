@@ -449,6 +449,22 @@ describe("o2b brain entity merge", () => {
     expect(out.stdout).toContain("dry-run; no changes written");
   });
 
+  test("plain dry-run names the cyclic edges the merge will remove", async () => {
+    const { keepId, dropId } = await seedMergePair();
+    // The survivor points at the dropped page: a self-relation after the
+    // merge, so the plan removes it - and says so before the operator
+    // consents.
+    const relate = await runCli(["brain", "entity", "relate", "Ada Lovelace", "related", "Ada"], {
+      env: env(),
+    });
+    expect(relate.returncode).toBe(0);
+    const out = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain("cyclic edges removed: 1");
+  });
+
   test("the echoed apply command shell-quotes subjects a shell would split", async () => {
     // Subjects echo verbatim into a command line, so a name with a space
     // must come back quoted: `merge 'Ada Lovelace'` parses back as ONE

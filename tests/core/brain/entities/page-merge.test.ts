@@ -631,6 +631,34 @@ describe("applyEntityMerge", () => {
     expect(survivor.relations.map((r) => r.target)).toEqual([bridge.entity.id]);
   });
 
+  test("the cyclic edges the merge removes are named in the audit and the log", () => {
+    const { keepId, dropId } = seedPair();
+    relateEntities(vault, {
+      from: { query: "Ada Lovelace" },
+      relation: "related",
+      to: { query: "Ada" },
+      now: NOW,
+    });
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    expect(plan.cyclic_edges_removed).toBe(1);
+    applyEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    // The operator agreed to the edge removal - the audit record and the
+    // log event both say how many edges went.
+    const auditDir = join(vault, "Brain", "log", HYGIENE_AUDIT_DIR);
+    const auditText = readdirSync(auditDir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => readFileSync(join(auditDir, f), "utf8"))
+      .join("\n");
+    expect(auditText).toContain('"cyclic_edges_removed":"1"');
+    const day = readLogDay(vault, "2026-10-17");
+    const mergeEvents = day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.merge);
+    expect(mergeEvents[0]!.body["cyclic_edges_removed"]).toBe("1");
+  });
+
   test("the apply appends the audit record and a merge log event", () => {
     const { keepId, dropId } = seedPair();
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
