@@ -1534,9 +1534,15 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 76 -> 77: the secrets keyfile envelope swap (custody bytes, not notes).
  * 77 -> 78: the per-agent MCP token store's custody swap (hash-at-rest
  *   state, not notes).
- * 78 -> 79: the intake's stage-disposition page move (a lifecycle move
+ * 78 -> 79: the decision ledger's lock-scoped append
+ *   (`src/core/brain/permissions/ledger.ts`): one row per gate verdict,
+ *   written with `writeFileSync` flag 'a' inside the per-shard lock -
+ *   append-only on the idempotency-ledger model, so there is no rewrite
+ *   for the shared writer to route. (Both write-side-trust steps moved
+ *   the count 77 -> 79; only the custody swap was written down here.)
+ * 79 -> 80: the intake's stage-disposition page move (a lifecycle move
  * whose only direct call is the unlink; it stamps no channel).
- * 79 -> 80: the source archive's entry discard (answer trust) - a
+ * 80 -> 81: the source archive's entry discard (answer trust) - a
  * content-addressed evidence prune whose last citing page the same
  * confirmed delete-by-source removed; no origin stamp on archive cleanup.
  * 81 -> 82: the entity page-merge's archive removal
