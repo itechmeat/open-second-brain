@@ -456,7 +456,11 @@ async function entityMerge(argv: string[]): Promise<number> {
 
   let plan: EntityMergePlan;
   try {
-    plan = planEntityMerge(vault, refs);
+    // `--force` is the consent for the text-level merge guard bypass, so it
+    // reaches the preview too: a guarded pair must be previewable (to get
+    // its plan hash) exactly as it is applicable. The plan-hash gate below
+    // is separate and stays unbypassable.
+    plan = planEntityMerge(vault, refs, { bypassEntityGuard: force });
   } catch (exc) {
     return entityMergeRefusal(exc, json);
   }
@@ -525,6 +529,7 @@ async function entityMerge(argv: string[]): Promise<number> {
   try {
     const result = applyEntityMerge(vault, refs, {
       expectHash,
+      bypassEntityGuard: force,
       now: new Date(),
       ...(flags["agent"] !== undefined ? { agent: normalizeFlagString(flags["agent"])! } : {}),
     });

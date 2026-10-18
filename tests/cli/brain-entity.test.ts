@@ -441,4 +441,74 @@ describe("o2b brain entity merge", () => {
     expect(out.stdout).toContain("--expect-hash ");
     expect(out.stdout).toContain("dry-run; no changes written");
   });
+
+  test("a guard-tripping pair merges end-to-end under --force; the hash gate still binds", async () => {
+    // The keep body anchors Mary Somerville, the drop body anchors only Ada:
+    // disjoint guarded anchor sets, the shape the core merge guard refuses.
+    const keep = await runCli(
+      [
+        "brain",
+        "entity",
+        "set",
+        "people",
+        "Ada Lovelace",
+        "--body",
+        "Mary Somerville wrote often.",
+      ],
+      { env: env() },
+    );
+    expect(keep.returncode).toBe(0);
+    const drop = await runCli(
+      ["brain", "entity", "set", "people", "Ada", "--body", "Short note about Ada.", "--json"],
+      { env: env() },
+    );
+    expect(drop.returncode).toBe(0);
+    const dropPayload = JSON.parse(drop.stdout) as { id: string; path: string };
+    const mary = await runCli(["brain", "entity", "set", "people", "Mary Somerville"], {
+      env: env(),
+    });
+    expect(mary.returncode).toBe(0);
+    const keepId = "ent-people-ada-lovelace";
+    const dropId = dropPayload.id;
+    const dropPath = dropPayload.path;
+
+    // Even the preview refuses while the guard stands, by its stable code.
+    const blocked = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--dry-run", "--json"],
+      { env: env() },
+    );
+    expect(blocked.returncode).toBe(1);
+    expect(JSON.parse(blocked.stdout)).toMatchObject({ ok: false, code: "entity-guard" });
+    expect(existsSync(dropPath)).toBe(true);
+
+    // --force unblocks the guarded preview and still echoes the hash.
+    const preview = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--dry-run", "--json"],
+      { env: env() },
+    );
+    expect(preview.returncode).toBe(0);
+    const { plan_hash: hash } = JSON.parse(preview.stdout) as { plan_hash: string };
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // The hash gate is a fact-check, not consent: --force does NOT bypass it.
+    const stale = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", "deadbeef"],
+      { env: env() },
+    );
+    expect(stale.returncode).toBe(1);
+    expect(stale.stderr).toContain("hash-mismatch");
+    expect(existsSync(dropPath)).toBe(true);
+
+    const out = await runCli(
+      ["brain", "entity", "merge", keepId, dropId, "--force", "--expect-hash", hash, "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    expect((JSON.parse(out.stdout) as { applied: boolean }).applied).toBe(true);
+    expect(existsSync(dropPath)).toBe(false);
+    // The old name resolves to the survivor: the guarded merge really landed.
+    const get = await runCli(["brain", "entity", "get", "Ada", "--json"], { env: env() });
+    expect(get.returncode).toBe(0);
+    expect((JSON.parse(get.stdout) as { id: string }).id).toBe(keepId);
+  });
 });

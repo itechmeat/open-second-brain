@@ -67,6 +67,36 @@ function seedPair(): { keepId: string; dropId: string } {
   return { keepId: keep.entity.id, dropId: drop.entity.id };
 }
 
+/**
+ * A pair the text-level merge guard refuses: the keep body anchors Mary
+ * Somerville (a guarded-category person) while the drop body anchors only
+ * Ada, so the guarded anchor sets are disjoint and non-empty - the one
+ * shape `guardEntityMerge` blocks.
+ */
+function seedGuardedPair(): { keepId: string; dropId: string } {
+  upsertEntity(vault, {
+    category: "people",
+    name: "Mary Somerville",
+    agent: "test-agent",
+    now: NOW,
+  });
+  const keep = upsertEntity(vault, {
+    category: "people",
+    name: "Ada Lovelace",
+    body: "Mary Somerville wrote often.",
+    agent: "test-agent",
+    now: NOW,
+  });
+  const drop = upsertEntity(vault, {
+    category: "people",
+    name: "Ada",
+    body: "Short note about Ada.",
+    agent: "test-agent",
+    now: NOW,
+  });
+  return { keepId: keep.entity.id, dropId: drop.entity.id };
+}
+
 /** Digest of every file under the vault, in walk order, for no-op assertions. */
 function vaultFingerprint(root: string): string {
   const parts: string[] = [];
@@ -176,6 +206,48 @@ describe("planEntityMerge", () => {
     expect(
       codeOf(() => planEntityMerge(vault, { keep: quarantined.entity.id, drop: keep!.id })),
     ).toBe("quarantine-record");
+  });
+
+  test("a guarded pair plans only through the explicit bypass option", () => {
+    const { keepId, dropId } = seedGuardedPair();
+    expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(
+      "entity-guard",
+    );
+    // `--force` reaches the core as this option, and it is opt-in per call:
+    // a plain re-plan afterwards still refuses.
+    const plan = planEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { bypassEntityGuard: true },
+    );
+    expect(plan.keep_id).toBe(keepId);
+    expect(plan.drop_id).toBe(dropId);
+    expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(
+      "entity-guard",
+    );
+  });
+
+  test("a guarded pair applies only through the explicit bypass option", () => {
+    const { keepId, dropId } = seedGuardedPair();
+    const plan = planEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { bypassEntityGuard: true },
+    );
+    const hash = entityMergePlanHash(plan);
+    const before = vaultFingerprint(vault);
+    expect(
+      codeOf(() =>
+        applyEntityMerge(vault, { keep: keepId, drop: dropId }, { expectHash: hash, now: NOW }),
+      ),
+    ).toBe("entity-guard");
+    expect(vaultFingerprint(vault)).toBe(before);
+    const result = applyEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { expectHash: hash, bypassEntityGuard: true, now: NOW, agent: "test-agent" },
+    );
+    expect(existsSync(join(vault, result.dropped_path))).toBe(false);
   });
 });
 
