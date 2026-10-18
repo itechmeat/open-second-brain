@@ -283,6 +283,13 @@ function readActiveBody(
   const trimmed = fmBody.trim();
   if (trimmed.length === 0) return "";
 
+  // A budget that cannot hold even the framing header skips the source
+  // whole: emitting the header alone would push the framed remainder
+  // past the very budget it is charged against, and metering it would
+  // name bytes that never reached the payload. The lessons reader
+  // applies the same floor to its own header.
+  if (budget < framingOverhead(SOURCE_ACTIVE_BODY)) return "";
+
   // Injection budget (token-diet): a large preference set must not flood
   // the session preamble. Resolved once in `resolveInjectionLimits`,
   // which also carries the reasoning for why a config failure lands on
@@ -346,6 +353,9 @@ function readLessonsBody(lessonsPath: string, budget: number): string | null {
     const [, body] = parseFrontmatterText(raw);
     const trimmed = body.trim();
     if (trimmed.length === 0) return null;
+    // The active body's floor, applied to this header: a body whose
+    // framing cannot fit is skipped rather than emitted over budget.
+    if (budget < framingOverhead(SOURCE_LESSONS_BODY)) return null;
     const innerBudget = Math.max(0, budget - framingOverhead(SOURCE_LESSONS_BODY));
     return frameMemoryBody(
       SOURCE_LESSONS_BODY,

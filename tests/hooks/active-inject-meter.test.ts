@@ -22,7 +22,12 @@ import { fileURLToPath } from "node:url";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 import { untrustedFramingHeader } from "../../src/core/brain/untrusted-source.ts";
-import { SOURCE_ACTIVE_BODY, SOURCE_LESSONS_BODY } from "../../hooks/lib/active-context.ts";
+import {
+  assembleActiveContext,
+  createInjectionMeter,
+  SOURCE_ACTIVE_BODY,
+  SOURCE_LESSONS_BODY,
+} from "../../hooks/lib/active-context.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -261,5 +266,29 @@ describe("active-inject injection meter", () => {
     const broken = await runHook({ hook_event_name: "SessionStart" });
     expect(broken.exit).toBe(0);
     expect(broken.stdout).toBe(healthy.stdout);
+  });
+
+  test("a budget that cannot hold the framing header skips the memory sources unmetered", () => {
+    // Unit-level on the exported assembly: the e2e hook cannot reach a
+    // sub-header budget (the config validator floors inject_budget_chars
+    // at 500), but the scoped-rules charge can leave the assembly less
+    // room than the header costs. A source whose header cannot fit is
+    // skipped whole - emitting it would push the framed remainder over
+    // the very budget it is charged against, and metering it would name
+    // bytes that never reached the payload.
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    const priorNotices = process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
+    process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = "false";
+    try {
+      const meter = createInjectionMeter(8000);
+      const assembled = assembleActiveContext(vault, 0, meter);
+      expect(assembled).toBe("");
+      expect(meter.sources.map((s) => s.name)).toEqual([]);
+      expect(meter.budgetChars).toBeNull();
+    } finally {
+      if (priorNotices === undefined) delete process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"];
+      else process.env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"] = priorNotices;
+    }
   });
 });
