@@ -1539,7 +1539,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 79 -> 80: the source archive's entry discard (answer trust) - a
  * content-addressed evidence prune whose last citing page the same
  * confirmed delete-by-source removed; no origin stamp on archive cleanup.
- * 80 -> 81: the entity page-merge's archive removal
+ * 81 -> 82: the entity page-merge's archive removal
  * (`src/core/brain/entities/page-merge.ts`) - a delete stamps nothing.
  */
 const UNSTAMPED_DIRECT_ROWS = 82;
