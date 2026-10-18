@@ -475,6 +475,80 @@ describe("planEntityMerge", () => {
     expect(thrown!.message).toContain(third.entity.id);
   });
 
+  test("a same-named record in another category does not block the merge", () => {
+    // The registry scopes display names per category (`byKey` is
+    // `category:normalized`), so two categories sharing a display name
+    // is a valid vault, and the holder check must not read a foreign
+    // category's same-named record as a claim - merging people/Jordan
+    // into people/Jordan Smith would otherwise refuse forever, with no
+    // way for the operator to fix it. A name matches only inside the
+    // merge's own category; alias matches stay global (pinned below and
+    // by the same-category refusal test above), mirroring
+    // `checkAliasClaims`.
+    const keep = upsertEntity(vault, {
+      category: "people",
+      name: "Jordan Smith",
+      body: "One person.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop = upsertEntity(vault, {
+      category: "people",
+      name: "Jordan",
+      body: "Short note about Jordan.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    upsertEntity(vault, {
+      category: "places",
+      name: "Jordan",
+      body: "A country.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keep.entity.id, drop: drop.entity.id });
+    expect(plan.alias_added).toBe("Jordan");
+    applyEntityMerge(
+      vault,
+      { keep: keep.entity.id, drop: drop.entity.id },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    const survivor = getEntity(vault, { query: "Jordan Smith" })!;
+    expect(survivor.aliases).toEqual(["Jordan"]);
+    // The other category's record is untouched and still itself.
+    const place = getEntity(vault, { query: "Jordan", category: "places" })!;
+    expect(place.id).not.toBe(keep.entity.id);
+
+    // Aliases remain global: a drop alias held by ANOTHER category's
+    // record still refuses the plan, exactly like the registry's
+    // byAlias lookup refuses a write.
+    const drop2 = upsertEntity(vault, {
+      category: "people",
+      name: "River Jordan",
+      body: "A river.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    upsertEntity(vault, {
+      category: "places",
+      name: "Petra",
+      aliases: ["Wadi Musa"],
+      body: "A city.",
+      agent: "test-agent",
+      now: NOW,
+    });
+    const drop2Fresh = getEntity(vault, { query: "River Jordan" })!;
+    const [meta, body] = parseFrontmatter(drop2Fresh.path);
+    writeFrontmatterAtomic(drop2Fresh.path, { ...meta, aliases: ["Wadi Musa"] }, body, {
+      overwrite: true,
+    });
+    __clearEntityIndexCache();
+    expect(
+      codeOf(() => planEntityMerge(vault, { keep: keep.entity.id, drop: drop2.entity.id })),
+    ).toBe("alias-claimed");
+  });
+
   test("a guarded pair plans only through the explicit bypass option", () => {
     const { keepId, dropId } = seedGuardedPair();
     expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(
