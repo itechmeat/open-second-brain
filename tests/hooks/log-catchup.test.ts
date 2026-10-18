@@ -279,6 +279,73 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(escaped).toEqual(["log-catchup..._.._evil.cursor.json"]);
   });
 
+  test("a shard that syncs in late for an earlier date still surfaces", async () => {
+    // Cross-device sync delay is the NORMAL case: yesterday's shard can
+    // land after the cursor already moved to today. A date-level skip
+    // would drop it forever; the skip decision must be per (date, shard)
+    // against the windowed marks.
+    seed("agent-a", "yesterdays early line", {
+      timestamp: "2026-10-16T09:00:00Z",
+      deviceId: "dev-a",
+    });
+    seed("agent-a", "todays line", { timestamp: "2026-10-17T09:00:00Z", deviceId: "dev-a" });
+    expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
+    seed("agent-a", "yesterdays late-synced line", {
+      timestamp: "2026-10-16T10:00:00Z",
+      deviceId: "dev-c",
+    });
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    const context = emitted(r);
+    expect(context).not.toBeNull();
+    expect(context).toContain("yesterdays late-synced line");
+    expect(context).not.toContain("yesterdays early line");
+  });
+
+  test("a date evicted from the window is still skipped whole", async () => {
+    // Six dates: the cursor keeps per-shard marks for the newest three
+    // before its date, so 10-10 and 10-13 are evicted - and a brand-new
+    // line on an evicted date is not chased, which bounds how far back a
+    // delayed sync can resurface.
+    const dates = [
+      "2026-10-10",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-17",
+    ];
+    for (const d of dates) {
+      seed("agent-a", `line on ${d}`, { timestamp: `${d}T09:00:00Z` });
+    }
+    expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      days: Record<string, Record<string, number>>;
+    };
+    expect(Object.keys(cursor.days).toSorted()).toEqual(["2026-10-14", "2026-10-15", "2026-10-16"]);
+    seed("agent-a", "a line on the evicted date", { timestamp: "2026-10-10T10:00:00Z" });
+    const r = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(r.exit).toBe(0);
+    expect(emitted(r)).toBeNull();
+  });
+
+  test("the cursor keeps per-shard marks for at most the previous three dates", async () => {
+    for (let d = 10; d <= 17; d++) {
+      seed("agent-a", `day ${d} line`, { timestamp: `2026-10-${d}T09:00:00Z` });
+    }
+    expect(emitted(await runHook(SESSION_START, flagOn("agent-b")))).not.toBeNull();
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      date: string;
+      days: Record<string, Record<string, number>>;
+    };
+    expect(cursor.date).toBe("2026-10-17");
+    const window = Object.keys(cursor.days).toSorted();
+    expect(window.length).toBeLessThanOrEqual(3);
+    for (const d of window) expect(d < cursor.date).toBe(true);
+    // The newest three older dates are exactly the ones kept.
+    expect(window).toEqual(["2026-10-14", "2026-10-15", "2026-10-16"]);
+  });
+
   test("a same-second line in a different shard is not skipped", async () => {
     // Run 1's cursor must sit on the HIGHER-sorting shard for this test
     // to exercise the interleaving: the dev-z line parks the cursor at

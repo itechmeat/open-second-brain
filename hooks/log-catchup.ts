@@ -62,6 +62,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
+  LOG_CATCHUP_WINDOW_DATES,
   readLogCatchupCursor,
   writeLogCatchupCursor,
   type LogCatchupCursor,
@@ -134,16 +135,18 @@ interface CatchupPosition {
 
 /**
  * Whether an entry read at `position` is past the cursor. Dates after
- * the cursor date are all new; dates before are all seen; on the cursor
- * date the per-shard high-water marks decide - a shard with no mark yet
- * is entirely new, otherwise the entry is new when its line index is
- * past that shard's mark. See the cursor module for why the marks, and
+ * the cursor date are all new; on the cursor date the per-shard marks
+ * decide - a shard with no mark yet is entirely new, otherwise the
+ * entry is new when its line index is past that shard's mark; a window
+ * date older than the cursor date reads the same decision off that
+ * date's `days` marks. See the cursor module for why the marks, and
  * not the bare tuple, are what the filter reads.
  */
 function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boolean {
   if (position.date > cursor.date) return true;
-  if (position.date < cursor.date) return false;
-  const mark = cursor.shards[position.shardId];
+  const marks = position.date < cursor.date ? cursor.days[position.date] : cursor.shards;
+  if (marks === undefined) return false;
+  const mark = marks[position.shardId];
   return mark === undefined || position.line > mark;
 }
 
@@ -192,24 +195,31 @@ async function main(): Promise<void> {
     // first must not read the log past lines the others never saw.
     const cursor = readLogCatchupCursor(vault, self.value);
 
-    // One walk over the log, oldest date first, starting at the cursor
-    // date when one exists. `readLogDay` merges each day's shards in
-    // (timestamp, shardId, line) order and also returns each entry's
-    // real index within its own shard file (`entryLines`), which is
-    // what both the filter and the watermark need: appends only ever
-    // extend a shard file, so the file index never needs retraction,
-    // while a merge-order count scrambles as soon as a shard's
-    // timestamps go backwards. The per-shard mark is therefore the
-    // MAXIMUM file index seen, not the last merge position. The
-    // watermark snapshot rides the last entry seen, so a trailing date
-    // with no entries cannot orphan the write.
+    // One walk over the log, oldest date first, starting at the oldest
+    // date the cursor can still vouch about. `readLogDay` merges each
+    // day's shards in (timestamp, shardId, line) order and also returns
+    // each entry's real index within its own shard file (`entryLines`),
+    // which is what both the filter and the watermark need: appends only
+    // ever extend a shard file, so the file index never needs
+    // retraction, while a merge-order count scrambles as soon as a
+    // shard's timestamps go backwards. The per-shard mark is therefore
+    // the MAXIMUM file index seen, not the last merge position. The
+    // watermark rides the last entry seen, so a trailing date with no
+    // entries cannot orphan the write.
+    //
+    // The skip decision is per (date, shard), not per date: a shard that
+    // syncs in late for an earlier date (the normal cross-device case)
+    // must still surface, so the cursor keeps windowed marks
+    // (LOG_CATCHUP_WINDOW_DATES dates back) and only a date both older
+    // than the cursor date and outside that window is skipped whole.
     const collected: Array<{ entry: BrainLogEntry }> = [];
-    let lastSeen: { position: CatchupPosition; marks: Record<string, number> } | null = null;
-    let shardMarks: Record<string, number> = {};
+    let lastSeen: CatchupPosition | null = null;
+    let perDateMarks: Record<string, Record<string, number>> = {};
     for (const date of listLogDates(vault)) {
-      if (cursor !== null && date < cursor.date) continue;
+      if (cursor !== null && date < cursor.date && cursor.days[date] === undefined) continue;
       const { entries, entryShardIds, entryLines } = readLogDay(vault, date);
-      shardMarks = {};
+      const shardMarks: Record<string, number> = {};
+      perDateMarks[date] = shardMarks;
       for (let i = 0; i < entries.length; i++) {
         const shardId = entryShardIds[i] ?? "";
         const line = entryLines[i] ?? i;
@@ -217,7 +227,7 @@ async function main(): Promise<void> {
         shardMarks[shardId] = mark === undefined || line > mark ? line : mark;
         const entry = entries[i]!;
         const position: CatchupPosition = { date, shardId, line };
-        lastSeen = { position, marks: { ...shardMarks } };
+        lastSeen = position;
         // Self by payload attribution against the resolved identity,
         // both sides trimmed (resolveSelfIdentity trims its value); in
         // the device-id fallback also by shard, because that is the only
@@ -278,12 +288,26 @@ async function main(): Promise<void> {
     // The watermark lands AFTER the emit, and only after an emit: a run
     // with nothing to show writes nothing, and a crash between the emit
     // and the write replays history next session rather than skipping it.
+    // The windowed days keep the marks of the newest
+    // LOG_CATCHUP_WINDOW_DATES dates before the watermark date, so a
+    // bounded slice of history stays per-shard resolvable and the file
+    // cannot grow with the log.
     if (lastSeen !== null) {
+      const days: Record<string, Record<string, number>> = {};
+      const windowDates = Object.keys(perDateMarks)
+        .filter((d) => d < lastSeen!.date)
+        .toSorted()
+        .slice(-LOG_CATCHUP_WINDOW_DATES);
+      for (const d of windowDates) {
+        const marks = perDateMarks[d]!;
+        if (Object.keys(marks).length > 0) days[d] = marks;
+      }
       writeLogCatchupCursor(vault, self.value, {
-        date: lastSeen.position.date,
-        shardId: lastSeen.position.shardId,
-        line: lastSeen.position.line,
-        shards: lastSeen.marks,
+        date: lastSeen.date,
+        shardId: lastSeen.shardId,
+        line: lastSeen.line,
+        shards: perDateMarks[lastSeen.date] ?? {},
+        days,
       });
     }
   } finally {
