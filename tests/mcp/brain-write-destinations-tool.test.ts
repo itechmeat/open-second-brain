@@ -158,9 +158,8 @@ describe("brain_write_destinations listing", () => {
 
   test("the payload carries the exact covered window, implicit lower bound included", async () => {
     seedNoteWrite("2026-03-04T01:00:00Z", "alpha", "One.md");
-    // With `until` given, the default 7-day lower bound is anchored on it:
-    // the query is about the period ending 2026-03-04, so the window opens
-    // six days earlier at that day's start.
+    // Both bounds explicit: `since` canonicalizes to that day's start and
+    // `until` through that day's end - no default fills either edge.
     const reply = (await call({
       since: "2026-03-01",
       until: "2026-03-04",
@@ -170,6 +169,9 @@ describe("brain_write_destinations listing", () => {
       until: "2026-03-04T23:59:59.999Z",
     });
 
+    // With `until` given and `since` omitted, the default 7-day lower
+    // bound is anchored on it: the query is about the period ending
+    // 2026-03-04, so the window opens six days earlier at that day's start.
     const anchored = (await call({ until: "2026-03-04" })) as unknown as DestinationsReply;
     expect(anchored.window).toEqual({
       since: "2026-02-26T00:00:00Z",
