@@ -300,16 +300,13 @@ function renderDestinationRow(row: WriteDestinationRow): string {
 /**
  * The covered window as one line, beside the JSON payload's `window`:
  * both ends completed to timestamps, because the default lower bound is
- * computed from the anchor rather than sent. A null upper end means the
- * walk ran to the present, and the line says `now` instead of printing a
- * null; the reader always completes the lower end (the type keeps the
- * reader's shape), so its null arm is unreachable from this surface.
+ * computed from the anchor rather than sent - the reader always
+ * completes the lower end, so only the upper end can be null, and a
+ * null upper end means the walk ran to the present, which the line
+ * spells `now`.
  */
-function windowLine(window: {
-  readonly since: string | null;
-  readonly until: string | null;
-}): string {
-  return `window: ${window.since ?? "open"} .. ${window.until ?? "now"}`;
+function windowLine(window: { readonly since: string; readonly until: string | null }): string {
+  return `window: ${window.since} .. ${window.until ?? "now"}`;
 }
 
 function pruneImages(

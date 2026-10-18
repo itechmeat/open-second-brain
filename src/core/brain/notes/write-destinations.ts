@@ -121,8 +121,12 @@ export interface WriteDestinationsResult {
   /** Row count before `limit` truncated the page. */
   readonly total_matched: number;
   readonly limit: number;
-  /** The window the walk covered, completed to timestamps. */
-  readonly window: { readonly since: string | null; readonly until: string | null };
+  /**
+   * The window the walk covered, completed to timestamps. The lower
+   * end is never null: a caller that sent no `--since` gets the
+   * default window's computed bound, not an open walk.
+   */
+  readonly window: { readonly since: string; readonly until: string | null };
   /** Every parse warning the underlying log days reported. */
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
   readonly coverage_note: string;

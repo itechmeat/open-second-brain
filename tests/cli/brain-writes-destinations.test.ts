@@ -89,7 +89,7 @@ interface DestinationsReply {
   readonly destinations: DestinationRow[];
   readonly total_matched: number;
   readonly returned: number;
-  readonly window: { readonly since: string | null; readonly until: string | null };
+  readonly window: { readonly since: string; readonly until: string | null };
   readonly coverage_note: string;
   readonly warnings: unknown[];
 }
