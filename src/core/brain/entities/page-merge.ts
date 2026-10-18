@@ -54,6 +54,7 @@ export type EntityMergeErrorCode =
   | "keep-not-found"
   | "drop-not-found"
   | "same-entity"
+  | "shared-entity-id"
   | "category-mismatch"
   | "ambiguous-subject"
   | "quarantine-record"
@@ -203,6 +204,18 @@ function resolveSubject(
   const inCategory = (e: BrainEntity) => category === undefined || e.category === category;
   const byId = index.entities.filter((e) => e.id === trimmed && inCategory(e));
   if (byId.length === 1) return assertMergeable(byId[0]!);
+  if (byId.length > 1) {
+    // More than one record carries the id: the sync / hand-copy collision
+    // the doctor reports. Refuse by name - the id cannot disambiguate
+    // itself, so "pass both sides by id" (the advice the ambiguous-name
+    // path gives) is impossible here. The fix is archival, not path-based.
+    throw new EntityMergeError(
+      "shared-entity-id",
+      `${byId.length} records share entity_id ${JSON.stringify(trimmed)} ` +
+        `(${byId.map((m) => m.path).join(", ")}) - the sync or hand-copy collision the doctor ` +
+        "reports; archive or rename one copy first, then merge",
+    );
+  }
 
   const normalized = normalizeEntityName(trimmed);
   if (normalized.length === 0) throw notFound();

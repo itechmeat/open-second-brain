@@ -9,7 +9,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,6 +133,34 @@ function codeOf(fn: () => unknown): string {
   throw new Error("expected the call to throw EntityMergeError");
 }
 
+/** Hand-write an entity file, bypassing the registry's write gate. */
+function writeRawEntity(category: string, id: string, name: string, stem = id): string {
+  const dir = join(vault, "Brain", "entities", category);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${stem}.md`);
+  writeFileSync(
+    path,
+    [
+      "---",
+      "kind: brain-entity",
+      `entity_id: ${id}`,
+      `category: ${category}`,
+      `name: ${name}`,
+      "status: active",
+      "created_at: 2026-07-18T00:00:00Z",
+      "updated_at: 2026-07-18T00:00:00Z",
+      "tags:",
+      "  - brain",
+      "  - brain/entity",
+      "---",
+      "",
+      `# ${name}`,
+      "",
+    ].join("\n"),
+  );
+  return path;
+}
+
 describe("planEntityMerge", () => {
   test("plans alias-on-survivor with the drop body folded and a stable hash", () => {
     const { keepId, dropId } = seedPair();
@@ -213,6 +249,34 @@ describe("planEntityMerge", () => {
         dropCategory: "people",
       }),
     ).not.toThrow();
+  });
+
+  test("two files sharing one entity_id refuse as the shared-id collision", () => {
+    const { keepId, dropId } = seedPair();
+    // A synced or hand-copied page keeps its entity_id: two records answer
+    // to one id, and "pass both sides by id" cannot disambiguate itself.
+    // The copy lives under a different file name - the id travels in the
+    // frontmatter, not the stem.
+    writeRawEntity("people", keepId, "Ada Lovelace", `${keepId}-copy`);
+    __clearEntityIndexCache();
+    let thrown: EntityMergeError | null = null;
+    try {
+      planEntityMerge(vault, { keep: keepId, drop: dropId });
+    } catch (err) {
+      thrown = err as EntityMergeError;
+    }
+    expect(thrown).toBeInstanceOf(EntityMergeError);
+    expect(thrown!.code).toBe("shared-entity-id");
+    expect(thrown!.message).toContain(keepId);
+    expect(thrown!.message).toContain("archive or rename");
+
+    // The same collision with diverged names: the id path must still name
+    // it rather than fall through to name resolution.
+    writeRawEntity("people", dropId, "Ada Copy", `${dropId}-copy`);
+    __clearEntityIndexCache();
+    expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(
+      "shared-entity-id",
+    );
   });
 
   test("a quarantine-lane record is refused with a named reason", () => {
