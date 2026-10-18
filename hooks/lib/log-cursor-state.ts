@@ -32,6 +32,15 @@
  * fail-open) rather than risk that silence. The file is left in place;
  * nothing reads it again.
  *
+ * The digest in the file name ships the same refusal one step further:
+ * the digest-less per-identity name this module briefly wrote
+ * (`log-catchup.<identity>.cursor.json`) is orphaned by the rename, and
+ * the older files are never read either. A migration would be derivable
+ * there - the digest computes from the identity - but it would keep a
+ * second file-name rule alive forever, and the reset is cheap: one
+ * replay of history under the lane's caps on the first run after the
+ * upgrade, after which the orphan sits unread in the derived store.
+ *
  * WHY THE PER-SHARD MARKS BESIDE THE TUPLE. `readLogDay` merges a day's
  * shards sorted by (timestamp, shardId, line), so a new line appended to
  * a LOW-named shard sorts BEFORE the high-water tuple even though it is
