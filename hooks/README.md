@@ -118,7 +118,7 @@ call would.
   cached script there whose `../src` imports do not exist. Edit
   `hooks/hooks.json`, then run the sync.
 
-- `log-catchup.ts` — Bun entry script for the opt-in cross-agent catch-up. Reads `Brain/log` through `listLogDates`/`readLogDay` only, filters `entry.agent !== self`, renders the newest lines under the shared untrusted fence, and advances the derived-store cursor after the emit. Never writes to `Brain/log`; fail-open exit 0.
+- `log-catchup.ts` — Bun entry script for the opt-in cross-agent catch-up. Reads `Brain/log` through `listLogDates`/`readLogDay` only, filters self lines by a trimmed `entry.agent` comparison (in device-fallback mode, with no configured agent name, this device's shards count as self too - the consequence is that several unconfigured runtimes on one device do not see each other, because no per-agent identity exists to key on), renders the newest lines under the shared untrusted fence, and advances the per-identity derived-store cursor after the emit. Never writes to `Brain/log`; fail-open exit 0.
 - `session-capture.ts` — Bun entry script that handles lifecycle
   observations and immediate marker/tool-feedback capture. It emits
   no stdout to the runtime; writes go to Brain signals plus
