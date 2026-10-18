@@ -449,6 +449,20 @@ describe("o2b brain entity merge", () => {
     expect(out.stdout).toContain("dry-run; no changes written");
   });
 
+  test("the echoed apply command shell-quotes subjects a shell would split", async () => {
+    // Subjects echo verbatim into a command line, so a name with a space
+    // must come back quoted: `merge 'Ada Lovelace'` parses back as ONE
+    // argument, the raw form would split into two.
+    await seedMergePair();
+    const out = await runCli(["brain", "entity", "merge", "Ada Lovelace", "Ada", "--dry-run"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    // The spaced name is quoted; the plain word stays bare.
+    expect(out.stdout).toContain("merge 'Ada Lovelace' Ada");
+    expect(out.stdout).not.toContain("merge Ada Lovelace");
+  });
+
   test("a guard-tripping pair merges end-to-end under --force; the hash gate still binds", async () => {
     // The keep body anchors Mary Somerville, the drop body anchors only Ada:
     // disjoint guarded anchor sets, the shape the core merge guard refuses.

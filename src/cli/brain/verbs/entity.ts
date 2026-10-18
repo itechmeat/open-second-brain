@@ -41,6 +41,18 @@ import {
   readSingleLine,
   usageError,
 } from "../helpers.ts";
+import { shellQuote } from "../../cron-recipe.ts";
+
+/**
+ * A word a POSIX shell needs no quoting for (the same plain set the
+ * search verb bakes into its flags): ids like `ent-people-ada` echo bare,
+ * anything a shell would split gets single-quoted.
+ */
+const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
+
+function shellSafe(value: string): string {
+  return PLAIN_SHELL_WORD.test(value) ? value : shellQuote(value);
+}
 
 function entityPayload(entity: BrainEntity): Record<string, unknown> {
   return {
@@ -468,8 +480,12 @@ async function entityMerge(argv: string[]): Promise<number> {
     return entityMergeRefusal(exc, json);
   }
   const hash = entityMergePlanHash(plan);
+  // The echo is a command an operator (or an agent) pastes back, so the
+  // subjects are shell-quoted: a name with a space must survive the
+  // round-trip as one argument.
   const applyCommand =
-    `o2b brain entity merge ${refs.keep} ${refs.drop} --expect-hash ${hash}` +
+    `o2b brain entity merge ${shellSafe(refs.keep)} ${shellSafe(refs.drop)} ` +
+    `--expect-hash ${hash}` +
     (force ? " --force" : "");
   const planLines = mergePlanLines(plan, hash, applyCommand);
 
