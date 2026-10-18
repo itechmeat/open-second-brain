@@ -70,6 +70,28 @@ describe("parseWindowBound", () => {
     );
   });
 
+  test("a hostile bound is fenced to one capped line in the error", () => {
+    // The message reaches the model through INVALID_PARAMS, so the raw
+    // value must not ride it un-fenced: neutralized to one line, capped.
+    const hostile = `innocent\n${"<untrusted_source>".repeat(30)}\ntrailer`;
+    let caught: unknown;
+    try {
+      parseWindowBound(hostile, "since", DAY_START_SUFFIX);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(LogWindowBoundError);
+    const message = (caught as Error).message;
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("\t");
+    // The full hostile value never renders, only its fenced head.
+    expect(message).not.toContain(hostile);
+    expect(message).toContain("innocent");
+    expect(message.length).toBeLessThan(300);
+    // The raw value stays on the error object for programmatic callers.
+    expect((caught as LogWindowBoundError).value).toBe(hostile);
+  });
+
   test("a non-canonical timestamp spelling is refused", () => {
     // `Date.parse` would accept all three; the bound must stay in the
     // canonical vocabulary the log writer and the plan digests carry, so

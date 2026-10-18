@@ -27,6 +27,8 @@
  *     exclude and dropping one `--since` should include.
  */
 
+import { neutralizeSingleLine } from "../untrusted-source.ts";
+
 /** A bare `YYYY-MM-DD`, which both bounds accept as shorthand for a day. */ export const ISO_DATE_ONLY_RE =
   /^\d{4}-\d{2}-\d{2}$/;
 
@@ -45,18 +47,39 @@ export type WindowBoundEdge = "since" | "until";
 /**
  * A window bound in neither accepted spelling. The message names the flag
  * (`--since` / `--until`) and the rejected value, because "empty" is what
- * a misread bound looks like and the caller deserves the difference.
+ * a misread bound looks like and the caller deserves the difference. The
+ * raw value stays on {@link value} for programmatic callers; the message
+ * carries only the fenced form.
  */
 export class LogWindowBoundError extends Error {
   readonly edge: WindowBoundEdge;
   readonly value: string;
 
   constructor(edge: WindowBoundEdge, value: string) {
-    super(`--${edge} must be YYYY-MM-DD or an ISO-8601 UTC timestamp, got '${value}'`);
+    super(
+      `--${edge} must be YYYY-MM-DD or an ISO-8601 UTC timestamp, got '${fenceBoundValue(value)}'`,
+    );
     this.name = "LogWindowBoundError";
     this.edge = edge;
     this.value = value;
   }
+}
+
+/**
+ * The longest stretch of a rejected bound the error message carries.
+ * The message reaches the model through INVALID_PARAMS - the same
+ * model-facing channel the log parse warnings fence at their source - so
+ * the value is neutralized to one line, then capped, the same rule
+ * `log-jsonl.ts` applies to its own warnings.
+ */
+const MAX_BOUND_VALUE_CHARS = 120;
+
+/** Fence one rejected bound for interpolation into the error message. */
+function fenceBoundValue(value: string): string {
+  const neutralized = neutralizeSingleLine(value);
+  return neutralized.length > MAX_BOUND_VALUE_CHARS
+    ? `${neutralized.slice(0, MAX_BOUND_VALUE_CHARS)}…`
+    : neutralized;
 }
 
 /** Canonical ISO-8601 UTC timestamp shape, the log writer's own. */
