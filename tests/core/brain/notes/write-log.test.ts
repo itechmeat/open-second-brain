@@ -7,9 +7,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { listNoteWrites } from "../../../../src/core/brain/notes/write-log.ts";
@@ -135,6 +135,43 @@ describe("listNoteWrites", () => {
     expect(
       listNoteWrites(vault, { since: "2026-03-04T23:59:30Z" }).writes.map((w) => w.target),
     ).toEqual(["Next.md"]);
+  });
+
+  test("a whole-second until excludes a fractional foreign entry, and since includes it", () => {
+    // The writer stamps whole seconds, but a hand-appended JSONL line can
+    // carry sub-second precision, and "…56.789Z" sorts BEFORE "…56Z" in a
+    // plain string compare ('.' < 'Z') - so an until at second 56 wrongly
+    // admitted the entry and a since at second 56 wrongly dropped it.
+    const abs = join(vault, "Brain", "log", "2026-03-04.jsonl");
+    const row = JSON.stringify({
+      ts: "2026-03-04T12:34:56.789Z",
+      kind: "note-write",
+      payload: {
+        write_id: "nw_fractional",
+        op: "update",
+        target: "Fractional.md",
+        hash_before: "a".repeat(64),
+        hash_after: "b".repeat(64),
+        bytes_before: "1",
+        bytes_after: "2",
+        agent: "foreign",
+      },
+    });
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, `${row}\n`, "utf8");
+
+    expect(listNoteWrites(vault, { until: "2026-03-04T12:34:56Z" }).writes).toEqual([]);
+    expect(
+      listNoteWrites(vault, { since: "2026-03-04T12:34:56Z" }).writes.map((w) => w.write_id),
+    ).toEqual(["nw_fractional"]);
+  });
+
+  test("a fractional bound orders a whole-second log entry as an instant", () => {
+    seed({ timestamp: "2026-03-04T12:34:56Z", agent: "a", target: "Whole.md" });
+    expect(
+      listNoteWrites(vault, { until: "2026-03-04T12:34:56.789Z" }).writes.map((w) => w.target),
+    ).toEqual(["Whole.md"]);
+    expect(listNoteWrites(vault, { since: "2026-03-04T12:34:56.789Z" }).writes).toEqual([]);
   });
 
   test("events of other kinds are not note writes", () => {

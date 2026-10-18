@@ -32,7 +32,13 @@ import { listLogDates, listLogShardFiles, readLogDay } from "../log-jsonl.ts";
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import type { WriteSessionStatus } from "../write-session/types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { DATE_LENGTH, DAY_END_SUFFIX, DAY_START_SUFFIX, parseWindowBound } from "./log-window.ts";
+import {
+  DATE_LENGTH,
+  DAY_END_SUFFIX,
+  DAY_START_SUFFIX,
+  parseWindowBound,
+  timestampInWindow,
+} from "./log-window.ts";
 
 /** Which recorded write kinds a destination's rows cover. */
 export const WRITE_DESTINATION_KIND = Object.freeze({
@@ -246,8 +252,7 @@ export function listWriteDestinations(
       if (touch === null) return;
       if (filter.agent !== undefined && touch.agent !== filter.agent) return;
       if (filter.path !== undefined && touch.target !== filter.path) return;
-      if (entry.timestamp < effectiveSince) return;
-      if (until !== null && entry.timestamp > until) return;
+      if (!timestampInWindow(entry.timestamp, effectiveSince, until)) return;
 
       let acc = byTarget.get(touch.target);
       if (acc === undefined) {

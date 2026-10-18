@@ -16,10 +16,15 @@
  *     caller's suffix - an `--until 2026-03-04` means "through the end of
  *     the fourth", not "up to midnight starting it";
  *   - an ISO-8601 UTC timestamp in the shape the log writer emits
- *     (`YYYY-MM-DDTHH:MM:SSZ`, optional sub-second precision), passed
- *     through verbatim - the readers compare bounds with the same string
- *     comparison as the log's own timestamps, so an offset spelling or a
- *     missing seconds field would order wrong even where it parses.
+ *     (`YYYY-MM-DDTHH:MM:SSZ`, optional sub-second precision). The strict
+ *     canonical shape keeps a bound in the same vocabulary the log and
+ *     the revert-plan digests carry - an offset spelling or a missing
+ *     seconds field is refused rather than normalized - but the window
+ *     comparison itself orders by instant ({@link timestampInWindow}):
+ *     the log writer stamps whole seconds while the JSONL reader admits
+ *     sub-second foreign lines, and a plain string compare would order
+ *     `…56.789Z` before `…56Z`, admitting an entry `--until` should
+ *     exclude and dropping one `--since` should include.
  */
 
 /** A bare `YYYY-MM-DD`, which both bounds accept as shorthand for a day. */ export const ISO_DATE_ONLY_RE =
@@ -58,7 +63,7 @@ export class LogWindowBoundError extends Error {
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 /**
- * Complete and validate one window bound, ready for the readers' string
+ * Complete and validate one window bound, ready for the readers' window
  * comparisons against canonical log timestamps.
  *
  * A bare date is completed with `suffix` and calendar-checked by parsing
@@ -79,4 +84,26 @@ export function parseWindowBound(
     return value;
   }
   throw new LogWindowBoundError(edge, value);
+}
+
+/**
+ * Whether one log entry timestamp falls inside the parsed window.
+ *
+ * Both sides are compared as instants (epoch milliseconds), not strings:
+ * a bound at whole seconds and an entry carrying sub-second precision
+ * order opposite ways under a plain string compare (`…56.789Z` sorts
+ * before `…56Z`), and an until that admits an entry it should exclude -
+ * or a since that drops one it should include - is exactly the kind of
+ * wrong this module exists to make loud. A null bound leaves that end
+ * unbounded.
+ */
+export function timestampInWindow(
+  timestamp: string,
+  since: string | null,
+  until: string | null,
+): boolean {
+  const at = Date.parse(timestamp);
+  if (since !== null && at < Date.parse(since)) return false;
+  if (until !== null && at > Date.parse(until)) return false;
+  return true;
 }

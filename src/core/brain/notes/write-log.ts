@@ -28,7 +28,13 @@ import { listLogDates, listLogShardFiles, readLogDay, type LogShardFile } from "
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../../origin-channel.ts";
-import { DATE_LENGTH, DAY_END_SUFFIX, DAY_START_SUFFIX, parseWindowBound } from "./log-window.ts";
+import {
+  DATE_LENGTH,
+  DAY_END_SUFFIX,
+  DAY_START_SUFFIX,
+  parseWindowBound,
+  timestampInWindow,
+} from "./log-window.ts";
 import { isNoteWriteOp, type NoteWriteOp } from "./write-record.ts";
 
 /** One recorded note write, projected from its log event. */
@@ -170,8 +176,7 @@ export function listNoteWrites(
       if (filter.device !== undefined && record.device !== filter.device) return;
       if (filter.path !== undefined && record.target !== filter.path) return;
       if (filter.op !== undefined && record.op !== filter.op) return;
-      if (since !== null && record.timestamp < since) return;
-      if (until !== null && record.timestamp > until) return;
+      if (!timestampInWindow(record.timestamp, since, until)) return;
       writes.push(record);
     });
   }

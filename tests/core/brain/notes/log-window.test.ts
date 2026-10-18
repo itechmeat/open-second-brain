@@ -16,6 +16,7 @@ import {
   DAY_START_SUFFIX,
   LogWindowBoundError,
   parseWindowBound,
+  timestampInWindow,
 } from "../../../../src/core/brain/notes/log-window.ts";
 
 describe("parseWindowBound", () => {
@@ -70,9 +71,10 @@ describe("parseWindowBound", () => {
   });
 
   test("a non-canonical timestamp spelling is refused", () => {
-    // `Date.parse` would accept all three; the readers compare bounds as
-    // strings against canonical log timestamps, so anything the writer
-    // would not emit must not slip past a parse that orders wrong.
+    // `Date.parse` would accept all three; the bound must stay in the
+    // canonical vocabulary the log writer and the plan digests carry, so
+    // anything the writer would not emit must not slip past a parse that
+    // orders wrong.
     for (const value of [
       "2026-03-04T12:34Z",
       "2026-03-04 12:34:56Z",
@@ -80,5 +82,37 @@ describe("parseWindowBound", () => {
     ]) {
       expect(() => parseWindowBound(value, "since", DAY_START_SUFFIX)).toThrow(LogWindowBoundError);
     }
+  });
+});
+
+describe("timestampInWindow", () => {
+  // The log writer emits whole seconds, but the JSONL reader admits
+  // sub-second foreign lines and the parser admits sub-second bounds.
+  // A plain string compare orders "…56.789Z" BEFORE "…56Z" ('.' < 'Z'),
+  // so until wrongly included a fractional entry and since wrongly
+  // dropped it; the window must order by instant.
+  const FRACTIONAL = "2026-03-04T12:34:56.789Z";
+  const WHOLE = "2026-03-04T12:34:56Z";
+
+  test("a whole-second until excludes the fractional entry a string compare admitted", () => {
+    expect(timestampInWindow(FRACTIONAL, null, WHOLE)).toBe(false);
+  });
+
+  test("a whole-second since includes the fractional entry a string compare dropped", () => {
+    expect(timestampInWindow(FRACTIONAL, WHOLE, null)).toBe(true);
+  });
+
+  test("a fractional until includes the whole-second entry at or before it", () => {
+    expect(timestampInWindow(WHOLE, null, FRACTIONAL)).toBe(true);
+  });
+
+  test("a fractional since excludes the whole-second entry before it", () => {
+    expect(timestampInWindow(WHOLE, FRACTIONAL, null)).toBe(false);
+  });
+
+  test("either bound absent leaves that end unbounded", () => {
+    expect(timestampInWindow(WHOLE, null, null)).toBe(true);
+    expect(timestampInWindow(WHOLE, "2026-03-05T00:00:00Z", null)).toBe(false);
+    expect(timestampInWindow(WHOLE, null, "2026-03-03T00:00:00Z")).toBe(false);
   });
 });
