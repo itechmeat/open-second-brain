@@ -364,8 +364,10 @@ describe("o2b brain writes revert", () => {
     const res = await runCli(["brain", "writes", "revert", "--device", ""], { env: env() });
     expect(res.returncode).toBe(0);
     // Unquoted, the echo renders `--device ` - an invocation that pastes
-    // back with the flag dropped and plans every device on re-read.
-    expect(res.stdout).toContain('revert --device ""');
+    // back with the flag dropped and plans every device on re-read. The
+    // echo quotes POSIX-style, so the empty value renders as two single
+    // quotes.
+    expect(res.stdout).toContain("revert --device ''");
   });
 
   test("prints the plan, the digest and the exact --apply invocation", async () => {
