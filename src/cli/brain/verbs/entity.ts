@@ -480,12 +480,16 @@ async function entityMerge(argv: string[]): Promise<number> {
     return entityMergeRefusal(exc, json);
   }
   const hash = entityMergePlanHash(plan);
-  // The echo is a command an operator (or an agent) pastes back, so the
-  // subjects are shell-quoted: a name with a space must survive the
-  // round-trip as one argument.
+  // The echo is a command an operator (or an agent) pastes back, so every
+  // argument a shell would split is quoted: subjects AND the vault. An
+  // explicit --vault rides along - against a synced copy with identical
+  // ids and paths, an echo that dropped it would apply to whichever vault
+  // the paste resolved instead of the one that was previewed.
+  const vaultFlag = normalizeFlagString(flags["vault"]);
   const applyCommand =
-    `o2b brain entity merge ${shellSafe(refs.keep)} ${shellSafe(refs.drop)} ` +
-    `--expect-hash ${hash}` +
+    `o2b brain entity merge ${shellSafe(refs.keep)} ${shellSafe(refs.drop)}` +
+    (vaultFlag !== null ? ` --vault ${shellSafe(vaultFlag)}` : "") +
+    ` --expect-hash ${hash}` +
     (force ? " --force" : "");
   const planLines = mergePlanLines(plan, hash, applyCommand);
 

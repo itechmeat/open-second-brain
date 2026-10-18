@@ -481,6 +481,38 @@ describe("o2b brain entity merge", () => {
     expect(out.stdout).not.toContain("merge Ada Lovelace");
   });
 
+  test("the echoed apply command carries the --vault flag it was given", async () => {
+    // A synced copy at a spaced path: pasting the echo back must target
+    // THAT vault - quoted, so the path survives the shell as one argument -
+    // not silently fall back to whichever vault the paste resolves.
+    const spacedVault = join(tmp, "synced copy");
+    const spacedConfig = join(tmp, "spaced.yaml");
+    writeFileSync(spacedConfig, `vault: ${spacedVault}\nagent_name: test-agent\n`);
+    bootstrapBrain(spacedVault, { configPath: spacedConfig });
+    const spacedEnv = () => ({ OPEN_SECOND_BRAIN_CONFIG: spacedConfig });
+    const keep = await runCli(["brain", "entity", "set", "people", "Ada Lovelace"], {
+      env: spacedEnv(),
+    });
+    expect(keep.returncode).toBe(0);
+    const drop = await runCli(["brain", "entity", "set", "people", "Ada"], { env: spacedEnv() });
+    expect(drop.returncode).toBe(0);
+    const out = await runCli(
+      [
+        "brain",
+        "entity",
+        "merge",
+        "ent-people-ada-lovelace",
+        "ent-people-ada",
+        "--dry-run",
+        "--vault",
+        spacedVault,
+      ],
+      { env: spacedEnv() },
+    );
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain(`--vault '${spacedVault}'`);
+  });
+
   test("a guard-tripping pair merges end-to-end under --force; the hash gate still binds", async () => {
     // The keep body anchors Mary Somerville, the drop body anchors only Ada:
     // disjoint guarded anchor sets, the shape the core merge guard refuses.
