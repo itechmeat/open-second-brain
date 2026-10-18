@@ -324,7 +324,10 @@ export function planEntityMerge(
   // keep and drop are exempt (keep's claim folds into the merge, and a
   // drop listing its own name claims itself), any other canonical holder
   // refuses by name - merging would duplicate the claim, not move it.
-  // The holders are scanned off the entity list, not `byAlias`: the map
+  // A holder is read off BOTH name fields: a candidate equal to another
+  // record's DISPLAY NAME is as claimed as one listed in its aliases -
+  // moving it would mint the duplicate identity the verb repairs. The
+  // holders are scanned off the entity list, not `byAlias`: the map
   // keeps only a duplicate claim's first claimant, which for a contested
   // alias is often the drop itself - the claimant this check must exempt.
   const keepNormalized = normalizeEntityName(keep.name);
@@ -341,7 +344,8 @@ export function planEntityMerge(
         e.id !== keep.id &&
         e.id !== drop.id &&
         entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
-        e.aliases.some((a) => normalizeEntityName(a) === normalized),
+        (normalizeEntityName(e.name) === normalized ||
+          e.aliases.some((a) => normalizeEntityName(a) === normalized)),
     );
   const seenAliases = new Set<string>();
   const aliasesMerged: string[] = [];

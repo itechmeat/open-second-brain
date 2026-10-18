@@ -444,6 +444,37 @@ describe("planEntityMerge", () => {
     expect(thrown!.message).toContain(third.entity.id);
   });
 
+  test("an alias equal to a third record's display name refuses as claimed", () => {
+    // The holder check read only other records' ALIASES: an alias equal
+    // to a third canonical record's NAME moved onto the survivor
+    // unrefused, leaving two records answering to one name - the exact
+    // duplicate identity this verb exists to repair.
+    const { keepId, dropId } = seedPair();
+    const third = upsertEntity(vault, {
+      category: "people",
+      name: "Charles Babbage",
+      agent: "test-agent",
+      now: NOW,
+    });
+    // Hand-add the contested alias to the drop page: upsert would refuse
+    // a duplicate claim, but a hand edit or an older build can land one.
+    const drop = getEntity(vault, { query: "Ada" })!;
+    const [meta, body] = parseFrontmatter(drop.path);
+    writeFrontmatterAtomic(drop.path, { ...meta, aliases: ["Charles Babbage"] }, body, {
+      overwrite: true,
+    });
+    __clearEntityIndexCache();
+    let thrown: EntityMergeError | null = null;
+    try {
+      planEntityMerge(vault, { keep: keepId, drop: dropId });
+    } catch (err) {
+      thrown = err as EntityMergeError;
+    }
+    expect(thrown).toBeInstanceOf(EntityMergeError);
+    expect(thrown!.code).toBe("alias-claimed");
+    expect(thrown!.message).toContain(third.entity.id);
+  });
+
   test("a guarded pair plans only through the explicit bypass option", () => {
     const { keepId, dropId } = seedGuardedPair();
     expect(codeOf(() => planEntityMerge(vault, { keep: keepId, drop: dropId }))).toBe(
