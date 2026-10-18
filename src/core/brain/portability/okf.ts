@@ -1144,16 +1144,23 @@ function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
  * fresh-export plain page comes back plain instead of gaining the
  * `status: stable` the derived block would have materialized.
  *
- * The restore runs only on a page whose file carries the
- * {@link RAW_CARRY_KEY} marker: a page WITHOUT it is a legacy bundle's
- * (exported before the raw-carrying declaration existed - sealed
- * knowledge-pack halves accepted on purpose included), its natives are
- * the frontmatter already in place, and reading their absence as "never
- * had a value" deleted them. The restore is skipped for such a page, so
- * a legacy quarantine survives its own round-trip.
+ * The restore runs only on a page that declares raw-carrying: the
+ * {@link RAW_CARRY_KEY} marker, or - saying the same thing when the
+ * marker went missing - any present raw key, which no legacy bundle
+ * ever wrote. A page with NEITHER is a legacy bundle's (exported
+ * before the raw-carrying declaration existed - sealed knowledge-pack
+ * halves accepted on purpose included), its natives are the
+ * frontmatter already in place, and reading their absence as "never
+ * had a value" deleted them. The restore is skipped for such a page,
+ * so a legacy quarantine survives its own round-trip; a page that kept
+ * its raw keys but lost the marker is restored anyway, instead of
+ * stranding the keys beside the derived block they were written to
+ * replace.
  */
 function restoreRawOkfKeys(meta: FrontmatterMap): void {
-  if (meta[RAW_CARRY_KEY] === undefined) return;
+  const marked =
+    meta[RAW_CARRY_KEY] !== undefined || RAW_OKF_KEYS.some(({ raw }) => meta[raw] !== undefined);
+  if (!marked) return;
   delete meta[RAW_CARRY_KEY];
   for (const { raw, native } of RAW_OKF_KEYS) {
     // Presence, not shape: the raw value round-tripped through the page

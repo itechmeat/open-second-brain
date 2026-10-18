@@ -615,6 +615,67 @@ describe("v0.2 import acceptance", () => {
     }
   });
 
+  test("a marker-less page carrying raw keys still restores its natives", () => {
+    // The raw keys and the okf_raw marker ship together, so no released
+    // bundle can carry one without the other - but a page that keeps the
+    // keys and loses the marker must not fall back to the legacy path:
+    // the raw keys are themselves the declaration that this page's
+    // natives ride beside the derived block. The legacy early-return
+    // stranded them - the derived `stable` landed, the carrier rode
+    // along beside it, and the next export carried the materialized
+    // status as a raw native, permanent.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rawnomark-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rawnomark-dest-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      const manifest = {
+        schema: OKF_SCHEMA_VERSION,
+        producer: OKF_PRODUCER,
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Markerless",
+        log_days: 0,
+        pages: [
+          {
+            id: "Topic",
+            path: "Notes/Topic.md",
+            class: "concept",
+            bundle_path: "concepts/Topic.md",
+            kind: "note",
+            citations: [],
+            status: "stable",
+            sources: [],
+            aliases: [],
+            freshness: null,
+            foreign_type: null,
+            producer_meta: {},
+          },
+        ],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      writeFileSync(
+        join(dir, "concepts/Topic.md"),
+        "---\ntitle: Topic\nokf_status_raw: quarantine\nstatus: stable\n---\nBody.\n",
+        "utf8",
+      );
+      const parsed = readOkfBundle(dir);
+      expect(parsed.foreign).toBe(false);
+      const result = importOkfBundle(dest, parsed, { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landed = readFileSync(join(dest, "Notes/Topic.md"), "utf8");
+      // The raw status is restored and the derived block shed, exactly
+      // as if the marker had been present beside the keys.
+      expect(landed).toContain("status: quarantine");
+      expect(landed).not.toContain("status: stable");
+      expect(landed).not.toContain("okf_status_raw");
+      expect(landed).not.toContain("sources:");
+      expect(landed).not.toContain("generated:");
+      expect(landed).toContain("Body.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
   test("a fresh-export plain page round-trips without gaining the derived block", () => {
     // A page whose source carried no status / sources / generated exports
     // no raw keys - but it is still a raw-carrying exporter's page, and
