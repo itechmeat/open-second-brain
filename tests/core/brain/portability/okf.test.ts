@@ -425,6 +425,161 @@ describe("v0.2 type emission", () => {
 });
 
 /**
+ * Manifest-less, spec-shaped OKF v0.2 bundles: the spec defines a bundle
+ * as a plain directory tree of markdown (reserving index.md and log.md)
+ * and requires NO manifest, so a tree whose bundle-root index declares
+ * `okf_version: "0.2"` must import even without okf.json. The page list
+ * is built by walking the tree; every walked page routes through the
+ * EXISTING foreign-producer path - staged for review, provenance
+ * stamped, machinery keys stripped - never a silent restore. A bundle
+ * WITH okf.json keeps the manifest path and its schema gate entirely,
+ * and every refusal but the absent-manifest one is unchanged.
+ */
+describe("manifest-less spec-shaped v0.2 bundles", () => {
+  /** Hand-built spec-shaped bundle: index.md + pages, no okf.json. */
+  function specBundle(dir: string): void {
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    mkdirSync(join(dir, "queries"), { recursive: true });
+    mkdirSync(join(dir, "references"), { recursive: true });
+    mkdirSync(join(dir, "notes"), { recursive: true });
+    writeFileSync(join(dir, "index.md"), '---\nokf_version: "0.2"\n---\n# Foreign\n', "utf8");
+    writeFileSync(join(dir, "log.md"), "## 2026-06-01\n\n- old news\n", "utf8");
+    writeFileSync(
+      join(dir, "concepts/foo.md"),
+      "---\ntitle: Foo\ntype: wiki-article\n_status: confirmed\nowner: someone\n---\nFoo body.\n",
+      "utf8",
+    );
+    writeFileSync(join(dir, "queries/q.md"), "---\ntitle: Q\ntype: report\n---\nQ body.\n", "utf8");
+    writeFileSync(
+      join(dir, "references/r.md"),
+      "---\ntitle: R\ntype: paper\n---\nR body.\n",
+      "utf8",
+    );
+    writeFileSync(join(dir, "notes/n.md"), "---\ntitle: N\ntype: zettel\n---\nN body.\n", "utf8");
+    writeFileSync(
+      join(dir, "loose.md"),
+      "---\ntitle: Loose\ntype: note\n---\nLoose body.\n",
+      "utf8",
+    );
+  }
+
+  test("a bundle with no okf.json and a v0.2 index is read by walking the tree", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-"));
+    try {
+      specBundle(dir);
+      const parsed = readOkfBundle(dir);
+      // Reserved files are never pages; everything else is.
+      expect(parsed.pages.map((p) => p.entry.bundle_path).toSorted()).toEqual([
+        "concepts/foo.md",
+        "loose.md",
+        "notes/n.md",
+        "queries/q.md",
+        "references/r.md",
+      ]);
+      // Class comes from the directory name when it names a class lane,
+      // and defaults to concept everywhere else (foreign dirs, root).
+      const byPath = new Map(parsed.pages.map((p) => [p.entry.bundle_path, p.entry]));
+      expect(byPath.get("concepts/foo.md")?.class).toBe("concept");
+      expect(byPath.get("queries/q.md")?.class).toBe("query");
+      expect(byPath.get("references/r.md")?.class).toBe("reference");
+      expect(byPath.get("notes/n.md")?.class).toBe("concept");
+      expect(byPath.get("loose.md")?.class).toBe("concept");
+      // Native frontmatter and body are intact.
+      const foo = parsed.pages.find((p) => p.entry.bundle_path === "concepts/foo.md")!;
+      expect(foo.frontmatter["title"]).toBe("Foo");
+      expect(foo.frontmatter["type"]).toBe("wiki-article");
+      expect(foo.body).toContain("Foo body.");
+      // No manifest declared anything: the parsed manifest shows it.
+      expect(parsed.manifest.schema).toBe("");
+      expect(parsed.foreign).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("imported spec pages stage for review through the foreign-producer path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-imp-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-spec-imp-dest-"));
+    try {
+      specBundle(dir);
+      const result = importOkfBundle(dest, readOkfBundle(dir), { now: new Date(0) });
+      expect(result.mode).toBe("review");
+      expect(result.errors).toEqual([]);
+      const staged = readFileSync(join(dest, OKF_REVIEW_REL, "concepts/foo.md"), "utf8");
+      // Native frontmatter intact.
+      expect(staged).toContain("title: Foo");
+      expect(staged).toContain("type: wiki-article");
+      // Provenance stamped: the spec page's own type is the raw foreign
+      // type the stamp preserves.
+      expect(staged).toContain("okf_producer: unknown");
+      expect(staged).toContain("okf_type: wiki-article");
+      expect(staged).toContain('okf_imported_at: "1970-01-01T00:00:00Z"');
+      expect(staged).toContain("okf_review: pending");
+      // Machinery keys are stripped, never silently restored, and this
+      // system's raw namespace cannot be planted through the walk either.
+      expect(staged).not.toContain("_status:");
+      expect(staged).not.toContain("owner:");
+      expect(staged).not.toContain("okf_raw");
+      expect(staged).toContain("Foo body.");
+      // The reserved change log is not staged as a page.
+      expect(existsSync(join(dest, OKF_REVIEW_REL, "log.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a manifest-less tree without a v0.2 index declaration is still refused by name", () => {
+    const noIndex = mkdtempSync(join(tmpdir(), "o2b-okf-spec-noindex-"));
+    const unversioned = mkdtempSync(join(tmpdir(), "o2b-okf-spec-unvers-"));
+    const wrongVersion = mkdtempSync(join(tmpdir(), "o2b-okf-spec-wrongvers-"));
+    try {
+      specBundle(noIndex);
+      rmSync(join(noIndex, "index.md"));
+      expect(() => readOkfBundle(noIndex)).toThrow("not an OKF bundle");
+
+      specBundle(unversioned);
+      writeFileSync(join(unversioned, "index.md"), "# No version declared\n", "utf8");
+      expect(() => readOkfBundle(unversioned)).toThrow("not an OKF bundle");
+
+      specBundle(wrongVersion);
+      writeFileSync(
+        join(wrongVersion, "index.md"),
+        '---\nokf_version: "9.9"\n---\n# Future\n',
+        "utf8",
+      );
+      expect(() => readOkfBundle(wrongVersion)).toThrow("not an OKF bundle");
+    } finally {
+      rmSync(noIndex, { recursive: true, force: true });
+      rmSync(unversioned, { recursive: true, force: true });
+      rmSync(wrongVersion, { recursive: true, force: true });
+    }
+  });
+
+  test("a present okf.json with a wrong schema is still refused beside a v0.2 index", () => {
+    // The manifest path and its schema gate are untouched by the
+    // manifest-less acceptance: a PRESENT wrong schema never falls back
+    // to the version declaration.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-manifest-"));
+    try {
+      specBundle(dir);
+      const manifest = {
+        schema: "999",
+        producer: "some-other-wiki",
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Foreign",
+        log_days: 0,
+        pages: [],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      expect(() => readOkfBundle(dir)).toThrow("unsupported OKF schema: expected 1, got 999");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
  * OKF v0.2 import acceptance (t_ffdb4fac): the reader admits a bundle
  * whose manifest carries the Open Second Brain dialect `schema: "1"` OR
  * one that declares NO manifest schema while its bundle-root index

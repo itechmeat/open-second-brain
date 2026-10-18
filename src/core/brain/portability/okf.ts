@@ -908,23 +908,115 @@ function indexOkfVersion(dir: string): string | null {
 }
 
 /**
+ * The bundle-directory names that map onto page classes, derived from
+ * {@link CLASS_DIR} so the export's lanes and the import's reading of
+ * them cannot drift.
+ */
+const SPEC_DIR_CLASS: Readonly<Record<string, OkfPageClass>> = Object.freeze(
+  Object.fromEntries(Object.entries(CLASS_DIR).map(([cls, dir]) => [dir, cls as OkfPageClass])),
+);
+
+/**
+ * Reserved bundle-root file basenames per the OKF v0.2 spec: the
+ * version-declaring index and the change log. Neither is ever a page.
+ */
+const SPEC_RESERVED_BASENAMES: ReadonlySet<string> = new Set(["index.md", "log.md"]);
+
+/**
+ * Read a manifest-less, spec-shaped OKF v0.2 bundle: the spec defines a
+ * bundle as a plain directory tree of markdown and requires NO machine
+ * manifest, so the page list is built by walking the tree. Reserved
+ * names (index.md, log.md) are skipped, the class comes from the page's
+ * top-level directory when it names a class lane (concepts / queries /
+ * references) and defaults to `concept` everywhere else, and each
+ * walked page's own `type` frontmatter is recorded as its foreign type -
+ * the producer's raw type value, which the import's provenance stamp
+ * preserves. There is no manifest to declare a producer, so the parsed
+ * manifest reads `producer: "unknown"` and the bundle is FOREIGN: every
+ * page imports through the foreign path (machinery stripped, raw keys
+ * shed, provenance stamped, review-staged by default) - the walk never
+ * restores machinery keys on a spec bundle's word.
+ */
+function readSpecOkfBundle(dir: string): ParsedOkfBundle {
+  const producer = "unknown";
+  const entries: OkfManifestPage[] = [];
+  const pages: ParsedOkfPage[] = [];
+  for (const abs of listMarkdown(dir, [])) {
+    const rel = relative(dir, abs).split(/[\\/]/).join(posix.sep);
+    const base = rel.slice(rel.lastIndexOf("/") + 1).toLowerCase();
+    if (SPEC_RESERVED_BASENAMES.has(base)) continue;
+    // Same wall the manifest path applies: a walked file that is not
+    // (symlink-)inside the bundle is skipped, never read.
+    try {
+      ensureInsideVault(abs, dir);
+    } catch {
+      continue;
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(abs, "utf8");
+    } catch {
+      continue;
+    }
+    const [frontmatter, body] = parseFrontmatterText(raw);
+    const topDir = rel.includes("/") ? rel.slice(0, rel.indexOf("/")) : "";
+    const entry: OkfManifestPage = {
+      id: stem(rel),
+      path: rel,
+      class: SPEC_DIR_CLASS[topDir] ?? "concept",
+      bundle_path: rel,
+      kind: stringField(frontmatter, "kind") ?? DEFAULT_KIND,
+      citations: [],
+      status: "stable",
+      sources: [],
+      aliases: [],
+      freshness: null,
+      foreign_type: stringField(frontmatter, "type"),
+      producer_meta: {},
+    };
+    entries.push(entry);
+    pages.push({ entry, frontmatter, body });
+  }
+  return {
+    manifest: {
+      schema: "",
+      producer,
+      generated_at: "",
+      vault_basename: "",
+      pages: entries,
+      log_days: 0,
+    },
+    foreign: producer !== OKF_PRODUCER,
+    pages,
+  };
+}
+
+/**
  * Read an OKF bundle directory: parse `okf.json`, validate the schema,
- * then parse each manifest-listed page file. Two bundle generations are
- * accepted: a manifest carrying the Open Second Brain dialect
- * `schema: "1"`, and a bundle that declares NO schema at all while its
+ * then parse each manifest-listed page file. Three bundle generations
+ * are accepted: a manifest carrying the Open Second Brain dialect
+ * `schema: "1"`, a bundle whose manifest declares NO schema while its
  * bundle-root `index.md` declares `okf_version: "0.2"` (the OKF v0.2
- * marker this export writes beside the dialect schema). A PRESENT
- * non-dialect schema is refused whatever the index says: this export's
- * own index always declares the version, so treating the declaration as
- * sufficient on its own would admit every future dialect bump under v1
- * assumptions. Everything else is refused by name. A page whose file is
- * missing or unreadable is skipped (the manifest is the source of truth
- * for what *should* be there; a partial bundle still imports what it
- * has). An unsupported schema or absent manifest throws {@link OkfError}.
+ * marker this export writes beside the dialect schema), and - the spec
+ * shape - a bundle with NO manifest at all whose bundle-root index
+ * declares the same version, which is read by walking the tree (see
+ * {@link readSpecOkfBundle}). A PRESENT non-dialect schema is refused
+ * whatever the index says: this export's own index always declares the
+ * version, so treating the declaration as sufficient on its own would
+ * admit every future dialect bump under v1 assumptions. Everything else
+ * is refused by name. A page whose file is missing or unreadable is
+ * skipped (the manifest is the source of truth for what *should* be
+ * there; a partial bundle still imports what it has). An unsupported
+ * schema or an absent manifest without a v0.2 index declaration throws
+ * {@link OkfError}.
  */
 export function readOkfBundle(dir: string): ParsedOkfBundle {
   const manifestPath = join(dir, OKF_MANIFEST_FILENAME);
   if (!existsSync(manifestPath)) {
+    // No manifest at all. The v0.2 spec requires none, so the spec shape
+    // - a v0.2 declaration on the bundle-root index - is accepted and
+    // read as a tree; everything else is refused exactly as before.
+    if (indexOkfVersion(dir) === OKF_VERSION) return readSpecOkfBundle(dir);
     throw new OkfError(`not an OKF bundle: ${manifestPath} is missing`);
   }
   let parsed: ManifestInput;
