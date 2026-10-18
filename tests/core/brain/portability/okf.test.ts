@@ -649,6 +649,53 @@ describe("manifest-less spec-shaped v0.2 bundles", () => {
     }
   });
 
+  test("a nested index.md is a page; only the bundle-root index and log are reserved", () => {
+    // The reserved-name check compared the BASENAME at any depth, so a
+    // foreign bundle's real nested pages - a concepts/index.md, a
+    // per-project log page - were silently dropped from the walk. The
+    // spec's reservation is a bundle-ROOT one: index.md at the top is
+    // the version declaration and log.md the change log; the same names
+    // below the root are nobody's machinery.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-nested-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-spec-nested-dest-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      writeFileSync(join(dir, "index.md"), '---\nokf_version: "0.2"\n---\n# Root\n', "utf8");
+      writeFileSync(join(dir, "log.md"), "## 2026-06-01\n\n- old news\n", "utf8");
+      mkdirSync(join(dir, "notes"), { recursive: true });
+      writeFileSync(
+        join(dir, "concepts", "index.md"),
+        "---\ntitle: Index Page\ntype: zettel\n---\nNested body.\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(dir, "notes", "log.md"),
+        "---\ntitle: Project Log\ntype: zettel\n---\nLog body.\n",
+        "utf8",
+      );
+      const parsed = readOkfBundle(dir);
+      expect(parsed.pages.map((p) => p.entry.bundle_path).toSorted()).toEqual([
+        "concepts/index.md",
+        "notes/log.md",
+      ]);
+      const result = importOkfBundle(dest, parsed, { now: new Date(0) });
+      expect(result.errors).toEqual([]);
+      expect(result.written).toEqual([
+        `${OKF_REVIEW_REL}/concepts/index.md`,
+        `${OKF_REVIEW_REL}/notes/log.md`,
+      ]);
+      const staged = readFileSync(join(dest, OKF_REVIEW_REL, "concepts", "index.md"), "utf8");
+      expect(staged).toContain("title: Index Page");
+      expect(staged).toContain("Nested body.");
+      // The root files stay reserved: never staged as pages.
+      expect(existsSync(join(dest, OKF_REVIEW_REL, "index.md"))).toBe(false);
+      expect(existsSync(join(dest, OKF_REVIEW_REL, "log.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
   test("a manifest-less tree without a v0.2 index declaration is still refused by name", () => {
     const noIndex = mkdtempSync(join(tmpdir(), "o2b-okf-spec-noindex-"));
     const unversioned = mkdtempSync(join(tmpdir(), "o2b-okf-spec-unvers-"));
