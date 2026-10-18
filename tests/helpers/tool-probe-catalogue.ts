@@ -366,10 +366,9 @@ export const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
   },
   {
     name: "brain_write_destinations",
-    // Both bounds, quoted from the fixture's log day: an until-only call
-    // left the window's lower bound to the default, which anchors on the
-    // present, so the probe walked a day that had already ended and every
-    // run proved nothing about the rows.
+    // Both bounds, quoted from the fixture's log day: the probe pins the
+    // window explicitly instead of leaning on the default, so the rows it
+    // proves never depend on when the run happens to execute.
     calls: [
       { args: { since: LOG_EVENT_DATE, until: LOG_EVENT_DATE }, reason: REASON.noteWriteLedger },
     ],
