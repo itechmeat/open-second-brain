@@ -389,16 +389,23 @@ export function planEntityMerge(
     }
   }
 
-  const keepTargets = new Set(
-    relationEdges(parseFrontmatter(keep.path)[0]).map((e) => `${e.key}:${e.target}`),
-  );
+  const keepMeta = parseFrontmatter(keep.path)[0];
+  const keepTargets = new Set(relationEdges(keepMeta).map((e) => `${e.key}:${e.target}`));
   const dropMeta = parseFrontmatter(drop.path)[0];
-  const relationsAbsorbed = relationEdges(dropMeta).filter(
-    (e) => e.target !== keep.id && e.target !== drop.id && !keepTargets.has(`${e.key}:${e.target}`),
-  ).length;
-  const cyclicRemoved = relationEdges(parseFrontmatter(keep.path)[0]).filter(
-    (e) => e.target === drop.id,
-  ).length;
+  // Dedup the dropped edges by field:target BEFORE counting, so the plan
+  // counts edges the way the apply's union writes them: a duplicated edge
+  // on the dropped page lands once, and the plan says one.
+  const seenDropEdges = new Set<string>();
+  let relationsAbsorbed = 0;
+  for (const edge of relationEdges(dropMeta)) {
+    const edgeKey = `${edge.key}:${edge.target}`;
+    if (seenDropEdges.has(edgeKey)) continue;
+    seenDropEdges.add(edgeKey);
+    if (edge.target !== keep.id && edge.target !== drop.id && !keepTargets.has(edgeKey)) {
+      relationsAbsorbed++;
+    }
+  }
+  const cyclicRemoved = relationEdges(keepMeta).filter((e) => e.target === drop.id).length;
   const inboundRetarged = index.entities.filter(
     (entity) =>
       entity.id !== keep.id &&

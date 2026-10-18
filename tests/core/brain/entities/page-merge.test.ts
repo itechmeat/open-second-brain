@@ -601,6 +601,36 @@ describe("applyEntityMerge", () => {
     ).toEqual(["Bridge", keepId]);
   });
 
+  test("relations_absorbed counts edges the way the apply writes them", () => {
+    const { keepId, dropId } = seedPair();
+    const bridge = upsertEntity(vault, {
+      category: "projects",
+      name: "Bridge",
+      agent: "test-agent",
+      now: NOW,
+    });
+    // Hand-write a duplicated edge onto the drop page: the apply's union
+    // writes it once, so the plan must count it once.
+    const drop = getEntity(vault, { query: "Ada" })!;
+    const [meta, body] = parseFrontmatter(drop.path);
+    writeFrontmatterAtomic(
+      drop.path,
+      { ...meta, related: [`[[${bridge.entity.id}]]`, `[[${bridge.entity.id}]]`] },
+      body,
+      { overwrite: true },
+    );
+    __clearEntityIndexCache();
+    const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
+    expect(plan.relations_absorbed).toBe(1);
+    applyEntityMerge(
+      vault,
+      { keep: keepId, drop: dropId },
+      { expectHash: entityMergePlanHash(plan), now: NOW, agent: "test-agent" },
+    );
+    const survivor = getEntity(vault, { query: "Ada Lovelace" })!;
+    expect(survivor.relations.map((r) => r.target)).toEqual([bridge.entity.id]);
+  });
+
   test("the apply appends the audit record and a merge log event", () => {
     const { keepId, dropId } = seedPair();
     const plan = planEntityMerge(vault, { keep: keepId, drop: dropId });
