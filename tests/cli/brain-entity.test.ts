@@ -816,8 +816,7 @@ describe("o2b brain entity merge", () => {
   test("a --force preview states the bypass only when the guard would refuse", async () => {
     // The guard line keys on the plan's guard_bypassed stamp, not on the
     // flag: a pair the guard refuses is previewable only under the
-    // override, and the consent the operator gives names it - while a
-    // clean pair merged under --force runs the guard and says nothing.
+    // override, and the consent the operator gives names it.
     const keep = await runCli(
       [
         "brain",
@@ -855,8 +854,12 @@ describe("o2b brain entity merge", () => {
     expect(forced.returncode).toBe(0);
     expect(forced.stdout).toContain("text-level merge guard");
     expect(forced.stdout).toContain("bypass");
-    // A clean pair states no bypass at either stance: the guard passes,
-    // so the override never happened.
+  });
+
+  test("a clean pair states no bypass at either stance", async () => {
+    // The other half of the guard-line contract, on its own seeded pair:
+    // the guard passes, so the override never happened and neither
+    // stance's preview names one.
     const { keepId, dropId } = await seedMergePair();
     const plain = await runCli(["brain", "entity", "merge", keepId, dropId, "--dry-run"], {
       env: env(),
