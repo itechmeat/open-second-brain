@@ -562,20 +562,17 @@ function translateSources(
 }
 
 /**
- * Render one scalar inside a YAML flow mapping (`{resource: …, id: …}`):
- * bare when the value cannot break flow context, double-quoted otherwise
- * (same escaping `formatFrontmatter` applies to block scalars).
+ * Render one scalar inside a YAML flow mapping (`{resource: …, id: …}`).
+ * EVERY value is emitted as a JSON string literal: JSON string syntax is
+ * valid YAML double-quoted style, so the scalar always parses back as a
+ * string — a bare-looking id like `2024` would be an integer to a strict
+ * YAML reader, bare `true` / `null` / `~` would be a boolean or null, and
+ * a hand-rolled escape covers nothing like the full metacharacter set
+ * (control characters included) JSON.stringify handles. The flow shapes
+ * around the scalars are kept.
  */
 function okfFlowScalar(value: string): string {
-  if (
-    value.length > 0 &&
-    value === value.trim() &&
-    !/[,[\]{}#]/.test(value) &&
-    !value.includes(": ")
-  ) {
-    return value;
-  }
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return JSON.stringify(value);
 }
 
 /**

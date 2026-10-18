@@ -204,13 +204,25 @@ describe("v0.2 emission", () => {
     const bundle = buildOkfBundle(vault);
     const ats = bundle.manifest.pages.map((p) => {
       const page = fileOf(bundle.files, p.bundle_path);
-      const m = page.match(/generated: \{by: open-second-brain\/\S+, at: "([^"]+)"\}/);
+      const m = page.match(/generated: \{by: "open-second-brain\/[^"]+", at: "([^"]+)"\}/);
       expect(m).not.toBeNull();
       return m![1]!;
     });
     expect(ats.length).toBe(bundle.manifest.pages.length);
     expect(new Set(ats).size).toBe(1);
     expect(ats[0]).toBe(bundle.manifest.generated_at);
+  });
+
+  test("flow scalars render as JSON double-quoted YAML, safe for ids like 2024", () => {
+    // A bare `id: 2024` is an integer to a strict YAML reader, and bare
+    // true/null/~ are booleans or null: every emitted scalar is a
+    // double-quoted JSON string, which is valid YAML of type string.
+    note("Notes/2024.md", "---\ntitle: Year\n---\nleaf.\n");
+    note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[2024]].\n");
+    const bundle = buildOkfBundle(vault);
+    const citer = fileOf(bundle.files, "concepts/Citer.md");
+    expect(citer).toContain('- {resource: "concepts/2024.md", id: "2024"}');
+    expect(citer).not.toContain("id: 2024");
   });
 
   test("citations translate into sources with a required resource", () => {
@@ -221,11 +233,11 @@ describe("v0.2 emission", () => {
     const bundle = buildOkfBundle(vault);
     const alpha = fileOf(bundle.files, "concepts/Alpha.md");
     expect(alpha).toContain("sources:");
-    expect(alpha).toContain("- {resource: concepts/Beta.md, id: Beta}");
-    expect(alpha).toContain("- {resource: concepts/Gamma.md, id: Gamma}");
+    expect(alpha).toContain('- {resource: "concepts/Beta.md", id: "Beta"}');
+    expect(alpha).toContain('- {resource: "concepts/Gamma.md", id: "Gamma"}');
     // A URL target is carried as-is; the manifest mirrors the entries.
     const url = fileOf(bundle.files, "concepts/Url.md");
-    expect(url).toContain("- {resource: https://example.com/paper}");
+    expect(url).toContain('- {resource: "https://example.com/paper"}');
     const alphaEntry = bundle.manifest.pages.find((p) => p.path === "Notes/Alpha.md");
     expect(alphaEntry?.sources).toEqual([
       { resource: "concepts/Beta.md", id: "Beta" },
@@ -242,7 +254,7 @@ describe("v0.2 emission", () => {
     const page = fileOf(bundle.files, "concepts/Lonely.md");
     // The URL source survives; the unresolvable wikilink never becomes a
     // source entry (the body keeps its verbatim link either way).
-    expect(page).toContain("- {resource: https://example.com/real}");
+    expect(page).toContain('- {resource: "https://example.com/real"}');
     expect(page).not.toContain("{resource: Ghost");
     expect(page).not.toContain("id: Ghost");
   });
@@ -265,7 +277,7 @@ describe("v0.2 emission", () => {
     note("Notes/Citer.md", "---\ntitle: Citer\n---\nsee [[Dup.md]].\n");
     const bundle = buildOkfBundle(vault);
     const citer = fileOf(bundle.files, "concepts/Citer.md");
-    expect(citer).toContain("- {resource: concepts/Dup.md, id: Dup}");
+    expect(citer).toContain('- {resource: "concepts/Dup.md", id: "Dup"}');
     const entry = bundle.manifest.pages.find((p) => p.path === "Notes/Citer.md");
     expect(entry?.sources).toEqual([{ resource: "concepts/Dup.md", id: "Dup" }]);
   });
@@ -398,7 +410,7 @@ describe("v0.2 import acceptance", () => {
       // (quoted on re-write), so the assertions pin the DATA, not the
       // quoting shape.
       expect(landed).toContain("status: stable");
-      expect(landed).toContain("{resource: concepts/Beta.md, id: Beta}");
+      expect(landed).toContain("concepts/Beta.md");
       expect(landed).toContain(bundle.manifest.generated_at);
     } finally {
       rmSync(dir, { recursive: true, force: true });
