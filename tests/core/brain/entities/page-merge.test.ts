@@ -796,7 +796,10 @@ describe("applyEntityMerge", () => {
       );
     const mergeRecord = records.find((r) => r.action === "entity_merge");
     expect(mergeRecord).toBeDefined();
-    expect(JSON.parse(mergeRecord!.details["aliases_merged"])).toEqual(["Ada", "The Countess"]);
+    expect(JSON.parse(String(mergeRecord!.details["aliases_merged"]))).toEqual([
+      "Ada",
+      "The Countess",
+    ]);
 
     // The Brain log event carries the same full list.
     const day = readLogDay(vault, "2026-10-17");
