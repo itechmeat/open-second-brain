@@ -225,6 +225,28 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(cursor.shards[""]).toBe(1);
   });
 
+  test("a solo agent's silent run still advances the cursor", async () => {
+    // Every scanned line is self-authored, so nothing is collected and
+    // nothing may be emitted - but the scan DID advance past lines. If
+    // the watermark is not parked, every SessionStart rescans the whole
+    // history from the beginning, forever.
+    seed("agent-b", "my own first line");
+    seed("agent-b", "my own second line");
+    const first = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(first.exit).toBe(0);
+    expect(first.stdout).toBe("");
+    const cursor = JSON.parse(readFileSync(cursorPath(), "utf8")) as {
+      date: string;
+      shards: Record<string, number>;
+    };
+    expect(cursor.date).toBe(NOW.slice(0, 10));
+    expect(cursor.shards[""]).toBe(1);
+    // The second run then scans nothing new and stays silent.
+    const second = await runHook(SESSION_START, flagOn("agent-b"));
+    expect(second.exit).toBe(0);
+    expect(second.stdout).toBe("");
+  });
+
   test("a shard named like an Object.prototype member still gets a cursor", async () => {
     // DEVICE_ID_RE admits lowercase names such as "constructor" and
     // "valueOf"; shard-keyed plain objects inherit those members, so the

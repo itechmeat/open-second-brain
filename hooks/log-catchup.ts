@@ -270,8 +270,6 @@ async function main(): Promise<void> {
       }
     }
 
-    if (collected.length === 0) return;
-
     // Newest-first under the line cap; anything older is counted, not
     // rendered (the buildActivityTimeline limit/total shape). The char
     // cap then trims the same way - oldest lines drop first - and a
@@ -305,24 +303,32 @@ async function main(): Promise<void> {
       olderCount += 1;
       block = render(shown);
     }
-    if (shown.length === 0) return;
+    // The emit happens only for a block with something in it; the
+    // watermark below decides separately.
+    if (shown.length > 0) {
+      const out = {
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: block,
+        },
+      };
+      process.stdout.write(JSON.stringify(out) + "\n");
+    }
 
-    const out = {
-      hookSpecificOutput: {
-        hookEventName,
-        additionalContext: block,
-      },
-    };
-    process.stdout.write(JSON.stringify(out) + "\n");
-
-    // The watermark lands AFTER the emit, and only after an emit: a run
-    // with nothing to show writes nothing, and a crash between the emit
-    // and the write replays history next session rather than skipping it.
+    // The watermark lands AFTER the emit. It is written whenever the
+    // scan actually advanced past lines - ALSO when nothing was
+    // collected: every scanned line was self-authored or already seen,
+    // so nothing is hidden by parking the cursor, and a solo agent that
+    // never wrote it would rescan the whole history every SessionStart.
+    // The only no-write cases: nothing was scanned at all
+    // (`lastSeen === null`), or lines were collected but none fit the
+    // cap (shown empty) - advancing past those would hide them forever.
     // The windowed days keep the marks of the newest
     // LOG_CATCHUP_WINDOW_DATES dates before the watermark date, so a
     // bounded slice of history stays per-shard resolvable and the file
     // cannot grow with the log.
-    if (lastSeen !== null) {
+    const nothingFitTheCap = collected.length > 0 && shown.length === 0;
+    if (lastSeen !== null && !nothingFitTheCap) {
       const days: Record<string, Record<string, number>> = {};
       const windowDates = Object.keys(perDateMarks)
         .filter((d) => d < lastSeen!.date)
