@@ -370,7 +370,9 @@ function readJsonl(path: string): ReadJsonlResult {
       warnings.push({
         path,
         lineNumber: i + 1,
-        message: `malformed JSONL line: ${line.slice(0, 80)}`,
+        // The least trusted value in the parser: any bytes that failed
+        // JSON.parse, so the preview rides the same fence as ts/kind.
+        message: `malformed JSONL line: ${fenceWarningValue(line.slice(0, 80))}`,
       });
       continue;
     }
