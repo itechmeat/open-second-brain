@@ -20,7 +20,10 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
-import { logCatchupCursorPath } from "../../hooks/lib/log-cursor-state.ts";
+import {
+  logCatchupCursorFilename,
+  logCatchupCursorPath,
+} from "../../hooks/lib/log-cursor-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -331,6 +334,20 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(existsSync(cursorPath("agent-b"))).toBe(true);
   });
 
+  test("two identities the sanitizer collides get distinct cursor files", () => {
+    // The `[^A-Za-z0-9._-] -> _` rule alone is not one-to-one: "agent b",
+    // "agent/b" and "agent_b" all sanitize to "agent_b", and one would
+    // read the other's watermark. The file name therefore carries a short
+    // digest of the RAW identity beside the sanitized form.
+    const a = logCatchupCursorFilename("agent b");
+    const b = logCatchupCursorFilename("agent/b");
+    const c = logCatchupCursorFilename("agent_b");
+    for (const name of [a, b, c]) {
+      expect(name).toMatch(/^log-catchup\.agent_b-[0-9a-f]{8}\.cursor\.json$/);
+    }
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+
   test("an identity name that could traverse is sanitized in the cursor file name", async () => {
     seed("agent-a", "a line under a hostile identity");
     const hostile = await runHook(SESSION_START, flagOn("../../evil"));
@@ -338,11 +355,11 @@ describe("log-catchup hook (SessionStart)", () => {
     expect(emitted(hostile)).not.toBeNull();
     // The written cursor stays inside the derived store under the
     // sanitized name; nothing escaped the vault directory.
-    expect(existsSync(cursorPath(".._.._evil"))).toBe(true);
+    expect(existsSync(cursorPath("../../evil"))).toBe(true);
     const escaped = readdirSync(join(vault, DERIVED_STORE_DIR)).filter((name) =>
       name.endsWith(".json"),
     );
-    expect(escaped).toEqual(["log-catchup..._.._evil.cursor.json"]);
+    expect(escaped).toEqual([logCatchupCursorFilename("../../evil")]);
   });
 
   test("a shard that syncs in late for an earlier date still surfaces", async () => {

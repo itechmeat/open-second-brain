@@ -2,7 +2,7 @@
  * Cross-agent log catch-up cursor state (t_3b44cd9a).
  *
  * One overwrite-only file per reading identity,
- * `<vault>/.open-second-brain/log-catchup.<identity>.cursor.json`,
+ * `<vault>/.open-second-brain/log-catchup.<identity>-<digest>.cursor.json`,
  * holding the watermark of what the catch-up lane last showed THAT
  * identity on this device: the `(date, shardId, line)` merge-order
  * position of the last entry seen, plus the per-shard high-water line
@@ -18,9 +18,10 @@
  * the watermark past lines the others never saw - each identity reads
  * the log through its own self-filter, so "last look" is a fact about
  * the identity, not about the device. The identity is sanitized into
- * the file name (`[^A-Za-z0-9._-]` -> `_`) because a configured agent
- * name is arbitrary operator input and the file name must stay inside
- * the derived store.
+ * the file name (`[^A-Za-z0-9._-]` -> `_`, plus a short digest of the
+ * raw name so the sanitization stays one-to-one) because a configured
+ * agent name is arbitrary operator input and the file name must stay
+ * inside the derived store.
  *
  * WHY THE PRE-IDENTITY FILE IS NOT MIGRATED. The old un-namespaced
  * `log-catchup.cursor.json` recorded what SOME identity on this device
@@ -47,11 +48,12 @@
  * silent forever), and a write reports `false` instead of throwing so
  * the hook's silent-exit-0 contract holds.
  *
- * Import-light on purpose (node:fs, the atomic writer, the no-follow
- * guard, the path constant), so the hook can statically import it and
- * stay cheap when the feature flag is off.
+ * Import-light on purpose (node:crypto and node:fs builtins, the atomic
+ * writer, the no-follow guard, the path constant), so the hook can
+ * statically import it and stay cheap when the feature flag is off.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -66,13 +68,20 @@ import { atomicWriteText } from "../../src/core/fs-atomic.ts";
 export const LOG_CATCHUP_CURSOR_STEM = "log-catchup";
 
 /**
- * The single state file name for one identity, directly under
- * {@link DERIVED_STORE_DIR}: `log-catchup.<identity>.cursor.json` with
- * every character outside `[A-Za-z0-9._-]` replaced by `_`, so a hostile
- * or exotic agent name cannot escape the derived store.
+ * The per-identity state file name, directly under
+ * {@link DERIVED_STORE_DIR}: `log-catchup.<identity>-<digest>.cursor.json`
+ * where `<identity>` is the raw name with every character outside
+ * `[A-Za-z0-9._-]` replaced by `_` - so a hostile or exotic agent name
+ * cannot escape the derived store - and `<digest>` is the first 8 hex of
+ * the raw name's sha-256. The digest is what keeps the mapping one-to-one:
+ * the replacement alone is not (`agent b`, `agent/b` and `agent_b` all
+ * sanitize to `agent_b`), and two identities sharing one file would read
+ * and park each other's watermark.
  */
 export function logCatchupCursorFilename(identity: string): string {
-  return `${LOG_CATCHUP_CURSOR_STEM}.${identity.replace(/[^A-Za-z0-9._-]/g, "_")}.cursor.json`;
+  const sanitized = identity.replace(/[^A-Za-z0-9._-]/g, "_");
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 8);
+  return `${LOG_CATCHUP_CURSOR_STEM}.${sanitized}-${digest}.cursor.json`;
 }
 
 /**
