@@ -180,7 +180,11 @@ function windowCutoffDate(cursorDate: string): string {
  * See the cursor module for why the marks, and not the bare tuple, are
  * what the filter reads.
  */
-function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boolean {
+function isAfterCursor(
+  position: CatchupPosition,
+  cursor: LogCatchupCursor,
+  windowCutoff: string,
+): boolean {
   if (position.date === cursor.date) {
     const mark = cursor.shards[position.shardId];
     return mark === undefined || position.line > mark;
@@ -188,7 +192,7 @@ function isAfterCursor(position: CatchupPosition, cursor: LogCatchupCursor): boo
   const marks =
     position.date < cursor.date ? cursor.days[position.date] : cursor.future[position.date];
   if (marks === undefined) {
-    return position.date > cursor.date || position.date >= windowCutoffDate(cursor.date);
+    return position.date > cursor.date || position.date >= windowCutoff;
   }
   const mark = marks[position.shardId];
   return mark === undefined || position.line > mark;
@@ -248,6 +252,11 @@ async function main(): Promise<void> {
     // share this vault with different agent names, and whoever runs
     // first must not read the log past lines the others never saw.
     const cursor = readLogCatchupCursor(vault, self.value);
+    // The calendar window behind the cursor date, computed once per run:
+    // both the date-level skip below and the per-entry filter consult it,
+    // and recomputing it per entry would re-derive the same date arithmetic
+    // for every mark-less line in the log.
+    const windowCutoff = cursor !== null ? windowCutoffDate(cursor.date) : "";
 
     // One walk over the log, oldest date first, starting at the oldest
     // date the cursor can still vouch about. `readLogDay` merges each
@@ -308,7 +317,7 @@ async function main(): Promise<void> {
         cursor !== null &&
         date < cursor.date &&
         cursor.days[date] === undefined &&
-        date < windowCutoffDate(cursor.date)
+        date < windowCutoff
       ) {
         continue;
       }
@@ -336,7 +345,7 @@ async function main(): Promise<void> {
         const selfOwned =
           (entry.agent ?? "").trim() === self.value ||
           (self.fromDeviceFallback && shardId === self.value);
-        if (!selfOwned && (cursor === null || isAfterCursor(position, cursor))) {
+        if (!selfOwned && (cursor === null || isAfterCursor(position, cursor, windowCutoff))) {
           collected.push({ entry });
         }
       }
