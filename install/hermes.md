@@ -160,24 +160,36 @@ Remove such a copy and restart the gateway.
 
 ### How Hermes discovers the provider
 
-Discovery runs through Python packaging metadata, not a config file: the
-package declares a `hermes_agent.memory_providers` entry point group
-whose `open-second-brain` entry names the `plugins.hermes` module. When
-Hermes lists memory providers it reads that group, imports
-`plugins.hermes`, and finds the `register` callable there — the same
-module this plugin's install lays down, so the entry point resolves
-whether Hermes loaded the wheel or a checkout.
+The primary route needs no packaging metadata at all: `hermes plugins
+install` git-clones the repo into `~/.hermes/plugins/open-second-brain/`,
+and Hermes discovers the provider by scanning that plugin directory -
+the `plugins/hermes` package ships `plugin.yaml` declaring
+`memory_provider: true`, and the loader imports `plugins.hermes` and
+finds the `register` callable there. A git clone registers no Python
+entry-point metadata, so this path never consults the entry point.
+
+The declared `hermes_agent.memory_providers` entry point group - the
+`open-second-brain` entry names the same `plugins.hermes` module - is an
+extra discovery route for pip or wheel installs only: entry-point
+metadata exists when the package has been installed into the
+environment, not when a checkout is cloned. That route presumes a clean
+environment - the target rides the top-level `plugins` package name,
+which only an operator-controlled install environment guarantees - so it
+is a convenience layered on top of the directory scan, never a
+requirement for the plugin install in step 1.
 
 Registering the provider is automatic; running it is not entirely. The
 provider serves memory by driving the Open Second Brain CLI over an
-internal `o2b mcp` bridge, and that bridge needs `o2b` reachable: either
-on PATH (step 2 creates the links) or resolvable from a checkout, where
-the provider falls back to launching the repo's TypeScript entry point
-through Bun. In both contexts nothing beyond the install above is
-needed. Outside them — the entry point resolved but neither an `o2b`
-binary nor a checkout present — registration still succeeds and the
-failure surfaces later as a bridge start error in the gateway log, so
-keep step 2 in place.
+internal `o2b mcp` bridge, and Bun is required in every context: the
+`o2b` wrapper on PATH (step 2 creates the links) is itself a bash script
+that checks `command -v bun` first and refuses to run without it, and
+the checkout fallback launches the repo's TypeScript entry point through
+`bun run` directly. With Bun installed, either context - `o2b` on PATH
+or a checkout - needs nothing beyond the install above. When Bun is
+missing, or neither an `o2b` binary nor a checkout is present,
+registration still succeeds and the failure surfaces later as a bridge
+start error in the gateway log, so keep step 2 in place and Bun
+installed.
 
 ## 5. Verify
 
