@@ -21,11 +21,15 @@ import {
   OKF_SCHEMA_VERSION,
   OkfError,
   buildOkfBundle,
+  buildOkfSubsetBundle,
   collectOkfPages,
   importOkfBundle,
   readOkfBundle,
   writeOkfBundle,
+  type OkfPage,
 } from "../../../../src/core/brain/portability/okf.ts";
+import { parseFrontmatter } from "../../../../src/core/vault.ts";
+import type { FrontmatterValue } from "../../../../src/core/types.ts";
 import {
   installKnowledgePack,
   readKnowledgePack,
@@ -558,6 +562,54 @@ describe("v0.2 import acceptance", () => {
       expect(landed).toContain("generated: by-hand");
       expect(landed).not.toContain("okf_status_raw");
       expect(landed).toContain("Body.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-string native status round-trips through the raw key", () => {
+    // The raw status was carried through the string-only field reader: a
+    // numeric or whitespace-only status was exported with no raw key at
+    // all, and the trusted restore then deleted the field wholesale. The
+    // raw key now carries whatever the frontmatter holds, and the
+    // restore keys on presence, not shape - the same rule sources and
+    // generated already follow. (A frontmatter map built in memory, as
+    // the knowledge-pack subset path does, can hold non-string scalars
+    // the file scanner would parse into strings.)
+    const page = (id: string, status: FrontmatterValue): OkfPage => ({
+      id,
+      path: `Notes/${id}.md`,
+      cls: "concept",
+      bundle_path: `concepts/${id}.md`,
+      kind: "note",
+      citations: [],
+      status: "stable",
+      aliases: [],
+      freshness: null,
+      foreign_type: null,
+      producer_meta: {},
+      frontmatter: { title: id, status },
+      body: "body.",
+    });
+    const bundle = buildOkfSubsetBundle(vault, [page("Num", 42), page("Ws", "  ")]);
+    // The export carries both under the raw key, beside the derived block.
+    expect(fileOf(bundle.files, "concepts/Num.md")).toContain("okf_status_raw: 42");
+    expect(fileOf(bundle.files, "concepts/Ws.md")).toContain('okf_status_raw: "  "');
+
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rawshape-"));
+    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rawshape-dest-"));
+    try {
+      writeOkfBundle(dir, bundle);
+      const result = importOkfBundle(dest, readOkfBundle(dir), { trusted: true });
+      expect(result.errors).toEqual([]);
+      const landedNum = readFileSync(join(dest, "Notes/Num.md"), "utf8");
+      expect(landedNum).toContain("status: 42");
+      expect(landedNum).not.toContain("status: stable");
+      expect(landedNum).not.toContain("okf_status_raw");
+      const [landedWsMeta] = parseFrontmatter(join(dest, "Notes/Ws.md"));
+      expect(landedWsMeta["status"]).toBe("  ");
+      expect(landedWsMeta["okf_status_raw"]).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });

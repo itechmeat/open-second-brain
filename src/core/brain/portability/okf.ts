@@ -638,9 +638,15 @@ function renderOkfPageFile(
   // sources are re-translated from citations, so exporting them in place
   // would rewrite what the operator wrote. Recomputed from current page
   // state on every export and never carried through from a previous
-  // bundle - the same honesty rule as the derived block.
-  const rawStatus = stringField(page.frontmatter, "status");
-  if (rawStatus !== null) carried[RAW_STATUS_KEY] = rawStatus;
+  // bundle - the same honesty rule as the derived block. A value is
+  // carried on PRESENCE alone (the rule sources and generated follow):
+  // a non-string status - a number from a hand-built frontmatter map, a
+  // list - is exactly the value the closed enum cannot name, so reading
+  // it through the string-only field would drop the one raw key that
+  // preserves it.
+  if (page.frontmatter["status"] !== undefined) {
+    carried[RAW_STATUS_KEY] = page.frontmatter["status"];
+  }
   if (page.frontmatter["sources"] !== undefined) {
     carried[RAW_SOURCES_KEY] = page.frontmatter["sources"];
   }
@@ -1116,8 +1122,11 @@ function restoreRawOkfKeys(meta: FrontmatterMap): void {
   ) {
     return;
   }
-  const rawStatus = meta[RAW_STATUS_KEY];
-  if (typeof rawStatus === "string" && rawStatus.trim() !== "") meta["status"] = rawStatus;
+  // Presence, not shape: the raw value round-tripped through the page
+  // file is whatever the export carried, and the restore replaces the
+  // derived value with it verbatim - a numeric or whitespace status
+  // included, exactly like sources and generated below.
+  if (meta[RAW_STATUS_KEY] !== undefined) meta["status"] = meta[RAW_STATUS_KEY];
   else delete meta["status"];
   delete meta[RAW_STATUS_KEY];
   if (meta[RAW_SOURCES_KEY] !== undefined) meta["sources"] = meta[RAW_SOURCES_KEY];
