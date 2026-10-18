@@ -134,6 +134,13 @@ const LESSONS_BODY =
 /** The frontmatter-stripped bodies, as the assembly budgets and meters them. */
 const ACTIVE_TRIMMED = ACTIVE_BODY.slice(ACTIVE_BODY.indexOf("# Active")).trimEnd();
 const LESSONS_TRIMMED = LESSONS_BODY.slice(LESSONS_BODY.indexOf("# Lessons")).trimEnd();
+/** An active body far too wide for a small budget, and a lessons body that is not. */
+const WIDE_ACTIVE_BODY =
+  "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+  "# Active Brain Preferences — a preamble line long enough that no small inner budget survives it\n\n" +
+  "## Confirmed (1)\n\n- `pref-foo` — Rule body\n";
+const TINY_LESSONS_BODY =
+  "---\nkind: brain-lessons\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Lessons\n\n## Avoid (1)\n\n- `de-1` — short lesson\n";
 
 describe("active-inject injection meter", () => {
   test("records one session_inject receipt per injection with per-source bytes and tokens", async () => {
@@ -337,6 +344,40 @@ describe("active-inject injection meter", () => {
       expect(assembled).toBe("");
       expect(assembled.length).toBeLessThanOrEqual(budget);
       expect(meter.sources.map((s) => s.name)).toEqual([]);
+    });
+  });
+
+  test("an active body truncated to its notice does not sink a lessons body that fits", () => {
+    // The notice-only skip is the ACTIVE source's alone. It used to
+    // return "" for the whole assembly, discarding a lessons body that
+    // had already passed its own budget and its own floor under the
+    // same ceiling - the lessons reader answers to its header, not to
+    // the active body's, so what it produced still emits and meters.
+    // "" is for a run where no block was produced at all.
+    writeActive(WIDE_ACTIVE_BODY);
+    writeLessons(TINY_LESSONS_BODY);
+    withRuntimeNoticesOff(() => {
+      const activeOverhead = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY).length + 1;
+      const lessonsOverhead = untrustedBindingFramingHeader(SOURCE_LESSONS_BODY).length + 1;
+      const activeTrimmed = WIDE_ACTIVE_BODY.slice(WIDE_ACTIVE_BODY.indexOf("# Active")).trimEnd();
+      const lessonsTrimmed = TINY_LESSONS_BODY.slice(
+        TINY_LESSONS_BODY.indexOf("# Lessons"),
+      ).trimEnd();
+      // The lessons body fits its own inner budget with room to spare,
+      // while the active body's preamble line alone outlasts anything
+      // the same budget leaves it - so the budgeter's answer for the
+      // active body is the notice, and the notice alone.
+      const budget = lessonsOverhead + lessonsTrimmed.length + 16;
+      expect(lessonsTrimmed.length + 16).toBeLessThan(activeTrimmed.length);
+      const meter = createInjectionMeter(8000);
+      const assembled = assembleActiveContext(vault, budget, meter);
+      expect(meter.sources.map((s) => s.name)).toEqual([SOURCE_LESSONS_BODY]);
+      expect(assembled).toBe(
+        `${untrustedBindingFramingHeader(SOURCE_LESSONS_BODY)}\n${lessonsTrimmed}`,
+      );
+      // The lessons source was measured under the configured ceiling,
+      // so the receipt names that ceiling even without an active body.
+      expect(meter.budgetChars).toBe(8000);
     });
   });
 });

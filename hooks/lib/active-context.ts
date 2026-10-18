@@ -323,19 +323,23 @@ function readActiveBody(
   const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), innerBudget);
   // A budgeted body that is ONLY the truncation notice carries no
   // content at all: framed, header + notice would land over the budget
-  // the source is charged against, so the source skips with it - the
-  // same honesty the sub-header floor practices, one rung up. The
-  // predicate is the budgeter's own (`isTruncationNoticeOnly`), so the
-  // guard cannot drift from the wording it detects.
-  if (isTruncationNoticeOnly(inner)) return "";
-  const framedActive = frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
-  meter.budgetChars = meter.configuredBudgetChars;
-  meter.sources.push({
-    name: SOURCE_ACTIVE_BODY,
-    text: framedActive,
-    lane: LANE_BUDGETED,
-    outsideBoundary: false,
-  });
+  // the source is charged against, so the ACTIVE source skips with it -
+  // the same honesty the sub-header floor practices, one rung up. The
+  // skip is this source's alone: the lessons body read above answers to
+  // its own header's overhead and its own budgeted remainder, so what
+  // it produced still emits and meters. "" is for a run where no block
+  // was produced at all.
+  const activeBlock = isTruncationNoticeOnly(inner)
+    ? ""
+    : frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
+  if (activeBlock.length > 0) {
+    meter.sources.push({
+      name: SOURCE_ACTIVE_BODY,
+      text: activeBlock,
+      lane: LANE_BUDGETED,
+      outsideBoundary: false,
+    });
+  }
   if (lessonsBody !== null) {
     meter.sources.push({
       name: SOURCE_LESSONS_BODY,
@@ -344,8 +348,13 @@ function readActiveBody(
       outsideBoundary: false,
     });
   }
-
-  return lessonsBody === null ? framedActive : joinBlocks([framedActive, lessonsBody]);
+  // A budgeted source was measured under the configured ceiling, so the
+  // receipt carries the budget block whenever any memory body emitted -
+  // a lessons-only assembly measured itself against the same number.
+  if (activeBlock.length > 0 || lessonsBody !== null) {
+    meter.budgetChars = meter.configuredBudgetChars;
+  }
+  return joinBlocks([activeBlock, lessonsBody ?? ""]);
 }
 
 /**
