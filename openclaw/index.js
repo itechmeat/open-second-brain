@@ -2277,6 +2277,7 @@ __export(exports_config, {
   resolveHygieneDigestEnabled: () => resolveHygieneDigestEnabled,
   resolveInstallationSecret: () => resolveInstallationSecret,
   resolveLinkOutputFormat: () => resolveLinkOutputFormat,
+  resolveLogCatchupEnabled: () => resolveLogCatchupEnabled,
   resolveMaintenanceCustomTasksSwitch: () => resolveMaintenanceCustomTasksSwitch,
   resolveMaintenanceEmbeddings: () => resolveMaintenanceEmbeddings,
   resolveMcpRouteMetricsEnabled: () => resolveMcpRouteMetricsEnabled,
@@ -2881,6 +2882,9 @@ function resolveGapLoopEnabled(configPath) {
 }
 function resolveBacklogNudgeEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED", "backlog_nudge_enabled", configPath);
+}
+function resolveLogCatchupEnabled(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_LOG_CATCHUP_ENABLED", "log_catchup_enabled", configPath);
 }
 function resolveGapLoopThreshold(configPath) {
   const env = process.env["OPEN_SECOND_BRAIN_GAP_LOOP_THRESHOLD"]?.trim();
