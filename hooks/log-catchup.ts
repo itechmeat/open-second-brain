@@ -127,7 +127,6 @@ interface CatchupPosition {
   readonly date: string;
   readonly shardId: string;
   readonly line: number;
-  readonly timestamp: string;
 }
 
 /**
@@ -211,12 +210,7 @@ async function main(): Promise<void> {
         const mark = shardMarks[shardId];
         shardMarks[shardId] = mark === undefined || line > mark ? line : mark;
         const entry = entries[i]!;
-        const position: CatchupPosition = {
-          date,
-          shardId,
-          line,
-          timestamp: entry.timestamp,
-        };
+        const position: CatchupPosition = { date, shardId, line };
         lastSeen = { position, marks: { ...shardMarks } };
         // Self by payload attribution against the resolved identity,
         // both sides trimmed (resolveSelfIdentity trims its value); in
