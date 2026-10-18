@@ -467,7 +467,7 @@ export function applyEntityMerge(
 
   const gated = withDestructiveSnapshot(
     vault,
-    BRAIN_SNAPSHOT_REASON.entityPrune,
+    BRAIN_SNAPSHOT_REASON.entityMerge,
     () => {
       // 1. Survivor rewrite: the dropped page's names in as aliases, its
       //    relation edges unioned in, edges pointing at the dropped page

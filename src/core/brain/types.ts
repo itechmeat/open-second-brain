@@ -694,6 +694,12 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
   /** Pre-prune point taken before malformed entity notes are deleted. */
   entityPrune: "entity-prune",
   /**
+   * Pre-apply point taken before an entity page merge folds two pages
+   * into one (actionable-now batch). Kebab-case like its siblings because
+   * the value doubles as the archive's filename prefix.
+   */
+  entityMerge: "entity-merge",
+  /**
    * Pre-deletion point taken before a note file is removed from the
    * vault. Kebab-case like its siblings because the value doubles as the
    * archive's filename prefix.

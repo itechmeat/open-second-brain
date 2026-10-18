@@ -391,7 +391,9 @@ describe("o2b brain entity merge", () => {
     expect(payload.applied).toBe(true);
     expect(payload.keep_id).toBe(keepId);
     expect(payload.drop_id).toBe(dropId);
-    expect(payload.snapshot_run_id).toMatch(/^entity-prune-/);
+    // Recovery points read entity-merge-*, so a restore names the merge -
+    // not the prune verb the reason was borrowed from.
+    expect(payload.snapshot_run_id).toMatch(/^entity-merge-/);
     expect(existsSync(dropPath)).toBe(false);
     // The old name now resolves to the survivor.
     const get = await runCli(["brain", "entity", "get", "Ada", "--json"], { env: env() });
