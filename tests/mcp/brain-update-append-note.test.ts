@@ -411,10 +411,10 @@ describe("brain_append_note - the post-write refresh claim", () => {
 
   test("a refused append wrote nothing, so it claims nothing", async () => {
     // The typed refusal is thrown before any claim is attempted. The
-    // mock is installed and freshening is ON so the assertion has
-    // something to catch: a claim hoisted above the write would light
-    // the seam up on its way to the refusal.
-    seedNote("Notes/Real.md", "first", "title: Real");
+    // mock is installed and freshening is ON (with a stamped stale
+    // index, so a claim that DID run would reach the seam) - the
+    // assertion has something to catch: a claim hoisted above the write
+    // would light the seam up on its way to the refusal.
     await stampIndexStale();
     await mockFreshenSpawned();
     const restore = withIntervalEnv("60");

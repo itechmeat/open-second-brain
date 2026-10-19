@@ -380,8 +380,11 @@ export function takeFreshenPending(dir: string): TakenFreshenPending | null {
             renameSync(held, path);
             return;
           } catch {
-            // The path is occupied again: a writer re-marked mid-settle
-            // with a younger instant, which supersedes ours.
+            // rename(2) replaces an occupied destination on every
+            // platform this runs on, so reaching here is a genuine I/O
+            // failure, not an occupied path: the take cannot be put
+            // back and is dropped below - the same best-effort loss a
+            // marker that cannot be written already names.
           }
         }
       }
