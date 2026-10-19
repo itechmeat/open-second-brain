@@ -405,54 +405,65 @@ export function takeFreshenPending(dir: string): TakenFreshenPending | null {
  *
  *   - a marker at or before the scan start is covered - clear it;
  *   - a newer marker is not: run ONE more incremental pass - the bound
- *     is one extra pass, never a loop - and clear the marker afterwards
- *     only if it still names an instant the extra pass's own scan start
- *     covers. A still-newer marker (a write landing during the extra
- *     pass) survives for the next run, which covers and clears it the
- *     same way;
+ *     is one extra pass, never a loop - and take the marker only once
+ *     the pass has finished, clearing it when it still names an instant
+ *     the extra pass's own scan start covers. A still-newer marker (a
+ *     write landing during the extra pass) survives for the next run,
+ *     which covers and clears it the same way;
  *   - a caller that cannot run a pass (a config that never resolved)
  *     leaves the marker exactly as it stands.
  *
- * The marker is judged through {@link takeFreshenPending}, so a writer
- * that re-marks between the take and the clear keeps its newer marker
- * on the path instead of being unlinked by this settle.
+ * The marker is READ before any pass runs and TAKEN only after - never
+ * the other way round. A take that outran its pass handed a killed or
+ * thrown-away child a marker stranded in the take's hold file, where
+ * nothing reads it again: the write stood unqueued and unmarked. With
+ * the pass running against a marker that never left its path, a child
+ * that dies mid-pass leaves the queue exactly as it found it, and the
+ * take's hold window shrinks to the judge-and-clear after the pass -
+ * where {@link takeFreshenPending}'s restore still answers a writer
+ * that re-marked with newer work, superseding the take rather than
+ * being unlinked by this settle. A pass that throws covered nothing and
+ * the marker was never taken, so it stands for the next run.
  *
  * Returns whether the extra pass ran. Throws only what `runPass`
- * throws - the take goes back on its path first, since a pass that
- * threw covered nothing - and the caller decides how a failed extra
- * pass is reported.
+ * throws, and the caller decides how a failed extra pass is reported.
  */
 export async function settleFreshenPending(
   dir: string,
   scanStartedAtMs: number,
   runPass: (() => Promise<void>) | null,
 ): Promise<boolean> {
-  const taken = takeFreshenPending(dir);
-  if (taken === null) return false;
-  const { pending } = taken;
-  if (pending !== null && pending.since <= scanStartedAtMs) {
+  // Read without taking: the marker stays on its own path through every
+  // fallible step below, so a child that dies at any of them leaves the
+  // queue standing for the next run.
+  const pending = readFreshenPending(dir);
+  if (pending === null) return false;
+  if (pending.since <= scanStartedAtMs) {
     // This run's scan began after the pending write: the pass that just
-    // finished covered it, and the marker's work is done.
-    taken.drop();
+    // finished covered it. The take judges what stands NOW, so a writer
+    // that re-marked between the read and this take keeps its newer
+    // marker - only a still-covered marker is dropped.
+    const covered = takeFreshenPending(dir);
+    if (covered !== null) {
+      if (covered.pending !== null && covered.pending.since <= scanStartedAtMs) {
+        covered.drop();
+      } else {
+        covered.restore();
+      }
+    }
     return false;
   }
-  if (runPass === null || pending === null) {
-    // No pass to run (or no readable marker to act on): the take goes
-    // back - superseded, not merged, if a writer re-marked meanwhile.
-    taken.restore();
+  if (runPass === null) {
+    // No pass to run: the marker stands untouched for the next run.
     return false;
   }
   const secondStart = Date.now();
-  try {
-    await runPass();
-  } catch (e) {
-    // A pass that threw covered nothing, so the marker goes back on its
-    // path for the next run - it must not stay stranded in the settle's
-    // hold file, where nothing would read it again.
-    taken.restore();
-    throw e;
-  }
-  if (pending.since <= secondStart) {
+  // A pass that throws propagates with the marker still on its path -
+  // it covered nothing, and that standing marker is the truthful queue.
+  await runPass();
+  const taken = takeFreshenPending(dir);
+  if (taken === null) return true;
+  if (taken.pending !== null && taken.pending.since <= secondStart) {
     // The extra pass started after the marker's instant, so it covered
     // the pending write - and the marker goes with it. A marker that
     // outlived its own coverage would push every later run into an

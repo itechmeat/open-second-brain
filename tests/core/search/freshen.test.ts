@@ -33,6 +33,7 @@ import {
 } from "../../../src/core/search/freshen.ts";
 import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import type { FreshenPending } from "../../../src/core/search/freshen.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
@@ -629,6 +630,33 @@ describe("the pending-refresh marker a refused forced claim leaves", () => {
     });
     expect(ran).toBe(false);
     expect(passes).toBe(0);
+  });
+
+  test("a hard kill during the extra pass leaves the marker standing on its path", async () => {
+    // The take-first settle moved the marker into its hold file BEFORE
+    // the extra pass ran, so a child killed mid-pass stranded the marker
+    // where nothing reads it again: the write stood unqueued and
+    // unmarked. The settle now reads without taking and takes only once
+    // the pass has finished, so at every instant up to and including the
+    // kill the marker is exactly where the next run reads it.
+    const markedAt = Date.now() - 1_000;
+    markFreshenPending(dir, markedAt);
+    const scanStart = markedAt - 5_000;
+    let observedDuringPass: FreshenPending | null | undefined;
+    const killDuringPass = new Promise<void>((resolve) => {
+      void settleFreshenPending(dir, scanStart, async () => {
+        // The kill lands here in a real child: the pass never returns,
+        // and nothing the settle does after it ever runs.
+        observedDuringPass = readFreshenPending(dir);
+        resolve();
+        await new Promise<void>(() => {});
+      }).catch(() => {});
+    });
+    await killDuringPass;
+    // Mid-pass, the marker is still on its own path - not hidden in the
+    // settle's hold file, where the kill would leave it for good.
+    expect(observedDuringPass).toEqual({ since: markedAt });
+    expect(readFreshenPending(dir)).toEqual({ since: markedAt });
   });
 
   test("a failed extra pass leaves the marker queued for the next run", async () => {
