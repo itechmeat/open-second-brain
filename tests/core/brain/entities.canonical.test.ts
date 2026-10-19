@@ -390,10 +390,17 @@ describe("matchVariantsOccurIn - the word-boundary rule", () => {
 
   test("the other no-space scripts suspend the boundary like CJK", () => {
     // Lao, Khmer and Myanmar are written without word spaces too; their
-    // adjacency is no boundary evidence, exactly like Han and kana.
-    expect(matchVariantsOccurIn(["ວຽງຈັນ"], ["ຢູ່ວຽງຈັນແລ້ວ"])).toBe(true);
-    expect(matchVariantsOccurIn(["ក្រុងព្រៃនគរ"], ["ក្រុងព្រៃនគរក្រោយ"])).toBe(true);
-    expect(matchVariantsOccurIn(["ရန်ကုန်"], ["ရန်ကုန်မြို့"])).toBe(true);
+    // adjacency is no boundary evidence, exactly like Han and kana. The
+    // neighbour before each needle is a BASE letter of the same script -
+    // a consonant, not a combining mark and not the string edge - so the
+    // probe really sees a word character, and only the script suspension
+    // can admit the hit.
+    expect(matchVariantsOccurIn(["ວຽງຈັນ"], ["ເມືອງວຽງຈັນແລ້ວ"])).toBe(true);
+    expect(matchVariantsOccurIn(["ក្រុងព្រៃនគរ"], ["ជិតក្រុងព្រៃនគរក្រោយ"])).toBe(true);
+    expect(matchVariantsOccurIn(["ရန်ကုန်"], ["ကရန်ကုန်မြို့"])).toBe(true);
+    // The suspension is per neighbour script: a spaced-script letter
+    // glued to the same needle is still boundary evidence and blocks.
+    expect(matchVariantsOccurIn(["ວຽງຈັນ"], ["xວຽງຈັນ"])).toBe(false);
   });
 
   test("an attached Korean particle does not block: the mention still anchors", () => {
