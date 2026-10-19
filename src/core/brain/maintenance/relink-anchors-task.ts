@@ -304,6 +304,12 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
     ? buildAnchorables(vault, index, agent, now)
     : buildAnchorablesQuietly(vault, index);
   const linkResolver: EntityLinkAccessor = entityLinkResolver(vault, { visible });
+  // One stat + read + parse per DISTINCT source page, not per signal:
+  // the inbox commonly holds several signals citing the same page, and
+  // the page's link-derived ids cannot change mid-pass. A page that
+  // cannot be read (or is oversized) caches an empty list - the same
+  // contributes-no-links answer the uncached path gave.
+  const linkIdsByPage = new Map<string, ReadonlyArray<string>>();
 
   const progress = progressCounter(OPERATION.relink, opts.onProgress);
   const perSource = new Map<string, { signals: number; anchorsAdded: number }>();
@@ -397,15 +403,21 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         const rollup = perSource.get(source.rel) ?? { signals: 0, anchorsAdded: 0 };
         rollup.signals++;
         perSource.set(source.rel, rollup);
-        try {
-          if (statSync(source.abs).size > SOURCE_PAGE_MAX_BYTES) continue;
-          const content = readFileSync(source.abs, "utf8");
-          for (const id of pageEntityLinks(content, linkResolver)) push(id);
-        } catch {
-          // A source page that cannot be read contributes no links; the
-          // signal's stored anchors are untouched either way.
-          continue;
+        let ids = linkIdsByPage.get(source.abs);
+        if (ids === undefined) {
+          try {
+            ids =
+              statSync(source.abs).size > SOURCE_PAGE_MAX_BYTES
+                ? []
+                : pageEntityLinks(readFileSync(source.abs, "utf8"), linkResolver);
+          } catch {
+            // A source page that cannot be read contributes no links; the
+            // signal's stored anchors are untouched either way.
+            ids = [];
+          }
+          linkIdsByPage.set(source.abs, ids);
         }
+        for (const id of ids) push(id);
       }
       if (added.length === 0) continue;
       const nextLine = `entities: ${[...stored, ...added].join(", ")}`;
