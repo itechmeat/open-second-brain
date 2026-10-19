@@ -254,7 +254,7 @@ test("brain_maintenance run executes the lane; status reads the journal", async 
   expect(ran["verdict"]).toBe("run");
   const tasks = ran["tasks"] as Array<{ name: string; ok: boolean }>;
   // Same lane contract as the CLI verb (link-recall-intelligence).
-  expect(tasks.map((t) => t.name)).toEqual(["dream", "reindex", "bridges", "clusters"]);
+  expect(tasks.map((t) => t.name)).toEqual(["dream", "reindex", "bridges", "clusters", "relink"]);
   expect(tasks.every((t) => t.ok)).toBe(true);
 
   const status = await call(server, "brain_maintenance", { operation: "status" });

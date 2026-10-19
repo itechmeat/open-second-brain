@@ -112,7 +112,7 @@ test("maintenance lane executes the bridges and clusters tasks", async () => {
   };
   expect(parsed.verdict).toBe("run");
   const names = parsed.tasks.map((t) => t.name);
-  expect(names).toEqual(["dream", "reindex", "bridges", "clusters"]);
+  expect(names).toEqual(["dream", "reindex", "bridges", "clusters", "relink"]);
   expect(parsed.tasks.every((t) => t.ok)).toBe(true);
   // The lane's reindex built the index, so both passes left a metric.
   expect(listMetrics(vault, { surface: "bridge_discovery" })).toHaveLength(1);
