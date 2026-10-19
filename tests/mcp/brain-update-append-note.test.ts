@@ -27,6 +27,7 @@ import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 /**
@@ -76,6 +77,26 @@ function seedNote(rel: string, body: string, frontmatter = ""): void {
 const updateTool = NOTES_TOOLS.find((t) => t.name === "brain_update_note")!;
 const appendTool = NOTES_TOOLS.find((t) => t.name === "brain_append_note")!;
 
+/** Stamp the vault's index with an old instant: the claim's stale gate must pass. */
+async function stampIndexStale(): Promise<void> {
+  const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../src/core/search/store.ts");
+  const store = await Store.open(resolveSearchConfig({ vault, configPath: ctx.configPath! }), {
+    mode: "write",
+  });
+  store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+  await store.close();
+}
+
+function withIntervalEnv(value: string): () => void {
+  const key = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+  const saved = process.env[key];
+  process.env[key] = value;
+  return () => {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  };
+}
+
 /**
  * The post-write index refresh a content edit claims.
  *
@@ -114,27 +135,6 @@ describe("brain_update_note - the post-write refresh claim", () => {
         return "spawned" as const;
       },
     }));
-  }
-
-  /** Stamp the vault's index with an old instant: the claim's stale gate must pass. */
-  async function stampIndexStale(): Promise<void> {
-    const { resolveSearchConfig } = await import("../../src/core/search/index.ts");
-    const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../src/core/search/store.ts");
-    const store = await Store.open(resolveSearchConfig({ vault, configPath: ctx.configPath! }), {
-      mode: "write",
-    });
-    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
-    await store.close();
-  }
-
-  function withIntervalEnv(value: string): () => void {
-    const key = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
-    const saved = process.env[key];
-    process.env[key] = value;
-    return () => {
-      if (saved === undefined) delete process.env[key];
-      else process.env[key] = saved;
-    };
   }
 
   test("a content edit claims one forced refresh: the seam sees force, and the receipt says claimed", async () => {
