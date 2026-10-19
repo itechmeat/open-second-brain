@@ -301,8 +301,11 @@ import {
   BASENAME_REWRITES,
   INDEX_EVIDENCE,
   INDEX_EVIDENCE_STATES,
+  INDEX_REFRESH,
+  INDEX_REFRESHES,
   isBasenameRewrite,
   isIndexEvidenceState,
+  isIndexRefresh,
   isNoteLifecycleAction,
   NOTE_LIFECYCLE_ACTION,
   NOTE_LIFECYCLE_ACTIONS,
@@ -1043,6 +1046,20 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: INDEX_EVIDENCE,
     members: INDEX_EVIDENCE_STATES,
     guard: isIndexEvidenceState,
+  },
+  {
+    // B2. Whether the write started the detached index refresh, riding
+    // the report beside the index evidence above. Registered when the
+    // guard was added so the vocabulary carries the same four pieces as
+    // its siblings - the token a caller reads back out of a report or a
+    // persisted payload has to survive the round trip through a string
+    // like every other one here. Two members, and the difference between
+    // them is the honesty claim: `claimed` says a run is IN FLIGHT, and
+    // `not_claimed` says the evidence's next command still reconciles.
+    name: "INDEX_REFRESH",
+    values: INDEX_REFRESH,
+    members: INDEX_REFRESHES,
+    guard: isIndexRefresh,
   },
   {
     // B3. Three of its four members are refusals, and that is the unit:
@@ -1938,7 +1955,10 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 102: the storage-lifecycle wave's three - STORAGE_FORECAST_TIER (the
 // capacity gate's tiers), RECEIPT_LEDGER_FAMILY and RECEIPT_MODE (the
 // receipt-compaction surfaces' shared input vocabulary).
-const VOCABULARY_POPULATION = 102;
+// 103: INDEX_REFRESH (note lifecycle) gains its isIndexRefresh guard,
+// completing the four-piece shape its sibling vocabularies already
+// carry and so entering the scanned population.
+const VOCABULARY_POPULATION = 103;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

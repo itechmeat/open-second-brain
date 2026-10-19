@@ -34,6 +34,8 @@ import {
   BASENAME_REWRITE,
   INDEX_EVIDENCE,
   INDEX_REFRESH,
+  INDEX_REFRESHES,
+  isIndexRefresh,
   isNoteLifecycleAction,
   NOTE_ARCHIVE_ROOT,
   NOTE_LIFECYCLE_ACTION,
@@ -81,6 +83,19 @@ describe("the action vocabulary", () => {
     for (const action of NOTE_LIFECYCLE_ACTIONS) expect(isNoteLifecycleAction(action)).toBe(true);
     for (const outsider of [null, 42, {}, "", "Rename"]) {
       expect(isNoteLifecycleAction(outsider)).toBe(false);
+    }
+  });
+});
+
+describe("the index-refresh vocabulary", () => {
+  // The guard ships beside its siblings' (isIndexEvidenceState,
+  // isBasenameRewrite): a token a caller reads back out of a report or a
+  // persisted payload has to survive the round trip through a string.
+  test("every declared refresh token is a member and the guard refuses everything else", () => {
+    expect([...INDEX_REFRESHES].toSorted()).toEqual(Object.values(INDEX_REFRESH).toSorted());
+    for (const token of INDEX_REFRESHES) expect(isIndexRefresh(token)).toBe(true);
+    for (const outsider of [null, 42, {}, "", "Claimed", "not-claimed", undefined]) {
+      expect(isIndexRefresh(outsider)).toBe(false);
     }
   });
 });

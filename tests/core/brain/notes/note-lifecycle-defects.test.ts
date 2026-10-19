@@ -37,7 +37,7 @@
  *      `nothing_at_risk`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -48,14 +48,15 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
   BASENAME_REWRITE,
   INDEX_EVIDENCE,
   INDEX_REFRESH,
+  lastRefreshClaimFailureMessage,
   NOTE_LIFECYCLE_ACTION,
   noteLifecycle,
   NoteLifecycleError,
@@ -63,6 +64,7 @@ import {
 import { RECOVERABILITY_STATE } from "../../../../src/core/brain/gates/recoverability.ts";
 import { CountGuardError } from "../../../../src/core/brain/count-guard.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { writeFreshenState } from "../../../../src/core/search/freshen.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
@@ -78,6 +80,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mock.restore();
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });
@@ -301,6 +304,101 @@ describe("the refresh claim beside the index evidence (7)", () => {
     expect(res.references.index.state).toBe(INDEX_EVIDENCE.stale);
     expect(res.references.index.lastIndexedAt).toBe("2026-08-15T00:00:00.000Z");
     expect(res.references.index.nextCommand.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the refresh claim decision on the injected clock", () => {
+  test("a backoff ahead of input.now is honoured even though the wall clock has passed it", async () => {
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const config = resolveSearchConfig({ vault });
+    const store = await Store.open(config, { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+    // A failed run left a backoff that ended in 2021: long behind the
+    // wall clock this suite runs at, and still ahead of the instant the
+    // caller injects below. The claim decision has to be made on THAT
+    // instant - a deterministic run may not have its behaviour moved by
+    // whichever wall clock happens to execute it.
+    writeFreshenState(dirname(config.dbPath), {
+      failures: 1,
+      backoffUntil: "2021-01-01T00:00:00.000Z",
+      lastOutcome: "failed",
+      lastRunAt: "2020-12-01T00:00:00.000Z",
+      lastDurationMs: 5,
+      lastError: "injected failure",
+      lastChanged: null,
+    });
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
+    let res;
+    try {
+      res = await noteLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.rename,
+        path: "Projects/Old.md",
+        to: "Projects/New.md",
+        apply: true,
+        now: new Date("2020-06-01T00:00:00.000Z"),
+        refreshSpawn: () => {},
+      });
+    } finally {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+    }
+    // Under the injected instant the backoff still holds, so nothing is
+    // claimed. Deciding on the wall clock instead spawns right past a
+    // backoff the caller's own timeline says is active.
+    expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
+  });
+});
+
+describe("a refresh claim whose machinery raises", () => {
+  // This runner's mock registration outlives mock.restore() across test
+  // FILES, so the teardown re-registers the REAL module object instead:
+  // whatever leaks past this file is freshen.ts itself, byte for byte.
+  const FRESHEN_MODULE = "../../../../src/core/search/freshen.ts";
+  let realFreshen: Record<string, unknown> | null = null;
+
+  afterEach(() => {
+    if (realFreshen !== null) mock.module(FRESHEN_MODULE, () => realFreshen);
+    mock.restore();
+    realFreshen = null;
+  });
+
+  test("still answers not_claimed, but records the failure where a diagnostic can name it", async () => {
+    // Force the freshen machinery to raise when the claim invokes it -
+    // the shape of a permanently broken freshen path, as opposed to one
+    // deliberately configured off. The token stays `not_claimed` either
+    // way (the public surface does not grow for this), but the old bare
+    // catch swallowed the distinction entirely: a broken spawn was
+    // indistinguishable from a disabled one, and nothing anywhere said
+    // so.
+    realFreshen = { ...(await import(FRESHEN_MODULE)) };
+    mock.module(FRESHEN_MODULE, () => ({
+      maybeFreshenIndex: () => {
+        throw new Error("freshen machinery exploded");
+      },
+    }));
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/Old.md",
+      to: "Projects/New.md",
+      apply: true,
+      refreshSpawn: () => {},
+    });
+
+    expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(res.applied).toBe(true);
+    expect(lastRefreshClaimFailureMessage()).toBe("freshen machinery exploded");
   });
 });
 

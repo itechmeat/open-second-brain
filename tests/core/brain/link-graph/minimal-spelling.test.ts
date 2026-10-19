@@ -91,6 +91,17 @@ describe("minimalSpellingFor", () => {
     expect(minimalSpellingFor("Projects/New.md", files)).toBe("New");
   });
 
+  test("an uppercase .MD stem is not stripped: the bare lowercase form is never the answer", () => {
+    // The store's `documentBasename` strips a trailing `.md` CASE-
+    // SENSITIVELY, so `Projects/Old.MD` keeps the stored basename
+    // `Old.MD` and the bare spelling `Old` dangles. The chooser's
+    // basename rung must strip under the same rule, or it would hand
+    // back exactly the spelling the ladder cannot resolve.
+    const files = ["Projects/Old.MD", "Projects/Ref.md"];
+    expect(minimalSpellingFor("Projects/Old.MD", files)).not.toBe("Old");
+    expect(minimalSpellingFor("Projects/Old.MD", files)).toBe("Old.MD");
+  });
+
   test("empty basename and multi-segment destinations stay well-formed", () => {
     expect(minimalSpellingFor("Solo.md", ["Solo.md"])).toBe("Solo");
     expect(minimalSpellingFor("a/b/c/Deep.md", ["a/b/c/Deep.md", "a/b/c/Other.md"])).toBe("Deep");

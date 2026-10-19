@@ -317,6 +317,11 @@ export const INDEX_REFRESHES: ReadonlyArray<IndexRefresh> = Object.freeze(
   Object.values(INDEX_REFRESH),
 );
 
+/** See {@link isNoteLifecycleAction} for why the parameter is `unknown`. */
+export function isIndexRefresh(value: unknown): value is IndexRefresh {
+  return typeof value === "string" && (INDEX_REFRESHES as ReadonlyArray<string>).includes(value);
+}
+
 /** What the derived index knows, and how old that knowledge is. */
 export interface IndexEvidence {
   readonly state: IndexEvidenceState;
@@ -569,6 +574,25 @@ const APPEND_ONLY_REL: ReadonlyArray<string> = Object.freeze([BRAIN_LOG_REL]);
  */
 const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
 
+/**
+ * The message the most recent post-write refresh claim raised, or `null`
+ * while every claim either spawned or refused for a stated reason.
+ * Module-level because {@link claimPostWriteRefresh} has no seam to hand
+ * a sink through - the same shape the session line reader's high-water
+ * mark uses - and because the token that lands on the report is
+ * deliberately coarse: `not_claimed` covers "configured off" and
+ * "tried and failed" alike, so a permanently broken freshen path would
+ * otherwise be indistinguishable from a deliberate one, with nothing
+ * anywhere naming the difference. Never thrown: the write already
+ * happened, and the claim is best-effort by design.
+ */
+let lastRefreshClaimFailure: string | null = null;
+
+/** The failure message of the most recent refused refresh claim, or `null`. */
+export function lastRefreshClaimFailureMessage(): string | null {
+  return lastRefreshClaimFailure;
+}
+
 /** The `.md` suffix, matched case-insensitively by the path envelope. */
 const MARKDOWN_SUFFIX = ".md";
 
@@ -674,6 +698,10 @@ async function readIndexEvidence(vault: string, wrote: boolean): Promise<IndexEv
  * happened, the refresh is best-effort by design, and the report's next
  * command reconciles the index whatever became of the spawn. `spawn` is
  * the injected test seam; absent, the child is the real detached run.
+ * `now` is the caller's injected clock: passed through as the decision's
+ * `nowMs`, so the freshness and backoff judgements are made on the same
+ * instant the rest of the run is reproducible against, and not on
+ * whichever wall clock happens to execute it.
  *
  * The imports are deferred for the same reason
  * {@link readIndexEvidence}'s are: the search barrel reaches back into
@@ -684,6 +712,7 @@ async function claimPostWriteRefresh(
   vault: string,
   index: IndexEvidence,
   spawn: ((argv: string[]) => void) | undefined,
+  now?: Date,
 ): Promise<IndexRefresh> {
   // Stale is the only state that describes an index this call aged. An
   // absent index holds nothing to refresh, an unreadable one has no
@@ -697,9 +726,15 @@ async function claimPostWriteRefresh(
       lastIndexedAt: index.lastIndexedAt,
       force: true,
       ...(spawn !== undefined ? { spawn } : {}),
+      ...(now !== undefined ? { nowMs: now.getTime() } : {}),
     });
     return decision === "spawned" ? INDEX_REFRESH.claimed : INDEX_REFRESH.notClaimed;
-  } catch {
+  } catch (err) {
+    // The token stays `not_claimed` - the report's vocabulary does not
+    // grow a third member for a branch nothing can act on - but the
+    // failure is no longer swallowed whole: the message lands in the
+    // module-level diagnostic so a broken freshen path can be named.
+    lastRefreshClaimFailure = err instanceof Error ? err.message : String(err);
     return INDEX_REFRESH.notClaimed;
   }
 }
@@ -1110,7 +1145,7 @@ export async function noteLifecycle(
       );
       snapshot = Object.freeze({ runId: gated.snapshot.runId, path: gated.snapshot.path });
       const index = await readIndexEvidence(vault, true);
-      const refresh = await claimPostWriteRefresh(vault, index, input.refreshSpawn);
+      const refresh = await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now);
       return finish(
         action,
         source.relPath,
@@ -1184,7 +1219,7 @@ export async function noteLifecycle(
   // DETACHED run that will not have landed by any instant this call can
   // observe. A plan-only run aged nothing and claims nothing.
   const refresh = apply
-    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn)
+    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now)
     : INDEX_REFRESH.notClaimed;
 
   return finish(

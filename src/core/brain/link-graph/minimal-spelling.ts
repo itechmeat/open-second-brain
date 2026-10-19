@@ -39,10 +39,17 @@
  * population-based judgement.
  */
 
-/** `Projects/Old.md` -> `Old`, matching the store's `documentBasename`. */
+/**
+ * `Projects/Old.md` -> `Old`, matching the store's `documentBasename`.
+ * The suffix test is CASE-SENSITIVE on purpose: the ladder's basename
+ * rung joins against the stored `documents.basename`, which strips a
+ * trailing `.md` and nothing else, so `Old.MD` keeps that basename and
+ * the bare spelling `Old` dangles - a candidate this chooser must never
+ * produce, however much shorter it reads.
+ */
 function basenameOf(relPath: string): string {
   const last = relPath.split("/").at(-1) ?? relPath;
-  return last.toLowerCase().endsWith(".md") ? last.slice(0, -".md".length) : last;
+  return last.endsWith(".md") ? last.slice(0, -".md".length) : last;
 }
 
 /** `Projects/Old.md` -> `Projects/Old`. */
