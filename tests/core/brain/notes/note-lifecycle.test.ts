@@ -307,6 +307,25 @@ describe("the freshness of the evidence a rename acted on", () => {
   });
 });
 
+/** Stamp a vault's index without running a full index pass. */
+async function stampIndex(at: string): Promise<void> {
+  const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+  const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../../../src/core/search/store.ts");
+  const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+  store.setState(LAST_INDEXED_AT_STATE_KEY, at);
+  await store.close();
+}
+
+/** The rename input every refresh test moves the same note with. */
+function renameInput(apply: boolean) {
+  return {
+    action: NOTE_LIFECYCLE_ACTION.rename,
+    path: "Projects/Old.md",
+    to: "Projects/New.md",
+    ...(apply ? { apply: true } : {}),
+  } as const;
+}
+
 /**
  * The detached refresh an applied write claims (F2).
  *
@@ -334,25 +353,6 @@ describe("the detached refresh an applied write claims", () => {
   function withFreshenOn(): void {
     savedInterval = process.env[FRESHEN_INTERVAL_ENV] ?? "0";
     process.env[FRESHEN_INTERVAL_ENV] = "60";
-  }
-
-  /** Stamp the vault's index without running a full index pass. */
-  async function stampIndex(at: string): Promise<void> {
-    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
-    const { LAST_INDEXED_AT_STATE_KEY, Store } =
-      await import("../../../../src/core/search/store.ts");
-    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
-    store.setState(LAST_INDEXED_AT_STATE_KEY, at);
-    await store.close();
-  }
-
-  function renameInput(apply: boolean) {
-    return {
-      action: NOTE_LIFECYCLE_ACTION.rename,
-      path: "Projects/Old.md",
-      to: "Projects/New.md",
-      ...(apply ? { apply: true } : {}),
-    } as const;
   }
 
   test("an applied rename claims one detached refresh, and the child is the freshen run", async () => {
