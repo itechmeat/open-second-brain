@@ -40,15 +40,16 @@
  * Three consequences are load-bearing and each is reported rather than
  * assumed:
  *
- *   - the bare-basename spelling `[[Old]]` is rewritten only when
- *     exactly one note in the scanned population carries the OLD
- *     basename and none carries the new one. Two notes named `Old.md` in
- *     different folders make `[[Old]]` a reference to whichever one
- *     Obsidian resolves, and rewriting it would re-point a link that
- *     never pointed here; a note already named `New.md` elsewhere makes
- *     `[[New]]` ambiguous the moment the rename lands, and by this
- *     project's own ladder an ambiguous basename resolves to nothing at
- *     all. The verdict token says which of the three happened.
+ *   - the bare-basename spelling `[[Old]]` is rewritten whenever it
+ *     uniquely resolved to the source before the move - the source is
+ *     the basename's only carrier, or the source is top-level and owns
+ *     the spelling through the exact-path rung - and the rewrite aims at
+ *     the minimal spelling of the destination, which is unambiguous by
+ *     construction whatever note count the move creates. Two nested
+ *     notes named `Old.md` in different folders still withhold it:
+ *     there `[[Old]]` named whichever one Obsidian resolves, and
+ *     rewriting it would re-point a link that never pointed here. The
+ *     verdict token says which of the three happened.
  *   - the search index's state travels back on the result as an
  *     {@link IndexEvidence}, with the instant of its last pass and the
  *     command that makes it agree with the vault again.
@@ -217,11 +218,21 @@ export function isNoteLifecycleAction(value: unknown): value is NoteLifecycleAct
  * construction.
  */
 export const BASENAME_REWRITE = Object.freeze({
-  /** Exactly one note carried the basename, so the spelling was rewritten. */
+  /**
+   * The bare spelling uniquely resolved to the source before the move,
+   * so it was rewritten - onto the minimal spelling of the destination,
+   * which is unambiguous by construction whatever the destination
+   * basename's carrier count became.
+   */
   applied: "applied",
   /** The basename did not change, so no bare spelling needed rewriting. */
   notNeeded: "not_needed",
-  /** Another note carries the same basename; rewriting could re-point its links. */
+  /**
+   * The bare spelling never uniquely named the source: a nested source
+   * with several same-basename carriers resolved, by the ladder's
+   * basename rung, to whichever one the resolver picked, and rewriting
+   * it could re-point a link that never pointed here.
+   */
   ambiguous: "ambiguous",
 } as const);
 
@@ -619,7 +630,7 @@ function resolveDestination(
 }
 
 /**
- * Decide what to do about the bare `[[Basename]]` spelling, from the
+ * Decide what to do about the bare `[[Old]]` spelling, from the
  * population the rewrite would act on.
  *
  * `files` is the list the counting pass just walked, which is exactly the
@@ -627,15 +638,22 @@ function resolveDestination(
  * answer from a second walk under a second rule set is how the count and
  * the rewrite would come to disagree.
  *
- * BOTH basenames are counted, and the destination side is the half that
- * was missing. `[[Old]]` is safe to rewrite only when it names exactly
- * one note before the rename AND `[[New]]` names exactly one after it.
- * With `A/Old.md` and `B/New.md` both present, renaming `A/Old.md` to
- * `A/New.md` used to report `applied` and produce two `[[New]]` links -
- * and by this project's own resolution ladder (`store/links.ts:66-69`
- * resolves a bare basename only when the count is exactly one) the
- * rewritten link then resolved to NEITHER note. Withholding is the only
- * answer that leaves a working link working.
+ * The question is whether `[[Old]]` uniquely resolved to the SOURCE
+ * before the move, because that is the link this operation would
+ * otherwise strand. The rewrite target is no longer the bare new
+ * basename but {@link minimalSpellingFor}'s answer over the post-move
+ * population, which is unambiguous by construction - so the DESTINATION
+ * side of the old count, which withheld the rewrite whenever any other
+ * note carried the destination basename, no longer withholds anything:
+ * with `A/Old.md`, `B/Foo.md` and a third page's `[[Old]]`, renaming
+ * `A/Old.md` to `A/Foo.md` rewrites the link to `[[A/Foo]]`, which
+ * resolves to the same note `[[Old]]` did. What still withholds is a
+ * bare spelling that never uniquely named the source: a NESTED source
+ * with several same-basename carriers answered, by the ladder's
+ * basename rung, to whichever one Obsidian picked - rewriting it would
+ * re-point a link that never pointed here - while a TOP-LEVEL source
+ * owns its bare spelling outright through the exact-path rung whatever
+ * the nested count.
  */
 function decideBasename(
   files: ReadonlyArray<string>,
@@ -646,11 +664,8 @@ function decideBasename(
   const to = basenameOf(destinationRel);
   if (from === to) return BASENAME_REWRITE.notNeeded;
   const carriersOfFrom = files.filter((rel) => basenameOf(rel) === from).length;
-  // The destination does not exist yet, so every carrier of its basename
-  // is a DIFFERENT note that will still be there afterwards - one is
-  // already one too many.
-  const carriersOfTo = files.filter((rel) => basenameOf(rel) === to).length;
-  return carriersOfFrom > 1 || carriersOfTo > 0
+  const sourceIsTopLevel = directoryOf(sourceRel) === "";
+  return carriersOfFrom > 1 && !sourceIsTopLevel
     ? BASENAME_REWRITE.ambiguous
     : BASENAME_REWRITE.applied;
 }

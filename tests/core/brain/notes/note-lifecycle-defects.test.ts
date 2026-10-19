@@ -59,6 +59,14 @@
  *      that global could answer one vault's reason for another. The
  *      reason now travels on the report that refused, as
  *      `references.refresh_reason`, read from that call's own decision.
+ *  21. the renamed note's own bare `[[Old]]` links were withheld from
+ *      the rewrite whenever the DESTINATION basename was contested -
+ *      sound when the target was the bare basename, but the rewrite now
+ *      aims at the minimal spelling, which is unambiguous by
+ *      construction. The withholding broke links that resolved before
+ *      the move. The bare pair is now emitted whenever `[[Old]]`
+ *      uniquely resolved to the source before it, and is withheld only
+ *      for a nested source the bare spelling never uniquely named.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -216,7 +224,7 @@ describe("a rewrite that cannot be written (3)", () => {
 });
 
 describe("the bare-basename guard (5)", () => {
-  test("repairs the third-party bare spelling the rename turns from unique to ambiguous", async () => {
+  test("repairs the third-party bare spelling the rename turns from unique to ambiguous, and rewrites the moved note's own", async () => {
     note("A/Old.md", "x\n");
     note("B/New.md", "a different note that already owns the name\n");
     note("Notes/Ref.md", "bare [[Old]] and bare [[New]]\n");
@@ -228,18 +236,44 @@ describe("the bare-basename guard (5)", () => {
       apply: true,
     });
 
-    expect(res.references.basename).toBe(BASENAME_REWRITE.ambiguous);
+    // `[[New]]` named exactly one note (B/New.md) before the rename and
+    // two nested carriers after it: the repair re-points it to the
+    // shortest spelling of its pre-rename target that still resolves.
+    // `[[Old]]` named the moved note - the only carrier there was - so
+    // it is rewritten TOO, aimed at the minimal spelling of the
+    // destination, which is unambiguous by construction: with B/New.md
+    // standing, that spelling is `A/New`, and the link resolves to the
+    // same note it named before the move (21).
+    expect(res.references.basename).toBe(BASENAME_REWRITE.applied);
     const ref = read("Notes/Ref.md");
-    // Before the rename, `[[New]]` resolved - by the ladder's
-    // unique-carrier rung - to exactly one note: B/New.md. After it there
-    // are two nested carriers and the spelling resolves to NEITHER: the
-    // rename silently broke a link that never mentioned it. The repair
-    // re-points it to the shortest spelling of its pre-rename target
-    // that still resolves. `[[Old]]` stays: it named the moved note and
-    // the bare form is contested on the way out, so rewriting it would
-    // be the guess the guard exists to refuse.
-    expect(ref).toBe("bare [[Old]] and bare [[B/New]]\n");
+    expect(ref).toBe("bare [[A/New]] and bare [[B/New]]\n");
+    expect(res.references.rewrittenSpellings).toContainEqual({ from: "Old", to: "A/New" });
     expect(res.references.rewrittenSpellings).toContainEqual({ from: "New", to: "B/New" });
+  });
+
+  test("the review's scenario: a contested destination basename no longer strands the moved note's own bare links", async () => {
+    // A/Old.md, B/Foo.md, and X.md holding `[[Old]] [[Foo]]`. Renaming
+    // A/Old.md to A/Foo.md used to leave `[[Old]]` dangling: the old
+    // rule withheld the bare rewrite because `Foo` was contested, even
+    // though the rewrite target is the minimal spelling `A/Foo`, which
+    // is unambiguous by construction. `[[Old]]` named exactly one note
+    // before the move; after it, both of X's links resolve.
+    note("A/Old.md", "x\n");
+    note("B/Foo.md", "a different note that already owns the name\n");
+    note("X.md", "[[Old]] [[Foo]]\n");
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "A/Old.md",
+      to: "A/Foo.md",
+      apply: true,
+    });
+
+    expect(read("X.md")).toBe("[[A/Foo]] [[B/Foo]]\n");
+    // Both rewrites are on the report: the third-party repair first,
+    // then the moved note's own bare spelling onto the minimal form.
+    expect(res.references.rewrittenSpellings).toContainEqual({ from: "Foo", to: "B/Foo" });
+    expect(res.references.rewrittenSpellings).toContainEqual({ from: "Old", to: "A/Foo" });
   });
 
   test("an already-ambiguous bare spelling stays untouched, and a dangling one is not adopted", async () => {
@@ -526,13 +560,17 @@ describe("a repair derived from a page the caller may not read (15)", () => {
       readable: (rel) => rel !== "B/New.md",
     });
 
-    // The pair was derived from the carrier of the contested basename.
-    // That carrier is withheld here, so the report answers as a vault
-    // without the page would: no `to` naming it.
+    // The REPAIR pair was derived from the carrier of the contested
+    // basename. That carrier is withheld here, so the report answers as
+    // a vault without the page would: no `to` naming it.
     expect(res.references.rewrittenSpellings).not.toContainEqual({ from: "New", to: "B/New" });
+    // The moved note's OWN bare rewrite is different: its pair derives
+    // from the paths the caller itself supplied, so it is applied AND
+    // reported (21) - and the file on disk carries both rewrites.
+    expect(res.references.rewrittenSpellings).toContainEqual({ from: "Old", to: "A/New" });
     // The repair itself still ran - the readers who CAN see the carrier
     // are not left with a spelling that resolves to neither note.
-    expect(read("Notes/Ref.md")).toBe("bare [[Old]] and bare [[B/New]]\n");
+    expect(read("Notes/Ref.md")).toBe("bare [[A/New]] and bare [[B/New]]\n");
   });
 
   test("a caller who may read the carrier keeps the pair", async () => {

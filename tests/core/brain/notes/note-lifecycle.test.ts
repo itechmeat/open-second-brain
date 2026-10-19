@@ -149,9 +149,17 @@ describe("rename", () => {
 
     // Bare `New` would have two carriers after the move and resolve, by
     // the ladder's own rule, to neither - so the shortest HONEST
-    // spelling is the suffix-less path.
-    expect(res.references?.basename).toBe(BASENAME_REWRITE.ambiguous);
+    // spelling is the suffix-less path. The destination basename being
+    // contested does NOT withhold the moved note's own bare `[[Old]]`
+    // rewrite: it named exactly one note before the move, and its
+    // rewrite target is the minimal spelling `Projects/New`, which is
+    // unambiguous by construction.
+    expect(res.references?.basename).toBe(BASENAME_REWRITE.applied);
     expect(read("Projects/Ref.md")).toBe("pathed [[Projects/New]] and suffixed [[Projects/New]]\n");
+    expect(res.references?.rewrittenSpellings).toContainEqual({
+      from: "Old",
+      to: "Projects/New",
+    });
   });
 
   test("rewrites references that live inside Brain/, not only outside it", async () => {
