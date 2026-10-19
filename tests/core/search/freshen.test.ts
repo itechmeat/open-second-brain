@@ -322,6 +322,49 @@ describe("maybeFreshenIndex", () => {
     expect(calls[0]!.join(" ")).toContain(`search index --vault ${vault}`);
   });
 
+  test("force still skips an index stamped after the write began - the freshness floor", () => {
+    // The write began BEFORE the last index pass: a run landed after the
+    // write started, so the write cannot have produced staleness that
+    // run has not seen. Without this floor, a stream of small writes
+    // chained one forced run after another forever.
+    expect(
+      maybeFreshenIndex(config, {
+        lastIndexedAt: ago(5),
+        nowMs: NOW,
+        spawn,
+        force: true,
+        writeStartedAtMs: NOW - 30_000,
+      }),
+    ).toBe(FRESHEN_SKIP.fresh);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a write that began after the last stamp still forces its run", () => {
+    expect(
+      maybeFreshenIndex(config, {
+        lastIndexedAt: ago(5),
+        nowMs: NOW,
+        spawn,
+        force: true,
+        writeStartedAtMs: NOW,
+      }),
+    ).toBe("spawned");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an unparseable stamp stays due even when the write predates it", () => {
+    expect(
+      maybeFreshenIndex(config, {
+        lastIndexedAt: "not a date",
+        nowMs: NOW,
+        spawn,
+        force: true,
+        writeStartedAtMs: NOW - 30_000,
+      }),
+    ).toBe("spawned");
+    expect(calls).toHaveLength(1);
+  });
+
   test("force with the interval at 0 still refuses - config off means off", () => {
     const offConfig = {
       ...config,

@@ -47,6 +47,9 @@
  *  17. the counting probe matched only the moved note's own spellings,
  *      so the files the repair pass writes were absent from the plan's
  *      `inbound_files` and from `--expect`'s number.
+ *  18. the forced post-write refresh spawned no matter how young the
+ *      index stamp was, so writes arriving in a steady stream chained
+ *      one detached indexer run after another forever.
  *  19. a refused refresh claim recorded nothing on the diagnostic when
  *      the freshen machinery answered with a skip token instead of
  *      throwing, and one transient failure read as broken forever
@@ -362,9 +365,11 @@ describe("the refresh claim decision on the injected clock", () => {
     } finally {
       process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
     }
-    // Under the injected instant the backoff still holds, so nothing is
-    // claimed. Deciding on the wall clock instead spawns right past a
-    // backoff the caller's own timeline says is active.
+    // Under the injected instant the stamp is newer than the write, so
+    // the forced refresh refuses on the spot - by the freshness floor
+    // here, and by the backoff when the stamp predates the write.
+    // Deciding on the wall clock instead would spawn right past a
+    // refusal the caller's own timeline says is active.
     expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
   });
 });
@@ -593,6 +598,69 @@ describe("the plan's blast radius covers the repair pass (17)", () => {
     });
     expect(applied.references.filesRewritten).toBe(2);
     expect(read("Notes/Casualty.md")).toBe("See [[B/New]].\n");
+  });
+});
+
+describe("the forced refresh against the write's own instant (18)", () => {
+  test("an index stamped after the write began claims nothing", async () => {
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+    // Freshen ON, and the write's own clock is BEFORE the stamp: a run
+    // landed after this write began, so this write cannot have produced
+    // staleness that run has not already seen. Forcing another run would
+    // re-run what just finished - which is how a stream of small writes
+    // kept one detached indexer running back-to-back forever.
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
+    const spawned: string[][] = [];
+    try {
+      const res = await noteLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.rename,
+        path: "Projects/Old.md",
+        to: "Projects/New.md",
+        apply: true,
+        now: new Date("2026-08-01T00:00:00.000Z"),
+        refreshSpawn: (argv: string[]) => spawned.push(argv),
+      });
+      expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
+    } finally {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+    }
+    expect(spawned).toHaveLength(0);
+  });
+
+  test("a write that began after the last stamp still claims its refresh", async () => {
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+    // The ordinary post-write shape: the stamp predates the write, so
+    // the index has not seen the write and the floor must not skip it.
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
+    const spawned: string[][] = [];
+    try {
+      const res = await noteLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.rename,
+        path: "Projects/Old.md",
+        to: "Projects/New.md",
+        apply: true,
+        now: new Date("2026-09-01T00:00:00.000Z"),
+        refreshSpawn: (argv: string[]) => spawned.push(argv),
+      });
+      expect(res.references.refresh).toBe(INDEX_REFRESH.claimed);
+    } finally {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+    }
+    expect(spawned).toHaveLength(1);
   });
 });
 
