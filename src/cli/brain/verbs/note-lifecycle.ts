@@ -58,6 +58,10 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
       files_scanned: res.references.filesScanned,
       inbound_files: [...res.references.inboundFiles],
       files_rewritten: res.references.filesRewritten,
+      rewritten_spellings: res.references.rewrittenSpellings.map((s) => ({
+        from: s.from,
+        to: s.to,
+      })),
       rewrite_failures: res.references.rewriteFailures.map((f) => ({
         path: f.path,
         reason: f.reason,
@@ -68,6 +72,9 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
         last_indexed_at: res.references.index.lastIndexedAt,
         next_command: res.references.index.nextCommand,
       },
+      // `claimed` says a detached refresh run is IN FLIGHT, never that it
+      // has landed; every other value names why nothing was started.
+      refresh: res.references.refresh,
     },
     cascade:
       res.cascade === null
@@ -84,7 +91,8 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
  * The human line. It names the index state and the command that fixes it
  * on every run, because the operator reading a terminal is exactly the
  * person who has to decide whether the search index still describes the
- * vault they just changed.
+ * vault they just changed - and it names whether the write claimed the
+ * detached refresh, so "claimed" is never read as "already caught up".
  */
 function renderText(res: NoteLifecycleResult): string {
   const where = res.to === null ? res.from : `${res.from} -> ${res.to}`;
@@ -122,6 +130,7 @@ function renderText(res: NoteLifecycleResult): string {
     "\n" +
     `  search index: ${refs.index.state}` +
     (refs.index.lastIndexedAt === null ? "" : ` since ${refs.index.lastIndexedAt}`) +
+    `; refresh: ${refs.refresh}` +
     `; next: ${refs.index.nextCommand}`
   );
 }

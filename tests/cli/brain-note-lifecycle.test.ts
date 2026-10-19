@@ -68,11 +68,25 @@ test("rename moves the note and reports the index freshness in its receipt", asy
   const body = JSON.parse(res.stdout) as {
     applied: boolean;
     to: string;
-    references: { files_rewritten: number; index: { state: string; next_command: string } };
+    references: {
+      files_rewritten: number;
+      rewritten_spellings: Array<{ from: string; to: string }>;
+      index: { state: string; next_command: string };
+      refresh: string;
+    };
   };
   expect(body.applied).toBe(true);
   expect(body.to).toBe("Projects/New.md");
   expect(body.references.files_rewritten).toBe(1);
+  // The spellings the rewrite carried out, minimal forms included.
+  expect(body.references.rewritten_spellings).toEqual([
+    { from: "Projects/Old.md", to: "New" },
+    { from: "Projects/Old", to: "New" },
+    { from: "Old", to: "New" },
+  ]);
+  // Freshening is off suite-wide, so the write claimed nothing and the
+  // next command remains the reconciliation.
+  expect(body.references.refresh).toBe("not_claimed");
   expect(body.references.index.state).toBe("absent");
   expect(body.references.index.next_command.length).toBeGreaterThan(0);
   expect(existsSync(join(vault, "Projects/New.md"))).toBe(true);
