@@ -98,7 +98,9 @@ describe("a linking page the caller cannot read is left out of the report", () =
     const hidden = fixture(true);
     await answer(hidden, { action: "move", path: TARGET, to: "Other/target.md", apply: true });
     const secret = readFileSync(join(hidden.vault, PRIVATE_PATH), "utf8");
-    expect(secret).toContain("[[Other/target]]");
+    // The basename stays unique through the move, so the rewritten link
+    // lands at its minimal spelling.
+    expect(secret).toContain("[[target]]");
     expect(secret).not.toContain("[[Notes/target]]");
   });
 });

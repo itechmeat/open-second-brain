@@ -87,7 +87,7 @@ describe("dispatch", () => {
     const index = references["index"] as Record<string, unknown>;
     expect(index["state"]).toBe(INDEX_EVIDENCE.absent);
     expect(typeof index["next_command"]).toBe("string");
-    expect(readFileSync(join(vault, "Projects/Ref.md"), "utf8")).toContain("[[Projects/New]]");
+    expect(readFileSync(join(vault, "Projects/Ref.md"), "utf8")).toContain("[[New]]");
   });
 
   test("dry run is the default: nothing moves without an explicit apply", async () => {

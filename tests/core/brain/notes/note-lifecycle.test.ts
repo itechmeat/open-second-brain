@@ -85,7 +85,7 @@ describe("the action vocabulary", () => {
 });
 
 describe("rename", () => {
-  test("moves the bytes and rewrites path-spelled inbound wikilinks", async () => {
+  test("moves the bytes and rewrites path-spelled inbound wikilinks to the minimal spelling", async () => {
     note("Projects/Old.md", "---\ntitle: Old\n---\n\nbody\n");
     note(
       "Projects/Ref.md",
@@ -106,11 +106,36 @@ describe("rename", () => {
     expect(read("Projects/New.md")).toContain("body");
 
     const ref = read("Projects/Ref.md");
-    expect(ref).toContain("[[Projects/New]]");
-    expect(ref).toContain("[[Projects/New.md]]");
-    expect(ref).toContain("[[Projects/New|x]]");
+    // Minimal spellings, not form preservation: the new basename is
+    // unique after the move, so every old form collapses onto `[[New]]`
+    // instead of each link keeping its original length.
+    expect(ref).toBe("see [[New]] and [[New]] and [[New|x]]\n");
     expect(ref).not.toContain("Old");
     expect(res.references?.filesRewritten).toBe(1);
+    expect(res.references?.rewrittenSpellings).toEqual([
+      { from: "Projects/Old.md", to: "New" },
+      { from: "Projects/Old", to: "New" },
+      { from: "Old", to: "New" },
+    ]);
+  });
+
+  test("rewrites path-spelled links to the suffix-less form when the destination basename is contested", async () => {
+    note("Projects/Old.md", "x\n");
+    note("Elsewhere/New.md", "another note that will still own the name\n");
+    note("Projects/Ref.md", "pathed [[Projects/Old]] and suffixed [[Projects/Old.md]]\n");
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/Old.md",
+      to: "Projects/New.md",
+      apply: true,
+    });
+
+    // Bare `New` would have two carriers after the move and resolve, by
+    // the ladder's own rule, to neither - so the shortest HONEST
+    // spelling is the suffix-less path.
+    expect(res.references?.basename).toBe(BASENAME_REWRITE.ambiguous);
+    expect(read("Projects/Ref.md")).toBe("pathed [[Projects/New]] and suffixed [[Projects/New]]\n");
   });
 
   test("rewrites references that live inside Brain/, not only outside it", async () => {
@@ -128,7 +153,7 @@ describe("rename", () => {
       apply: true,
     });
 
-    expect(read("Brain/reports/weekly.md")).toContain("[[Projects/New]]");
+    expect(read("Brain/reports/weekly.md")).toContain("[[New]]");
     expect(res.references?.filesRewritten).toBe(1);
   });
 
@@ -161,10 +186,10 @@ describe("rename", () => {
 
     expect(res.references?.basename).toBe(BASENAME_REWRITE.ambiguous);
     const ref = read("Projects/Ref.md");
-    // The unambiguous path spelling still moves; the bare one is left
-    // exactly as it was, because it may name the other note.
-    expect(ref).toContain("[[Projects/New]]");
-    expect(ref).toContain("[[Old]]");
+    // The path spelling collapses onto the (uncontested) new basename;
+    // the bare `[[Old]]` is left exactly as it was, because it may name
+    // the other note.
+    expect(ref).toBe("bare [[Old]] and pathed [[New]]\n");
   });
 
   test("refuses a destination in another directory - that is a move", async () => {
@@ -241,6 +266,13 @@ describe("rename", () => {
     expect(res.applied).toBe(false);
     expect(res.references?.inboundFiles).toEqual(["Projects/Ref.md"]);
     expect(res.references?.filesRewritten).toBe(0);
+    // The plan is reported in the spellings it would write, minimal
+    // forms included, so a dry run previews exactly the apply.
+    expect(res.references?.rewrittenSpellings).toEqual([
+      { from: "Projects/Old.md", to: "New" },
+      { from: "Projects/Old", to: "New" },
+      { from: "Old", to: "New" },
+    ]);
     expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
     expect(read("Projects/Ref.md")).toContain("[[Projects/Old]]");
   });
@@ -289,7 +321,9 @@ describe("move", () => {
     expect(res.applied).toBe(true);
     expect(read("Projects/Note.md")).toContain("body");
     expect(existsSync(join(vault, "Inbox/Note.md"))).toBe(false);
-    expect(read("Inbox/Ref.md")).toContain("[[Projects/Note]]");
+    // The basename stays unique through the move, so the rewritten link
+    // comes out at its minimal spelling.
+    expect(read("Inbox/Ref.md")).toContain("[[Note]]");
     // The basename did not change, so there was no bare spelling to fix.
     expect(res.references?.basename).toBe(BASENAME_REWRITE.notNeeded);
   });

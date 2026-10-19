@@ -170,7 +170,7 @@ describe("a rewrite that cannot be written (3)", () => {
 
       // And the vault is in exactly the state the result describes.
       expect(existsSync(join(vault, "Projects/New.md"))).toBe(true);
-      expect(read("Aaa/Ref.md")).toContain("[[Projects/New]]");
+      expect(read("Aaa/Ref.md")).toContain("[[New]]");
       expect(read("Docs/Ref.md")).toContain("[[Projects/Old]]");
     },
   );
@@ -272,7 +272,7 @@ describe("the append-only observation log (8)", () => {
     // ...and the record does not change.
     expect(read("Brain/log/2026-08-15.md")).toBe("- agent said [[Projects/Old]] at 10:00\n");
     expect(res.references.filesRewritten).toBe(1);
-    expect(read("Notes/Ref.md")).toContain("[[Projects/New]]");
+    expect(read("Notes/Ref.md")).toContain("[[New]]");
   });
 });
 
@@ -299,7 +299,7 @@ describe("the count guard and the note's own self-reference (10)", () => {
       expect: 1,
     });
     expect(res.references.filesRewritten).toBe(1);
-    expect(read("Projects/New.md")).toContain("[[Projects/New]]");
+    expect(read("Projects/New.md")).toContain("[[New]]");
   });
 
   test("a delete still excludes its own file, which strands nothing", async () => {
@@ -393,7 +393,7 @@ describe("the recoverability verdict of a relocation (14)", () => {
     });
 
     // The file was overwritten and nothing regenerates a user's prose.
-    expect(read("Notes/Handwritten.md")).toContain("[[Projects/New]]");
+    expect(read("Notes/Handwritten.md")).toContain("[[New]]");
     expect(res.recoverability.state).toBe(RECOVERABILITY_STATE.unproven);
     expect(res.recoverability.blockers).toContain("no_recovery_point");
     expect(res.recoverability.blockers).toContain("outside_brain_root");

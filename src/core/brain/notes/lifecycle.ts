@@ -159,6 +159,7 @@ import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "../gates/recoverability.ts";
 import { retargetWikilinks, type WikilinkRetarget } from "../page-dedup.ts";
+import { minimalSpellingFor } from "../link-graph/minimal-spelling.ts";
 import { withDestructiveSnapshot } from "../snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -960,7 +961,8 @@ export async function noteLifecycle(
       ? BASENAME_REWRITE.notNeeded
       : decideBasename(probe.files, source.relPath, destination.relPath);
 
-  const retargets = destination === null ? [] : retargetsFor(source, destination, basename);
+  const retargets =
+    destination === null ? [] : retargetsFor(probe.files, source, destination, basename);
 
   let snapshot: NoteLifecycleResult["snapshot"] = null;
   let rewritten: ReadonlyArray<string> = [];
@@ -1153,22 +1155,49 @@ function planCascade(
 }
 
 /**
- * The spellings this relocation will actually rewrite. The bare basename
- * is included only when {@link decideBasename} cleared it, so the
- * `rewrittenSpellings` a caller reads back is the list that was applied
- * and not the list that was considered.
+ * The walked population as the relocation leaves it: the source path
+ * gone, the destination present. Every judgement about the POST state -
+ * the minimal destination spelling, the basename carrier counts - is
+ * derived from this list rather than from a second walk, so the decision
+ * and the rewrite pass can never see two different vaults.
+ */
+function postRelocationPopulation(
+  files: ReadonlyArray<string>,
+  sourceRel: string,
+  destinationRel: string,
+): ReadonlyArray<string> {
+  return [...files.filter((rel) => rel !== sourceRel), destinationRel].toSorted();
+}
+
+/**
+ * The spellings this relocation will actually rewrite, aimed at the
+ * MINIMAL spelling the destination resolves under once the move has
+ * landed ({@link minimalSpellingFor} over the post-move population):
+ * every old spelling of the source collapses onto the one shortest form
+ * that stays unambiguous, so `[[Projects/Old]]` comes out `[[New]]`
+ * when `New` is unique and `[[Projects/New]]` only when it is not. A
+ * link comes out no longer than the vault still needs, and never
+ * longer than it went in. The bare basename is included only when
+ * {@link decideBasename} cleared it, so the `rewrittenSpellings` a
+ * caller reads back is the list that was applied and not the list that
+ * was considered.
  */
 function retargetsFor(
+  files: ReadonlyArray<string>,
   source: ResolvedNoteTarget,
   destination: ResolvedNoteTarget,
   basename: BasenameRewrite,
 ): ReadonlyArray<WikilinkRetarget> {
+  const to = minimalSpellingFor(
+    destination.relPath,
+    postRelocationPopulation(files, source.relPath, destination.relPath),
+  );
   const pairs: WikilinkRetarget[] = [
-    { from: source.relPath, to: destination.relPath },
-    { from: withoutSuffix(source.relPath), to: withoutSuffix(destination.relPath) },
+    { from: source.relPath, to },
+    { from: withoutSuffix(source.relPath), to },
   ];
   if (basename === BASENAME_REWRITE.applied) {
-    pairs.push({ from: basenameOf(source.relPath), to: basenameOf(destination.relPath) });
+    pairs.push({ from: basenameOf(source.relPath), to });
   }
   return Object.freeze(pairs);
 }
