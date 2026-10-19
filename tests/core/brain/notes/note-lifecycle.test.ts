@@ -33,6 +33,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
   BASENAME_REWRITE,
   INDEX_EVIDENCE,
+  INDEX_REFRESH,
   isNoteLifecycleAction,
   NOTE_ARCHIVE_ROOT,
   NOTE_LIFECYCLE_ACTION,
@@ -303,6 +304,189 @@ describe("the freshness of the evidence a rename acted on", () => {
       apply: true,
     });
     expect(res.references?.filesScanned).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * The detached refresh an applied write claims (F2).
+ *
+ * The tests run with the suite-wide freshen-off default and turn the
+ * interval on only inside the specific tests that need it, so no real
+ * indexer is ever left behind; the spawn is always intercepted by the
+ * `refreshSpawn` seam. The "force was passed" evidence is indirect but
+ * binding: the index stamp in these fixtures is SECONDS old, so an
+ * unforced call would answer `fresh` and spawn nothing.
+ */
+describe("the detached refresh an applied write claims", () => {
+  const FRESHEN_INTERVAL_ENV = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+  let savedInterval: string | undefined;
+
+  beforeEach(() => {
+    savedInterval = undefined;
+  });
+  afterEach(() => {
+    if (savedInterval !== undefined) {
+      process.env[FRESHEN_INTERVAL_ENV] = savedInterval;
+      savedInterval = undefined;
+    }
+  });
+
+  function withFreshenOn(): void {
+    savedInterval = process.env[FRESHEN_INTERVAL_ENV] ?? "0";
+    process.env[FRESHEN_INTERVAL_ENV] = "60";
+  }
+
+  /** Stamp the vault's index without running a full index pass. */
+  async function stampIndex(at: string): Promise<void> {
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, at);
+    await store.close();
+  }
+
+  function renameInput(apply: boolean) {
+    return {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/Old.md",
+      to: "Projects/New.md",
+      ...(apply ? { apply: true } : {}),
+    } as const;
+  }
+
+  test("an applied rename claims one detached refresh, and the child is the freshen run", async () => {
+    withFreshenOn();
+    // A stamp younger than the interval: only the force path spawns here.
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.claimed);
+    expect(spawned).toHaveLength(1);
+    const argv = spawned[0]!.join(" ");
+    expect(argv).toContain("search index");
+    expect(argv).toContain("--freshen");
+    expect(argv).toContain("--freshen-state");
+    // The evidence read stays synchronous: the report still describes
+    // the index as it stood at the end of the call.
+    expect(res.references?.index.state).toBe(INDEX_EVIDENCE.stale);
+  });
+
+  test("claim exclusivity prevents doubles: a second applied write spawns nothing", async () => {
+    withFreshenOn();
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    const first: string[][] = [];
+    const second: string[][] = [];
+
+    const one = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => first.push(argv),
+    });
+    const two = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/New.md",
+      to: "Projects/Newer.md",
+      apply: true,
+      refreshSpawn: (argv: string[]) => second.push(argv),
+    });
+
+    expect(one.references?.refresh).toBe(INDEX_REFRESH.claimed);
+    // The intercepted spawn never runs a child, so the first claim is
+    // still held - and the second write must not spawn past it.
+    expect(two.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(second).toHaveLength(0);
+  });
+
+  test("a freshen interval of 0 disables the post-write spawn - config off means off", async () => {
+    savedInterval = "60";
+    process.env[FRESHEN_INTERVAL_ENV] = "0";
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(spawned).toHaveLength(0);
+  });
+
+  test("a plan-only run claims nothing", async () => {
+    withFreshenOn();
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(false),
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.applied).toBe(false);
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(spawned).toHaveLength(0);
+  });
+
+  test("an unindexed vault claims nothing - there is nothing to refresh", async () => {
+    withFreshenOn();
+    note("Projects/Old.md", "x\n");
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.references?.index.state).toBe(INDEX_EVIDENCE.absent);
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(spawned).toHaveLength(0);
+  });
+
+  test("a spawn failure never fails the write", async () => {
+    withFreshenOn();
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "body\n");
+    note("Projects/Ref.md", "see [[Projects/Old]]\n");
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: () => {
+        throw new Error("no fork");
+      },
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(read("Projects/New.md")).toContain("body");
+    expect(read("Projects/Ref.md")).toContain("[[New]]");
+  });
+
+  test("an applied delete claims the same refresh", async () => {
+    withFreshenOn();
+    await stampIndex(new Date().toISOString());
+    note("Projects/Gone.md", "x\n");
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.delete,
+      path: "Projects/Gone.md",
+      apply: true,
+      confirm: true,
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.claimed);
+    expect(spawned).toHaveLength(1);
   });
 });
 

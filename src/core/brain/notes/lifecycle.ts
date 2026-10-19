@@ -26,11 +26,16 @@
  * A rename that reports success and stops is a lie, and it is worth being
  * precise about which lie. The Brain backlink index (`backlinks.ts`) is a
  * full scan and Brain-scoped. The vault-wide `links` table is only as
- * fresh as the last `indexVault` pass, and there is no write-to-index
- * hook anywhere in this codebase. So a rename can truthfully say only
- * this: of the Markdown files it READ during this call, these are the
- * ones whose `[[...]]` spellings it rewrote - and the derived index still
- * holds the old path until something re-indexes.
+ * fresh as the last `indexVault` pass. An applied relocation or delete
+ * now CLAIMS one detached, claim-guarded refresh of that index - the
+ * freshen-on-read machinery run at force - so the window in which the
+ * index still holds the old paths starts closing at the write itself,
+ * and the claim rides the report beside the evidence. The claim is not
+ * an invariant: until the detached run lands, a search can still answer
+ * from the old paths. So a rename can truthfully say only this: of the
+ * Markdown files it READ during this call, these are the ones whose
+ * `[[...]]` spellings it rewrote, and the derived index holds the old
+ * path until the claimed run - or the command on the report - lands.
  *
  * Three consequences are load-bearing and each is reported rather than
  * assumed:
@@ -240,11 +245,14 @@ export function isBasenameRewrite(value: unknown): value is BasenameRewrite {
 /**
  * The state of the search index at the moment this call finished.
  *
- * There is no `current` member and that is a result, not an omission: no
- * write path in this codebase updates the `links` table, so an index that
- * exists is stale with respect to a relocation that just happened, by
- * construction. Declaring a member nothing can produce would be inviting
- * a reader to believe a rename might have refreshed the index.
+ * There is no `current` member and that is a result, not an omission:
+ * the refresh an applied write claims is detached, so at the instant
+ * this evidence is read no run has landed yet - an index that exists is
+ * stale with respect to a relocation that just happened, every time.
+ * Declaring a member nothing can produce would be inviting a reader to
+ * believe a rename might have refreshed the index; the claim that a run
+ * is IN FLIGHT travels on the report beside this evidence, never inside
+ * it.
  *
  * `unchanged` is the plan-only counterpart, and it exists because that
  * argument has a premise: an index goes stale with respect to a
@@ -280,6 +288,34 @@ export function isIndexEvidenceState(value: unknown): value is IndexEvidenceStat
     typeof value === "string" && (INDEX_EVIDENCE_STATES as ReadonlyArray<string>).includes(value)
   );
 }
+
+/**
+ * What this call did about a detached refresh of the derived index.
+ *
+ * Two tokens, and the difference between them is the honesty claim. A
+ * write that CLAIMED a refresh has started the same claim-guarded
+ * detached run the freshen-on-read path starts, and that run - not this
+ * call - will bring the index around. `not_claimed` covers every case
+ * where nothing was started: freshening configured off, another run
+ * already holding the claim, no index to refresh, a failed spawn. In
+ * every one of them {@link IndexEvidence.nextCommand} remains the way
+ * the index actually gets reconciled, which is exactly why the claim
+ * must never read as a guarantee.
+ */
+export const INDEX_REFRESH = Object.freeze({
+  /** A detached refresh run was started for this write and holds the freshen claim. */
+  claimed: "claimed",
+  /** No refresh was started; the index evidence's next command still reconciles. */
+  notClaimed: "not_claimed",
+} as const);
+
+/** Closed union over {@link INDEX_REFRESH}. */
+export type IndexRefresh = (typeof INDEX_REFRESH)[keyof typeof INDEX_REFRESH];
+
+/** Membership list, in declaration order. */
+export const INDEX_REFRESHES: ReadonlyArray<IndexRefresh> = Object.freeze(
+  Object.values(INDEX_REFRESH),
+);
 
 /** What the derived index knows, and how old that knowledge is. */
 export interface IndexEvidence {
@@ -335,6 +371,12 @@ export interface NoteReferenceReport {
   readonly basename: BasenameRewrite;
   /** How fresh the derived index is with respect to this call. */
   readonly index: IndexEvidence;
+  /**
+   * Whether this write started the detached index refresh. `claimed`
+   * says a run is IN FLIGHT, never that it has landed - the index
+   * evidence beside it still describes the index as this call left it.
+   */
+  readonly refresh: IndexRefresh;
 }
 
 /**
@@ -444,6 +486,14 @@ export interface NoteLifecycleInput {
    * reads the vault directly).
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * Test seam: replaces the detached spawn of the post-write index
+   * refresh, the same seam shape the freshen-on-read callers inject.
+   * Absent, the spawn is the real detached one, and a short-lived CLI
+   * process is not its parent for long - which is why the child is
+   * detached in the first place.
+   */
+  readonly refreshSpawn?: (argv: string[]) => void;
 }
 
 export interface NoteLifecycleResult {
@@ -607,6 +657,50 @@ async function readIndexEvidence(vault: string, wrote: boolean): Promise<IndexEv
       lastIndexedAt: null,
       nextCommand: REINDEX_COMMAND,
     });
+  }
+}
+
+/**
+ * Try to claim one detached refresh of the derived index on behalf of a
+ * write that just happened - the freshen-on-read machinery, forced past
+ * the freshness gate because the stamp is now older than the vault it
+ * describes. The claim protocol is the reader path's, verbatim: the
+ * same claim file, so a lifecycle refresh and a reader-triggered
+ * freshen exclude each other, and a second write that arrives while the
+ * first run still holds the claim starts nothing.
+ *
+ * Everything that can refuse is allowed to, and every refusal and every
+ * failure lands on {@link INDEX_REFRESH.notClaimed}: the write already
+ * happened, the refresh is best-effort by design, and the report's next
+ * command reconciles the index whatever became of the spawn. `spawn` is
+ * the injected test seam; absent, the child is the real detached run.
+ *
+ * The imports are deferred for the same reason
+ * {@link readIndexEvidence}'s are: the search barrel reaches back into
+ * the Brain tree, and a static edge from a Brain note writer into it is
+ * the shape the acyclic-import ratchet exists to keep out.
+ */
+async function claimPostWriteRefresh(
+  vault: string,
+  index: IndexEvidence,
+  spawn: ((argv: string[]) => void) | undefined,
+): Promise<IndexRefresh> {
+  // Stale is the only state that describes an index this call aged. An
+  // absent index holds nothing to refresh, an unreadable one has no
+  // stamp to force past, and both are already on the report with the
+  // command that rebuilds or reconciles them.
+  if (index.state !== INDEX_EVIDENCE.stale) return INDEX_REFRESH.notClaimed;
+  try {
+    const { resolveSearchConfig } = await import("../../search/index.ts");
+    const { maybeFreshenIndex } = await import("../../search/freshen.ts");
+    const decision = maybeFreshenIndex(resolveSearchConfig({ vault }), {
+      lastIndexedAt: index.lastIndexedAt,
+      force: true,
+      ...(spawn !== undefined ? { spawn } : {}),
+    });
+    return decision === "spawned" ? INDEX_REFRESH.claimed : INDEX_REFRESH.notClaimed;
+  } catch {
+    return INDEX_REFRESH.notClaimed;
   }
 }
 
@@ -861,7 +955,9 @@ function relocateBytes(
  * before the count guard runs; the count guard runs before any byte
  * moves; and the index evidence is read at the END, so the instant it
  * reports is the one a caller comparing it against the relocation will
- * actually reason about.
+ * actually reason about, with the refresh claim trailing it - the claim
+ * starts a detached run, and the evidence must stay the description of
+ * the index as this call left it.
  */
 export async function noteLifecycle(
   vault: string,
@@ -1013,6 +1109,8 @@ export async function noteLifecycle(
         },
       );
       snapshot = Object.freeze({ runId: gated.snapshot.runId, path: gated.snapshot.path });
+      const index = await readIndexEvidence(vault, true);
+      const refresh = await claimPostWriteRefresh(vault, index, input.refreshSpawn);
       return finish(
         action,
         source.relPath,
@@ -1026,7 +1124,8 @@ export async function noteLifecycle(
         [],
         [],
         basename,
-        await readIndexEvidence(vault, true),
+        index,
+        refresh,
         cascade,
       );
     }
@@ -1079,6 +1178,15 @@ export async function noteLifecycle(
     },
   });
 
+  const index = await readIndexEvidence(vault, apply);
+  // The refresh claim trails the evidence read on purpose: the evidence
+  // must describe the index as this call left it, and the claim starts a
+  // DETACHED run that will not have landed by any instant this call can
+  // observe. A plan-only run aged nothing and claims nothing.
+  const refresh = apply
+    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn)
+    : INDEX_REFRESH.notClaimed;
+
   return finish(
     action,
     source.relPath,
@@ -1092,7 +1200,8 @@ export async function noteLifecycle(
     retargets.flatMap((r) => (r.to === undefined ? [] : [{ from: r.from, to: r.to }])),
     rewriteFailures,
     basename,
-    await readIndexEvidence(vault, apply),
+    index,
+    refresh,
     cascade,
   );
 }
@@ -1261,6 +1370,7 @@ function finish(
   rewriteFailures: ReadonlyArray<{ readonly path: string; readonly reason: string }>,
   basename: BasenameRewrite,
   index: IndexEvidence,
+  refresh: IndexRefresh,
   cascade: NoteDeleteCascade | null,
 ): NoteLifecycleResult {
   return Object.freeze({
@@ -1279,6 +1389,7 @@ function finish(
       rewriteFailures: Object.freeze([...rewriteFailures]),
       basename,
       index,
+      refresh,
     }),
   });
 }

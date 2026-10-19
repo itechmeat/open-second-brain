@@ -55,6 +55,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
   BASENAME_REWRITE,
   INDEX_EVIDENCE,
+  INDEX_REFRESH,
   NOTE_LIFECYCLE_ACTION,
   noteLifecycle,
   NoteLifecycleError,
@@ -265,6 +266,41 @@ describe("the bare-basename guard (5)", () => {
     });
     expect(res.references.basename).toBe(BASENAME_REWRITE.applied);
     expect(read("Notes/Ref.md")).toContain("[[New]]");
+  });
+});
+
+describe("the refresh claim beside the index evidence (7)", () => {
+  test("a claimed refresh does not pretend the index has already caught up", async () => {
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+    // Freshen ON, the stamp far older than any interval: this write
+    // claims the detached refresh.
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
+    let res;
+    try {
+      res = await noteLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.rename,
+        path: "Projects/Old.md",
+        to: "Projects/New.md",
+        apply: true,
+        refreshSpawn: () => {},
+      });
+    } finally {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+    }
+    expect(res.references.refresh).toBe(INDEX_REFRESH.claimed);
+    // The claim says a run is IN FLIGHT, nothing more: the evidence
+    // still reports the pre-refresh stamp and the stale state, and the
+    // next command stays on the report.
+    expect(res.references.index.state).toBe(INDEX_EVIDENCE.stale);
+    expect(res.references.index.lastIndexedAt).toBe("2026-08-15T00:00:00.000Z");
+    expect(res.references.index.nextCommand.length).toBeGreaterThan(0);
   });
 });
 
