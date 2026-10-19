@@ -354,19 +354,31 @@ function renameInput(apply: boolean) {
 describe("the detached refresh an applied write claims", () => {
   const FRESHEN_INTERVAL_ENV = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
   let savedInterval: string | undefined;
+  let intervalWasSaved = false;
 
   beforeEach(() => {
     savedInterval = undefined;
+    intervalWasSaved = false;
   });
   afterEach(() => {
-    if (savedInterval !== undefined) {
-      process.env[FRESHEN_INTERVAL_ENV] = savedInterval;
-      savedInterval = undefined;
-    }
+    if (!intervalWasSaved) return;
+    // Restore whatever the environment ACTUALLY held, including its
+    // absence. Writing back a hardcoded "60" here once leaked a freshen
+    // interval onto every follower test file sharing the process.
+    if (savedInterval === undefined) delete process.env[FRESHEN_INTERVAL_ENV];
+    else process.env[FRESHEN_INTERVAL_ENV] = savedInterval;
+    intervalWasSaved = false;
   });
 
+  /** Capture the interval the environment holds right now, once. */
+  function saveInterval(): void {
+    if (intervalWasSaved) return;
+    savedInterval = process.env[FRESHEN_INTERVAL_ENV];
+    intervalWasSaved = true;
+  }
+
   function withFreshenOn(): void {
-    savedInterval = process.env[FRESHEN_INTERVAL_ENV] ?? "0";
+    saveInterval();
     process.env[FRESHEN_INTERVAL_ENV] = "60";
   }
 
@@ -420,7 +432,7 @@ describe("the detached refresh an applied write claims", () => {
   });
 
   test("a freshen interval of 0 disables the post-write spawn - config off means off", async () => {
-    savedInterval = "60";
+    saveInterval();
     process.env[FRESHEN_INTERVAL_ENV] = "0";
     await stampIndex(new Date().toISOString());
     note("Projects/Old.md", "x\n");
