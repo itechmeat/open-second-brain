@@ -82,12 +82,15 @@ function writeEntityNode(
 }
 
 /** Write a source page into the vault and resolve its links the way a
- * page-sourced caller does: server-side, in first-occurrence order. */
+ * page-sourced caller does: server-side, in first-occurrence order. The
+ * `visible` predicate is the resolver's REQUIRED argument - these
+ * fixtures run at the vault's own reach, and say so here rather than
+ * letting a default decide. */
 function resolveSourcePageLinks(rel: string, body: string): string[] {
   const abs = join(vault, rel);
   mkdirSync(join(abs, ".."), { recursive: true });
   writeFileSync(abs, body, "utf8");
-  return pageEntityLinks(body, entityLinkResolver(vault));
+  return pageEntityLinks(body, entityLinkResolver(vault, { visible: () => true }));
 }
 
 function entitiesLineOfBody(body: string): string | undefined {

@@ -20,6 +20,7 @@ import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import {
   entityLinkResolver,
   pageEntityLinks,
+  type EntityLinkAccessor,
 } from "../../../../src/core/brain/intake/page-entity-links.ts";
 import { __clearEntityIndexCache } from "../../../../src/core/brain/entities/index-builder.ts";
 
@@ -97,6 +98,28 @@ describe("pageEntityLinks", () => {
     ).toEqual([]);
   });
 
+  test("a throwing accessor degrades to the partial list, not a failed page", () => {
+    // PINNED, not incidental: the accessor is where withholding and
+    // resolving live, and one target it raises on must cost the page
+    // only THAT target - the links before it stay attached, the links
+    // after it are indistinguishable from absent, and the page itself
+    // never fails. If this test starts failing, someone turned a
+    // resolver fault into a failed read.
+    const ids = pageEntityLinks(
+      [
+        "- [[ent-people-ada-lovelace]] wrote the note.",
+        "- [[ent-project-atlas]] funded it.",
+        "- [[ent-orgs-acme]] reviewed it.",
+      ].join("\n"),
+      (target) => {
+        if (target === "ent-people-ada-lovelace") return "ent-people-ada-lovelace";
+        if (target === "ent-project-atlas") throw new Error("index exploded mid-page");
+        return target === "ent-orgs-acme" ? "ent-orgs-acme" : undefined;
+      },
+    );
+    expect(ids).toEqual(["ent-people-ada-lovelace", "ent-orgs-acme"]);
+  });
+
   test("skips media and code regions the wikilink extractor skips", () => {
     const ids = pageEntityLinks(
       ["![[ent-people-ada-lovelace.png]]", "`[[ent-project-atlas]]`", "[[ent-orgs-acme]]"].join(
@@ -115,7 +138,10 @@ describe("entityLinkResolver", () => {
   });
 
   test("resolves the id, .md, path, slug-prefixed and alias spellings", () => {
-    const resolve = entityLinkResolver(vault);
+    // These tests run at the vault's own reach, and the resolver makes
+    // that decision EXPLICIT: the predicate is a required argument, so
+    // "everything counts" is written here rather than defaulted to.
+    const resolve = entityLinkResolver(vault, { visible: () => true });
     expect(resolve("ent-people-ada-lovelace")).toBe("ent-people-ada-lovelace");
     expect(resolve("ent-people-ada-lovelace.md")).toBe("ent-people-ada-lovelace");
     expect(resolve("Brain/entities/people/ent-people-ada-lovelace.md")).toBe(
@@ -127,7 +153,7 @@ describe("entityLinkResolver", () => {
   });
 
   test("leaves bare names, unknown targets and non-entity notes unresolved", () => {
-    const resolve = entityLinkResolver(vault);
+    const resolve = entityLinkResolver(vault, { visible: () => true });
     expect(resolve("Ada Lovelace")).toBeUndefined();
     expect(resolve("ent-people-nobody")).toBeUndefined();
     expect(resolve("some-regular-note")).toBeUndefined();
@@ -136,7 +162,7 @@ describe("entityLinkResolver", () => {
   test("drops non-canonical entity pages before returning", () => {
     writeEntityNode("orgs", "ent-orgs-retired", "Retired Co", [], "archived");
     writeEntityNode("orgs", "ent-orgs-quarantined", "Quarantined Co", [], "quarantine");
-    const resolve = entityLinkResolver(vault);
+    const resolve = entityLinkResolver(vault, { visible: () => true });
     expect(resolve("ent-orgs-retired")).toBeUndefined();
     expect(resolve("ent-orgs-quarantined")).toBeUndefined();
     expect(resolve("orgs/retired-co")).toBeUndefined();
@@ -156,8 +182,21 @@ describe("entityLinkResolver", () => {
     const broken = join(vault, "Brain", "entities", "people");
     writeFileSync(join(broken, "ent-people-broken.md"), "this is not frontmatter at all", "utf8");
     __clearEntityIndexCache();
-    const resolve = entityLinkResolver(vault);
+    const resolve = entityLinkResolver(vault, { visible: () => true });
     expect(resolve("ent-people-broken")).toBeUndefined();
     expect(resolve("ent-people-ada-lovelace")).toBe("ent-people-ada-lovelace");
+  });
+
+  test("the visibility predicate is a required argument, not a defaulted one", () => {
+    // A forgotten predicate must be a TYPE error at the call site, never
+    // a silent decision that every canonical-scope entity - private
+    // pages included - may be named in an anchor list. The bad call sits
+    // in a function the runtime never invokes: the assertion is tsc's,
+    // not bun's.
+    const resolveWith = entityLinkResolver;
+    const forgets = (): EntityLinkAccessor =>
+      // @ts-expect-error - omitting `visible` refuses to compile
+      resolveWith(vault);
+    expect(typeof forgets).toBe("function");
   });
 });

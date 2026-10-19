@@ -87,18 +87,22 @@ export function pageEntityLinks(content: string, resolve: EntityLinkAccessor): s
 export interface EntityLinkResolverOptions {
   /**
    * May the caller read the entity page at this VAULT-RELATIVE path?
-   * Optional because a caller already running at the vault's own reach
-   * (a local maintenance lane, the local CLI) needs no narrower answer;
-   * a caller deriving the list for a narrower reader binds its rule
-   * here. A refused page is dropped before the list is returned, so the
-   * refused id is not merely hidden but absent.
+   * REQUIRED, with no default: a predicate nobody wrote must not read as
+   * "everything is visible", because the resolver indexes every
+   * canonical-scope entity it can see, and the anchor list naming an
+   * entity page the reader cannot read IS the disclosure. A caller
+   * already running at the vault's own reach (a local maintenance lane,
+   * the local CLI) passes `() => true` - the decision stays visible at
+   * the call site, and a caller deriving the list for a narrower reader
+   * binds its rule here. A refused page is dropped before the list is
+   * returned, so the refused id is not merely hidden but absent.
    */
-  readonly visible?: (rel: string) => boolean;
+  readonly visible: (rel: string) => boolean;
 }
 
 /**
  * The production {@link EntityLinkAccessor} over `vault`'s entity index,
- * built once per call. Canonical-scope records only; a page the optional
+ * built once per call. Canonical-scope records only; a page the caller's
  * `visible` predicate refuses is dropped before answering, under every
  * spelling it answers to. Never throws: an index that cannot build
  * answers `undefined` for every target, which is the one answer that
@@ -106,7 +110,7 @@ export interface EntityLinkResolverOptions {
  */
 export function entityLinkResolver(
   vault: string,
-  opts: EntityLinkResolverOptions = {},
+  opts: EntityLinkResolverOptions,
 ): EntityLinkAccessor {
   let index: ReturnType<typeof buildEntityIndex>;
   try {
@@ -119,7 +123,7 @@ export function entityLinkResolver(
   for (const entity of index.entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     const rel = relative(vault, entity.path).split(sep).join("/");
-    if (opts.visible !== undefined && !opts.visible(rel)) continue;
+    if (!opts.visible(rel)) continue;
     byId.set(entity.id, entity.id);
     for (const alias of entity.aliases) {
       const normalized = normalizeEntityName(alias);
