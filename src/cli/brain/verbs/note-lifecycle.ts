@@ -73,8 +73,12 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
         next_command: res.references.index.nextCommand,
       },
       // `claimed` says a detached refresh run is IN FLIGHT, never that it
-      // has landed; every other value names why nothing was started.
+      // has landed; every other value names why nothing was started, and
+      // `refresh_reason` spells that reason - the freshen machinery's own
+      // skip token, or the error it raised - so `not_claimed` is never
+      // the whole answer a caller receives.
       refresh: res.references.refresh,
+      refresh_reason: res.references.refreshReason,
     },
     cascade:
       res.cascade === null
@@ -130,7 +134,11 @@ function renderText(res: NoteLifecycleResult): string {
     "\n" +
     `  search index: ${refs.index.state}` +
     (refs.index.lastIndexedAt === null ? "" : ` since ${refs.index.lastIndexedAt}`) +
+    // The reason rides the token in prose too: an operator reading a
+    // terminal is exactly the person who has to tell a deliberate
+    // config-off from a held claim or a broken spawn.
     `; refresh: ${refs.refresh}` +
+    (refs.refreshReason === null ? "" : ` (${refs.refreshReason})`) +
     `; next: ${refs.index.nextCommand}`
   );
 }

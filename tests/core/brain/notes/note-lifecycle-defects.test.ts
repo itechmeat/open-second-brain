@@ -54,6 +54,11 @@
  *      the freshen machinery answered with a skip token instead of
  *      throwing, and one transient failure read as broken forever
  *      because a successful claim never cleared the slot.
+ *  20. the reason a refused refresh gave lived only in a process-global
+ *      that no production surface rendered - and in a multi-vault server
+ *      that global could answer one vault's reason for another. The
+ *      reason now travels on the report that refused, as
+ *      `references.refresh_reason`, read from that call's own decision.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -75,7 +80,6 @@ import {
   BASENAME_REWRITE,
   INDEX_EVIDENCE,
   INDEX_REFRESH,
-  lastRefreshClaimFailureMessage,
   NOTE_LIFECYCLE_ACTION,
   noteLifecycle,
   NoteLifecycleError,
@@ -387,14 +391,15 @@ describe("a refresh claim whose machinery raises", () => {
     realFreshen = null;
   });
 
-  test("still answers not_claimed, but records the failure where a diagnostic can name it", async () => {
+  test("still answers not_claimed, and the report names the failure (20)", async () => {
     // Force the freshen machinery to raise when the claim invokes it -
     // the shape of a permanently broken freshen path, as opposed to one
     // deliberately configured off. The token stays `not_claimed` either
-    // way (the public surface does not grow for this), but the old bare
-    // catch swallowed the distinction entirely: a broken spawn was
-    // indistinguishable from a disabled one, and nothing anywhere said
-    // so.
+    // way (the public vocabulary does not grow for this), but the old
+    // bare catch swallowed the distinction entirely: a broken spawn was
+    // indistinguishable from a disabled one. The reason now lands on the
+    // result itself, read from THIS call's decision - never from a
+    // process-global another vault could have written.
     realFreshen = { ...(await import(FRESHEN_MODULE)) };
     mock.module(FRESHEN_MODULE, () => ({
       maybeFreshenIndex: () => {
@@ -419,10 +424,10 @@ describe("a refresh claim whose machinery raises", () => {
 
     expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
     expect(res.applied).toBe(true);
-    expect(lastRefreshClaimFailureMessage()).toBe("freshen machinery exploded");
+    expect(res.references.refreshReason).toBe("freshen machinery exploded");
   });
 
-  test("a refusal that answers instead of throwing is recorded, and a later success clears it (19)", async () => {
+  test("a refusal that answers instead of throwing names its skip token, and a later success clears it (19)", async () => {
     // The freshen machinery refuses INSIDE itself - a spawn that failed
     // there answers with a skip token and does not throw - so the bare
     // catch above never ran for it: the diagnostic stayed empty and a
@@ -451,11 +456,11 @@ describe("a refresh claim whose machinery raises", () => {
     });
 
     expect(refused.references.refresh).toBe(INDEX_REFRESH.notClaimed);
-    // The skip token IS the reason: it lands on the diagnostic verbatim.
-    expect(lastRefreshClaimFailureMessage()).toBe("spawn_failed");
+    // The skip token IS the reason: it lands on the report verbatim.
+    expect(refused.references.refreshReason).toBe("spawn_failed");
 
-    // And a claim that succeeds clears the slot, so one transient
-    // refusal does not read as a permanently broken freshen path.
+    // And a claim that succeeds carries no reason, so one transient
+    // refusal is not misread later as a permanently broken freshen path.
     mock.module(FRESHEN_MODULE, () => realFreshen!);
     const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
     process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
@@ -469,7 +474,7 @@ describe("a refresh claim whose machinery raises", () => {
         refreshSpawn: () => {},
       });
       expect(claimed.references.refresh).toBe(INDEX_REFRESH.claimed);
-      expect(lastRefreshClaimFailureMessage()).toBeNull();
+      expect(claimed.references.refreshReason).toBeNull();
     } finally {
       process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
     }

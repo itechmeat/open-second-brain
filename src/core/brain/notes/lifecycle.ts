@@ -160,8 +160,6 @@ import { pathCovers } from "../../vault-scope/defaults.ts";
 import { assertExpectedCount } from "../count-guard.ts";
 import { DERIVATION_SCAN_SCOPE, traceNoteDerivations } from "../source-cleanup.ts";
 import { BRAIN_LOG_REL, BRAIN_ROOT_REL } from "../path-constants.ts";
-import { requireNextStep } from "../next-step.ts";
-import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "../gates/recoverability.ts";
 import { retargetWikilinks, type WikilinkRetarget } from "../page-dedup.ts";
 import { minimalSpellingFor } from "../link-graph/minimal-spelling.ts";
@@ -241,98 +239,35 @@ export function isBasenameRewrite(value: unknown): value is BasenameRewrite {
 }
 
 // ----- How stale the derived index is ---------------------------------------
+//
+// The vocabulary, the evidence read and the refresh claim live in
+// `./index-refresh.ts` - lifted out of this module so the note create and
+// content-update writers could claim the SAME refresh without importing
+// the lifecycle back (this module already imports their path envelope,
+// and a second copy of the claim is how two surfaces come to report two
+// different refusals). This module re-exports the vocabulary unchanged:
+// every report this module builds answers in the same tokens it always
+// answered in, with the refusal's reason now on the report itself.
 
-/**
- * The state of the search index at the moment this call finished.
- *
- * There is no `current` member and that is a result, not an omission:
- * the refresh an applied write claims is detached, so at the instant
- * this evidence is read no run has landed yet - an index that exists is
- * stale with respect to a relocation that just happened, every time.
- * Declaring a member nothing can produce would be inviting a reader to
- * believe a rename might have refreshed the index; the claim that a run
- * is IN FLIGHT travels on the report beside this evidence, never inside
- * it.
- *
- * `unchanged` is the plan-only counterpart, and it exists because that
- * argument has a premise: an index goes stale with respect to a
- * relocation THAT HAPPENED. A run with `apply: false` moved no byte and
- * rewrote no spelling, so the index describes the vault exactly as well
- * after the call as before it, and reporting `stale` there was a false
- * statement about the one field this module's honesty rests on. It is
- * deliberately not named `current`: the claim is only that THIS call did
- * not age the index, never that some earlier write did not.
- */
-export const INDEX_EVIDENCE = Object.freeze({
-  /** An index exists; its last pass predates this call and names the old path. */
-  stale: "stale",
-  /** An index exists and this call wrote nothing, so it is no staler. */
-  unchanged: "unchanged",
-  /** No index at the configured path, so it held no evidence either way. */
-  absent: "absent",
-  /** An index exists and could not be opened, or records no run instant. */
-  unreadable: "unreadable",
-} as const);
+export {
+  INDEX_EVIDENCE_STATES,
+  INDEX_REFRESHES,
+  isIndexEvidenceState,
+  isIndexRefresh,
+  type IndexEvidenceState,
+  type IndexRefresh,
+  type PostWriteRefreshClaim,
+} from "./index-refresh.ts";
+export { INDEX_EVIDENCE, INDEX_REFRESH, readIndexEvidence, type IndexEvidence };
 
-/** Closed union over {@link INDEX_EVIDENCE}. */
-export type IndexEvidenceState = (typeof INDEX_EVIDENCE)[keyof typeof INDEX_EVIDENCE];
-
-/** Membership list, in declaration order. */
-export const INDEX_EVIDENCE_STATES: ReadonlyArray<IndexEvidenceState> = Object.freeze(
-  Object.values(INDEX_EVIDENCE),
-);
-
-/** See {@link isNoteLifecycleAction} for why the parameter is `unknown`. */
-export function isIndexEvidenceState(value: unknown): value is IndexEvidenceState {
-  return (
-    typeof value === "string" && (INDEX_EVIDENCE_STATES as ReadonlyArray<string>).includes(value)
-  );
-}
-
-/**
- * What this call did about a detached refresh of the derived index.
- *
- * Two tokens, and the difference between them is the honesty claim. A
- * write that CLAIMED a refresh has started the same claim-guarded
- * detached run the freshen-on-read path starts, and that run - not this
- * call - will bring the index around. `not_claimed` covers every case
- * where nothing was started: freshening configured off, another run
- * already holding the claim, no index to refresh, a failed spawn. In
- * every one of them {@link IndexEvidence.nextCommand} remains the way
- * the index actually gets reconciled, which is exactly why the claim
- * must never read as a guarantee.
- */
-export const INDEX_REFRESH = Object.freeze({
-  /** A detached refresh run was started for this write and holds the freshen claim. */
-  claimed: "claimed",
-  /** No refresh was started; the index evidence's next command still reconciles. */
-  notClaimed: "not_claimed",
-} as const);
-
-/** Closed union over {@link INDEX_REFRESH}. */
-export type IndexRefresh = (typeof INDEX_REFRESH)[keyof typeof INDEX_REFRESH];
-
-/** Membership list, in declaration order. */
-export const INDEX_REFRESHES: ReadonlyArray<IndexRefresh> = Object.freeze(
-  Object.values(INDEX_REFRESH),
-);
-
-/** See {@link isNoteLifecycleAction} for why the parameter is `unknown`. */
-export function isIndexRefresh(value: unknown): value is IndexRefresh {
-  return typeof value === "string" && (INDEX_REFRESHES as ReadonlyArray<string>).includes(value);
-}
-
-/** What the derived index knows, and how old that knowledge is. */
-export interface IndexEvidence {
-  readonly state: IndexEvidenceState;
-  /**
-   * ISO instant of the index's last pass; `null` unless the index
-   * reported one, which is the `stale` and `unchanged` states.
-   */
-  readonly lastIndexedAt: string | null;
-  /** The registered command that makes the index agree with the vault again. */
-  readonly nextCommand: string;
-}
+import {
+  claimPostWriteRefresh,
+  INDEX_EVIDENCE,
+  INDEX_REFRESH,
+  readIndexEvidence,
+  type IndexEvidence,
+  type IndexRefresh,
+} from "./index-refresh.ts";
 
 /**
  * What a lifecycle call did to the vault's inbound references, and on
@@ -382,6 +317,16 @@ export interface NoteReferenceReport {
    * evidence beside it still describes the index as this call left it.
    */
   readonly refresh: IndexRefresh;
+  /**
+   * Why `refresh` is `not_claimed`: the freshen machinery's own skip
+   * token, or the message of an error it raised. `null` when a run was
+   * started, and when no claim was attempted (a plan-only run refused
+   * nothing). Rendered on every report, so `not_claimed` never has to be
+   * guessed at - a deliberate config-off reads differently from a
+   * `writer_lock`, a held claim or a broken spawn, and in a multi-vault
+   * server the reason is THIS call's own decision, never another vault's.
+   */
+  readonly refreshReason: string | null;
 }
 
 /**
@@ -567,40 +512,6 @@ const VAULT_ROOT_REL = "";
  */
 const APPEND_ONLY_REL: ReadonlyArray<string> = Object.freeze([BRAIN_LOG_REL]);
 
-/**
- * The command that reconciles the derived index with the vault. Resolved
- * from the diagnostics registry rather than written here, so the string
- * an operator is handed is the same one every other index advisory names,
- * and a registry rename fails at import instead of inside the advisory it
- * was meant to explain.
- */
-const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
-
-/**
- * The reason the most recent refresh claim did not end in a spawned run,
- * or `null` while every claim either spawned or refused for a stated
- * reason recorded earlier and since cleared. Module-level because
- * {@link claimPostWriteRefresh} has no seam to hand a sink through - the
- * same shape the session line reader's high-water mark uses - and
- * because the token that lands on the report is deliberately coarse:
- * `not_claimed` covers "configured off", "tried and failed" and "another
- * run holds the claim" alike, so a permanently broken freshen path would
- * otherwise be indistinguishable from a deliberate one, with nothing
- * anywhere naming the difference. Both kinds of refusal land here - the
- * skip token the freshen machinery answered with, or the message of an
- * error it raised - and a claim that SPAWNS clears the slot, so one
- * transient failure does not read as broken forever. Never thrown: the
- * write already happened, and the claim is best-effort by design. The
- * reader exists for the tests that pin this behaviour; no production
- * surface renders it.
- */
-let lastRefreshClaimFailure: string | null = null;
-
-/** The reason the most recent refused refresh claim gave, or `null`. */
-export function lastRefreshClaimFailureMessage(): string | null {
-  return lastRefreshClaimFailure;
-}
-
 /** The `.md` suffix, matched case-insensitively by the path envelope. */
 const MARKDOWN_SUFFIX = ".md";
 
@@ -634,136 +545,6 @@ function withoutSuffix(relPath: string): string {
  */
 function spellingsOf(relPath: string): ReadonlyArray<string> {
   return [relPath, withoutSuffix(relPath), basenameOf(relPath)];
-}
-
-/**
- * Read the derived index's freshness. Never throws: this is evidence
- * ABOUT the operation, and an unreadable index must not fail a relocation
- * that already succeeded - it must be reported as unreadable, which is a
- * different answer from "no stale references exist".
- *
- * `wrote` is what separates {@link INDEX_EVIDENCE.stale} from
- * {@link INDEX_EVIDENCE.unchanged}: the staleness claim is about what
- * THIS call did to the vault, so a plan-only run - which moved nothing
- * and rewrote nothing - cannot have aged an index and must not say it
- * did. The other two states are facts about the index file itself and
- * read the same either way.
- *
- * The import is deferred because the search barrel reaches back into the
- * Brain tree, and a static edge from a Brain note writer into it is the
- * shape the acyclic-import ratchet exists to keep out.
- */
-async function readIndexEvidence(vault: string, wrote: boolean): Promise<IndexEvidence> {
-  try {
-    const { resolveSearchConfig } = await import("../../search/index.ts");
-    const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../search/store.ts");
-    const config = resolveSearchConfig({ vault });
-    if (!existsSync(config.dbPath)) {
-      return Object.freeze({
-        state: INDEX_EVIDENCE.absent,
-        lastIndexedAt: null,
-        nextCommand: REINDEX_COMMAND,
-      });
-    }
-    const store = await Store.open(config, { mode: "read" });
-    try {
-      const last = store.getState(LAST_INDEXED_AT_STATE_KEY);
-      if (last === null) {
-        return Object.freeze({
-          state: INDEX_EVIDENCE.unreadable,
-          lastIndexedAt: null,
-          nextCommand: REINDEX_COMMAND,
-        });
-      }
-      return Object.freeze({
-        state: wrote ? INDEX_EVIDENCE.stale : INDEX_EVIDENCE.unchanged,
-        lastIndexedAt: last,
-        nextCommand: REINDEX_COMMAND,
-      });
-    } finally {
-      await store.close();
-    }
-  } catch {
-    return Object.freeze({
-      state: INDEX_EVIDENCE.unreadable,
-      lastIndexedAt: null,
-      nextCommand: REINDEX_COMMAND,
-    });
-  }
-}
-
-/**
- * Try to claim one detached refresh of the derived index on behalf of a
- * write that just happened - the freshen-on-read machinery, forced past
- * the freshness gate because the stamp is now older than the vault it
- * describes. The claim protocol is the reader path's, verbatim: the
- * same claim file, so a lifecycle refresh and a reader-triggered
- * freshen exclude each other, and a second write that arrives while the
- * first run still holds the claim starts nothing.
- *
- * Everything that can refuse is allowed to, and every refusal and every
- * failure lands on {@link INDEX_REFRESH.notClaimed}: the write already
- * happened, the refresh is best-effort by design, and the report's next
- * command reconciles the index whatever became of the spawn. `spawn` is
- * the injected test seam; absent, the child is the real detached run.
- * `now` is the caller's injected clock: passed through as the decision's
- * `nowMs`, so the freshness and backoff judgements are made on the same
- * instant the rest of the run is reproducible against, and not on
- * whichever wall clock happens to execute it. There is no freshness
- * floor against the write's own instant: the index stamp marks when a
- * run FINISHED, and a run that finished after the write began may have
- * scanned before the write landed, so a stamp cannot prove the index
- * has seen the write - a floor built on it would silently drop the one
- * refresh the write needs. Back-to-back applied writes spawn one run
- * each; the claim machinery itself - exclusivity, backoff, the
- * writer-lock probe - caps them.
- *
- * The imports are deferred for the same reason
- * {@link readIndexEvidence}'s are: the search barrel reaches back into
- * the Brain tree, and a static edge from a Brain note writer into it is
- * the shape the acyclic-import ratchet exists to keep out.
- */
-async function claimPostWriteRefresh(
-  vault: string,
-  index: IndexEvidence,
-  spawn: ((argv: string[]) => void) | undefined,
-  now: Date | undefined,
-): Promise<IndexRefresh> {
-  // Stale is the only state that describes an index this call aged. An
-  // absent index holds nothing to refresh, an unreadable one has no
-  // stamp to force past, and both are already on the report with the
-  // command that rebuilds or reconciles them.
-  if (index.state !== INDEX_EVIDENCE.stale) return INDEX_REFRESH.notClaimed;
-  try {
-    const { resolveSearchConfig } = await import("../../search/index.ts");
-    const { maybeFreshenIndex } = await import("../../search/freshen.ts");
-    const decision = maybeFreshenIndex(resolveSearchConfig({ vault }), {
-      lastIndexedAt: index.lastIndexedAt,
-      force: true,
-      ...(spawn !== undefined ? { spawn } : {}),
-      ...(now !== undefined ? { nowMs: now.getTime() } : {}),
-    });
-    if (decision !== "spawned") {
-      // A refusal is a stated reason, not a thrown one: the freshen
-      // machinery answers with a skip token - `spawn_failed` among them
-      // - so the throwing arm below never ran for a spawn that failed
-      // inside it, and the diagnostic stayed empty. Every refusal now
-      // names itself; the token stays `not_claimed` on the report.
-      lastRefreshClaimFailure = decision;
-      return INDEX_REFRESH.notClaimed;
-    }
-    // A claim that spawned clears the slot, so one transient refusal is
-    // not misread later as a permanently broken freshen path.
-    lastRefreshClaimFailure = null;
-    return INDEX_REFRESH.claimed;
-  } catch (err) {
-    // The token stays `not_claimed` - the report's vocabulary does not
-    // grow a third member for a branch nothing can act on - but the
-    // failure is no longer swallowed whole: the message lands in the
-    // module-level diagnostic so a broken freshen path can be named.
-    lastRefreshClaimFailure = err instanceof Error ? err.message : String(err);
-    return INDEX_REFRESH.notClaimed;
-  }
 }
 
 /**
@@ -1189,7 +970,7 @@ export async function noteLifecycle(
       );
       snapshot = Object.freeze({ runId: gated.snapshot.runId, path: gated.snapshot.path });
       const index = await readIndexEvidence(vault, true);
-      const refresh = await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now);
+      const claim = await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now);
       return finish(
         action,
         source.relPath,
@@ -1204,7 +985,8 @@ export async function noteLifecycle(
         [],
         basename,
         index,
-        refresh,
+        claim.refresh,
+        claim.refreshReason,
         cascade,
       );
     }
@@ -1289,10 +1071,11 @@ export async function noteLifecycle(
   // The refresh claim trails the evidence read on purpose: the evidence
   // must describe the index as this call left it, and the claim starts a
   // DETACHED run that will not have landed by any instant this call can
-  // observe. A plan-only run aged nothing and claims nothing.
-  const refresh = apply
+  // observe. A plan-only run aged nothing and claims nothing - and
+  // refused nothing, so its reason is null rather than a borrowed token.
+  const claim = apply
     ? await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now)
-    : INDEX_REFRESH.notClaimed;
+    : { refresh: INDEX_REFRESH.notClaimed, refreshReason: null };
 
   return finish(
     action,
@@ -1319,7 +1102,8 @@ export async function noteLifecycle(
     rewriteFailures,
     basename,
     index,
-    refresh,
+    claim.refresh,
+    claim.refreshReason,
     cascade,
   );
 }
@@ -1508,6 +1292,7 @@ function finish(
   basename: BasenameRewrite,
   index: IndexEvidence,
   refresh: IndexRefresh,
+  refreshReason: string | null,
   cascade: NoteDeleteCascade | null,
 ): NoteLifecycleResult {
   return Object.freeze({
@@ -1527,6 +1312,10 @@ function finish(
       basename,
       index,
       refresh,
+      // Rendered on every report, null included: a caller reading the
+      // field is reading an answer (nothing was refused, or nothing was
+      // attempted) rather than inferring one from an absent key.
+      refreshReason,
     }),
   });
 }

@@ -395,6 +395,9 @@ describe("the detached refresh an applied write claims", () => {
     });
 
     expect(res.references?.refresh).toBe(INDEX_REFRESH.claimed);
+    // A claim that started names no refusal, so the reason is null
+    // rather than a bare absent key a reader would have to guess about.
+    expect(res.references?.refreshReason).toBeNull();
     expect(spawned).toHaveLength(1);
     const argv = spawned[0]!.join(" ");
     expect(argv).toContain("search index");
@@ -426,8 +429,11 @@ describe("the detached refresh an applied write claims", () => {
 
     expect(one.references?.refresh).toBe(INDEX_REFRESH.claimed);
     // The intercepted spawn never runs a child, so the first claim is
-    // still held - and the second write must not spawn past it.
+    // still held - and the second write must not spawn past it. Its
+    // refusal names the reason instead of leaving `not_claimed` to be
+    // read as a deliberate config-off.
     expect(two.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(two.references?.refreshReason).toBe("claimed");
     expect(second).toHaveLength(0);
   });
 
@@ -444,6 +450,9 @@ describe("the detached refresh an applied write claims", () => {
     });
 
     expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    // `not_claimed` alone cannot distinguish a broken freshen path from
+    // a deliberate off; the reason can.
+    expect(res.references?.refreshReason).toBe("off");
     expect(spawned).toHaveLength(0);
   });
 
@@ -460,6 +469,9 @@ describe("the detached refresh an applied write claims", () => {
 
     expect(res.applied).toBe(false);
     expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    // No write, no attempt: a plan-only run refused nothing, so there is
+    // no reason to name - null, not a borrowed skip token.
+    expect(res.references?.refreshReason).toBeNull();
     expect(spawned).toHaveLength(0);
   });
 
@@ -475,6 +487,9 @@ describe("the detached refresh an applied write claims", () => {
 
     expect(res.references?.index.state).toBe(INDEX_EVIDENCE.absent);
     expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    // Nothing to refresh is itself a stated reason: the machinery's own
+    // no-index token, not a bare unexplained refusal.
+    expect(res.references?.refreshReason).toBe("no_index");
     expect(spawned).toHaveLength(0);
   });
 

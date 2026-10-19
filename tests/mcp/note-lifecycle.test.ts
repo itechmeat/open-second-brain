@@ -90,8 +90,12 @@ describe("dispatch", () => {
       { from: "Projects/Old", to: "New" },
       { from: "Old", to: "New" },
     ]);
-    // Freshening is off suite-wide, so the write claimed nothing.
+    // Freshening is off suite-wide, so the write claimed nothing - and
+    // the refusal says why on the same response, so a caller reading
+    // `not_claimed` is not left to distinguish a deliberate off from a
+    // broken freshen path.
     expect(references["refresh"]).toBe(INDEX_REFRESH.notClaimed);
+    expect(references["refresh_reason"]).toBe("no_index");
     const index = references["index"] as Record<string, unknown>;
     expect(index["state"]).toBe(INDEX_EVIDENCE.absent);
     expect(typeof index["next_command"]).toBe("string");

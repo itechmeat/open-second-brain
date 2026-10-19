@@ -91,8 +91,13 @@ function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
         next_command: res.references.index.nextCommand,
       },
       // `claimed` says a detached refresh run is IN FLIGHT, never that it
-      // has landed; every other value names why nothing was started.
+      // has landed; every other value names why nothing was started, and
+      // `refresh_reason` spells that reason - the freshen machinery's own
+      // skip token, or the error it raised - so `not_claimed` is never
+      // the whole answer a caller receives. Read from THIS call's own
+      // decision, never from state another vault could have written.
       refresh: res.references.refresh,
+      refresh_reason: res.references.refreshReason,
     },
     // `null` when no cascade was asked for, which is a different answer
     // from a cascade that found nothing. Rendered on every response so a
