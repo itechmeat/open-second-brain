@@ -1008,7 +1008,7 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     const before = [
       "---",
       "kind: brain-signal",
-      "_raw_codec: 0.22.0",
+      "_raw_codec: 1",
       "---",
       "## Raw",
       "entities: ent-project-atlas",
@@ -1025,15 +1025,14 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     // falls through for these and the old flow's answers stand: a
     // placeholder is still fillable, a missing section still has no
     // home - neither is counted as anything.
-    const placeholder =
-      "---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n## Raw\n_(not provided)_\n";
+    const placeholder = "---\nkind: brain-signal\n_raw_codec: 1\n---\n## Raw\n_(not provided)_\n";
     expect(decideRawRewrite(placeholder, ["ent-c"])).toEqual({
       action: "rewrite",
-      next: "---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n## Raw\nentities: ent-c\n",
+      next: "---\nkind: brain-signal\n_raw_codec: 1\n---\n## Raw\nentities: ent-c\n",
       appended: ["ent-c"],
     });
     expect(
-      decideRawRewrite("---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n\nbody\n", ["ent-c"]),
+      decideRawRewrite("---\nkind: brain-signal\n_raw_codec: 1\n---\n\nbody\n", ["ent-c"]),
     ).toEqual({ action: "no-home" });
   });
 
