@@ -68,9 +68,38 @@ describe("minimalSpellingFor", () => {
     expect(minimalSpellingFor("Deep/New.md", files)).toBe("Deep/New");
   });
 
-  test("the full relPath is the fallback when nothing shorter resolves to the destination", () => {
+  test("the suffix-less relPath is the fallback when the basename is ambiguous", () => {
     const files = ["A/New.md", "B/New.md", "C/New.md"];
     expect(minimalSpellingFor("A/New.md", files)).toBe("A/New");
+  });
+
+  test("a case-insensitive .md spelling still tries the append rung (ladder rung 2)", () => {
+    // "x.Md" ends in ".md" case-insensitively, but the ladder's append
+    // rung is unconditional: a spelling resolves when a document equals it
+    // OR it + ".md". The top-level "x.Md.md" therefore OWNS the "x.Md"
+    // spelling (rung 2 answers it before the basename rung is reached),
+    // and the nested destination must never come out as "x.Md" - the
+    // ladder would resolve that link to the OTHER note.
+    const files = ["x.Md.md", "B/x.Md.md"];
+    expect(minimalSpellingFor("B/x.Md.md", files)).not.toBe("x.Md");
+    expect(minimalSpellingFor("B/x.Md.md", files)).toBe("B/x.Md");
+  });
+
+  test("the basename rung still answers when the append form is absent", () => {
+    // With no top-level "x.Md.md" in the population the append rung has
+    // nothing to answer, so the unique nested carrier of the stored
+    // basename "x.Md" owns the spelling - the ladder's rung 3. Trying
+    // the append rung must not SUPPRESS the basename rung.
+    const files = ["B/x.Md.md", "Notes/Ref.md"];
+    expect(minimalSpellingFor("B/x.Md.md", files)).toBe("x.Md");
+  });
+
+  test("the exact-path rung beats the append rung when both documents exist", () => {
+    // The ladder's COALESCE answers the exact path before the appended
+    // one, so "x.Md" resolves to the document literally named "x.Md" -
+    // which is not the destination, and the spelling falls through.
+    const files = ["x.Md", "x.Md.md", "B/x.Md.md"];
+    expect(minimalSpellingFor("B/x.Md.md", files)).toBe("B/x.Md");
   });
 
   test("a destination absent from the population yields the destination itself, never a guess", () => {

@@ -59,19 +59,24 @@ function withoutMarkdownSuffix(relPath: string): string {
 
 /**
  * What the ladder resolves `spelling` to over `files`, or `null` when it
- * resolves to nothing. Exact-path first (with the suffix appended when
- * absent - the ladder's second rung), then the unambiguous
- * nested-basename rung, whose carriers exclude top-level documents
- * because a top-level carrier would have owned the spelling outright
- * one rung earlier.
+ * resolves to nothing. The exact rung mirrors the ladder's COALESCE
+ * order: a document named `spelling` VERBATIM answers before a document
+ * named `spelling + ".md"` - and the append is UNCONDITIONAL, exactly
+ * like the ladder's `target_path || '.md'` rung, so a spelling that
+ * already ends in `.md` in some case (`x.Md`) still tries the appended
+ * form (`x.Md.md`) instead of jumping straight to the basename rung.
+ * Only then the unambiguous nested-basename rung, whose carriers
+ * exclude top-level documents because a top-level carrier would have
+ * owned the spelling outright one rung earlier.
  */
 function resolveOverFiles(
   spelling: string,
   files: ReadonlyArray<string>,
 ): string | "ambiguous" | null {
-  const target = spelling.toLowerCase().endsWith(".md") ? spelling : `${spelling}.md`;
-  const exact = files.filter((rel) => rel === target);
-  if (exact.length > 0) return exact.length === 1 ? exact[0]! : "ambiguous";
+  const asIs = files.filter((rel) => rel === spelling);
+  if (asIs.length > 0) return asIs.length === 1 ? asIs[0]! : "ambiguous";
+  const appended = files.filter((rel) => rel === `${spelling}.md`);
+  if (appended.length > 0) return appended.length === 1 ? appended[0]! : "ambiguous";
   if (spelling.includes("/")) return null;
   const nested = files.filter((rel) => rel.includes("/") && basenameOf(rel) === spelling);
   if (nested.length === 1) return nested[0]!;
