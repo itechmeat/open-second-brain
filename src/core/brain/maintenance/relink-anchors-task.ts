@@ -51,6 +51,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { buildEntityIndex } from "../entities/index-builder.ts";
 import {
   matchFormVariants,
@@ -204,6 +205,9 @@ function resolveSourcePage(vault: string, ref: string): string | undefined {
  */
 export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): RelinkAnchorsReport {
   const apply = opts.apply === true;
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // A dry run reports would-be additions and writes nothing.
+  if (apply) assertVaultIdentityForWrite(vault);
   const agent = "maintenance";
   const now = opts.now;
   const reachCache: FrontmatterCache = new Map();
