@@ -369,9 +369,21 @@ export function takeFreshenPending(dir: string): TakenFreshenPending | null {
     restore: () => {
       try {
         linkSync(held, path);
-      } catch {
-        // The path is occupied again: a writer re-marked mid-settle
-        // with a younger instant, which supersedes ours.
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+          // A filesystem without hard links (EPERM, ENOTSUP, EXDEV on
+          // network and exFAT mounts): the exclusive put-back is
+          // unavailable there, so the take goes back by plain rename -
+          // the small window where a writer's newer marker could be
+          // replaced is the price of not destroying the marker outright.
+          try {
+            renameSync(held, path);
+            return;
+          } catch {
+            // The path is occupied again: a writer re-marked mid-settle
+            // with a younger instant, which supersedes ours.
+          }
+        }
       }
       unlinkQuietly(held);
     },
@@ -403,7 +415,9 @@ export function takeFreshenPending(dir: string): TakenFreshenPending | null {
  * on the path instead of being unlinked by this settle.
  *
  * Returns whether the extra pass ran. Throws only what `runPass`
- * throws - the caller decides how a failed extra pass is reported.
+ * throws - the take goes back on its path first, since a pass that
+ * threw covered nothing - and the caller decides how a failed extra
+ * pass is reported.
  */
 export async function settleFreshenPending(
   dir: string,
@@ -426,7 +440,15 @@ export async function settleFreshenPending(
     return false;
   }
   const secondStart = Date.now();
-  await runPass();
+  try {
+    await runPass();
+  } catch (e) {
+    // A pass that threw covered nothing, so the marker goes back on its
+    // path for the next run - it must not stay stranded in the settle's
+    // hold file, where nothing would read it again.
+    taken.restore();
+    throw e;
+  }
   if (pending.since <= secondStart) {
     // The extra pass started after the marker's instant, so it covered
     // the pending write - and the marker goes with it. A marker that

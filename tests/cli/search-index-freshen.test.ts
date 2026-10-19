@@ -188,12 +188,19 @@ test("a run locked out of the index leaves a queued marker for the next run", as
   }
 });
 
-test("a completed run clears a marker its scan covered and keeps one it did not", async () => {
-  // The happy path the gate exists to protect: a marker older than the
-  // run's scan start is covered by the main pass and cleared; a marker
-  // newer than it is not, and survives for the next run.
+test("a completed run clears a marker its scan covered and keeps one it cannot have seen", async () => {
+  // Both halves of the settle over a real child run. A marker older
+  // than the run's scan start is covered by the main pass and cleared;
+  // an instant AFTER the scan start is not - neither the main pass nor
+  // the bounded extra pass can prove it saw that write - so the marker
+  // survives the run for the next one.
   markFreshenPending(derived, Date.now() - 60_000);
   const result = await freshenRun();
   expect(result.returncode).toBe(0);
   expect(readFreshenPending(derived)).toBeNull();
+
+  markFreshenPending(derived, Date.now() + 60_000);
+  const second = await freshenRun();
+  expect(second.returncode).toBe(0);
+  expect(readFreshenPending(derived)).not.toBeNull();
 });

@@ -630,6 +630,28 @@ describe("the pending-refresh marker a refused forced claim leaves", () => {
     expect(ran).toBe(false);
     expect(passes).toBe(0);
   });
+
+  test("a failed extra pass leaves the marker queued for the next run", async () => {
+    // A pass that threw covered nothing, so the marker goes back on its
+    // path - it must not stay stranded in the settle's hold file, where
+    // nothing would read it again. This is the pin the CLI child's
+    // "an uncovered marker survives for the next run" rests on.
+    const markedAt = Date.now() - 1_000;
+    markFreshenPending(dir, markedAt);
+    const scanStart = markedAt - 5_000;
+    let passes = 0;
+    try {
+      await settleFreshenPending(dir, scanStart, async () => {
+        passes++;
+        throw new Error("indexer exploded");
+      });
+      throw new Error("the settle should have propagated the pass failure");
+    } catch (e) {
+      expect((e as Error).message).toBe("indexer exploded");
+    }
+    expect(passes).toBe(1);
+    expect(readFreshenPending(dir)).toEqual({ since: markedAt });
+  });
 });
 
 test("the spawned run is told where its state lives", () => {
