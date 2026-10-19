@@ -24,14 +24,32 @@
  * entity index. It resolves through the spellings a wikilink to an entity
  * page can actually carry, in ladder order:
  *
- *   1. the entity id itself (`[[ent-people-ada-lovelace]]`);
- *   2. the page basename or full vault path, with or without `.md`
- *      (`[[ent-people-ada-lovelace.md]]`, `[[Brain/entities/people/...]]`);
- *   3. the slug-prefixed spelling `[[people/ada-lovelace]]` - the same
+ *   1. the entity id itself, with or without the `.md` suffix
+ *      (`[[ent-people-ada-lovelace]]`, `[[ent-people-ada-lovelace.md]]`);
+ *   2. the page's own vault path, with or without `.md`
+ *      (`[[Brain/entities/people/...]]`) - a spelling that carries a
+ *      directory prefix answers ONLY as that path, never by basename
+ *      alone, because the vault's own link resolution dangles on a
+ *      prefixed spelling that names no page and so must this resolver;
+ *   3. the slug-prefixed spelling `[[people/ada-lovelace]]` - lowercased
+ *      and separator-folded exactly like the id-minting slug and the
  *      separator-tolerant spelling the anchoring kernel matches at a
  *      path-segment boundary, so what the matcher admits and what the
  *      resolver maps agree on one rule;
- *   4. a frontmatter alias, through the index's own alias vocabulary.
+ *   4. a frontmatter alias, through the index's own alias vocabulary -
+ *      except an alias more than one visible canonical entity claims:
+ *      the index records that claim as a duplicate-alias conflict and
+ *      answers it to no one, and a resolver that picked a first winner
+ *      would turn an ambiguous link into a confident wrong anchor.
+ *
+ * Every rung answers the TRIMMED target: the shared wikilink extractor
+ * captures the text between the brackets untrimmed, so the whitespace a
+ * link carries is not part of the spelling the author wrote. The `.md`
+ * suffix is the one tolerance beyond that: entity ids and paths are
+ * answered case-sensitively, because a link is matched by its exact
+ * stored spelling the same way every other link read in this codebase
+ * matches, and a case-insensitive id map would resolve spellings the
+ * vault's own link resolution refuses.
  *
  * A bare entity NAME is deliberately not a rung: name-in-text matching is
  * the anchoring kernel's job, and a link spelling the vault's own link
@@ -104,9 +122,13 @@ export interface EntityLinkResolverOptions {
  * The production {@link EntityLinkAccessor} over `vault`'s entity index,
  * built once per call. Canonical-scope records only; a page the caller's
  * `visible` predicate refuses is dropped before answering, under every
- * spelling it answers to. Never throws: an index that cannot build
- * answers `undefined` for every target, which is the one answer that
- * cannot leak a record a broken walk cannot see.
+ * spelling it answers to - and before counting as an alias claimant,
+ * since a refused page is identical to absent and cannot make a visible
+ * entity's alias ambiguous. An alias two visible entities claim is
+ * dropped for both, the index's own duplicate-alias rule mirrored over
+ * the population this accessor may name. Never throws: an index that
+ * cannot build answers `undefined` for every target, which is the one
+ * answer that cannot leak a record a broken walk cannot see.
  */
 export function entityLinkResolver(
   vault: string,
@@ -119,26 +141,44 @@ export function entityLinkResolver(
     return () => undefined;
   }
   const byId = new Map<string, string>();
-  const byAlias = new Map<string, string>();
+  const byPath = new Map<string, string>();
+  const aliasClaims = new Map<string, Set<string>>();
   for (const entity of index.entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     const rel = relative(vault, entity.path).split(sep).join("/");
     if (!opts.visible(rel)) continue;
     byId.set(entity.id, entity.id);
+    // The page's own vault path, with and without the `.md` suffix: the
+    // only directory-prefixed spellings that answer (rung 2).
+    byPath.set(rel, entity.id);
+    byPath.set(rel.replace(/\.md$/i, ""), entity.id);
     for (const alias of entity.aliases) {
       const normalized = normalizeEntityName(alias);
-      if (normalized && !byAlias.has(normalized)) byAlias.set(normalized, entity.id);
+      if (!normalized) continue;
+      const claimants = aliasClaims.get(normalized) ?? new Set<string>();
+      claimants.add(entity.id);
+      aliasClaims.set(normalized, claimants);
     }
   }
+  // Contested aliases answer no one; uncontested ones answer their one
+  // claimant, deterministically.
+  const byAlias = new Map<string, string>();
+  for (const [normalized, claimants] of aliasClaims) {
+    if (claimants.size !== 1) continue;
+    byAlias.set(normalized, claimants.values().next().value!);
+  }
   return (target) => {
-    if (byId.has(target)) return target;
-    const stripped = target.replace(/\.md$/i, "");
-    const basename = stripped.includes("/")
-      ? stripped.slice(stripped.lastIndexOf("/") + 1)
-      : stripped;
-    if (byId.has(basename)) return basename;
-    const slugPrefixed = `ent-${stripped.split("/").join("-")}`;
+    const trimmed = target.trim();
+    if (byId.has(trimmed)) return trimmed;
+    const stripped = trimmed.replace(/\.md$/i, "");
+    const asPath = byPath.get(stripped);
+    if (asPath !== undefined) return asPath;
+    if (!stripped.includes("/") && byId.has(stripped)) return stripped;
+    const slugPrefixed = `ent-${stripped
+      .split("/")
+      .map((segment) => segment.toLowerCase().replace(/[-_ ]+/g, "-"))
+      .join("-")}`;
     if (byId.has(slugPrefixed)) return slugPrefixed;
-    return byAlias.get(normalizeEntityName(target));
+    return byAlias.get(normalizeEntityName(trimmed));
   };
 }

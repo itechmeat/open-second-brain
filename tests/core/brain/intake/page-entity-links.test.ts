@@ -159,6 +159,74 @@ describe("entityLinkResolver", () => {
     expect(resolve("some-regular-note")).toBeUndefined();
   });
 
+  test("a directory prefix must be the page's own vault path, never a basename fallback", () => {
+    // A link that carries a directory prefix names THAT page: the vault's
+    // own link resolution dangles on Notes/ent-people-ada-lovelace, so
+    // answering the entity by basename alone would attach an anchor the
+    // link never supported. Only the entity page's real vault path - with
+    // or without the .md suffix - resolves through a prefixed spelling.
+    const resolve = entityLinkResolver(vault, { visible: () => true });
+    expect(resolve("Notes/ent-people-ada-lovelace")).toBeUndefined();
+    expect(resolve("Notes/ent-people-ada-lovelace.md")).toBeUndefined();
+    expect(resolve("Brain/entities/people/ent-people-ada-lovelace.md")).toBe(
+      "ent-people-ada-lovelace",
+    );
+    expect(resolve("Brain/entities/people/ent-people-ada-lovelace")).toBe(
+      "ent-people-ada-lovelace",
+    );
+  });
+
+  test("an alias two visible entities claim stays unresolved instead of first-wins", () => {
+    // The index refuses to answer a contested alias (duplicate-alias
+    // conflicts, first claimant kept only for its own reads); a resolver
+    // that answers first-wins turns an ambiguous link into a confident
+    // wrong anchor. Ambiguous stays unresolved, for every claimant.
+    writeEntityNode("people", "ent-people-ada-smith", "Ada Smith", ["Ada"]);
+    const resolve = entityLinkResolver(vault, { visible: () => true });
+    expect(resolve("Ada")).toBeUndefined();
+    // The contested spelling is gone; each entity's own spellings are not.
+    expect(resolve("ent-people-ada-lovelace")).toBe("ent-people-ada-lovelace");
+    expect(resolve("ent-people-ada-smith")).toBe("ent-people-ada-smith");
+  });
+
+  test("an alias claim is counted over the visible canonical population only", () => {
+    // An archived page is identical to absent here, so its claim cannot
+    // make a visible entity's alias ambiguous; neither can a page the
+    // visible predicate refuses.
+    writeEntityNode("orgs", "ent-orgs-acme", "Acme Co", ["Shared"]);
+    writeEntityNode("orgs", "ent-orgs-old", "Old Co", ["Shared"], "archived");
+    writeEntityNode("orgs", "ent-orgs-hidden", "Hidden Co", ["Also Shared"]);
+    writeEntityNode("orgs", "ent-orgs-visible", "Visible Co", ["Also Shared"]);
+    const refused = new Set(["Brain/entities/orgs/ent-orgs-hidden.md"]);
+    const resolve = entityLinkResolver(vault, {
+      visible: (rel) => !refused.has(rel.split("\\").join("/")),
+    });
+    expect(resolve("Shared")).toBe("ent-orgs-acme");
+    expect(resolve("Also Shared")).toBe("ent-orgs-visible");
+  });
+
+  test("a link target is trimmed before the rungs answer it", () => {
+    // WIKILINK_TARGET_RE captures the target untrimmed, so `[[id ]]` and
+    // `[[id #anchor]]` hand the resolver a trailing space; the rungs must
+    // answer the target the author wrote, not the whitespace around it.
+    const resolve = entityLinkResolver(vault, { visible: () => true });
+    expect(resolve("  ent-people-ada-lovelace  ")).toBe("ent-people-ada-lovelace");
+    expect(resolve("ent-people-ada-lovelace.md ")).toBe("ent-people-ada-lovelace");
+    expect(resolve(" people/ada-lovelace\t")).toBe("ent-people-ada-lovelace");
+    expect(resolve(" Ada ")).toBe("ent-people-ada-lovelace");
+  });
+
+  test("the slug rung folds separator runs and case like the kernel's spellings", () => {
+    // The anchoring kernel matches "ada lovelace", "ada-lovelace" and
+    // "ada_lovelace" as one class at a path-segment boundary, and ids are
+    // minted slugified; a slug-prefixed link spelled the way authors
+    // actually write them must resolve to the id those rules mint.
+    const resolve = entityLinkResolver(vault, { visible: () => true });
+    expect(resolve("people/Ada_Lovelace")).toBe("ent-people-ada-lovelace");
+    expect(resolve("People/ada lovelace")).toBe("ent-people-ada-lovelace");
+    expect(resolve("people/ada--_ lovelace.md")).toBe("ent-people-ada-lovelace");
+  });
+
   test("drops non-canonical entity pages before returning", () => {
     writeEntityNode("orgs", "ent-orgs-retired", "Retired Co", [], "archived");
     writeEntityNode("orgs", "ent-orgs-quarantined", "Quarantined Co", [], "quarantine");
