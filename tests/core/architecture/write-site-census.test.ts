@@ -980,13 +980,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
 
   "src/core/search/freshen.ts": {
     categories: [C.lockPrimitive, C.retentionDelete],
-    calls: ["renameSync", "unlinkSync", "writeFileSync"],
+    calls: ["linkSync", "renameSync", "unlinkSync", "writeFileSync"],
     reason:
       "the freshen-on-read claim is an exclusive create (`wx`) of a token file in " +
       "`.open-second-brain/`, released by unlinking it; a dead run's claim is replaced by " +
       "an atomic rename under an exclusive takeover lock; routing it through " +
       "the atomic writer would lose the exclusivity that keeps concurrent readers from " +
-      "starting a background index run each. The run's state file goes through " +
+      "starting a background index run each. The pending-write marker's settle takes the " +
+      "marker by atomic rename and puts it back through an exclusive link, so a writer " +
+      "that re-marked mid-settle keeps the path instead of being unlinked by the settle. " +
+      "The run's state file goes through " +
       "`atomicWriteFileSync`. Both are this tool's own per-device state, never a note.",
   },
 

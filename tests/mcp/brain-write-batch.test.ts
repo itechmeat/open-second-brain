@@ -481,7 +481,16 @@ describe("brain_write_batch - the absolute-path advisory on the receipt", () => 
       path: "Notes/App.md",
       content: "clean addition",
     })) as Record<string, unknown>;
-    expect(Object.keys(res)).toEqual(["appended", "path", "write_id"]);
+    // The refresh-claim marker rides the append receipt under the same
+    // vocabulary the update receipt carries (freshening is off
+    // suite-wide, so it reads not_claimed with its reason); no advisory.
+    expect(Object.keys(res)).toEqual([
+      "appended",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
     expect("path_advisory" in res).toBe(false);
   });
 });
