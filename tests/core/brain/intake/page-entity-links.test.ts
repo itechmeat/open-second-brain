@@ -159,6 +159,24 @@ describe("entityLinkResolver", () => {
     expect(resolve("some-regular-note")).toBeUndefined();
   });
 
+  test("the slug fold rung never folds a bare spelling into the id's slug", () => {
+    // The fold is the category/slug rung: it maps each PATH SEGMENT the
+    // way the anchoring kernel's separator-tolerant spelling does. Folded
+    // over a bare name it would assemble the id's own slug out of
+    // "People Ada Lovelace" or "people_ada_lovelace" - bare entity NAMEs,
+    // which are deliberately not a rung - and resolve spellings the
+    // vault's own link resolution dangles on. Case-varying a bare id
+    // stays unresolved too: ids are answered case-sensitively.
+    const resolve = entityLinkResolver(vault, { visible: () => true });
+    expect(resolve("People Ada Lovelace")).toBeUndefined();
+    expect(resolve("people_ada_lovelace")).toBeUndefined();
+    expect(resolve("Ent-People-Ada-Lovelace")).toBeUndefined();
+    expect(resolve("people ada lovelace")).toBeUndefined();
+    // The prefixed form keeps its rung, folded or not.
+    expect(resolve("People/Ada Lovelace")).toBe("ent-people-ada-lovelace");
+    expect(resolve("PEOPLE/ADA-LOVELACE")).toBe("ent-people-ada-lovelace");
+  });
+
   test("a directory prefix must be the page's own vault path, never a basename fallback", () => {
     // A link that carries a directory prefix names THAT page: the vault's
     // own link resolution dangles on Notes/ent-people-ada-lovelace, so

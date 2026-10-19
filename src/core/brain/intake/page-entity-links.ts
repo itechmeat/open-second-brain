@@ -31,11 +31,16 @@
  *      directory prefix answers ONLY as that path, never by basename
  *      alone, because the vault's own link resolution dangles on a
  *      prefixed spelling that names no page and so must this resolver;
- *   3. the slug-prefixed spelling `[[people/ada-lovelace]]` - lowercased
- *      and separator-folded exactly like the id-minting slug and the
- *      separator-tolerant spelling the anchoring kernel matches at a
- *      path-segment boundary, so what the matcher admits and what the
- *      resolver maps agree on one rule;
+ *   3. the slug-prefixed spelling `[[people/ada-lovelace]]` - each path
+ *      segment lowercased and its separator runs folded the way the
+ *      anchoring kernel's separator-tolerant spelling folds them, so
+ *      what the matcher admits and what the resolver maps agree on one
+ *      rule. The fold is the matcher's, not the full id-minting
+ *      slugify: a character only slugify folds (a period, an
+ *      apostrophe) stays as written and the spelling dangles, exactly
+ *      as the vault's own link resolution dangles on it. The rung is
+ *      defined on the category/slug form a directory prefix carries -
+ *      a spelling without one never reaches it;
  *   4. a frontmatter alias, through the index's own alias vocabulary -
  *      except an alias more than one visible canonical entity claims:
  *      the index records that claim as a duplicate-alias conflict and
@@ -174,6 +179,15 @@ export function entityLinkResolver(
     const asPath = byPath.get(stripped);
     if (asPath !== undefined) return asPath;
     if (!stripped.includes("/") && byId.has(stripped)) return stripped;
+    // A bare spelling's rungs end here. The fold below is the
+    // slug-prefixed spelling's rung, defined on the category/slug form
+    // a directory prefix carries; folded over a bare name it would
+    // mint the id's own slug out of "People Ada Lovelace" or
+    // "people_ada_lovelace" - bare entity NAMEs, which are deliberately
+    // not a rung - and resolve spellings the vault's own link
+    // resolution dangles on. Case-varying a bare id stays unresolved
+    // for the same reason: ids are answered case-sensitively.
+    if (!stripped.includes("/")) return byAlias.get(normalizeEntityName(trimmed));
     const slugPrefixed = `ent-${stripped
       .split("/")
       .map((segment) => segment.toLowerCase().replace(/[-_ ]+/g, "-"))
