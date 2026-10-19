@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +26,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { writeFrontmatterAtomic } from "../../../../src/core/vault.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
+import type { ProgressEvent } from "../../../../src/core/brain/progress.ts";
 import { writeSignal } from "../../../../src/core/brain/signal.ts";
 import { LANE_TASK, LANE_TASKS, isLaneTask } from "../../../../src/core/brain/maintenance/lane.ts";
 import { buildLaneTasks } from "../../../../src/core/brain/maintenance/lane-tasks.ts";
@@ -85,11 +87,15 @@ function writeSourcePage(rel: string, body: string): void {
 }
 
 function writePageSourcedSignal(input: {
-  readonly sourceRef: string;
+  readonly sourceRef?: string;
+  readonly sourceRefs?: ReadonlyArray<string>;
   readonly principle: string;
   readonly storedEntityIds: ReadonlyArray<string>;
   readonly topic?: string;
+  /** Write the page with no `## Raw` section at all (v0.10.1 shape). */
+  readonly noRawSection?: boolean;
 }): void {
+  const sourceRefs = input.sourceRefs ?? [input.sourceRef ?? ""];
   writeSignal(vault, {
     topic: input.topic ?? "fact-quantity",
     signal: "positive",
@@ -98,13 +104,37 @@ function writePageSourcedSignal(input: {
     created_at: "2026-10-19T01:00:00Z",
     date: "2026-10-19",
     slug: input.topic ?? "fact-quantity",
-    source: [`[[${input.sourceRef}]]`],
+    source: sourceRefs.map((ref) => `[[${ref}]]`),
     source_type: "inline",
-    dedup_hash: `hash-${input.principle.length}-${input.sourceRef.replace(/\W/g, "")}`,
-    ...(input.storedEntityIds.length > 0
-      ? { raw: `entities: ${input.storedEntityIds.join(", ")}` }
-      : { raw: "_(not provided)_" }),
+    dedup_hash: `hash-${input.principle.length}-${sourceRefs.join(".").replace(/\W/g, "")}`,
+    ...(input.noRawSection
+      ? {}
+      : input.storedEntityIds.length > 0
+        ? { raw: `entities: ${input.storedEntityIds.join(", ")}` }
+        : { raw: "_(not provided)_" }),
   });
+}
+
+/**
+ * Every byte under `Brain/log/`, as one deterministic string: the
+ * dry-run-writes-nothing pins compare whole snapshots, not single files,
+ * so a skip event landing in any shard fails the comparison.
+ */
+function logSnapshot(): string {
+  const root = brainDirs(vault).log;
+  if (!existsSync(root)) return "<absent>";
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else out.push(`${path}\n${readFileSync(path, "utf8")}`);
+    }
+  };
+  walk(root);
+  return out.join("\n");
 }
 
 function inboxFiles(): ReadonlyArray<string> {
@@ -262,8 +292,235 @@ describe("runRelinkAnchors", () => {
     expect(report.anchorsAdded).toBe(3);
   });
 
+  test("a signal without a Raw section reports no addition it could not make", () => {
+    // No `## Raw` section means the anchor has no home on the page: the
+    // rewrite refuses it, so reporting the addition - in either arm -
+    // would be a count for a write that never happens.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      noRawSection: true,
+    });
+    const file = inboxFiles()[0]!;
+    const before = readFileSync(join(brainDirs(vault).inbox, file), "utf8");
+
+    const dry = runRelinkAnchors(vault, { now: NOW });
+    expect(dry.signalsPageSourced).toBe(1);
+    expect(dry.signalsChanged).toBe(0);
+    expect(dry.anchorsAdded).toBe(0);
+
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+    expect(applied.signalsChanged).toBe(0);
+    expect(applied.anchorsAdded).toBe(0);
+    expect(readFileSync(join(brainDirs(vault).inbox, file), "utf8")).toBe(before);
+  });
+
+  test("two consecutive dry runs report identical numbers", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: ["ent-project-atlas"],
+    });
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the depot confirmed receipt the same day",
+      storedEntityIds: [],
+      topic: "fact-url",
+    });
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "no raw section on this one",
+      storedEntityIds: [],
+      topic: "fact-topic",
+      noRawSection: true,
+    });
+
+    const first = runRelinkAnchors(vault, { now: NOW });
+    const second = runRelinkAnchors(vault, { now: NOW });
+    expect(second).toEqual(first);
+  });
+
+  test("a dry run and an apply run over the same vault report the same numbers", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: ["ent-project-atlas"],
+    });
+
+    const dry = runRelinkAnchors(vault, { now: NOW });
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+    expect(applied.signalsScanned).toBe(dry.signalsScanned);
+    expect(applied.signalsPageSourced).toBe(dry.signalsPageSourced);
+    expect(applied.signalsChanged).toBe(dry.signalsChanged);
+    expect(applied.anchorsAdded).toBe(dry.anchorsAdded);
+    expect(applied.perSource).toEqual(dry.perSource);
+  });
+
+  test("a placeholder Raw section still gains the text-derived anchors", () => {
+    // The "(not provided)" placeholder is the section the rewrite can
+    // fill; a signal whose stored raw reads as absent must not lose the
+    // text match - only the WRITE waits on the rewrite's support.
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage("notes/meeting.md", "# Meeting\n\nNo entity links here.\n");
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: [],
+    });
+    const file = inboxFiles()[0]!;
+
+    const dry = runRelinkAnchors(vault, { now: NOW });
+    expect(dry.anchorsAdded).toBe(1);
+
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+    expect(applied.anchorsAdded).toBe(1);
+    expect(entitiesLineOf(file)).toBe("entities: ent-project-atlas");
+  });
+
+  test("two pointers to one page count that page once", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRefs: ["notes/meeting.md", "notes/meeting"],
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+
+    const report = runRelinkAnchors(vault, { now: NOW });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.perSource).toEqual([{ source: "notes/meeting.md", signals: 1, anchorsAdded: 1 }]);
+  });
+
+  test("a directory shadowing the page name does not swallow the page", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    // A DIRECTORY at the exact ref path: an existence probe answers true
+    // for it, and reading it fails - which must cost the pass its .md
+    // sibling, never the page itself.
+    mkdirSync(join(vault, "notes", "meeting"), { recursive: true });
+    writeFileSync(join(vault, "notes", "meeting", "inner.txt"), "x", "utf8");
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(applied.signalsPageSourced).toBe(1);
+    expect(applied.anchorsAdded).toBe(1);
+  });
+
+  test("a dry run leaves the Brain log byte-identical; the apply arm stamps the skip audit", () => {
+    // The shared anchorable build logs an entity-anchor-skip for a
+    // canonical entity whose NAME fails the quality gate. That log event
+    // is a write: the preview must compute the same anchors without
+    // stamping it, and the apply arm - the write path - stamps it exactly
+    // as the capture path does.
+    writeEntityNode("orgs", "ent-orgs-junk", "***", ["junk"]);
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+
+    const before = logSnapshot();
+    const dry = runRelinkAnchors(vault, { now: NOW });
+    expect(logSnapshot()).toBe(before);
+    expect(dry.anchorsAdded).toBe(1);
+
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+    expect(applied.anchorsAdded).toBe(dry.anchorsAdded);
+    // The write path stamps the audit the preview withheld.
+    expect(logSnapshot()).not.toBe(before);
+    expect(logSnapshot()).toContain("entity-anchor-skip");
+  });
+
+  test("the signal walk is one stage over both trees, started once", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: [],
+      topic: "fact-url",
+    });
+    // One signal archived into the processed tree, so the walk has work
+    // in both directories it scans.
+    const processedDir = brainDirs(vault).processed;
+    mkdirSync(processedDir, { recursive: true });
+    const moved = inboxFiles()[0]!;
+    renameSync(join(brainDirs(vault).inbox, moved), join(processedDir, moved));
+
+    const events: ProgressEvent[] = [];
+    runRelinkAnchors(vault, { now: NOW, onProgress: (event) => events.push(event) });
+
+    const starts = events.filter((event) => event.kind === "started");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.stage).toBe("signals");
+    expect(starts[0]!.total).toBe(2);
+    expect(events.filter((event) => event.kind === "advanced")).toHaveLength(2);
+    expect(events.filter((event) => event.kind === "finished")).toHaveLength(1);
+  });
+
+  test("a vault path with a trailing separator still resolves and counts its pages", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+
+    const report = runRelinkAnchors(`${vault}/`, { now: NOW });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.anchorsAdded).toBe(1);
+    expect(report.perSource).toEqual([{ source: "notes/meeting.md", signals: 1, anchorsAdded: 1 }]);
+  });
+
   test("an unreadable signal file is counted, never fatal", () => {
-    writeSourcePage("notes/meeting.md", "# Meeting\n");
     const dir = brainDirs(vault).inbox;
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "sig-2026-10-19-broken.md"), "totally not a signal page", "utf8");

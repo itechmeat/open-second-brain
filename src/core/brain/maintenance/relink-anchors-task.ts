@@ -3,26 +3,27 @@
  *
  * Anchors are facts of attachment: a signal whose `entities:` line omits
  * an entity it is about never reaches that entity's recall surface. The
- * write side now attaches link-derived ids beside the text-derived ones
- * (the extraction callers resolve the source page's outbound links), but
- * every signal written before that change - and every text anchor the
- * older matcher could not see - stays narrow until something recomputes
- * it. This pass is that something: it walks the signal pages, and for
+ * anchoring kernel accepts caller-resolved link-derived ids beside the
+ * text-derived ones, but that parameter is an extension seam - no shipped
+ * extraction caller resolves its source page's links yet - so the
+ * extraction callers write text-derived anchors only, and every signal
+ * stored before and since holds just what its own text named. This pass
+ * is the seam's shipped consumer: it walks the signal pages, and for
  * every PAGE-SOURCED signal (one whose `source:` pointer resolves to a
  * vault page) it recomputes the anchors with the shipped rules and unions
  * them into the stored line.
  *
  * ## The recomputation uses the shipped matchers, never new ones
  *
- * Text anchors come from the same build the capture path builds
- * (`buildAnchorables`) matched through the capture path's own occurrence
- * rule: the fact text normalized once and expanded through
- * {@link matchFormVariants}, each entity's precomputed variants tested
- * with {@link matchVariantsOccurIn} - the exact comparison
- * `routeExtractedFacts` performs, so a form this pass adds is exactly a
- * form the extractor itself would attach today. Link-derived ids come
- * from the page-link resolver ({@link ../intake/page-entity-links.ts}),
- * the same resolver the extraction callers use, with the entity pages
+ * Text anchors come from the same build the capture path builds, matched
+ * through the capture path's own occurrence rule: the fact text
+ * normalized once and expanded through {@link matchFormVariants}, each
+ * entity's precomputed variants tested with {@link matchVariantsOccurIn}
+ * - the exact comparison `routeExtractedFacts` performs, so a form this
+ * pass adds is exactly a form the extractor itself would attach today.
+ * Link-derived ids come from the page-link resolver
+ * ({@link ../intake/page-entity-links.ts}), the same resolver a
+ * page-sourced extraction caller would use, with the entity pages
  * filtered at {@link MAINTENANCE_LANE_REACH} - the lane's declared local
  * reach, the one at which a repair pass may see everything it is
  * repairing.
@@ -33,11 +34,18 @@
  * would not produce it: the pass heals narrow anchor lists, it does not
  * second-guess wide ones (an id that outlived its entity is the doctor's
  * finding, not this pass's deletion). Absent {@link RelinkAnchorsOptions.apply}
- * the pass reports what it WOULD add and writes nothing; with `apply` the
+ * the pass reports what it WOULD add and writes nothing - including the
+ * `entity-anchor-skip` audit the shared anchorable build appends for a
+ * junk-named entity: the dry run builds its anchorables through the same
+ * gate, floor and variant expansion with the logging held back, because a
+ * preview that wrote the log would not be a preview. With `apply` the
  * changed signal pages are rewritten in place through the atomic writer,
- * the stored ids first and the added ones appended. A signal without a
+ * the stored ids first and the added ones appended, and the audit is
+ * stamped exactly as the capture path stamps it. A signal without a
  * `## Raw` section is out of the rewrite's reach - the section is the
- * anchor's only home, and this pass does not restructure pages.
+ * anchor's only home, and this pass does not restructure pages - so it is
+ * counted by neither arm: a dry run never reports an addition no apply
+ * could make.
  *
  * The pass never calls a model: the recomputation is a file walk, an
  * index build and pure matching, bounded by the caller's safeguard like
@@ -45,7 +53,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
@@ -54,10 +62,13 @@ import { isPathReadableAtReach, type FrontmatterCache } from "../../search/resul
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { buildEntityIndex } from "../entities/index-builder.ts";
 import {
+  entityMatchForms,
   matchFormVariants,
   matchVariantsOccurIn,
   normalizeEntityName,
 } from "../entities/canonical.ts";
+import { resolveEntityLexicon } from "../entities/lexicon.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 import { brainDirs } from "../paths.ts";
 import { progressCounter, type ProgressSink } from "../progress.ts";
 import { parseSignal } from "../signal.ts";
@@ -68,7 +79,16 @@ import {
   pageEntityLinks,
   type EntityLinkAccessor,
 } from "../intake/page-entity-links.ts";
-import { buildAnchorables } from "../fact-extract.ts";
+import { buildAnchorables, type AnchorableEntity } from "../fact-extract.ts";
+
+/**
+ * The length floor below which a form never participates in substring
+ * matching. Kept in step with the capture kernel's `MIN_ANCHOR_FORM_LENGTH`
+ * (fact-extract.ts), which is not exported: this quiet build must apply
+ * the same floor or the dry run's report would disagree with the apply
+ * arm's changes.
+ */
+const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /** One source page's rollup in the relink report. */
 export interface RelinkSourceReport {
@@ -100,8 +120,9 @@ export interface RelinkAnchorsReport {
 
 export interface RelinkAnchorsOptions {
   /**
-   * Injected clock; it stamps the skip-audit log events the shared
-   * anchorable build may emit, exactly as the capture path stamps them.
+   * Injected clock; on the apply arm it stamps the skip-audit log events
+   * the shared anchorable build emits, exactly as the capture path stamps
+   * them. The dry run writes nothing and needs no stamp.
    */
   readonly now: Date;
   /**
@@ -122,6 +143,42 @@ const SOURCE_PAGE_MAX_BYTES = 1_048_576;
 
 /** The raw-section placeholder a signal with no stored raw content carries. */
 const RAW_PLACEHOLDER = "_(not provided)_";
+
+/**
+ * The dry run's quiet twin of the capture path's anchorable build
+ * (`buildAnchorables`): the same quality gate, the same length floor and
+ * the same separator-variant expansion, minus the `entity-anchor-skip`
+ * log events the shared build appends for a junk-named entity - those are
+ * writes, and a preview must not write. The apply arm calls the shared
+ * build, so the audit trail is stamped exactly where bytes change; the
+ * two builds compute the same forms, which is what the dry/apply
+ * agreement pin in the task's suite holds.
+ */
+function buildAnchorablesQuietly(
+  vault: string,
+  index: ReturnType<typeof buildEntityIndex>,
+): AnchorableEntity[] {
+  const lexicon = resolveEntityLexicon(vault);
+  const out: AnchorableEntity[] = [];
+  for (const entity of index.entities) {
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
+    // The capture build's own form rule, verbatim: gate each label, keep
+    // the forms at or above the length floor, expand each once into its
+    // separator variants, Set-deduped in the generator's order. A
+    // junk-named entity still anchors on its valid alias forms here,
+    // exactly as it does on the capture path.
+    const forms = [
+      ...new Set(
+        entityMatchForms([entity.name, ...entity.aliases], { lexicon })
+          .filter((f) => f.length >= MIN_ANCHOR_FORM_LENGTH)
+          .flatMap((f) => matchFormVariants(f)),
+      ),
+    ];
+    if (forms.length === 0) continue;
+    out.push({ id: entity.id, forms });
+  }
+  return out;
+}
 
 /** The `entities:` ids of a raw section, in stored order; empty when absent. */
 function storedAnchorIds(raw: string | undefined): string[] {
@@ -186,7 +243,16 @@ function sourceRefOf(entry: string): string | undefined {
   return target.length > 0 ? target : undefined;
 }
 
-/** The vault-relative page path a source ref names, or `undefined`. */
+/** True when `path` exists as a regular file - a directory is not a page. */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** The absolute page path a source ref names, or `undefined`. */
 function resolveSourcePage(vault: string, ref: string): string | undefined {
   let inside: string;
   try {
@@ -194,9 +260,13 @@ function resolveSourcePage(vault: string, ref: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (existsSync(inside)) return inside;
+  // Only a regular file resolves. A directory that happens to share the
+  // page's name must not swallow the ref: the pass reads the page the
+  // author linked, so the `.md` form is tried before the ref is given up
+  // as unresolved.
+  if (isRegularFile(inside)) return inside;
   const withMd = `${inside}.md`;
-  return existsSync(withMd) ? withMd : undefined;
+  return isRegularFile(withMd) ? withMd : undefined;
 }
 
 /**
@@ -216,6 +286,11 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   // half may name.
   const visible = (rel: string): boolean =>
     isPathReadableAtReach(vault, rel, MAINTENANCE_LANE_REACH, reachCache);
+  // Vault-relative form of an absolute path. Derived with `relative`
+  // rather than a length-based slice so a caller that handed down a
+  // non-normalized vault root (a trailing separator, a redundant segment)
+  // still yields the same relative paths as the normalized spelling.
+  const relOf = (abs: string): string => relative(vault, abs).split(sep).join("/");
 
   let index: ReturnType<typeof buildEntityIndex>;
   try {
@@ -223,7 +298,12 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   } catch {
     index = { entities: [], byKey: new Map(), byAlias: new Map(), conflicts: [] };
   }
-  const anchorables = buildAnchorables(vault, index, agent, now);
+  // The apply arm builds through the capture path's own build and stamps
+  // its skip audit; the dry run builds quietly, because a preview must
+  // not write - not even a log event.
+  const anchorables = apply
+    ? buildAnchorables(vault, index, agent, now)
+    : buildAnchorablesQuietly(vault, index);
   const linkResolver: EntityLinkAccessor = entityLinkResolver(vault, { visible });
 
   const progress = progressCounter(OPERATION.relink, opts.onProgress);
@@ -234,18 +314,29 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   let changed = 0;
   let addedTotal = 0;
 
+  // Listed first, so the walk is ONE stage with the whole denominator
+  // (both trees) - a per-directory start would reset the counter an
+  // operator is watching mid-stage.
   const dirs = [brainDirs(vault).inbox, brainDirs(vault).processed];
+  const batches: Array<{ dir: string; names: string[] }> = [];
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;
-    let names: string[];
     try {
-      names = readdirSync(dir)
-        .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
-        .toSorted();
+      batches.push({
+        dir,
+        names: readdirSync(dir)
+          .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
+          .toSorted(),
+      });
     } catch {
       continue;
     }
-    progress.start("signals", names.length);
+  }
+  progress.start(
+    "signals",
+    batches.reduce((sum, batch) => sum + batch.names.length, 0),
+  );
+  for (const { dir, names } of batches) {
     for (const name of names) {
       opts.safeguard?.checkpoint();
       const path = join(dir, name);
@@ -260,16 +351,21 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       }
       // Every source pointer that resolves to a real page in this vault.
       // A session pointer names no page and resolves to nothing, which is
-      // exactly the out-of-scope answer.
-      const sourcePaths = (signal.source ?? []).flatMap((entry) => {
-        const ref = sourceRefOf(entry);
-        if (ref === undefined) return [];
-        const resolved = resolveSourcePage(vault, ref);
-        if (resolved === undefined) return [];
-        const rel = resolved.slice(vault.length + 1);
-        return visible(rel) ? [resolved] : [];
-      });
-      if (sourcePaths.length === 0) continue;
+      // exactly the out-of-scope answer. Deduped: two pointers to one
+      // page are one source - it is read once and counted once.
+      const sources = [
+        ...new Set(
+          (signal.source ?? []).flatMap((entry) => {
+            const ref = sourceRefOf(entry);
+            if (ref === undefined) return [];
+            const resolved = resolveSourcePage(vault, ref);
+            if (resolved === undefined) return [];
+            const rel = relOf(resolved);
+            return visible(rel) ? [resolved] : [];
+          }),
+        ),
+      ].map((abs) => ({ abs, rel: relOf(abs) }));
+      if (sources.length === 0) continue;
       pageSourced++;
 
       const stored = storedAnchorIds(signal.raw);
@@ -279,21 +375,22 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       };
       // Text-derived first, through the capture path's own comparison, so a
       // form the extractor would anchor today is the form this pass adds.
-      if (signal.raw !== undefined) {
-        const haystackVariants = matchFormVariants(normalizeEntityName(signal.principle));
-        for (const anchorable of anchorables) {
-          if (matchVariantsOccurIn(anchorable.forms, haystackVariants)) push(anchorable.id);
-        }
+      // The match runs UNCONDITIONALLY: a signal whose Raw section holds
+      // only the placeholder still earns its text-derived anchors - the
+      // placeholder is exactly the line the rewrite can fill - and only
+      // the WRITE below waits on the rewrite's support.
+      const haystackVariants = matchFormVariants(normalizeEntityName(signal.principle));
+      for (const anchorable of anchorables) {
+        if (matchVariantsOccurIn(anchorable.forms, haystackVariants)) push(anchorable.id);
       }
       // Then link-derived, in body order, from each resolvable source page.
-      for (const sourcePath of sourcePaths) {
-        const rel = sourcePath.slice(vault.length + 1);
-        const rollup = perSource.get(rel) ?? { signals: 0, anchorsAdded: 0 };
+      for (const source of sources) {
+        const rollup = perSource.get(source.rel) ?? { signals: 0, anchorsAdded: 0 };
         rollup.signals++;
-        perSource.set(rel, rollup);
+        perSource.set(source.rel, rollup);
         try {
-          if (statSync(sourcePath).size > SOURCE_PAGE_MAX_BYTES) continue;
-          const content = readFileSync(sourcePath, "utf8");
+          if (statSync(source.abs).size > SOURCE_PAGE_MAX_BYTES) continue;
+          const content = readFileSync(source.abs, "utf8");
           for (const id of pageEntityLinks(content, linkResolver)) push(id);
         } catch {
           // A source page that cannot be read contributes no links; the
@@ -302,24 +399,33 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         }
       }
       if (added.length === 0) continue;
+      const nextLine = `entities: ${[...stored, ...added].join(", ")}`;
+      let next: string | undefined;
+      try {
+        next = rewriteRawEntitiesLine(readFileSync(path, "utf8"), nextLine);
+      } catch {
+        next = undefined;
+      }
+      // No `## Raw` section: the anchor has no home on this page, so no
+      // arm counts it - a dry run never reports an addition no apply
+      // could make, and run-to-run numbers stay idempotent.
+      if (next === undefined) continue;
       changed++;
       addedTotal += added.length;
-      for (const sourcePath of sourcePaths) {
-        const rollup = perSource.get(sourcePath.slice(vault.length + 1))!;
+      for (const source of sources) {
+        const rollup = perSource.get(source.rel)!;
         rollup.anchorsAdded += added.length;
       }
       if (!apply) continue;
-      const nextLine = `entities: ${[...stored, ...added].join(", ")}`;
       try {
-        const next = rewriteRawEntitiesLine(readFileSync(path, "utf8"), nextLine);
-        if (next !== undefined) atomicWriteFileSync(path, next);
+        atomicWriteFileSync(path, next);
       } catch {
         // A page that cannot be rewritten is reported by its absence: the
         // next pass recomputes the same additions, idempotently.
         changed--;
         addedTotal -= added.length;
-        for (const sourcePath of sourcePaths) {
-          const rollup = perSource.get(sourcePath.slice(vault.length + 1))!;
+        for (const source of sources) {
+          const rollup = perSource.get(source.rel)!;
           rollup.anchorsAdded -= added.length;
         }
       }
