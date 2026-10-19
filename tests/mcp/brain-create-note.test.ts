@@ -6,7 +6,7 @@
  * context. Refusals map to INVALID_PARAMS and write nothing.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -53,6 +53,132 @@ afterEach(() => {
 
 const tool = NOTES_TOOLS.find((t) => t.name === "brain_create_note")!;
 const handler = tool.handler;
+
+/**
+ * The post-write index refresh a created note claims.
+ *
+ * The card names created notes among the writes that must resolve
+ * without a reindex, so an applied create claims the SAME detached,
+ * claim-guarded refresh a lifecycle write claims - fire-and-forget, with
+ * the claim marker and its refusal reason on the receipt under the same
+ * vocabulary (`index_refresh`, `index_refresh_reason`). The seam is the
+ * freshen module itself, mocked here so the assertion sees the forced
+ * call without ever spawning a real indexer; the suite-wide freshen-off
+ * default keeps every OTHER test in this file inert.
+ */
+describe("brain_create_note - the post-write refresh claim", () => {
+  // This runner's mock registration outlives mock.restore() across test
+  // FILES, so the teardown re-registers the REAL module object instead:
+  // whatever leaks past this file is freshen.ts itself, byte for byte.
+  const FRESHEN_MODULE = "../../src/core/search/freshen.ts";
+  let realFreshen: Record<string, unknown> | null = null;
+  let forcedCalls: Array<{ vault: string; opts: Record<string, unknown> }> = [];
+
+  afterEach(() => {
+    if (realFreshen !== null) mock.module(FRESHEN_MODULE, () => realFreshen);
+    mock.restore();
+    realFreshen = null;
+    forcedCalls = [];
+  });
+
+  /** Intercept the freshen machinery at the deferred-import seam. */
+  async function mockFreshenSpawned(): Promise<void> {
+    realFreshen = { ...(await import(FRESHEN_MODULE)) };
+    forcedCalls = [];
+    mock.module(FRESHEN_MODULE, () => ({
+      ...realFreshen,
+      maybeFreshenIndex: (config: { vault: string }, opts: Record<string, unknown>) => {
+        forcedCalls.push({ vault: config.vault, opts });
+        return "spawned" as const;
+      },
+    }));
+  }
+
+  /** Stamp the vault's index with an old instant: the claim's stale gate must pass. */
+  async function stampIndexStale(): Promise<void> {
+    const { resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../src/core/search/store.ts");
+    const store = await Store.open(resolveSearchConfig({ vault, configPath: ctx.configPath! }), {
+      mode: "write",
+    });
+    store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+    await store.close();
+  }
+
+  function withIntervalEnv(value: string): () => void {
+    const key = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+    const saved = process.env[key];
+    process.env[key] = value;
+    return () => {
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    };
+  }
+
+  test("an applied create claims one forced refresh: the seam sees force, and the receipt says claimed", async () => {
+    // An index exists and is stale: the claim's stale gate passes and the
+    // forced machinery is what the seam intercepts.
+    await stampIndexStale();
+    await mockFreshenSpawned();
+    const restore = withIntervalEnv("60");
+    try {
+      const res = (await handler(ctx, {
+        path: "Notes/Refreshed.md",
+        frontmatter: { title: "R" },
+        content: "a created note that claims its refresh",
+      })) as Record<string, unknown>;
+
+      expect(res["created"]).toBe(true);
+      // The same claim marker vocabulary the lifecycle tool renders, on
+      // the create receipt: a run is IN FLIGHT, never landed.
+      expect(res["index_refresh"]).toBe("claimed");
+      expect(res["index_refresh_reason"]).toBeNull();
+      // The seam assertion: one forced call for THIS vault - force past
+      // the freshness gate, because the create is due by definition.
+      expect(forcedCalls).toHaveLength(1);
+      expect(forcedCalls[0]!.vault).toBe(vault);
+      expect(forcedCalls[0]!.opts["force"]).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test("config off does not claim: the receipt says not_claimed and names off", async () => {
+    // An index exists (so the stale gate passes and the machinery is
+    // what refuses), and no mock: with the interval at 0 the REAL
+    // machinery answers before any spawn could be considered, so nothing
+    // can leak out of this test either.
+    await stampIndexStale();
+    const restore = withIntervalEnv("0");
+    try {
+      const res = (await handler(ctx, {
+        path: "Notes/Unrefreshed.md",
+        content: "an operator who disabled freshening asked for exactly that",
+      })) as Record<string, unknown>;
+
+      expect(res["created"]).toBe(true);
+      expect(res["index_refresh"]).toBe("not_claimed");
+      expect(res["index_refresh_reason"]).toBe("off");
+    } finally {
+      restore();
+    }
+  });
+
+  test("a skipped create wrote nothing, so it carries no refresh marker at all", async () => {
+    await handler(ctx, { path: "Notes/There.md", content: "first\n" });
+    const res = (await handler(ctx, {
+      path: "Notes/There.md",
+      content: "second\n",
+      if_exists: "skip",
+    })) as Record<string, unknown>;
+
+    expect(res["created"]).toBe(false);
+    // Byte-identical-when-absent: a receipt for a write that did not
+    // happen says nothing about a refresh it did not claim.
+    expect("index_refresh" in res).toBe(false);
+    expect("index_refresh_reason" in res).toBe(false);
+  });
+});
 
 describe("brain_create_note", () => {
   test("is registered with a write-shaped name and schema", () => {
@@ -264,7 +390,17 @@ describe("brain_create_note - the lint attached to the receipt", () => {
       frontmatter: { title: "Clean" },
       content: "plain prose, no links",
     });
-    expect(Object.keys(res)).toEqual(["created", "outcome", "path", "write_id"]);
+    // A landed create carries the refresh-claim marker beside the audit
+    // half (freshening is off suite-wide, so it reads not_claimed with
+    // its reason).
+    expect(Object.keys(res)).toEqual([
+      "created",
+      "outcome",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
     expect(res).toMatchObject({ created: true, outcome: "created", path: "Notes/Clean.md" });
     // `write_id` joined the receipt with the note-write record
     // (who-wrote-what, Task A); its value is derived from the instant of
@@ -359,7 +495,16 @@ describe("brain_create_note - widened near-duplicate hint", () => {
       frontmatter: { title: "L" },
       content: BODY,
     })) as Record<string, unknown>;
-    expect(Object.keys(res)).toEqual(["created", "outcome", "path", "write_id"]);
+    // "Unchanged" now includes the refresh-claim marker a landed create
+    // carries (the lint widening is what this test keeps unchanged).
+    expect(Object.keys(res)).toEqual([
+      "created",
+      "outcome",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
   });
 
   test("with the key on and no index, the receipt says widening did not run", async () => {

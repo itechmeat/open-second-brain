@@ -63,6 +63,10 @@ import { ROUTE_STAGE, timeStage, timeStageSync } from "../../core/route-scope.ts
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import type { ResolvedSearchConfig } from "../../core/search/types.ts";
 import {
+  claimNoteWriteRefresh,
+  type PostWriteRefreshClaim,
+} from "../../core/brain/notes/index-refresh.ts";
+import {
   WRITE_PATH_ADVISORY_KEY,
   type WritePathAdvisoryField,
 } from "../../core/brain/write-path-advisory.ts";
@@ -331,6 +335,13 @@ async function toolBrainCreateNote(
         ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
       });
     }
+    // An APPLIED create claims the same detached index refresh a
+    // lifecycle write claims: the card names created notes among the
+    // writes that must resolve without a reindex, and the PR says a
+    // create claims. Fire-and-forget, never failing the write it
+    // follows; a skip or a staged create authored nothing at the target,
+    // so neither claims and neither carries the marker.
+    const claim = res.created ? await claimNoteWriteRefresh(ctx.vault) : null;
     return await noteWriteResult(ctx, res.created ? [res.path] : [], {
       created: res.created,
       outcome: res.outcome,
@@ -340,6 +351,7 @@ async function toolBrainCreateNote(
       // has no write to attribute and no null that could be mistaken for
       // a lost one.
       ...(res.outcome === "created" ? auditFields(res) : {}),
+      ...(claim !== null ? refreshClaimFields(claim) : {}),
     });
   } catch (err) {
     // Almost every CreateNoteError is a client-input fault (bad path,
@@ -437,11 +449,18 @@ async function toolBrainUpdateNote(
   // one fact, one source. A skipped update wrote no bytes, so it names no
   // page for the lint and carries no audit half - the same shape a
   // skipped create spells.
+  //
+  // An APPLIED update - a content edit, frontmatter or both - claims the
+  // same detached index refresh the lifecycle's writes claim, with the
+  // marker on the receipt under the same vocabulary. A byte-identical
+  // re-apply wrote nothing, so it claims nothing and carries no marker.
+  const claim = result.updated ? await claimNoteWriteRefresh(ctx.vault) : null;
   return noteWriteResult(ctx, result.updated ? [result.path] : [], {
     updated: result.updated,
     path: result.path,
     ...(result.updated ? auditFields(result) : {}),
     ...pathAdvisoryFields(result),
+    ...(claim !== null ? refreshClaimFields(claim) : {}),
   });
 }
 
@@ -481,6 +500,23 @@ function auditFields(audit: NoteWriteAudit): Record<string, unknown> {
   return {
     write_id: audit.write_id,
     ...(audit.audit_reason !== undefined ? { audit_reason: audit.audit_reason } : {}),
+  };
+}
+
+/**
+ * The refresh-claim marker a landed create or content edit carries on
+ * its receipt, in the same vocabulary the note-lifecycle tool renders:
+ * `index_refresh` is `claimed` (a detached run is IN FLIGHT, never
+ * landed) or `not_claimed`, and `index_refresh_reason` spells why
+ * nothing was started - the freshen machinery's own skip token, or the
+ * error it raised. Both keys render together or not at all: a write
+ * that authored no bytes claims nothing, and its receipt is
+ * byte-identical to the one that shipped before this field existed.
+ */
+function refreshClaimFields(claim: PostWriteRefreshClaim): Record<string, unknown> {
+  return {
+    index_refresh: claim.refresh,
+    index_refresh_reason: claim.refreshReason,
   };
 }
 
@@ -626,7 +662,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_create_note",
     description:
-      "Create an actual vault note file (path + frontmatter + content), written atomically inside the vault. Distinct from brain_note, which only appends a log line. Refuses path traversal, the Brain root, vault-scope-excluded paths, writes outside the declared write binding, and by default clobbering.",
+      "Create an actual vault note file (path + frontmatter + content), written atomically inside the vault. Distinct from brain_note, which only appends a log line. Refuses traversal, the Brain root, excluded paths, bad write bindings, default clobbering. An applied create claims a detached index refresh.",
     inputSchema: {
       type: "object",
       properties: {
@@ -676,7 +712,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_update_note",
     description:
-      "Update an existing vault note: merge frontmatter keys and/or replace the body, written atomically. A missing target is refused. Reuses the create-note safety envelope: path traversal, the Brain root, vault-scope-excluded paths, and writes outside the declared write binding are refused.",
+      "Update an existing vault note: merge frontmatter keys and/or replace the body, atomically; a missing target is refused. Reuses the create-note safety envelope: traversal, the Brain root, excluded paths, bad write bindings. An applied update claims a detached index refresh.",
     inputSchema: {
       type: "object",
       properties: {
