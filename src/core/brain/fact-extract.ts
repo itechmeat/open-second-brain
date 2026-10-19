@@ -240,6 +240,25 @@ export interface RouteFactsInput {
    * drops it at read; `0` (the default) stamps nothing, byte-identical.
    */
   readonly ambientTtlDays?: number;
+  /**
+   * Link-derived entity ids the CALLER resolved from this capture's
+   * source page, in the page's first-occurrence (body) order
+   * (note-change truth maintenance, F4). The kernel unions them into
+   * every signal this capture writes: link-derived ids first - the
+   * first body-order link leads the persisted `entities:` line, so it
+   * is the primary anchor when both mechanisms match the same fact -
+   * followed by the text-derived ids that are not already present.
+   *
+   * The resolution and its withholding are the CALLER's job, done
+   * server-side before this call: a page-sourced caller maps the page's
+   * outbound wikilinks through the page-link resolver, which drops
+   * withheld entity pages before any id is produced. This kernel takes
+   * the ids as given - it reads no pages, resolves no links and never
+   * widens the list on its own. A session-sourced capture passes
+   * nothing (or an empty list), which is byte-identical to before this
+   * parameter existed; a dry run forecasts unchanged either way.
+   */
+  readonly linkDerivedEntityIds?: ReadonlyArray<string>;
 }
 
 export interface RouteFactsResult {
@@ -360,6 +379,30 @@ function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: s
     if (matchVariantsOccurIn(entity.forms, haystackVariants)) ids.push(entity.id);
   }
   return ids;
+}
+
+/**
+ * The persisted anchor union for one capture: the caller's link-derived
+ * ids first, in the body order they arrived (the first body-order link
+ * is the primary when both mechanisms match the same fact), then the
+ * text-derived anchors the kernel found, deduped across the two
+ * mechanisms. Absent or empty link ids answer the text anchors verbatim,
+ * so a session-sourced capture is byte-identical to before the parameter
+ * existed.
+ */
+function unionAnchors(
+  linkDerived: ReadonlyArray<string> | undefined,
+  textAnchors: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  if (linkDerived === undefined || linkDerived.length === 0) return textAnchors;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of [...linkDerived, ...textAnchors]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -510,7 +553,7 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       withheld++;
       continue;
     }
-    const anchors = entityAnchors(anchorables, fact.text);
+    const anchors = unionAnchors(input.linkDerivedEntityIds, entityAnchors(anchorables, fact.text));
     const topic = `fact-${fact.family}`;
     try {
       const result = writeSignal(
