@@ -73,6 +73,40 @@ describe("checkEntityContamination (pure)", () => {
     });
     expect(result.clean).toBe(true);
   });
+
+  // Separator-tolerant twins (note-change truth maintenance, F3): the
+  // check shares the anchoring kernels' match-form rule, so its inclusion
+  // test folds separator runs on both sides, matches a slug-prefixed form
+  // at the path-segment boundary, and never sees a mid-word mention.
+
+  test("separator-folded mentions clear the entity across spellings", () => {
+    const result = checkEntityContamination({
+      conclusion: "Ada-Lovelace approved the rollout",
+      sources: ["ada lovelace signed off this morning"],
+      entities: [person("ent-people-ada-lovelace", "Ada-Lovelace")],
+    });
+    expect(result.clean).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  test("a slug-prefixed alias clears the entity through its last path segment", () => {
+    const result = checkEntityContamination({
+      conclusion: "Ada Lovelace approved the rollout",
+      sources: ["see people/ada_lovelace for the rollout notes"],
+      entities: [person("ent-people-ada-lovelace", "Ada Lovelace")],
+    });
+    expect(result.clean).toBe(true);
+  });
+
+  test("a mid-word mention is not a mention (canada never anchors ada)", () => {
+    const result = checkEntityContamination({
+      conclusion: "Canada approved the rollout",
+      sources: ["Nothing relevant"],
+      entities: [person("ent-people-ada", "Ada")],
+    });
+    expect(result.clean).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
 });
 
 describe("deepSynthesis wiring", () => {

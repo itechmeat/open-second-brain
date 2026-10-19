@@ -8,7 +8,7 @@
  * mentions Bob.
  */
 
-import { normalizeEntityName } from "../entities/canonical.ts";
+import { matchFormOccursIn, normalizeEntityName } from "../entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /**
@@ -55,9 +55,18 @@ export interface ContaminationInput {
   readonly entities: ReadonlyArray<ContaminationEntityLike>;
 }
 
+/**
+ * The inclusion test behind the check - the twins' copy of
+ * fact-extraction's anchoring rule, kept verbatim through the one
+ * canonical match-form rule ({@link matchFormOccursIn}) since F3
+ * (note-change truth maintenance): separator-folded on both sides, a
+ * slug-prefixed form matching at the path-segment boundary, and every
+ * occurrence word-bounded, so the fold never plants a mid-word hit
+ * literal matching did not already have.
+ */
 function mentions(haystack: string, entity: ContaminationEntityLike): boolean {
   const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-  return forms.some((f) => f.length >= 3 && haystack.includes(f));
+  return forms.some((f) => f.length >= 3 && matchFormOccursIn(f, haystack));
 }
 
 /**

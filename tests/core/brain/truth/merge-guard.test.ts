@@ -114,6 +114,47 @@ describe("guardEntityMerge (pure)", () => {
     expect(verdict.allowed).toBe(true);
   });
 
+  // Separator-tolerant twins (note-change truth maintenance, F3): the
+  // guard shares the anchoring kernels' match-form rule, so its inclusion
+  // test folds separator runs on both sides, matches a slug-prefixed form
+  // at the path-segment boundary, and never anchors a mid-word mention.
+
+  test("separator-folded mentions anchor across hyphen and underscore spellings", () => {
+    const ada = person("ent-people-ada-lovelace", "Ada-Lovelace", ["ada_lovelace"]);
+    const verdict = guardEntityMerge({
+      keepText: "Ada Lovelace decided to ship on Friday",
+      dropText: "Bob Hale decided to ship on Friday",
+      entities: [ada, bob],
+    });
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.keepAnchors).toEqual(["ent-people-ada-lovelace"]);
+    expect(verdict.dropAnchors).toEqual(["ent-people-bob-hale"]);
+  });
+
+  test("a slug-prefixed alias matches through its last path segment", () => {
+    // The "***" name matches nothing, so only the slug-prefixed alias -
+    // via its "ada lovelace" tail - can anchor the first entity.
+    const weird = person("ent-people-ada-lovelace", "***", ["people/ada_lovelace"]);
+    const verdict = guardEntityMerge({
+      keepText: "Ada Lovelace decided to ship on Friday",
+      dropText: "Bob Hale decided to ship on Friday",
+      entities: [weird, bob],
+    });
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.keepAnchors).toEqual(["ent-people-ada-lovelace"]);
+  });
+
+  test("a mid-word mention never anchors (canada never anchors ada)", () => {
+    const ada = person("ent-people-ada", "Ada");
+    const verdict = guardEntityMerge({
+      keepText: "Canada approved the rollout",
+      dropText: "Bob Hale approved the rollout",
+      entities: [ada, bob],
+    });
+    expect(verdict.keepAnchors).toEqual([]);
+    expect(verdict.allowed).toBe(true);
+  });
+
   test("default guarded categories cover people and orgs", () => {
     expect(GUARDED_ENTITY_CATEGORIES).toContain("people");
     expect(GUARDED_ENTITY_CATEGORIES).toContain("org");

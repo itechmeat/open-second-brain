@@ -9,7 +9,7 @@
  * anchors) merges exactly as today.
  */
 
-import { normalizeEntityName } from "../entities/canonical.ts";
+import { matchFormOccursIn, normalizeEntityName } from "../entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /** Categories guarded by default: people and organisations. */
@@ -50,9 +50,14 @@ export interface MergeGuardVerdict {
 
 /**
  * Anchor a text against guarded entities: every active entity whose
- * normalized name or alias appears in the normalized text. The same
- * inclusion rule as fact-extraction's `entityAnchors`, restricted to
- * the guarded categories.
+ * normalized name or alias occurs in the normalized text. The same
+ * inclusion rule as fact-extraction's `entityAnchors`, restricted to the
+ * guarded categories - shared verbatim since F3 (note-change truth
+ * maintenance) through the one canonical match-form rule
+ * ({@link matchFormOccursIn}): separator-folded on both sides, a
+ * slug-prefixed form matching at the path-segment boundary, and every
+ * occurrence word-bounded, so the fold never plants a mid-word hit
+ * literal matching did not already have.
  */
 function guardedAnchors(
   text: string,
@@ -65,7 +70,7 @@ function guardedAnchors(
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     if (!categories.has(entity.category.toLowerCase())) continue;
     const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-    if (forms.some((f) => f.length >= 3 && haystack.includes(f))) ids.push(entity.id);
+    if (forms.some((f) => f.length >= 3 && matchFormOccursIn(f, haystack))) ids.push(entity.id);
   }
   return ids.toSorted();
 }
