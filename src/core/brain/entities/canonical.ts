@@ -133,6 +133,55 @@ export function foldQuoteVariantsByClass(raw: string): string {
 }
 
 /**
+ * The separators whose RUNS are interchangeable at match time, and the
+ * single instances they fold to. Space, hyphen and underscore only: a
+ * `notes/link-candidates.ts` basename is a slug, so those three are the
+ * spellings one token sequence answers to in this store; dot and slash
+ * carry structure (`Node.js`, a path) and are never folded.
+ */
+const MATCH_SEPARATOR_RUN_RE = /[-_ ]+/;
+const MATCH_SEPARATOR_JOINS: ReadonlyArray<string> = [" ", "-", "_"];
+
+/**
+ * Expand one ALREADY-NORMALIZED match form into the separator-variant
+ * match forms the anchoring kernels compare with (note-change truth
+ * maintenance, F3). Two rules, both pure:
+ *
+ *   - Separator runs are interchangeable: a run of space, hyphen or
+ *     underscore (in any mix) stands for one separator of any of the
+ *     three kinds, so `ada lovelace`, `ada-lovelace`, `ada_lovelace`
+ *     and `ada -_ lovelace` all expand to one variant class. Both sides
+ *     of a comparison must expand - the kernels fold the needle AND the
+ *     haystack - because a variant class only describes its own
+ *     spellings, not the text it might occur in.
+ *   - A slug-prefixed form also matches at a path-segment boundary: the
+ *     variants of the form's LAST `/`-segment (the slug itself) are
+ *     appended, so `people/ada_lovelace` also occurs in a text that
+ *     only says `ada lovelace`. The segment prefix is registry
+ *     decoration, not part of the mentioned name.
+ *
+ * The output is Set-deduped in a deterministic order (full-form variants
+ * first, the last-segment tail after) and never empty for a non-empty
+ * separator-free form. Deliberately NOT part of identity: the input is
+ * never re-normalized, `normalizeEntityName` is untouched, and nothing
+ * this returns may be persisted - identity keys keep their separators,
+ * which is exactly why two spellings can be two identities and one
+ * match class. Pure: no I/O, no state.
+ */
+export function matchFormVariants(form: string): string[] {
+  const out = new Set<string>();
+  const fold = (s: string): void => {
+    const tokens = s.split(MATCH_SEPARATOR_RUN_RE).filter((token) => token !== "");
+    if (tokens.length === 0) return;
+    for (const join of MATCH_SEPARATOR_JOINS) out.add(tokens.join(join));
+  };
+  fold(form);
+  const lastSlash = form.lastIndexOf("/");
+  if (lastSlash >= 0) fold(form.slice(lastSlash + 1));
+  return [...out];
+}
+
+/**
  * The kernel's shape pass, WITHOUT the quote fold: NFC, trim, collapse
  * whitespace runs, lowercase. Separated from {@link normalizeEntityName}
  * so {@link differsOnlyByQuoteVariant} can name the difference the fold

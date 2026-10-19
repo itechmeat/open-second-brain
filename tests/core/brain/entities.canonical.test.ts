@@ -7,6 +7,7 @@ import {
   entityIdentityKey,
   entityMatchForms,
   isValidEntityLabel,
+  matchFormVariants,
   normalizeEntityName,
   sanitizeEntityLabel,
   validateEntityCategory,
@@ -207,6 +208,78 @@ describe("entityMatchForms", () => {
 
   test("clean forms normalize exactly as before (backward compatible)", () => {
     expect(entityMatchForms(["Open Second Brain"])).toEqual(["open second brain"]);
+  });
+});
+
+// ----- Separator-variant match forms (note-change truth maintenance, F3) -----
+//
+// The match-form generator expands ONE already-normalized form into the
+// match variants the anchoring kernels compare with: runs of space, hyphen
+// or underscore are interchangeable at match time, and a slug-prefixed form
+// also matches at a path-segment boundary (its last path segment alone).
+// Identity is untouched - `normalizeEntityName` keeps every separator, so
+// two spellings stay two identities while matching treats them as one.
+
+describe("matchFormVariants", () => {
+  test("a separator-free form is its own single variant", () => {
+    expect(matchFormVariants("atlas")).toEqual(["atlas"]);
+  });
+
+  test("a spaced form expands to the space, hyphen and underscore joins", () => {
+    expect(matchFormVariants("ada lovelace")).toEqual([
+      "ada lovelace",
+      "ada-lovelace",
+      "ada_lovelace",
+    ]);
+  });
+
+  test("hyphenated and underscored forms expand to the same variant class", () => {
+    expect(matchFormVariants("ada-lovelace")).toEqual(matchFormVariants("ada lovelace"));
+    expect(matchFormVariants("ada_lovelace")).toEqual(matchFormVariants("ada lovelace"));
+  });
+
+  test("a mixed separator run collapses like any single separator", () => {
+    expect(matchFormVariants("ada -_ lovelace")).toEqual(matchFormVariants("ada lovelace"));
+  });
+
+  test("a slug-prefixed form also expands its last path segment", () => {
+    expect(matchFormVariants("people/ada_lovelace")).toEqual([
+      "people/ada lovelace",
+      "people/ada-lovelace",
+      "people/ada_lovelace",
+      "ada lovelace",
+      "ada-lovelace",
+      "ada_lovelace",
+    ]);
+  });
+
+  test("edge separator runs vanish instead of planting empty tokens", () => {
+    expect(matchFormVariants("-ada-")).toEqual(["ada"]);
+    // A slash is path structure, not a foldable separator, so a trailing
+    // slash stays part of the token; its empty tail segment adds nothing.
+    expect(matchFormVariants("people/")).toEqual(["people/"]);
+  });
+
+  test("empty and separator-only input expand to nothing", () => {
+    expect(matchFormVariants("")).toEqual([]);
+    expect(matchFormVariants("---")).toEqual([]);
+    expect(matchFormVariants("  ")).toEqual([]);
+  });
+
+  test("deterministic: same input, deeply equal output", () => {
+    expect(matchFormVariants("people/ada_lovelace")).toEqual(
+      matchFormVariants("people/ada_lovelace"),
+    );
+  });
+
+  test("the generator unifies for matching what identity keeps apart", () => {
+    // normalizeEntityName preserves separators - the two spellings stay two
+    // identity keys - while the match-form class is one and the same.
+    expect(normalizeEntityName("ada_lovelace")).not.toBe(normalizeEntityName("ada lovelace"));
+    expect(matchFormVariants("ada_lovelace")).toEqual(matchFormVariants("ada lovelace"));
+    expect(entityIdentityKey("people", "ada_lovelace")).not.toBe(
+      entityIdentityKey("people", "ada lovelace"),
+    );
   });
 });
 
