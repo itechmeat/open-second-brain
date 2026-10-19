@@ -47,7 +47,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,6 +64,8 @@ import {
   CUSTOM_TASKS_OFF_NOTICE,
 } from "../../src/core/brain/maintenance/custom-tasks.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
+import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 // Measured caps on the tool's text: the registry keeps every description
 // short. Imported rather than restated so the two ratchets cannot drift -
@@ -704,5 +706,127 @@ describe("declared custom tasks are retried and refused the same way on both sur
       env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
     });
     expect((JSON.parse(cli.stdout) as { notice?: string }).notice).toBe(CUSTOM_TASKS_OFF_NOTICE);
+  });
+});
+
+describe("the relink arm is opt-in on the tool too", () => {
+  let tmp: string;
+  let vault: string;
+  let configPath: string;
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-maint-relink-"));
+    vault = join(tmp, "vault");
+    mkdirSync(vault, { recursive: true });
+    configPath = join(tmp, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
+    const init = await runCli(["brain", "init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(init.returncode).toBe(0);
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  async function callTool(args: Record<string, unknown>) {
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: PROTOCOL_VERSION },
+    });
+    return (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "tools/call",
+      params: { name: TOOL_NAME, arguments: args },
+    })) as {
+      error?: { code: number; message: string };
+      result?: { structuredContent?: Record<string, unknown>; content?: Array<{ text: string }> };
+    };
+  }
+
+  function toolPayload(res: Awaited<ReturnType<typeof callTool>>): Record<string, unknown> {
+    if (res.result?.structuredContent) return res.result.structuredContent;
+    return JSON.parse(res.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+  }
+
+  /** One entity, one page linking it, one page-sourced signal naming nothing. */
+  function writeRelinkFixture(): string {
+    const entitiesDir = join(vault, "Brain", "entities", "people");
+    mkdirSync(entitiesDir, { recursive: true });
+    const now = new Date().toISOString();
+    writeFrontmatterAtomic(
+      join(entitiesDir, "ent-people-ada-lovelace.md"),
+      {
+        kind: "brain-entity",
+        entity_id: "ent-people-ada-lovelace",
+        category: "people",
+        name: "Ada Lovelace",
+        status: "active",
+        created_at: now,
+        updated_at: now,
+        tags: ["brain", "brain/entity"],
+      },
+      "# Ada Lovelace",
+      { overwrite: true },
+    );
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "notes", "meeting.md"),
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+      "utf8",
+    );
+    writeSignal(vault, {
+      topic: "relink-surface",
+      signal: "positive",
+      agent: "tester",
+      principle: "the review concluded with five follow-ups",
+      created_at: now,
+      date: now.slice(0, 10),
+      slug: "relink-surface",
+      scope: "writing",
+      source: ["[[notes/meeting.md]]"],
+      source_type: "inline",
+      dedup_hash: `relink-surface-${now}`,
+      // The placeholder Raw section: the shape a signal stored without a
+      // verbatim quote carries, and the line the relink rewrite can fill.
+      raw: "_(not provided)_",
+    });
+    const inbox = join(vault, "Brain", "inbox");
+    const name = readdirSync(inbox).find((f) => f.startsWith("sig-") && f.endsWith(".md"));
+    if (name === undefined) throw new Error("fixture signal was not written");
+    return join(inbox, name);
+  }
+
+  test("relink_apply rewrites the stored lines and the result carries the report", async () => {
+    const signalPath = writeRelinkFixture();
+    const res = await callTool({ operation: "run", relink_apply: true });
+    expect(res.error).toBeUndefined();
+    const payload = toolPayload(res);
+    const relink = payload["relink"] as {
+      apply: boolean;
+      signalsChanged: number;
+      anchorsAdded: number;
+    };
+    expect(relink.apply).toBe(true);
+    expect(relink.signalsChanged).toBe(1);
+    expect(relink.anchorsAdded).toBe(1);
+    expect(readFileSync(signalPath, "utf8")).toContain("entities: ent-people-ada-lovelace");
+  });
+
+  test("without it the tool's relink task previews and the report says so", async () => {
+    const signalPath = writeRelinkFixture();
+    const before = readFileSync(signalPath, "utf8");
+    const res = await callTool({ operation: "run" });
+    expect(res.error).toBeUndefined();
+    const payload = toolPayload(res);
+    const relink = payload["relink"] as { apply: boolean; anchorsAdded: number };
+    expect(relink.apply).toBe(false);
+    expect(relink.anchorsAdded).toBe(1);
+    expect(readFileSync(signalPath, "utf8")).toBe(before);
   });
 });

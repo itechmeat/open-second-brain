@@ -484,6 +484,7 @@ async function toolBrainMaintenance(
     searchConfig,
     now,
     forceCost: args["force_cost"] === true,
+    relinkApply: args["relink_apply"] === true,
     safeguardFor: laneSafeguard,
     ...(onProgress ? { onProgress } : {}),
   });
@@ -518,6 +519,10 @@ async function toolBrainMaintenance(
   });
   // The run-level spend block, the CLI JSON payload's shape.
   const spend = lane.reindex.spendBlock(result.tasks);
+  // The relink pass's report: the preview on the default arm, the changes
+  // under relink_apply - the same block the CLI JSON payload carries, so
+  // the two front doors cannot disagree about what the pass would add.
+  const relink = lane.relinkReport();
   return {
     verdict: result.verdict,
     tasks: result.tasks,
@@ -526,6 +531,7 @@ async function toolBrainMaintenance(
     // cannot disagree about what a skip says.
     ...(result.capacity !== undefined ? { capacity: result.capacity } : {}),
     ...(spend !== undefined ? { spend } : {}),
+    ...(relink !== undefined ? { relink } : {}),
     // Named, never dropped: a refused declaration journals nothing, and
     // the valid tasks still ran.
     ...(lane.custom.errors.length > 0 ? { custom_task_errors: lane.custom.errors } : {}),
@@ -610,7 +616,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters and declared custom:<name> tasks behind window, busy, pressure, capacity and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
+      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters, relink and declared custom:<name> tasks behind window, busy, pressure, capacity and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
     inputSchema: {
       type: "object",
       properties: {
@@ -634,6 +640,11 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "Bypass a positive embedding cost gate for this run's reindex (run); recorded on the spend receipt when it overrode a gate that would have refused.",
+        },
+        relink_apply: {
+          type: "boolean",
+          description:
+            "Apply the relink pass (run): rewrite the changed signal pages' entity anchor lines. Default false previews the per-source additions and writes nothing.",
         },
         busy_minutes: {
           type: "integer",

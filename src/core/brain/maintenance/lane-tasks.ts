@@ -36,7 +36,7 @@ import {
 } from "./custom-tasks.ts";
 import { LANE_TASK, type LaneTask, type LaneTaskId, type MaintenanceTask } from "./lane.ts";
 import { createLaneReindex, type LaneReindex } from "./reindex-task.ts";
-import { runRelinkAnchors } from "./relink-anchors-task.ts";
+import { runRelinkAnchors, type RelinkAnchorsReport } from "./relink-anchors-task.ts";
 
 export interface LaneTaskBuildOptions {
   readonly vault: string;
@@ -45,6 +45,15 @@ export interface LaneTaskBuildOptions {
   readonly now: Date;
   /** Bypass a positive embedding cost gate for this run (`--force-cost`). */
   readonly forceCost: boolean;
+  /**
+   * Apply the relink pass: rewrite the changed signal pages' anchor
+   * lines. Absent or false, the lane's relink task is the dry run - it
+   * reports what it would add and writes nothing - because every other
+   * pass an unattended lane runs through a cron produces no new writes
+   * without an explicit ask. The apply arm carries the run's own
+   * vault-identity write guard.
+   */
+  readonly relinkApply?: boolean;
   /** One fresh deadline per built-in task, called when that task starts. */
   readonly safeguardFor: (operation: LaneTask) => Safeguard;
   readonly signal?: AbortSignal;
@@ -59,11 +68,24 @@ export interface LaneTaskSet {
   /** Every registered identity, in registration order. */
   readonly taskNames: ReadonlyArray<LaneTaskId>;
   readonly custom: CustomTaskResolution;
+  /**
+   * The relink pass's report for the run dispatched through this set, or
+   * `undefined` while the task has not completed: the preview on the
+   * default arm, the changes on the apply arm. Read after
+   * `runMaintenance` resolves, beside the task rows - the same shape the
+   * reindex spend block rides, because a task's report belongs to the
+   * run, not to a task row's receipt field.
+   */
+  relinkReport(): RelinkAnchorsReport | undefined;
 }
 
 export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
   const { vault, now, searchConfig, safeguardFor } = opts;
   const laneProgress = opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {};
+  // The relink report is captured by the task body and read by the
+  // caller after the run: `undefined` until the task completes, and
+  // undefined again never - a set builds one run's tasks.
+  let relinkReport: RelinkAnchorsReport | undefined;
   // Spend is opt-in (`maintenance_embeddings`): the reindex builder decides
   // whether the pass may embed, announces the predicted spend inside the
   // task and receipts what the phase priced.
@@ -152,15 +174,18 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
     },
     // The anchor-relink pass (note-change truth maintenance) closes the
     // lane: it reads the signal tree and the entity index only, so it
-    // needs no store. A lane pass PREVIEWS by contract - the report is
-    // what would change, and no signal page is rewritten until a caller
-    // asks `runRelinkAnchors` for the apply arm itself. The pass never
-    // calls a model and returns no spend receipt.
+    // needs no store. It PREVIEWS by contract - `relinkApply` hands it
+    // the apply arm, and absent that flag the report is what would change
+    // and no signal page is rewritten. Either way the pass's report is
+    // captured below and surfaced through `relinkReport()`, so neither
+    // front door runs the pass blind. The pass never calls a model and
+    // returns no spend receipt.
     {
       name: LANE_TASK.relink,
       run: async () => {
-        runRelinkAnchors(vault, {
+        relinkReport = runRelinkAnchors(vault, {
           now,
+          apply: opts.relinkApply === true,
           safeguard: safeguardFor(LANE_TASK.relink),
           ...laneProgress,
         });
@@ -175,5 +200,11 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
     }),
   );
   const tasks = [...builtIns, ...customTasks];
-  return { tasks, reindex, taskNames: tasks.map((task) => task.name), custom };
+  return {
+    tasks,
+    reindex,
+    taskNames: tasks.map((task) => task.name),
+    custom,
+    relinkReport: () => relinkReport,
+  };
 }

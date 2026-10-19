@@ -35,7 +35,7 @@ const RECALL_CHANNEL_CHOICES = RECALL_CHANNELS.join("|");
  */
 export const MAINTENANCE_USAGE =
   "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
-  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
+  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--relink-apply] [--progress] " +
   "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
   "| status [--limit N]  [--vault <path>] [--json]";
 
@@ -752,7 +752,9 @@ export const VERB_HELP: Record<string, string> = {
     "maintenance.failure_streak_limit times in a row is REFUSED by name\n" +
     "(exit 7) while the others still run; --retry <task> attempts that one\n" +
     "task with every gate still in force, and --force bypasses the soft\n" +
-    "gates and every refusal, never the lease. Every attempt - including\n" +
+    "gates and every refusal, never the lease. The relink task previews\n" +
+    "the anchor additions it would make; --relink-apply rewrites the\n" +
+    "stored signal pages. Every attempt - including\n" +
     "gate refusals - lands in a bounded journal; status renders lease +\n" +
     "journal. Custom tasks are shell commands declared in the machine\n" +
     "config (maintenance_custom_<name>), run only with\n" +

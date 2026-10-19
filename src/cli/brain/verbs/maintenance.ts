@@ -7,7 +7,10 @@
  * bridges, and clusters stale-first; --force bypasses the soft gates
  * and every streak refusal but never the lease, while --retry <task>
  * (repeatable) bypasses the streak refusal for that task alone and
- * leaves every gate in force. The reindex pass stays keyword-only
+ * leaves every gate in force. The relink task previews the anchor
+ * additions it would make and rewrites the stored signal pages only
+ * under --relink-apply; either way its per-source report rides the run
+ * result. The reindex pass stays keyword-only
  * unless `maintenance_embeddings` opts the lane into the embedding phase
  * and the resolved config can reach a provider: then the pass announces
  * its predicted spend before it runs, receipts what the phase actually
@@ -52,6 +55,7 @@ import {
 } from "../../../core/brain/maintenance/custom-tasks.ts";
 import { isCustomLaneTask } from "../../../core/brain/maintenance/custom-task-id.ts";
 import { buildLaneTasks } from "../../../core/brain/maintenance/lane-tasks.ts";
+import type { RelinkAnchorsReport } from "../../../core/brain/maintenance/relink-anchors-task.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
 import {
@@ -124,6 +128,7 @@ const RUN_ONLY_FLAGS = [
   "force",
   "retry",
   "force-cost",
+  "relink-apply",
   "busy-minutes",
   "busy-threshold",
   "agent",
@@ -166,6 +171,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     progress: { type: "boolean" },
     json: { type: "boolean" },
     "force-cost": { type: "boolean" },
+    "relink-apply": { type: "boolean" },
     "cron-template": { type: "boolean" },
     interval: { type: "string" },
     format: { type: "string" },
@@ -373,6 +379,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         searchConfig,
         now,
         forceCost: flags["force-cost"] === true,
+        relinkApply: flags["relink-apply"] === true,
         safeguardFor: laneSafeguard,
         signal: interrupt.signal,
         ...laneProgress,
@@ -417,6 +424,10 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       // The run-level spend block: the banner this run announced and the
       // receipt its reindex pass returned, both absent when nothing spent.
       const spend = lane.reindex.spendBlock(result.tasks);
+      // The relink pass's report: the preview on the default arm, the
+      // changes under --relink-apply. Absent while the task has not run
+      // (a gate skip, a refusal), so a skipped lane reports no numbers.
+      const relink = lane.relinkReport();
       if (asJson) {
         okJson({
           verdict: result.verdict,
@@ -426,6 +437,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           // so the two surfaces cannot disagree about what a skip says.
           ...(result.capacity !== undefined ? { capacity: result.capacity } : {}),
           ...(spend !== undefined ? { spend } : {}),
+          ...(relink !== undefined ? { relink } : {}),
         });
       } else {
         ok(`maintenance: ${result.verdict}`);
@@ -433,6 +445,9 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           ok(`  capacity: ${result.capacity.tier} - ${result.capacity.remedy}`);
         }
         for (const t of result.tasks) ok(`  ${renderTaskLine(t)}`);
+        if (relink !== undefined) {
+          ok(`  relink: ${renderRelinkLine(relink)}`);
+        }
       }
       // A stopped lane is reported as stopped, not as four failures. The
       // lane catches each task's abort and journals it, so without this the
@@ -557,6 +572,19 @@ export function formatSpendBanner(preview: EmbeddingSpendPreview, gateUsd: numbe
     `embedding spend: model ${preview.model ?? "unknown"}, ${preview.pendingChunks} chunks pending, ` +
     `${estimate} (gate: ${gate})`
   );
+}
+
+/**
+ * One line for the relink pass's report, under the task rows. The verb
+ * says which arm ran: without `--relink-apply` the numbers are the
+ * preview's, and the sentence must not read as though signal pages
+ * changed.
+ */
+export function renderRelinkLine(report: RelinkAnchorsReport): string {
+  const arm = report.apply
+    ? `added ${report.anchorsAdded} anchor(s) to ${report.signalsChanged} signal(s)`
+    : `would add ${report.anchorsAdded} anchor(s) to ${report.signalsChanged} signal(s)`;
+  return `${arm} across ${report.perSource.length} source page(s)`;
 }
 
 /** A repeatable flag's values; a flag never passed is an empty list. */

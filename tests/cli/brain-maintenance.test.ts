@@ -5,7 +5,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -30,6 +39,8 @@ import {
   MAINTENANCE_VERDICT,
 } from "../../src/core/brain/maintenance/journal.ts";
 import { listMetrics } from "../../src/core/brain/metrics.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
+import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../src/core/brain/maintenance/lease.ts";
 import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
 import {
@@ -878,4 +889,123 @@ describe("the spend surface end to end", () => {
       }
     },
   );
+});
+
+describe("the relink arm is opt-in", () => {
+  /**
+   * A bootstrapped fixture vault holding one canonical entity, one source
+   * page that links it, and one page-sourced signal that names nothing:
+   * the exact shape the relink pass heals. Returns the signal's path.
+   */
+  function writeRelinkFixture(): string {
+    const entitiesDir = join(vault, "Brain", "entities", "people");
+    mkdirSync(entitiesDir, { recursive: true });
+    const now = new Date().toISOString();
+    writeFrontmatterAtomic(
+      join(entitiesDir, "ent-people-ada-lovelace.md"),
+      {
+        kind: "brain-entity",
+        entity_id: "ent-people-ada-lovelace",
+        category: "people",
+        name: "Ada Lovelace",
+        status: "active",
+        created_at: now,
+        updated_at: now,
+        tags: ["brain", "brain/entity"],
+      },
+      "# Ada Lovelace",
+      { overwrite: true },
+    );
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "notes", "meeting.md"),
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+      "utf8",
+    );
+    writeSignal(vault, {
+      topic: "relink-surface",
+      signal: "positive",
+      agent: "tester",
+      principle: "the review concluded with five follow-ups",
+      created_at: now,
+      date: now.slice(0, 10),
+      slug: "relink-surface",
+      scope: "writing",
+      source: ["[[notes/meeting.md]]"],
+      source_type: "inline",
+      dedup_hash: `relink-surface-${now}`,
+      // The placeholder Raw section: the shape a signal stored without a
+      // verbatim quote carries, and the line the relink rewrite can fill.
+      raw: "_(not provided)_",
+    });
+    const signalPath = join(vault, "Brain", "inbox");
+    const name = readdirSync(signalPath).find((f) => f.startsWith("sig-") && f.endsWith(".md"));
+    if (name === undefined) throw new Error("fixture signal was not written");
+    return join(signalPath, name);
+  }
+
+  test("without the flag the lane's relink task previews: it reports and writes nothing", async () => {
+    await initVault();
+    const signalPath = writeRelinkFixture();
+    const before = readFileSync(signalPath, "utf8");
+
+    const run = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+      env: baseEnv(),
+    });
+    expect(run.returncode).toBe(0);
+    const payload = JSON.parse(run.stdout) as {
+      relink?: {
+        apply: boolean;
+        signalsPageSourced: number;
+        anchorsAdded: number;
+        perSource: Array<{ source: string; signals: number; anchorsAdded: number }>;
+      };
+    };
+    // The unattended lane runs the relink pass as a preview and carries
+    // its report beside the task rows.
+    expect(payload.relink?.apply).toBe(false);
+    expect(payload.relink?.signalsPageSourced).toBe(1);
+    expect(payload.relink?.anchorsAdded).toBe(1);
+    expect(payload.relink?.perSource).toEqual([
+      { source: "notes/meeting.md", signals: 1, anchorsAdded: 1 },
+    ]);
+    expect(readFileSync(signalPath, "utf8")).toBe(before);
+  });
+
+  test("--relink-apply rewrites the stored lines and the report says what changed", async () => {
+    await initVault();
+    const signalPath = writeRelinkFixture();
+
+    const run = await runCli(
+      ["brain", "maintenance", "run", "--relink-apply", "--vault", vault, "--json"],
+      { env: baseEnv() },
+    );
+    expect(run.returncode).toBe(0);
+    const payload = JSON.parse(run.stdout) as {
+      relink?: { apply: boolean; signalsChanged: number; anchorsAdded: number };
+      tasks: Array<{ name: string; ok: boolean }>;
+    };
+    expect(payload.relink?.apply).toBe(true);
+    expect(payload.relink?.signalsChanged).toBe(1);
+    expect(payload.relink?.anchorsAdded).toBe(1);
+    expect(readFileSync(signalPath, "utf8")).toContain("entities: ent-people-ada-lovelace");
+  });
+
+  test("the preview arm names its report in the human output too", async () => {
+    await initVault();
+    writeRelinkFixture();
+
+    const run = await runCli(["brain", "maintenance", "run", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(run.returncode).toBe(0);
+    expect(run.stdout).toContain("relink: would add 1 anchor(s) to 1 signal(s)");
+  });
+
+  test("--relink-apply is a lane-run flag: the recipe refuses it", async () => {
+    const refused = await recipe(["--relink-apply"]);
+    expect(refused.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(refused.stderr).toContain("--relink-apply");
+    expect(listJournal(vault, MAINTENANCE_JOURNAL_CAP)).toEqual([]);
+  });
 });

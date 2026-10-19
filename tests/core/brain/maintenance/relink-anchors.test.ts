@@ -572,5 +572,64 @@ describe("the relink lane task registration", () => {
     expect(await relink!.run()).toBeUndefined();
     const after = inboxFiles().map((f) => readFileSync(join(brainDirs(vault).inbox, f), "utf8"));
     expect(after).toEqual(before);
+    // The preview is not discarded: the set surfaces the report the run
+    // produced, so both front doors can carry what the pass would add.
+    const report = set.relinkReport();
+    expect(report?.apply).toBe(false);
+    expect(report?.signalsPageSourced).toBe(1);
+    expect(report?.anchorsAdded).toBe(1);
+    expect(report?.perSource).toEqual([
+      { source: "notes/meeting.md", signals: 1, anchorsAdded: 1 },
+    ]);
+  });
+
+  test("relinkApply hands the task the apply arm, and the surfaced report says what changed", async () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    const file = inboxFiles()[0]!;
+    const set = buildLaneTasks({
+      vault,
+      configPath,
+      searchConfig: resolveSearchConfig({ vault, configPath }),
+      now: NOW,
+      forceCost: false,
+      relinkApply: true,
+      safeguardFor: (operation) => ({
+        checkpoint: () => {},
+        timeoutMs: null,
+        operation,
+      }),
+    });
+    const relink = set.tasks.find((task) => task.name === LANE_TASK.relink);
+    expect(await relink!.run()).toBeUndefined();
+    expect(entitiesLineOf(file)).toBe("entities: ent-people-ada-lovelace");
+    const report = set.relinkReport();
+    expect(report?.apply).toBe(true);
+    expect(report?.signalsChanged).toBe(1);
+    expect(report?.anchorsAdded).toBe(1);
+  });
+
+  test("the surfaced report is undefined before the relink task has run", () => {
+    const set = buildLaneTasks({
+      vault,
+      configPath,
+      searchConfig: resolveSearchConfig({ vault, configPath }),
+      now: NOW,
+      forceCost: false,
+      safeguardFor: (operation) => ({
+        checkpoint: () => {},
+        timeoutMs: null,
+        operation,
+      }),
+    });
+    expect(set.relinkReport()).toBeUndefined();
   });
 });
