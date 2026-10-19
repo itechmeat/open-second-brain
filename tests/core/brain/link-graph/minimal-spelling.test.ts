@@ -27,9 +27,12 @@
  * chooser returning a longer form for it is the honest answer.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { minimalSpellingFor } from "../../../../src/core/brain/link-graph/minimal-spelling.ts";
+import { indexVault } from "../../../../src/core/search/indexer.ts";
+import { Store } from "../../../../src/core/search/store.ts";
+import { createTempVault, makeConfig, writeMd } from "../../../helpers/search-fixtures.ts";
 
 describe("minimalSpellingFor", () => {
   test("the unique nested basename is the minimal spelling", () => {
@@ -91,5 +94,116 @@ describe("minimalSpellingFor", () => {
   test("empty basename and multi-segment destinations stay well-formed", () => {
     expect(minimalSpellingFor("Solo.md", ["Solo.md"])).toBe("Solo");
     expect(minimalSpellingFor("a/b/c/Deep.md", ["a/b/c/Deep.md", "a/b/c/Other.md"])).toBe("Deep");
+  });
+});
+
+/**
+ * Chooser and ladder agreement, pinned against a real index.
+ *
+ * The chooser re-derives the store's resolution rules in pure form, and
+ * a re-derivation drifts unless something compares the two on the same
+ * vault. Each fixture below builds a temp vault whose shape is one of
+ * the chooser's unit populations, asks the chooser for the minimal
+ * spelling of a destination, writes a referencing note that uses the
+ * chosen spelling (and, where the shape has one, a second note using
+ * the bare basename), indexes the vault, and then asks the store's OWN
+ * ladder - `resolvedDocLinkPairs`, the same RESOLVED_LINK_TARGET_SQL
+ * the census and the dangling list follow - which document that link
+ * resolves to. Agreement means: the chosen spelling lands on the
+ * destination document, every time, on every population shape.
+ */
+describe("agreement with the store resolution ladder", () => {
+  let vault: string;
+  let dbPath: string;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    const created = createTempVault("minimal-spelling-ladder");
+    vault = created.vault;
+    dbPath = created.dbPath;
+    cleanup = created.cleanup;
+  });
+  afterEach(() => cleanup());
+
+  /** Index `vault` and return the resolved target path of every link. */
+  async function resolvedLinkTargets(): Promise<Array<{ source: string; target: string }>> {
+    const config = makeConfig({ vault, dbPath });
+    await indexVault(config, { force: true });
+    const store = await Store.open(config, { mode: "read" });
+    try {
+      const idToPath = new Map<number, string>();
+      for (const [path, summary] of store.listDocuments()) idToPath.set(summary.id, path);
+      return store.resolvedDocLinkPairs().flatMap((pair) => {
+        const source = idToPath.get(pair.source);
+        const target = idToPath.get(pair.target);
+        return source !== undefined && target !== undefined ? [{ source, target }] : [];
+      });
+    } finally {
+      await store.close();
+    }
+  }
+
+  /**
+   * Write the population, ask the chooser for the minimal spelling of
+   * `destination`, write a ref note citing that spelling, and return the
+   * chosen spelling so the assertions can name what they pinned.
+   */
+  function refCitingChooserSpelling(
+    population: ReadonlyArray<string>,
+    destination: string,
+  ): string {
+    const spelling = minimalSpellingFor(
+      destination,
+      population.filter((rel) => rel !== "Notes/Ref.md"),
+    );
+    writeMd(vault, "Notes/Ref.md", `see [[${spelling}]] here\n`);
+    for (const rel of population) if (rel !== "Notes/Ref.md") writeMd(vault, rel, "body\n");
+    return spelling;
+  }
+
+  test("a unique nested basename resolves through the ladder to the destination", async () => {
+    const destination = "Projects/New.md";
+    const spelling = refCitingChooserSpelling(
+      ["Projects/New.md", "Projects/Ref.md", "Notes/Ref.md"],
+      destination,
+    );
+    expect(spelling).toBe("New");
+    const pairs = await resolvedLinkTargets();
+    expect(pairs).toContainEqual({ source: "Notes/Ref.md", target: destination });
+  });
+
+  test("a top-level destination's bare spelling resolves through the exact rung", async () => {
+    const destination = "New.md";
+    const spelling = refCitingChooserSpelling(
+      ["New.md", "Projects/Other.md", "Notes/Ref.md"],
+      destination,
+    );
+    expect(spelling).toBe("New");
+    const pairs = await resolvedLinkTargets();
+    expect(pairs).toContainEqual({ source: "Notes/Ref.md", target: destination });
+  });
+
+  test("under a top-level basename carrier the suffix-less spelling resolves to the nested destination", async () => {
+    const destination = "A/New.md";
+    const spelling = refCitingChooserSpelling(["A/New.md", "New.md", "Notes/Ref.md"], destination);
+    expect(spelling).toBe("A/New");
+    const pairs = await resolvedLinkTargets();
+    expect(pairs).toContainEqual({ source: "Notes/Ref.md", target: destination });
+  });
+
+  test("with two nested carriers the suffix-less spelling resolves and the bare one resolves to neither", async () => {
+    const destination = "A/New.md";
+    const spelling = refCitingChooserSpelling(
+      ["A/New.md", "B/New.md", "Notes/Ref.md"],
+      destination,
+    );
+    expect(spelling).toBe("A/New");
+    writeMd(vault, "Bare/Ref.md", "bare [[New]] here\n");
+    const pairs = await resolvedLinkTargets();
+    // The chooser's spelling lands on the destination...
+    expect(pairs).toContainEqual({ source: "Notes/Ref.md", target: destination });
+    // ...and the bare spelling the chooser refused is unresolved, which
+    // is exactly why it was refused.
+    expect(pairs.find((pair) => pair.source === "Bare/Ref.md")).toBeUndefined();
   });
 });
