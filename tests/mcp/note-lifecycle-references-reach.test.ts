@@ -39,8 +39,14 @@ interface Fixture {
 /**
  * A visible note linked from a visible page and, in one of the two vaults,
  * from a private page. With no `reach`, the server mints none: remote.
+ * `visibleCarrier`, when given, is an extra VISIBLE page shared by both
+ * vaults - the sole carrier of a basename a repair-arm move can contest.
  */
-function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fixture {
+function fixture(
+  withSecret: boolean,
+  reach?: typeof TRANSPORT_REACH.local,
+  visibleCarrier?: string,
+): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-lifecycle-refs-reach-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -51,6 +57,10 @@ function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fix
   writeFileSync(join(vault, TARGET), "# Target\n");
   writeFileSync(join(vault, "Notes/open.md"), "# Open\nSee [[Notes/target]].\n");
   if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
+  if (visibleCarrier !== undefined) {
+    mkdirSync(dirname(join(vault, visibleCarrier)), { recursive: true });
+    writeFileSync(join(vault, visibleCarrier), "# Draft\nA visible note.\n");
+  }
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, server };
 }
@@ -135,4 +145,44 @@ describe("a hidden page at the destination is a known one-bit limitation", () =>
       expect(readFileSync(join(hidden.vault, TARGET), "utf8")).toBe("# Target\n");
     });
   }
+});
+
+describe("the bare-name repair arm at reach", () => {
+  // The repair target spelling is derived from the third-party note that
+  // carries the basename the move contests. A carrier the caller may not
+  // read must contribute no pair: the remote answer names it no more than
+  // a vault without that page would.
+  test("a withheld sole carrier of the contested basename is never named", async () => {
+    const hidden = fixture(true);
+    for (const args of [
+      { action: "move", path: TARGET, to: "Other/secret.md" },
+      { action: "move", path: TARGET, to: "Other/secret.md", apply: true },
+    ]) {
+      const out = await answer(hidden, args);
+      // The repair's reported `to` is the carrier's suffix-less spelling,
+      // so the assertion runs at that precision too.
+      expect(out).not.toContain("Notes/secret");
+      expect(out).not.toContain(`${PRIVATE_PATH}`);
+    }
+  });
+
+  test("at local reach the repair names the carrier - the control", async () => {
+    const out = await answer(fixture(true, TRANSPORT_REACH.local), {
+      action: "move",
+      path: TARGET,
+      to: "Other/secret.md",
+    });
+    expect(out).toContain("Notes/secret");
+  });
+
+  test("with a visible carrier the answers are byte-identical with and without the withheld page", async () => {
+    // A VISIBLE note is the sole carrier of the contested basename, so
+    // the repair fires and is reported in both vaults. The unrelated
+    // withheld page in one of them must not change a byte of the answer -
+    // the same contract the calls above pin, now covering the repair arm.
+    const hidden = fixture(true, undefined, "Notes/draft.md");
+    const absent = fixture(false, undefined, "Notes/draft.md");
+    const args = { action: "move", path: TARGET, to: "Other/draft.md" };
+    expect(await answer(hidden, args)).toBe(await answer(absent, args));
+  });
 });

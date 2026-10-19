@@ -35,6 +35,10 @@
  *      refused as `destination_occupied`.
  *  14. a vault-wide in-place rewrite of hand-authored notes reported
  *      `nothing_at_risk`.
+ *  15. a bare-name repair derived its reported `to` spelling from a
+ *      third-party note without asking whether the caller may read that
+ *      note, so a restricted caller's report named a page withheld from
+ *      it.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -430,6 +434,46 @@ describe("index evidence on a plan-only run (7)", () => {
       apply: true,
     });
     expect(applied.references.index.state).toBe(INDEX_EVIDENCE.stale);
+  });
+});
+
+describe("a repair derived from a page the caller may not read (15)", () => {
+  test("is applied for the readers who can see it, but names no pair in the report", async () => {
+    note("A/Old.md", "x\n");
+    note("B/New.md", "a different note that already owns the name\n");
+    note("Notes/Ref.md", "bare [[Old]] and bare [[New]]\n");
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "A/Old.md",
+      to: "A/New.md",
+      apply: true,
+      readable: (rel) => rel !== "B/New.md",
+    });
+
+    // The pair was derived from the carrier of the contested basename.
+    // That carrier is withheld here, so the report answers as a vault
+    // without the page would: no `to` naming it.
+    expect(res.references.rewrittenSpellings).not.toContainEqual({ from: "New", to: "B/New" });
+    // The repair itself still ran - the readers who CAN see the carrier
+    // are not left with a spelling that resolves to neither note.
+    expect(read("Notes/Ref.md")).toBe("bare [[Old]] and bare [[B/New]]\n");
+  });
+
+  test("a caller who may read the carrier keeps the pair", async () => {
+    note("A/Old.md", "x\n");
+    note("B/New.md", "a different note that already owns the name\n");
+    note("Notes/Ref.md", "bare [[Old]] and bare [[New]]\n");
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "A/Old.md",
+      to: "A/New.md",
+      apply: true,
+      readable: () => true,
+    });
+
+    expect(res.references.rewrittenSpellings).toContainEqual({ from: "New", to: "B/New" });
   });
 });
 

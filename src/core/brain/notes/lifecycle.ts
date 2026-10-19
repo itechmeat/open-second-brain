@@ -487,8 +487,10 @@ export interface NoteLifecycleInput {
    * rejects is reported as a vault without it would be, and a cascade
    * never deletes it. The link rewrite of an applied relocation still
    * edits it, so the readers who can see it are not left with links to a
-   * path that no longer exists. Absent, every file counts (the CLI, which
-   * reads the vault directly).
+   * path that no longer exists - and the same holds for a bare-name
+   * repair derived from a page it rejects: the repair runs, but names no
+   * pair in `rewrittenSpellings`. Absent, every file counts (the CLI,
+   * which reads the vault directly).
    */
   readonly readable?: (rel: string) => boolean;
   /**
@@ -1232,7 +1234,17 @@ export async function noteLifecycle(
     filesScanned,
     inboundFiles,
     rewritten.length,
-    retargets.flatMap((r) => (r.to === undefined ? [] : [{ from: r.from, to: r.to }])),
+    // A bare-name repair derived from a page the caller may not read is
+    // applied (the readers who can see that page keep a working link)
+    // but names no pair, exactly like the rewrites inside withheld
+    // pages: the report answers as a vault without the page would. The
+    // main pairs are derived solely from the paths this call was given,
+    // so no pair of theirs can name a page the caller chose not to see.
+    retargets.flatMap((r) =>
+      r.to === undefined || (r.carrierRel !== undefined && !reported(r.carrierRel))
+        ? []
+        : [{ from: r.from, to: r.to }],
+    ),
     rewriteFailures,
     basename,
     index,
@@ -1314,6 +1326,16 @@ function postRelocationPopulation(
 }
 
 /**
+ * One retarget pair plus, for a bare-name repair, the third-party page
+ * the pair was derived from. The carrier travels with the pair so the
+ * report can ask the caller's reach predicate about the page a withheld
+ * carrier would otherwise name - the pair itself spells only a basename
+ * and a minimal spelling, and the spelling derived from a page the
+ * caller may not read must contribute no reported pair.
+ */
+type AnnotatedRetarget = WikilinkRetarget & { readonly carrierRel?: string };
+
+/**
  * The bare-name spellings this rename PROVABLY breaks for links that
  * never mentioned it, and the spelling each should carry instead.
  *
@@ -1339,17 +1361,19 @@ function bareNameRepairs(
   files: ReadonlyArray<string>,
   sourceRel: string,
   destinationRel: string,
-): ReadonlyArray<WikilinkRetarget> {
+): ReadonlyArray<AnnotatedRetarget> {
   const from = basenameOf(sourceRel);
   const to = basenameOf(destinationRel);
   const post = postRelocationPopulation(files, sourceRel, destinationRel);
-  const repairs: WikilinkRetarget[] = [];
+  const repairs: AnnotatedRetarget[] = [];
   for (const spelling of new Set([from, to])) {
     const preCarriers = files.filter((rel) => basenameOf(rel) === spelling);
     const delta = (spelling === to ? 1 : 0) - (spelling === from ? 1 : 0);
     if (preCarriers.length !== 1 || preCarriers.length + delta < 2) continue;
     const repairedTo = minimalSpellingFor(preCarriers[0]!, post);
-    if (repairedTo !== spelling) repairs.push({ from: spelling, to: repairedTo });
+    if (repairedTo !== spelling) {
+      repairs.push({ from: spelling, to: repairedTo, carrierRel: preCarriers[0]! });
+    }
   }
   return repairs;
 }
@@ -1367,19 +1391,21 @@ function bareNameRepairs(
  * `rewrittenSpellings` a caller reads back is the list that was applied
  * and not the list that was considered - and the repairs
  * {@link bareNameRepairs} derives ride the same pass, so they obey the
- * same never-rewrite scope and the same length-first ordering.
+ * same never-rewrite scope and the same length-first ordering. Each
+ * repair carries the page its spelling was derived from, so the report
+ * can withhold a pair whose carrier the caller may not read.
  */
 function retargetsFor(
   files: ReadonlyArray<string>,
   source: ResolvedNoteTarget,
   destination: ResolvedNoteTarget,
   basename: BasenameRewrite,
-): ReadonlyArray<WikilinkRetarget> {
+): ReadonlyArray<AnnotatedRetarget> {
   const to = minimalSpellingFor(
     destination.relPath,
     postRelocationPopulation(files, source.relPath, destination.relPath),
   );
-  const pairs: WikilinkRetarget[] = [
+  const pairs: AnnotatedRetarget[] = [
     { from: source.relPath, to },
     { from: withoutSuffix(source.relPath), to },
   ];
