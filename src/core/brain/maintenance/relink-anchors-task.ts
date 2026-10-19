@@ -65,6 +65,7 @@ import {
   entityMatchForms,
   matchFormVariants,
   matchVariantsOccurIn,
+  MIN_ANCHOR_FORM_LENGTH,
   normalizeEntityName,
 } from "../entities/canonical.ts";
 import { resolveEntityLexicon } from "../entities/lexicon.ts";
@@ -80,15 +81,6 @@ import {
   type EntityLinkAccessor,
 } from "../intake/page-entity-links.ts";
 import { buildAnchorables, type AnchorableEntity } from "../fact-extract.ts";
-
-/**
- * The length floor below which a form never participates in substring
- * matching. Kept in step with the capture kernel's `MIN_ANCHOR_FORM_LENGTH`
- * (fact-extract.ts), which is not exported: this quiet build must apply
- * the same floor or the dry run's report would disagree with the apply
- * arm's changes.
- */
-const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /** One source page's rollup in the relink report. */
 export interface RelinkSourceReport {
