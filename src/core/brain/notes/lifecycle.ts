@@ -1170,6 +1170,47 @@ function postRelocationPopulation(
 }
 
 /**
+ * The bare-name spellings this rename PROVABLY breaks for links that
+ * never mentioned it, and the spelling each should carry instead.
+ *
+ * The casualty is the bare spelling whose carrier count the move turns
+ * from exactly one into several: before it, the ladder's
+ * unique-carrier rung resolved that spelling to one note; after it,
+ * there are two carriers and the spelling resolves to NEITHER - the
+ * rename silently broke a third-party link. Those links are repaired to
+ * the minimal unambiguous spelling of their PRE-rename target, the
+ * chooser applied to the note that never moved. Everything else stays
+ * untouched, because nothing is provable about it: a spelling carried
+ * by several notes before the move was already ambiguous, a spelling
+ * with no carrier was already dangling (adopting it would be a guess),
+ * and a single TOP-LEVEL carrier keeps owning its spelling through the
+ * exact-path rung whatever the nested count becomes - which is why the
+ * repair target is computed through the same chooser and ladder as the
+ * main rewrite, and why a repair that comes out identical to the
+ * spelling it would "repair" is dropped as a no-op. The pre-state is
+ * the counting probe's walked population; the post-state is derived,
+ * the move relocating exactly one carrier.
+ */
+function bareNameRepairs(
+  files: ReadonlyArray<string>,
+  sourceRel: string,
+  destinationRel: string,
+): ReadonlyArray<WikilinkRetarget> {
+  const from = basenameOf(sourceRel);
+  const to = basenameOf(destinationRel);
+  const post = postRelocationPopulation(files, sourceRel, destinationRel);
+  const repairs: WikilinkRetarget[] = [];
+  for (const spelling of new Set([from, to])) {
+    const preCarriers = files.filter((rel) => basenameOf(rel) === spelling);
+    const delta = (spelling === to ? 1 : 0) - (spelling === from ? 1 : 0);
+    if (preCarriers.length !== 1 || preCarriers.length + delta < 2) continue;
+    const repairedTo = minimalSpellingFor(preCarriers[0]!, post);
+    if (repairedTo !== spelling) repairs.push({ from: spelling, to: repairedTo });
+  }
+  return repairs;
+}
+
+/**
  * The spellings this relocation will actually rewrite, aimed at the
  * MINIMAL spelling the destination resolves under once the move has
  * landed ({@link minimalSpellingFor} over the post-move population):
@@ -1177,10 +1218,12 @@ function postRelocationPopulation(
  * that stays unambiguous, so `[[Projects/Old]]` comes out `[[New]]`
  * when `New` is unique and `[[Projects/New]]` only when it is not. A
  * link comes out no longer than the vault still needs, and never
- * longer than it went in. The bare basename is included only when
- * {@link decideBasename} cleared it, so the `rewrittenSpellings` a
- * caller reads back is the list that was applied and not the list that
- * was considered.
+ * longer than it went in. The bare basename of the SOURCE is included
+ * only when {@link decideBasename} cleared it, so the
+ * `rewrittenSpellings` a caller reads back is the list that was applied
+ * and not the list that was considered - and the repairs
+ * {@link bareNameRepairs} derives ride the same pass, so they obey the
+ * same never-rewrite scope and the same length-first ordering.
  */
 function retargetsFor(
   files: ReadonlyArray<string>,
@@ -1199,6 +1242,7 @@ function retargetsFor(
   if (basename === BASENAME_REWRITE.applied) {
     pairs.push({ from: basenameOf(source.relPath), to });
   }
+  pairs.push(...bareNameRepairs(files, source.relPath, destination.relPath));
   return Object.freeze(pairs);
 }
 
