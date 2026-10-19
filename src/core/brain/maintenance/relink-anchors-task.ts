@@ -29,9 +29,13 @@
  * receives ids whose entity page and source page are readable at that
  * reach, because an id written into a listable signal is disclosed to
  * every reader that can list it - and this pass never removes an anchor,
- * so the disclosure would be permanent. A signal reserved against remote
- * reads keeps {@link MAINTENANCE_LANE_REACH}: the lane is a local repair
- * pass, and what it heals for a local-only page never leaves the host.
+ * so the disclosure would be permanent. The TEXT-derived matches answer
+ * to the same per-signal predicate: the anchorable list is built at the
+ * lane's reach, and a match against it unfiltered would write a private
+ * entity's id into a remotely readable signal just the same. A signal
+ * reserved against remote reads keeps {@link MAINTENANCE_LANE_REACH}:
+ * the lane is a local repair pass, and what it heals for a local-only
+ * page never leaves the host.
  *
  * ## Server-stamped sources only
  *
@@ -371,6 +375,20 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   const anchorables = apply
     ? buildAnchorables(vault, index, agent, now)
     : buildAnchorablesQuietly(vault, index);
+  // Each anchorable's own page, so the TEXT-derived half can answer the
+  // same per-signal visible predicate the link-derived half resolves
+  // through: the anchorable list is built at the lane's reach and holds
+  // every canonical entity the lane can see, and a match against it
+  // without this filter wrote a private entity's id into a signal any
+  // remote-reach reader can list - the leak the resolver's predicate
+  // already closed for links, entering through the text arm instead.
+  // Canonical scope, the same population the two builds admit, so every
+  // matchable id resolves here.
+  const entityRelById = new Map<string, string>();
+  for (const entity of index.entities) {
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
+    entityRelById.set(entity.id, relOf(entity.path));
+  }
   // One resolver per reach, built on first use: each resolves through
   // its own view of the entity index (a page the predicate refuses is
   // dropped before any spelling can answer), and a vault with no
@@ -518,10 +536,19 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       // The match runs UNCONDITIONALLY: a signal whose Raw section holds
       // only the placeholder still earns its text-derived anchors - the
       // placeholder is exactly the line the rewrite can fill - and only
-      // the WRITE below waits on the rewrite's support.
+      // the WRITE below waits on the rewrite's support. Each match is
+      // then filtered through THIS signal's visible predicate - the same
+      // one the source pointers passed above: the anchorables were built
+      // at the lane's reach, so a remotely readable signal whose
+      // principle names a private entity would otherwise store that
+      // entity's id, the disclosure the link half's reach binding
+      // already refuses.
       const haystackVariants = matchFormVariants(normalizeEntityName(signal.principle));
       for (const anchorable of anchorables) {
-        if (matchVariantsOccurIn(anchorable.forms, haystackVariants)) push(anchorable.id);
+        if (!matchVariantsOccurIn(anchorable.forms, haystackVariants)) continue;
+        const entityRel = entityRelById.get(anchorable.id);
+        if (entityRel === undefined || !visible(entityRel)) continue;
+        push(anchorable.id);
       }
       // Then link-derived, in body order, from each resolvable source page.
       for (const source of sources) {

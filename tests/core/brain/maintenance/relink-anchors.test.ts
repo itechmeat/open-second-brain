@@ -703,6 +703,56 @@ describe("the resolution binds at the reach the signal itself is readable at", (
     );
   });
 
+  test("a remotely readable signal anchors nothing from a principle naming a private entity", () => {
+    // The TEXT half binds at the same per-signal reach as the link half.
+    // The anchorable list is built at the lane's reach, so a principle
+    // naming a PRIVATE entity matched that entity and pushed its id into
+    // a signal every remote-reach reader can list - the same leak the
+    // link half's reach fix closed, entering through the text arm. The
+    // private name anchors nothing; a public name on the same signal
+    // class still anchors; a local-only signal keeps healing the
+    // private name.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("people", "ent-people-secret-person", "Secret Person", [], "active", "private");
+    writeSourcePage("notes/meeting.md", "# Meeting\n\nNo entity links here.\n");
+    // Remotely readable, names the private entity only: nothing anchors.
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Secret Person joined the review",
+      storedEntityIds: [],
+    });
+    // Remotely readable, names the public entity: still anchors.
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Ada Lovelace joined the review",
+      storedEntityIds: [],
+      topic: "fact-public",
+    });
+    // Local-only, names the private entity: the lane still heals it.
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Secret Person joined the review",
+      storedEntityIds: [],
+      topic: "fact-private",
+    });
+    markSignalPrivate(inboxFiles()[0]!);
+    // Sorted by name: `fact-private` (local-only, heals the private
+    // name), `fact-public` (remote, anchors the public name),
+    // `fact-quantity` (remote, names the private entity).
+    const [healedFile, publicFile, remoteSecretFile] = inboxFiles();
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(3);
+    expect(report.anchorsAdded).toBe(2);
+    expect(report.signalsChanged).toBe(2);
+    expect(entitiesLineOf(healedFile!)).toBe("entities: ent-people-secret-person");
+    expect(entitiesLineOf(publicFile!)).toBe("entities: ent-people-ada-lovelace");
+    expect(entitiesLineOf(remoteSecretFile!)).toBeUndefined();
+    const body = readFileSync(join(brainDirs(vault).inbox, remoteSecretFile!), "utf8");
+    expect(body).not.toContain("ent-people-secret-person");
+  });
+
   test("a remotely readable signal whose source page is private is out of scope", () => {
     // The source filter binds at the same per-signal reach as the
     // resolver: a signal any remote reader can list gains nothing from a
