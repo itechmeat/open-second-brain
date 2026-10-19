@@ -300,26 +300,22 @@ export function rewriteRawEntitiesLine(contents: string, nextLine: string): stri
 }
 
 /**
- * The Raw section the BYTES carry - the span `rewriteRawEntitiesLine`
- * itself would rewrite (the lines between the `## Raw` heading and the
- * next heading), trimmed, or `undefined` when the bytes hold no such
- * heading or only blank lines. The drift re-check below re-runs the
- * shape gate on this span, so the gate and the writer judge the same
- * bytes.
+ * The Raw section the BYTES carry - the span the parser itself reads
+ * (everything after the `## Raw` heading through EOF, the schema's one
+ * section), trimmed, or `undefined` when the bytes hold no such heading
+ * or only blank lines. The drift re-check below re-runs the shape gate
+ * on this span, so the gate and the parse-time gate judge the same
+ * bytes: a heading after `## Raw` is part of the section - multi-line,
+ * not the extractor's shape - and answers `unsafe-shape` here exactly
+ * as the parse gate would, instead of being cut off and the remainder
+ * mistaken for a rewritable one-liner.
  */
 function rawSectionBytes(contents: string): string | undefined {
   const lines = contents.split("\n");
   const rawIdx = lines.findIndex((line) => line.trim() === "## Raw");
   if (rawIdx < 0) return undefined;
-  let end = lines.length;
-  for (let i = rawIdx + 1; i < lines.length; i++) {
-    if (lines[i]!.startsWith("## ")) {
-      end = i;
-      break;
-    }
-  }
   const section = lines
-    .slice(rawIdx + 1, end)
+    .slice(rawIdx + 1)
     .join("\n")
     .trim();
   return section.length > 0 ? section : undefined;

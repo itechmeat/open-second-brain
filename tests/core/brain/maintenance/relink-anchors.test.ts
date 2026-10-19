@@ -996,6 +996,27 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     });
   });
 
+  test("a heading after the entities line between parse and read is refused, not spliced into", () => {
+    // The parse saw the extractor's one-line raw; the apply read finds a
+    // heading after the `entities:` line. The parser reads `## Raw` to
+    // EOF, so the parse-time shape gate would reject these bytes as a
+    // multi-line section - the byte gate must too, though only the span
+    // up to the heading still looks like the extractor's one line.
+    const before = [
+      "---",
+      "kind: brain-signal",
+      "---",
+      "## Raw",
+      "entities: ent-project-atlas",
+      "## Notes",
+      "Ada Lovelace joined the review.",
+      "",
+    ].join("\n");
+    expect(decideRawRewrite(before, ["ent-people-ada-lovelace"])).toEqual({
+      action: "unsafe-shape",
+    });
+  });
+
   test("a Raw turned codec between parse and read is refused, even when the compressed form spells the extractor's line", () => {
     // Same window, opposite edit: the frontmatter now carries the
     // `_raw_codec` marker beside a real section, so the bytes on disk
