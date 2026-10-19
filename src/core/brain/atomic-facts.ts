@@ -11,6 +11,7 @@
  */
 
 import {
+  MIN_ANCHOR_FORM_LENGTH,
   entityMatchForms,
   matchFormVariants,
   matchVariantsOccurIn,
@@ -126,9 +127,6 @@ export function splitSentences(text: string): string[] {
   return out.map((s) => s.trim()).filter((s) => s !== "");
 }
 
-/** Minimum normalised form length that participates in substring matching. */
-const MIN_ANCHOR_FORM_LENGTH = 3;
-
 /**
  * The occurrence-anchoring kernel (truth-correctable-time-aware,
  * task 4): the quality-gated normalized match forms that occur in
@@ -140,9 +138,10 @@ const MIN_ANCHOR_FORM_LENGTH = 3;
  * separator-tolerant: both the form AND the haystack expand through
  * {@link matchFormVariants} - runs of space, hyphen and underscore are
  * interchangeable, a slug-prefixed form also matches at a path-segment
- * boundary - and every occurrence must sit at a word boundary, so the
- * fold never plants a mid-word hit literal matching did not already
- * have (`canada` never anchors `ada`). The returned forms are still the
+ * boundary - and every occurrence must sit at a word boundary (a
+ * no-space-script neighbour suspends the requirement), so the fold
+ * never plants a mid-word hit literal matching did not already have
+ * (`canada` never anchors `ada`). The returned forms are still the
  * gate's normalized forms, never the expanded variants. Pure: no I/O,
  * no registry - so this layer never resolves the lexicon itself. The
  * one kernel every occurrence-anchoring caller shares - the assertion

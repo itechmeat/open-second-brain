@@ -10,6 +10,7 @@
  */
 
 import {
+  MIN_ANCHOR_FORM_LENGTH,
   matchFormVariants,
   matchVariantsOccurIn,
   normalizeEntityName,
@@ -78,7 +79,9 @@ function guardedAnchors(
     const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
     if (
       forms.some(
-        (f) => f.length >= 3 && matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
+        (f) =>
+          f.length >= MIN_ANCHOR_FORM_LENGTH &&
+          matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
       )
     )
       ids.push(entity.id);

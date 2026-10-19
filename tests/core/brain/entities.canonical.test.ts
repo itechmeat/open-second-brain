@@ -3,11 +3,13 @@ import { describe, expect, test } from "bun:test";
 import {
   ENTITY_LABEL_MAX_LENGTH,
   InvalidEntityLabelError,
+  MIN_ANCHOR_FORM_LENGTH,
   assertValidEntityLabel,
   entityIdentityKey,
   entityMatchForms,
   isValidEntityLabel,
   matchFormVariants,
+  matchVariantsOccurIn,
   normalizeEntityName,
   sanitizeEntityLabel,
   validateEntityCategory,
@@ -216,9 +218,11 @@ describe("entityMatchForms", () => {
 // The match-form generator expands ONE already-normalized form into the
 // match variants the anchoring kernels compare with: runs of space, hyphen
 // or underscore are interchangeable at match time, and a slug-prefixed form
-// also matches at a path-segment boundary (its last path segment alone).
-// Identity is untouched - `normalizeEntityName` keeps every separator, so
-// two spellings stay two identities while matching treats them as one.
+// also matches at a path-segment boundary (its last path segment alone,
+// held to the same minimum form length the callers apply to the full
+// form). Identity is untouched - `normalizeEntityName` keeps every
+// separator, so two spellings stay two identities while matching treats
+// them as one.
 
 describe("matchFormVariants", () => {
   test("a separator-free form is its own single variant", () => {
@@ -253,6 +257,23 @@ describe("matchFormVariants", () => {
     ]);
   });
 
+  test("a slug tail below the minimum form length is never emitted", () => {
+    // "AC/DC" must not mint the needle "dc": the tail is an emitted
+    // variant in its own right and meets the same floor the callers
+    // apply to the full form, or a standalone "dc" in a text anchors.
+    const variants = matchFormVariants("ac/dc");
+    expect(variants).toContain("ac/dc"); // the full form is untouched
+    expect(variants).not.toContain("dc");
+    for (const variant of variants) {
+      expect(variant.length).toBeGreaterThanOrEqual(MIN_ANCHOR_FORM_LENGTH);
+    }
+    expect(matchFormVariants("tcp/ip")).toEqual(["tcp/ip"]);
+  });
+
+  test("a slug tail at the minimum form length still expands", () => {
+    expect(matchFormVariants("notes/tcp")).toEqual(["notes/tcp", "tcp"]);
+  });
+
   test("edge separator runs vanish instead of planting empty tokens", () => {
     expect(matchFormVariants("-ada-")).toEqual(["ada"]);
     // A slash is path structure, not a foldable separator, so a trailing
@@ -280,6 +301,42 @@ describe("matchFormVariants", () => {
     expect(entityIdentityKey("people", "ada_lovelace")).not.toBe(
       entityIdentityKey("people", "ada lovelace"),
     );
+  });
+});
+
+// ----- The word-boundary rule over match variants (F3) -----------------------
+//
+// Direct pins for the one comparison the anchoring kernels and their twins
+// share: an occurrence must sit at a token edge, and the probe judges an
+// astral neighbour whole rather than as a lone surrogate.
+
+describe("matchVariantsOccurIn - the word-boundary rule", () => {
+  test("a mid-word occurrence never matches (canada never anchors ada)", () => {
+    expect(matchVariantsOccurIn(["ada"], ["canada"])).toBe(false);
+    expect(matchVariantsOccurIn(["ada"], ["ada lovelace"])).toBe(true);
+  });
+
+  test("an astral-script neighbour is judged whole, so it still requires the boundary", () => {
+    // U+1D41A MATHEMATICAL BOLD SMALL A is an astral letter: the boundary
+    // probe must step over the surrogate pair and see a word char, never a
+    // lone (always non-word) code unit.
+    expect(matchVariantsOccurIn(["da"], ["\u{1D41A}da"])).toBe(false);
+    expect(matchVariantsOccurIn(["\u{1D41A}da"], ["x \u{1D41A}da x"])).toBe(true);
+  });
+
+  test("a no-space-script neighbour does not block: CJK text anchors a CJK form", () => {
+    // A particle or another name touches the mention directly - Han and
+    // kana are written without word spaces, so adjacency there is not a
+    // mid-word hit and the boundary requirement is suspended.
+    expect(matchVariantsOccurIn(["田中太郎"], ["田中太郎は出張した"])).toBe(true);
+    expect(matchVariantsOccurIn(["田中太郎"], ["鈴木花子と田中太郎が出席した"])).toBe(true);
+  });
+
+  test("the boundary rule still holds between spaced scripts and CJK text", () => {
+    // The suspension is per neighbour script: a Latin neighbour still
+    // blocks even in otherwise-CJK text.
+    expect(matchVariantsOccurIn(["ada"], ["会ada議"])).toBe(true);
+    expect(matchVariantsOccurIn(["ada"], ["会adable議"])).toBe(false);
   });
 });
 

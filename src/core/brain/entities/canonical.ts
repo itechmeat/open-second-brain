@@ -143,6 +143,23 @@ const MATCH_SEPARATOR_RUN_RE = /[-_ ]+/;
 const MATCH_SEPARATOR_JOINS: ReadonlyArray<string> = [" ", "-", "_"];
 
 /**
+ * Minimum normalized form length that participates in substring matching.
+ * The anchoring kernels gate the FULL forms they compare with this floor,
+ * and {@link matchFormVariants} gates the slug tail it emits - the tail is
+ * an emitted needle in its own right, and an unfloored one would anchor
+ * standalone words no full form ever matched (`AC/DC` must not mint `dc`).
+ * One constant here so the kernels and the generator cannot drift.
+ */
+export const MIN_ANCHOR_FORM_LENGTH = 3;
+
+/** The joins a string's separator-delimited tokens expand to, or nothing. */
+function separatorVariantsOf(s: string): string[] {
+  const tokens = s.split(MATCH_SEPARATOR_RUN_RE).filter((token) => token !== "");
+  if (tokens.length === 0) return [];
+  return MATCH_SEPARATOR_JOINS.map((join) => tokens.join(join));
+}
+
+/**
  * Expand one ALREADY-NORMALIZED match form into the separator-variant
  * match forms the anchoring kernels compare with (note-change truth
  * maintenance, F3). Two rules, both pure:
@@ -158,26 +175,31 @@ const MATCH_SEPARATOR_JOINS: ReadonlyArray<string> = [" ", "-", "_"];
  *     variants of the form's LAST `/`-segment (the slug itself) are
  *     appended, so `people/ada_lovelace` also occurs in a text that
  *     only says `ada lovelace`. The segment prefix is registry
- *     decoration, not part of the mentioned name.
+ *     decoration, not part of the mentioned name - and because the tail
+ *     is an emitted needle in its own right, every tail variant meets
+ *     {@link MIN_ANCHOR_FORM_LENGTH}, the same floor the kernels apply
+ *     to full forms (`AC/DC` emits no `dc` for a standalone word to
+ *     match). The FULL form is never floored here: gating it stays the
+ *     caller's call, unchanged.
  *
  * The output is Set-deduped in a deterministic order (full-form variants
  * first, the last-segment tail after) and never empty for a non-empty
- * separator-free form. Deliberately NOT part of identity: the input is
- * never re-normalized, `normalizeEntityName` is untouched, and nothing
- * this returns may be persisted - identity keys keep their separators,
- * which is exactly why two spellings can be two identities and one
- * match class. Pure: no I/O, no state.
+ * separator-free form of at least {@link MIN_ANCHOR_FORM_LENGTH}.
+ * Deliberately NOT part of identity: the input is never re-normalized,
+ * `normalizeEntityName` is untouched, and nothing this returns may be
+ * persisted - identity keys keep their separators, which is exactly why
+ * two spellings can be two identities and one match class. Pure: no I/O,
+ * no state.
  */
 export function matchFormVariants(form: string): string[] {
   const out = new Set<string>();
-  const fold = (s: string): void => {
-    const tokens = s.split(MATCH_SEPARATOR_RUN_RE).filter((token) => token !== "");
-    if (tokens.length === 0) return;
-    for (const join of MATCH_SEPARATOR_JOINS) out.add(tokens.join(join));
-  };
-  fold(form);
+  for (const variant of separatorVariantsOf(form)) out.add(variant);
   const lastSlash = form.lastIndexOf("/");
-  if (lastSlash >= 0) fold(form.slice(lastSlash + 1));
+  if (lastSlash >= 0) {
+    for (const variant of separatorVariantsOf(form.slice(lastSlash + 1))) {
+      if (variant.length >= MIN_ANCHOR_FORM_LENGTH) out.add(variant);
+    }
+  }
   return [...out];
 }
 
@@ -189,6 +211,30 @@ export function matchFormVariants(form: string): string[] {
  */
 const MATCH_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 
+/**
+ * The scripts written WITHOUT word spaces - Han, Hiragana, Katakana,
+ * Thai. In a run of such text every letter touches a letter, so a
+ * neighbouring letter is not evidence of a mid-word hit the way it is in
+ * a spaced script: `田中太郎` never occurs in `田中太郎は` at a word
+ * boundary, and a boundary rule applied there verbatim would have
+ * silenced every CJK mention the pre-rule literal `includes` matching
+ * anchored. For a neighbour from one of these scripts the boundary
+ * requirement is therefore suspended - the script keeps its literal
+ * behavior back, spaced scripts keep the rule (a Latin neighbour blocks
+ * even inside otherwise-CJK text).
+ */
+const NO_SPACE_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}]/u;
+
+/**
+ * True when `codePoint` belongs to a script written without word spaces
+ * (see {@link NO_SPACE_SCRIPT_RE}): a neighbour from one of these
+ * scripts never blocks an occurrence, because adjacency there carries
+ * no word-boundary information.
+ */
+function boundaryNotRequiredForScripts(codePoint: string): boolean {
+  return NO_SPACE_SCRIPT_RE.test(codePoint);
+}
+
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
@@ -198,44 +244,53 @@ function isLowSurrogate(code: number): boolean {
 }
 
 /**
- * True when the code point ending just before index `i` is a letter or
- * digit. Steps over a surrogate pair so an astral letter is judged whole
- * rather than as a lone (always non-word) code unit.
+ * The code point ending just before index `i`, or null at the string
+ * edge. Steps over a surrogate pair so an astral letter comes back
+ * whole rather than as a lone (always non-word) code unit.
  */
-function matchWordCharBefore(s: string, i: number): boolean {
-  if (i <= 0) return false;
+function codePointBefore(s: string, i: number): string | null {
+  if (i <= 0) return null;
   const start =
     i >= 2 && isLowSurrogate(s.charCodeAt(i - 1)) && isHighSurrogate(s.charCodeAt(i - 2))
       ? i - 2
       : i - 1;
-  return MATCH_WORD_CHAR_RE.test(s.slice(start, i));
+  return s.slice(start, i);
 }
 
-/** True when the code point starting at index `i` is a letter or digit. */
-function matchWordCharAfter(s: string, i: number): boolean {
-  if (i >= s.length) return false;
+/** The code point starting at index `i`, or null at the string edge. */
+function codePointAfter(s: string, i: number): string | null {
+  if (i >= s.length) return null;
   const end =
     i + 1 < s.length && isHighSurrogate(s.charCodeAt(i)) && isLowSurrogate(s.charCodeAt(i + 1))
       ? i + 2
       : i + 1;
-  return MATCH_WORD_CHAR_RE.test(s.slice(i, end));
+  return s.slice(i, end);
 }
 
 /**
  * True when `variant` occurs in one folded haystack string at a word
- * boundary: some occurrence of it has neither a letter nor a digit
- * directly before or after it. The word-boundary rule is what keeps the
- * separator fold from planting mid-word hits literal `includes` matching
- * did not already have (`canada` never anchors `ada`, folded spellings
- * included); an occurrence beside a separator or the string edge is a
- * token edge and anchors.
+ * boundary: some occurrence of it has no letter or digit directly
+ * before or after it - UNLESS that neighbour belongs to a script
+ * written without word spaces (see {@link NO_SPACE_SCRIPT_RE}), whose
+ * adjacency suspends the requirement on that side. The word-boundary
+ * rule is what keeps the separator fold from planting mid-word hits
+ * literal `includes` matching did not already have (`canada` never
+ * anchors `ada`, folded spellings included); an occurrence beside a
+ * separator or the string edge is a token edge and anchors.
  */
 function variantOccursAtWordBoundary(variant: string, haystack: string): boolean {
+  // An empty variant occurs everywhere and nowhere - refuse it rather
+  // than let a boundary-less occurrence anchor.
+  if (variant === "") return false;
   let at = haystack.indexOf(variant);
   while (at >= 0) {
-    if (!matchWordCharBefore(haystack, at) && !matchWordCharAfter(haystack, at + variant.length)) {
-      return true;
-    }
+    const before = codePointBefore(haystack, at);
+    const after = codePointAfter(haystack, at + variant.length);
+    const blockedBefore =
+      before !== null && MATCH_WORD_CHAR_RE.test(before) && !boundaryNotRequiredForScripts(before);
+    const blockedAfter =
+      after !== null && MATCH_WORD_CHAR_RE.test(after) && !boundaryNotRequiredForScripts(after);
+    if (!blockedBefore && !blockedAfter) return true;
     at = haystack.indexOf(variant, at + 1);
   }
   return false;

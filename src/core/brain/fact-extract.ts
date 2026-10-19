@@ -37,6 +37,7 @@ import { brainDirsForWrite } from "./paths.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
+  MIN_ANCHOR_FORM_LENGTH,
   entityMatchForms,
   matchFormVariants,
   matchVariantsOccurIn,
@@ -289,9 +290,6 @@ export interface RouteFactsResult {
 
 /** Max length of the redacted fact text carried onto a `durability-skip` log. */
 const DURABILITY_LOG_TEXT_MAX_LEN = 200;
-
-/** Minimum normalised form length that participates in substring matching. */
-const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /**
  * A registry entity reduced to its clean, matchable label forms, each

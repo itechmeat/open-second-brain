@@ -155,6 +155,22 @@ describe("guardEntityMerge (pure)", () => {
     expect(verdict.allowed).toBe(true);
   });
 
+  test("CJK names fire the protected-name path (no-space scripts anchor)", () => {
+    // Kana particles touch the names directly - a script written without
+    // word spaces suspends the boundary rule, so both sides anchor and a
+    // disjoint CJK pair blocks the merge exactly like a Latin one.
+    const tanaka = person("ent-people-tanaka-taro", "田中太郎");
+    const suzuki = person("ent-people-suzuki-hanako", "鈴木花子");
+    const verdict = guardEntityMerge({
+      keepText: "田中太郎は出張を決めた",
+      dropText: "鈴木花子は出張を決めた",
+      entities: [tanaka, suzuki],
+    });
+    expect(verdict.keepAnchors).toEqual(["ent-people-tanaka-taro"]);
+    expect(verdict.dropAnchors).toEqual(["ent-people-suzuki-hanako"]);
+    expect(verdict.allowed).toBe(false);
+  });
+
   test("default guarded categories cover people and orgs", () => {
     expect(GUARDED_ENTITY_CATEGORIES).toContain("people");
     expect(GUARDED_ENTITY_CATEGORIES).toContain("org");

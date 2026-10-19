@@ -209,4 +209,22 @@ describe("routeExtractedFacts separator-tolerant anchoring (F3)", () => {
     expect(result.created).toBe(1);
     expect(inboxSignalBodies().every((b) => !b.includes("ent-people-ada"))).toBe(true);
   });
+
+  test("CJK fact text anchors a CJK stored name into a signal", () => {
+    // A kana particle touches the name directly - a script written without
+    // word spaces suspends the word-boundary rule, so the mention anchors.
+    writeEntityNode("people", "ent-people-tanaka-taro", "田中太郎");
+    const dedup = new Map<string, DedupIndexEntry>();
+    const result = routeExtractedFacts(vault, {
+      facts: [{ family: "quantity", text: "田中太郎は出張を決めた", line: 1 }],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-7",
+      dedup,
+    });
+    expect(result.created).toBe(1);
+    const anchored = inboxSignalBodies().find((b) => b.includes("entities:"));
+    expect(anchored).toBeDefined();
+    expect(anchored!).toContain("ent-people-tanaka-taro");
+  });
 });

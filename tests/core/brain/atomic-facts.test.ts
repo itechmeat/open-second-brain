@@ -321,6 +321,42 @@ describe("anchorEntityForms - separator-tolerant matching (F3)", () => {
   test("forms shorter than the minimum never participate, folded or not", () => {
     expect(anchorEntityForms("ada-lovelace wrote.", ["lo"])).toEqual([]);
   });
+
+  test("a boundary-occurring short form is refused by the length gate itself", () => {
+    // "lo" sits at a word boundary here, so the word-boundary rule would
+    // admit it - only MIN_ANCHOR_FORM_LENGTH refuses it. (The mid-word pin
+    // above cannot see the gate: the boundary guard refuses that shape
+    // with or without the floor.)
+    expect(anchorEntityForms("the lo fixture ran its course.", ["lo"])).toEqual([]);
+  });
+
+  test("a mixed separator run in the text anchors (the haystack folds, not just the needle)", () => {
+    // No variant of the needle occurs literally in the raw text - only the
+    // haystack's own expansion turns "ada -_ lovelace" into a spellings the
+    // needle's variant class answers to.
+    expect(anchorEntityForms("the memoir of ada -_ lovelace survived.", ["ada-lovelace"])).toEqual([
+      "ada-lovelace",
+    ]);
+  });
+
+  test("a standalone slug tail below the minimum never anchors", () => {
+    // The tail "dc" of "ac/dc" is shorter than the floor, so the entity's
+    // only emitted variant is the full form - a standalone "dc" in a text
+    // never anchors the band.
+    expect(anchorEntityForms("dc opened for the headliners tonight.", ["AC/DC"])).toEqual([]);
+  });
+
+  test("a full slug form still anchors at its own boundaries", () => {
+    expect(anchorEntityForms("the TCP/IP runbook lives in the wiki.", ["TCP/IP"])).toEqual([
+      "tcp/ip",
+    ]);
+  });
+
+  test("CJK text anchors a CJK form (no-space scripts need no word boundary)", () => {
+    // "田中太郎は" has a kana letter touching the name directly; a script
+    // written without word spaces never reads as a mid-word hit.
+    expect(anchorEntityForms("田中太郎は会議に出席した。", ["田中太郎"])).toEqual(["田中太郎"]);
+  });
 });
 
 /**

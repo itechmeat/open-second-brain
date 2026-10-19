@@ -90,12 +90,18 @@ describe("checkEntityContamination (pure)", () => {
   });
 
   test("a slug-prefixed alias clears the entity through its last path segment", () => {
+    // The slug-prefixed alias is the entity's ONLY matchable form (the
+    // name matches nothing), the conclusion carries the slug form, and the
+    // source mentions only the bare tail - so the tail expansion is the
+    // ONE route that can clear the citation, and this test fails if the
+    // last-segment expansion is ever dropped.
     const result = checkEntityContamination({
-      conclusion: "Ada Lovelace approved the rollout",
-      sources: ["see people/ada_lovelace for the rollout notes"],
-      entities: [person("ent-people-ada-lovelace", "Ada Lovelace")],
+      conclusion: "see people/ada_lovelace for the rollout decision",
+      sources: ["ada lovelace signed off this morning"],
+      entities: [person("ent-people-ada-lovelace", "***", ["people/ada_lovelace"])],
     });
     expect(result.clean).toBe(true);
+    expect(result.violations).toHaveLength(0);
   });
 
   test("a mid-word mention is not a mention (canada never anchors ada)", () => {
