@@ -295,6 +295,23 @@ describe("matchFormVariants", () => {
     expect(matchFormVariants("company/acme corp")).toContain("acme corp");
   });
 
+  test("the tail gate is the slug's own parent segment, so deeper registry paths mint too", () => {
+    // The gate compares the SEGMENT before the slug, not the whole
+    // prefix before the slash: an alias that still carries the
+    // registry's deeper path has the category folder as its immediate
+    // parent and mints its tail exactly like the bare
+    // `<folder>/<slug>` spelling, while a non-folder prefix anywhere
+    // before the slug mints nothing.
+    expect(matchFormVariants("entities/people/ada_lovelace")).toContain("ada lovelace");
+    expect(matchFormVariants("Brain/entities/people/ada_lovelace")).toContain("ada lovelace");
+    expect(matchFormVariants("entities/people/ada-lovelace")).toContain("ada lovelace");
+    // A non-folder immediate parent keeps the whole form one variant,
+    // whatever sits deeper in the path (case is the caller's normalize
+    // step, so it rides through untouched here).
+    expect(matchFormVariants("companies/warner/chappell")).toEqual(["companies/warner/chappell"]);
+    expect(matchFormVariants("Brain/notes/tcp")).toEqual(["Brain/notes/tcp"]);
+  });
+
   test("a slug tail at the minimum form length still expands (folder prefixes only)", () => {
     // "notes" is not one of the registry's entity-type folders, so the
     // segment gate refuses the tail long before the floor is consulted;

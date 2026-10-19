@@ -203,11 +203,15 @@ function canonicalMatchJoin(s: string): string {
  *     non-word neighbour at the leading edge, and both the old grid and
  *     the folded one compare token sequences - so the fold is verdict-
  *     equivalent, at one scan instead of nine.
- *   - When the form is prefixed by a registry entity-type folder
- *     ({@link ENTITY_TYPE_FOLDERS} - the categories entity pages and ids
- *     are minted from), the CANONICAL JOIN of its LAST `/`-segment (the
- *     slug itself), so `people/ada_lovelace` also occurs in a text that
- *     only says `ada lovelace`. The segment prefix is registry
+ *   - When the form's LAST `/`-segment (the slug itself) has a registry
+ *     entity-type folder for its parent segment ({@link
+ *     ENTITY_TYPE_FOLDERS} - the categories entity pages and ids are
+ *     minted from; the parent SEGMENT gates, so the registry's deeper
+ *     spellings `entities/people/ada_lovelace` and
+ *     `Brain/entities/people/ada_lovelace` mint the tail too), the
+ *     CANONICAL JOIN of that segment, so `people/ada_lovelace` also
+ *     occurs in a text that only says `ada lovelace`. The segment prefix
+ *     is registry
  *     decoration, not part of the mentioned name - and because the tail
  *     is an emitted needle in its own right, the tail meets
  *     {@link MIN_ANCHOR_FORM_LENGTH}, the same floor the kernels apply
@@ -233,7 +237,15 @@ export function matchFormVariants(form: string): string[] {
   out.push(full);
   const lastSlash = form.lastIndexOf("/");
   if (lastSlash >= 0) {
-    const folder = form.slice(0, lastSlash).toLowerCase();
+    // The gate is the slug's OWN parent segment - the category folder an
+    // entity page's id sits in - not the whole prefix before the slash:
+    // a form that still carries the registry's deeper path
+    // (`Brain/entities/people/ada_lovelace`) has `people` as its
+    // immediate parent and mints its tail the same as the bare
+    // `people/ada_lovelace`, while `Warner/Chappell` has `warner` there
+    // and mints nothing (M1, PR 268 review).
+    const prefix = form.slice(0, lastSlash);
+    const folder = prefix.slice(prefix.lastIndexOf("/") + 1).toLowerCase();
     if (ENTITY_TYPE_FOLDER_SET.has(folder)) {
       const tail = canonicalMatchJoin(form.slice(lastSlash + 1));
       if (tail.length >= MIN_ANCHOR_FORM_LENGTH) out.push(tail);
