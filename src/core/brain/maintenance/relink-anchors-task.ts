@@ -33,6 +33,19 @@
  * reads keeps {@link MAINTENANCE_LANE_REACH}: the lane is a local repair
  * pass, and what it heals for a local-only page never leaves the host.
  *
+ * ## Server-stamped sources only
+ *
+ * The pass also acts only on signals whose `source:` the SERVER derived -
+ * `source_type: extracted`, the stamp every extraction caller writes. A
+ * `brain_feedback` caller supplied its own pointer (a `live` signal
+ * carries no source_type at all - absence IS the live stamp), and an
+ * inline author marker is author-written the same way; a caller-chosen
+ * page must not choose which entity ids attach, because the card's
+ * invariant is that server-derived facts outrank caller-supplied claims.
+ * Those signals are out of the pass's scope entirely: the pass never
+ * reads their pointers, and they are counted by neither arm - the same
+ * answer a signal whose pointer names no page gets.
+ *
  * ## Additive only, and dry-run by default
  *
  * An anchor already stored is never removed, even when the recompute
@@ -86,6 +99,7 @@ import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-sco
 import { brainDirs } from "../paths.ts";
 import { progressCounter, type ProgressSink } from "../progress.ts";
 import { parseSignal } from "../signal.ts";
+import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
 import type { Safeguard } from "../safeguard.ts";
 import { OPERATION } from "../safeguard.ts";
 import {
@@ -113,7 +127,10 @@ export interface RelinkAnchorsReport {
   readonly signalsScanned: number;
   /** Pages that could not be parsed; counted, never fatal. */
   readonly signalsUnreadable: number;
-  /** Signals whose `source:` pointer resolved to at least one vault page. */
+  /**
+   * In-scope signals (`source_type: extracted`) whose `source:` pointer
+   * resolved to at least one vault page at the signal's own reach.
+   */
   readonly signalsPageSourced: number;
   /** Signals with at least one anchor to add - rewritten on `apply`. */
   readonly signalsChanged: number;
@@ -375,6 +392,16 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         unreadable++;
         continue;
       }
+      // Server-stamped sources only: the pass acts on signals whose
+      // `source:` the SERVER derived - `source_type: extracted`, the
+      // stamp every extraction caller writes. A `brain_feedback` caller
+      // supplied its own pointer (a `live` signal carries no source_type
+      // at all - absence IS the live stamp), and an inline author marker
+      // is author-written the same way; a caller-chosen page must not
+      // choose which entity ids attach, so the pass never reads those
+      // pointers. Out of the pass's scope entirely: counted by neither
+      // arm, the same answer a signal whose pointer names no page gets.
+      if (signal.source_type !== BRAIN_SIGNAL_SOURCE_TYPE.extracted) continue;
       // Every source pointer that resolves to a real page in this vault
       // AT THE SIGNAL'S OWN REACH. A session pointer names no page and
       // resolves to nothing, which is exactly the out-of-scope answer; a

@@ -932,7 +932,9 @@ describe("the relink arm is opt-in", () => {
       slug: "relink-surface",
       scope: "writing",
       source: ["[[notes/meeting.md]]"],
-      source_type: "inline",
+      // The pass's in-scope stamp: relink reads only server-derived
+      // sources, so the fixture signal is extraction-written.
+      source_type: "extracted",
       dedup_hash: `relink-surface-${now}`,
       // The placeholder Raw section: the shape a signal stored without a
       // verbatim quote carries, and the line the relink rewrite can fill.

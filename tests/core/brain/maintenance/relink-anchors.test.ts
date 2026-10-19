@@ -109,6 +109,12 @@ function writePageSourcedSignal(input: {
   readonly principle: string;
   readonly storedEntityIds: ReadonlyArray<string>;
   readonly topic?: string;
+  /**
+   * The signal's source_type stamp. Defaults to `extracted` - the pass's
+   * in-scope stamp; `"live"` omits the field entirely, which is how a
+   * `brain_feedback` signal is stored (live is the implicit default).
+   */
+  readonly sourceType?: "extracted" | "inline" | "live";
   /** Write the page with no `## Raw` section at all (v0.10.1 shape). */
   readonly noRawSection?: boolean;
   /** Store the raw body codec-compressed (the `_raw_codec` marker). */
@@ -117,6 +123,7 @@ function writePageSourcedSignal(input: {
   readonly rawBody?: string;
 }): void {
   const sourceRefs = input.sourceRefs ?? [input.sourceRef ?? ""];
+  const sourceType = input.sourceType ?? "extracted";
   writeSignal(vault, {
     topic: input.topic ?? "fact-quantity",
     signal: "positive",
@@ -126,7 +133,7 @@ function writePageSourcedSignal(input: {
     date: "2026-10-19",
     slug: input.topic ?? "fact-quantity",
     source: sourceRefs.map((ref) => `[[${ref}]]`),
-    source_type: "inline",
+    ...(sourceType === "live" ? {} : { source_type: sourceType }),
     dedup_hash: `hash-${input.principle.length}-${sourceRefs.join(".").replace(/\W/g, "")}`,
     ...(input.noRawSection
       ? {}
@@ -693,6 +700,65 @@ describe("the resolution binds at the reach the signal itself is readable at", (
       storedEntityIds: [],
     });
     markSignalPrivate(inboxFiles()[0]!);
+    const file = inboxFiles()[0]!;
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.anchorsAdded).toBe(1);
+    expect(entitiesLineOf(file)).toBe("entities: ent-people-ada-lovelace");
+  });
+});
+
+describe("the pass reads only server-stamped sources", () => {
+  test("a feedback-sourced or inline-sourced signal pointing at a page gains nothing", () => {
+    // A `brain_feedback` caller supplied its own `source:` pointer (and a
+    // `live` signal carries no source_type at all - absence IS the live
+    // stamp); an inline marker is author-written the same way. A
+    // caller-chosen page must not choose which entity ids attach:
+    // server-derived facts outrank caller-supplied claims, so both are
+    // out of the pass's scope entirely - the pointer is never even read.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      sourceType: "live",
+    });
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Ada Lovelace joined the review",
+      storedEntityIds: [],
+      topic: "fact-inline",
+      sourceType: "inline",
+    });
+    const before = inboxFiles().map((f) => readFileSync(join(brainDirs(vault).inbox, f), "utf8"));
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsScanned).toBe(2);
+    expect(report.signalsPageSourced).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    const after = inboxFiles().map((f) => readFileSync(join(brainDirs(vault).inbox, f), "utf8"));
+    expect(after).toEqual(before);
+  });
+
+  test("an extracted-sourced signal pointing at the same page still does", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      sourceType: "extracted",
+    });
     const file = inboxFiles()[0]!;
 
     const report = runRelinkAnchors(vault, { now: NOW, apply: true });
