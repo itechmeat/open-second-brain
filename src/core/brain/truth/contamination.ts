@@ -84,14 +84,14 @@ function prepareEntity(entity: ContaminationEntityLike): PreparedEntity {
  * The inclusion test behind the check - the twins' copy of
  * fact-extraction's anchoring rule, kept verbatim through the one
  * canonical match-form rule ({@link matchVariantsOccurIn}) since F3
- * (note-change truth maintenance): separator-folded on both sides, a
- * slug-prefixed form matching at the path-segment boundary, and every
- * occurrence word-bounded (a no-space-script neighbour suspends the
- * requirement), so the fold never plants a mid-word hit literal
- * matching did not already have. Takes the entity ALREADY prepared
- * through {@link prepareEntity} and a haystack ALREADY expanded through
- * {@link matchFormVariants} - each side tokenizes once, the same hoist
- * `entityAnchors` makes, not once per entity per source.
+ * (note-change truth maintenance): both sides fold to their canonical
+ * (space) joins, a folder-prefixed form matching at the path-segment
+ * boundary, and every occurrence leading-edge-checked (a no-space-script
+ * neighbour suspends the requirement), so the fold never plants a
+ * mid-word hit nothing anchored before. Takes the entity ALREADY
+ * prepared through {@link prepareEntity} and a haystack ALREADY expanded
+ * through {@link matchFormVariants} - each side tokenizes once, the
+ * same hoist `entityAnchors` makes, not once per entity per source.
  */
 function mentions(haystackVariants: ReadonlyArray<string>, prepared: PreparedEntity): boolean {
   return prepared.forms.some(

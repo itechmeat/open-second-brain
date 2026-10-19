@@ -341,10 +341,11 @@ export function buildAnchorables(
       // Fall through: entityMatchForms drops the junk name form itself, so a
       // valid alias still yields an anchorable form.
     }
-    // Separator-variant expansion (F3) happens ONCE here, per capture: the
-    // gate-filtered normalized forms become their match variants, Set-deduped
-    // in the generator's deterministic order. MIN_ANCHOR_FORM_LENGTH still
-    // gates the ORIGINAL forms - an expansion never rescues a short one.
+    // Match-variant expansion (F3) happens ONCE here, per capture: the
+    // gate-filtered normalized forms fold to their canonical-join match
+    // variants (at most the full form plus a folder-prefixed tail).
+    // MIN_ANCHOR_FORM_LENGTH still gates the ORIGINAL forms - an
+    // expansion never rescues a short one.
     const forms = [
       ...new Set(
         entityMatchForms([entity.name, ...entity.aliases], { lexicon })
@@ -363,11 +364,11 @@ export function buildAnchorables(
  * entity whose match forms occur in the fact text. The canonicalization
  * kernel is the comparison boundary, so facts and the registry compare
  * like with like - and since F3 (note-change truth maintenance) both
- * sides fold: the haystack expands through {@link matchFormVariants} once
+ * sides fold: the haystack folds through {@link matchFormVariants} once
  * per fact, each entity's precomputed variants are compared through the
- * shared word-bounded rule ({@link matchVariantsOccurIn}), so a spaced
- * text anchors a hyphenated or slug-prefixed form while the fold never
- * plants a mid-word hit literal matching did not already have.
+ * shared leading-edge rule ({@link matchVariantsOccurIn}), so a spaced
+ * text anchors a hyphenated or folder-prefixed form while the fold never
+ * plants a mid-word hit nothing anchored before.
  */
 function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: string): string[] {
   if (anchorables.length === 0) return [];

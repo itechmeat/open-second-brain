@@ -59,12 +59,13 @@ export interface MergeGuardVerdict {
  * inclusion rule as fact-extraction's `entityAnchors`, restricted to the
  * guarded categories - shared verbatim since F3 (note-change truth
  * maintenance) through the one canonical match-form rule
- * ({@link matchVariantsOccurIn}): separator-folded on both sides, a
- * slug-prefixed form matching at the path-segment boundary, and every
- * occurrence word-bounded, so the fold never plants a mid-word hit
- * literal matching did not already have. The haystack expands through
- * its match variants ONCE per call - the same hoist `entityAnchors`
- * makes - not once per form per entity.
+ * ({@link matchVariantsOccurIn}): both sides fold to their canonical
+ * (space) joins, a folder-prefixed form matching at the path-segment
+ * boundary, and every occurrence leading-edge-checked, so the fold never
+ * plants a mid-word hit nothing anchored before. The haystack expands
+ * ONCE per call - the same hoist `entityAnchors` makes, not once per
+ * form per entity - and each entity's forms expand alongside their
+ * normalization, once per entity, never inside the match predicate.
  */
 function guardedAnchors(
   text: string,
@@ -76,15 +77,14 @@ function guardedAnchors(
   for (const entity of entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     if (!categories.has(entity.category.toLowerCase())) continue;
-    const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-    if (
-      forms.some(
+    const anchored = [entity.name, ...entity.aliases]
+      .map((f) => normalizeEntityName(f))
+      .some(
         (f) =>
           f.length >= MIN_ANCHOR_FORM_LENGTH &&
           matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
-      )
-    )
-      ids.push(entity.id);
+      );
+    if (anchored) ids.push(entity.id);
   }
   return ids.toSorted();
 }

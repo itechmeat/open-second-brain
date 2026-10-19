@@ -267,10 +267,11 @@ describe("lexicon-gated anchoring (recall-quality A2)", () => {
     const anchorables = buildAnchorables(vault, buildEntityIndex(vault), "test-agent", NOW);
     expect(anchorables).toHaveLength(1);
     expect(anchorables[0]!.id).toBe("ent-people-junk");
-    // The surviving alias form, expanded once into its separator-variant
-    // match forms (note-change truth maintenance, F3): the haystack fold
-    // means the anchorable carries every spelling its class answers to.
-    expect(anchorables[0]!.forms).toEqual(["atlas prime", "atlas-prime", "atlas_prime"]);
+    // The surviving alias form, expanded once into its match variants
+    // (note-change truth maintenance, F3; grid reduced per M2): the
+    // canonical space join is the ONE variant the class answers to, the
+    // haystack folds through the same join.
+    expect(anchorables[0]!.forms).toEqual(["atlas prime"]);
   });
 });
 

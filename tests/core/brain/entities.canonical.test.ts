@@ -229,17 +229,33 @@ describe("matchFormVariants", () => {
     expect(matchFormVariants("atlas")).toEqual(["atlas"]);
   });
 
-  test("a spaced form expands to the space, hyphen and underscore joins", () => {
-    expect(matchFormVariants("ada lovelace")).toEqual([
-      "ada lovelace",
-      "ada-lovelace",
-      "ada_lovelace",
-    ]);
+  test("a spaced form expands to its one canonical (space) join", () => {
+    expect(matchFormVariants("ada lovelace")).toEqual(["ada lovelace"]);
   });
 
   test("hyphenated and underscored forms expand to the same variant class", () => {
     expect(matchFormVariants("ada-lovelace")).toEqual(matchFormVariants("ada lovelace"));
     expect(matchFormVariants("ada_lovelace")).toEqual(matchFormVariants("ada lovelace"));
+  });
+
+  test("every form expands to at most two variants: the canonical join and the tail", () => {
+    // M2 (PR 268 review): the comparison the kernels run is
+    // needle variants x haystack variants per entity per text, so the
+    // generator folds BOTH sides to ONE canonical (space) join - tokens
+    // never contain separators, and every join character counts as a
+    // non-word neighbour, so one space-joined comparison answers for the
+    // whole variant class. A folder-prefixed form emits the folded tail
+    // beside the folded full form, and never anything else.
+    expect(matchFormVariants("ada-lovelace")).toEqual(["ada lovelace"]);
+    expect(matchFormVariants("ada -_ lovelace")).toEqual(["ada lovelace"]);
+    expect(matchFormVariants("people/ada_lovelace")).toEqual([
+      "people/ada lovelace",
+      "ada lovelace",
+    ]);
+    // One haystack variant per text, whatever separators it carries.
+    expect(matchFormVariants("the memoir of ada -_ lovelace survived")).toEqual([
+      "the memoir of ada lovelace survived",
+    ]);
   });
 
   test("a mixed separator run collapses like any single separator", () => {
@@ -249,11 +265,7 @@ describe("matchFormVariants", () => {
   test("a slug-prefixed form also expands its last path segment", () => {
     expect(matchFormVariants("people/ada_lovelace")).toEqual([
       "people/ada lovelace",
-      "people/ada-lovelace",
-      "people/ada_lovelace",
       "ada lovelace",
-      "ada-lovelace",
-      "ada_lovelace",
     ]);
   });
 
