@@ -55,7 +55,7 @@ formatted and linted before the commit. Test runs use a throwaway HOME.
 - **Depends on**: B1
 
 ### Task B3: twins in sync
-- **Files**: src/core/brain/entities/merge-guard.ts, src/core/brain/entities/contamination.ts, tests/core/brain/entities/merge-guard.test.ts, tests/core/brain/entities/contamination.test.ts
+- **Files**: src/core/brain/truth/merge-guard.ts, src/core/brain/truth/contamination.ts, tests/core/brain/truth/merge-guard.test.ts, tests/core/brain/truth/contamination.test.ts
 - **Acceptance**: the two inline re-implementations use the same generator; their tests updated in the same commit.
 - **Depends on**: B2
 

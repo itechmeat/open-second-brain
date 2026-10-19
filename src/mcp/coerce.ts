@@ -176,9 +176,9 @@ export const RECALL_SCORES_SCHEMA = Object.freeze({
  * hard-keyed on it, one layer softer. Both now say the key of the tool they
  * are attached to.
  *
- * The sentence is budgeted for the LONGEST key it will be handed:
- * `PROPERTY_DESCRIPTION_MAX` is 160 and `registry-guard` grants no
- * exemptions, so prose that fits under `scores` can still overflow under
+ * The sentence is budgeted for the LONGEST key it will be handed: the
+ * cap is `PROPERTY_DESCRIPTION_MAX` (registry-guard, which grants no
+ * exemptions), so prose that fits under `scores` can still overflow under
  * `recall_scores`. Six characters of key are six characters of budget.
  */
 export function matchQualitySchema(scoresKey: string): Readonly<Record<string, unknown>> {

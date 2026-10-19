@@ -43,7 +43,7 @@ Variant 1 of the consultant's three ("Detached refresh claims, contract-preservi
 - src/core/brain/link-graph/ (new minimal-spelling chooser leaf + fixtures)
 - src/core/brain/page-dedup.ts (shared rewrite helpers if the repair arm needs them)
 - src/cli/brain/verbs/note-lifecycle.ts, src/mcp/brain/lifecycle-file-tools.ts (report fields)
-- src/core/brain/entities/canonical.ts (match-form generator), src/core/brain/atomic-facts.ts, src/core/brain/fact-extract.ts (kernels), src/core/brain/entities/merge-guard.ts, src/core/brain/entities/contamination.ts (twins)
+- src/core/brain/entities/canonical.ts (match-form generator), src/core/brain/atomic-facts.ts, src/core/brain/fact-extract.ts (kernels), src/core/brain/truth/merge-guard.ts, src/core/brain/truth/contamination.ts (twins)
 - src/core/brain/ingest/ingest.ts, src/cli/brain/verbs/facts.ts, src/core/brain/intake/extract-intake.ts (caller threading)
 - src/core/brain/maintenance/lane.ts + new relink task file
 - tests/ mirroring each of the above; docs touched by osb-pr-prepare's docs lane.

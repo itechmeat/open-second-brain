@@ -52,8 +52,9 @@ export const TOOL_DESCRIPTION_MAX = 300;
 // The retry_tasks description enumerates the known lane tasks, so a fifth
 // task's registration (note-change truth maintenance) grew the measured
 // length; the cap moved with the population rather than shortening the text
-// that names what an operator may retry. This is the same number the
-// maintenance parity census measures against - keep the two in agreement.
+// that names what an operator may retry. The maintenance parity census
+// imports this constant and measures against it, so the cap and the census
+// cannot drift.
 export const PROPERTY_DESCRIPTION_MAX = 168;
 
 /**
