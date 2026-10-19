@@ -44,6 +44,9 @@
  *      destination's own bare basename rewrote the spellings the main
  *      pass had JUST written - repointing the renamed note's inbound
  *      links onto an unrelated note.
+ *  17. the counting probe matched only the moved note's own spellings,
+ *      so the files the repair pass writes were absent from the plan's
+ *      `inbound_files` and from `--expect`'s number.
  *  19. a refused refresh claim recorded nothing on the diagnostic when
  *      the freshen machinery answered with a skip token instead of
  *      throwing, and one transient failure read as broken forever
@@ -558,6 +561,38 @@ describe("a destination-collapsing pass that chained into the repair rules (16)"
     // renamed note repointed at a note it never named.
     expect(read("Notes/Ref.md")).toBe("[[Old]] and [[Docs/Old]]\n");
     expect(res.references.filesRewritten).toBe(1);
+  });
+});
+
+describe("the plan's blast radius covers the repair pass (17)", () => {
+  test("a file mentioning only the contested basename is listed on the plan", async () => {
+    note("A/Old.md", "x\n");
+    note("B/New.md", "a different note that already owns the name\n");
+    note("Notes/Ref.md", "pathed [[A/Old]]\n");
+    note("Notes/Casualty.md", "See [[New]].\n");
+
+    const planned = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "A/Old.md",
+      to: "A/New.md",
+    });
+
+    expect(planned.applied).toBe(false);
+    expect(planned.references.inboundFiles).toContain("Notes/Casualty.md");
+    expect(planned.references.inboundFiles).toContain("Notes/Ref.md");
+    expect(existsSync(join(vault, "Notes/Casualty.md"))).toBe(true);
+
+    // And the apply does exactly what the plan listed: both files are
+    // rewritten, so the plan's number is the number `--expect` guards.
+    const applied = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "A/Old.md",
+      to: "A/New.md",
+      apply: true,
+      expect: 2,
+    });
+    expect(applied.references.filesRewritten).toBe(2);
+    expect(read("Notes/Casualty.md")).toBe("See [[B/New]].\n");
   });
 });
 

@@ -1074,17 +1074,42 @@ export async function noteLifecycle(
     spellingsOf(source.relPath).map((from) => ({ from })),
     { root: VAULT_ROOT_REL, apply: false },
   );
+  const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
+  const basename =
+    destination === null
+      ? BASENAME_REWRITE.notNeeded
+      : decideBasename(probe.files, source.relPath, destination.relPath);
+  const mainRetargets =
+    destination === null ? [] : mainRetargetsFor(probe.files, source, destination, basename);
+  const repairs =
+    destination === null ? [] : bareNameRepairs(probe.files, source.relPath, destination.relPath);
+  // The repair pass writes files the moved note's own spellings can
+  // never match: a file mentioning ONLY the contested bare basename
+  // matches none of them, yet the repair rewrites it. Its spellings
+  // therefore run through a match-only probe of their own, and the
+  // files they hit join `inbound_files` and the count guard - the plan
+  // names every file the apply will write, and `--expect` counts the
+  // same set. A delete has no destination and so no repairs; the union
+  // below is its plain probe then.
+  const repairMatched =
+    repairs.length > 0
+      ? retargetWikilinks(
+          vault,
+          repairs.map((r) => ({ from: r.from })),
+          { root: VAULT_ROOT_REL, apply: false },
+        ).matched
+      : [];
+  const matched = [...new Set([...probe.matched, ...repairMatched])].toSorted();
   // A delete drops its own file, so a reference living inside it strands
   // nothing and is not counted. A relocation REWRITES its own file when
   // the note names its own old path, so that file is one of the writes
   // `--expect` guards and has to be in the number.
   // A file the caller may not read is absent from every list and count
   // below; see `NoteLifecycleInput.readable`.
-  const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
   const inboundFiles = (
     action === NOTE_LIFECYCLE_ACTION.delete
-      ? probe.matched.filter((rel) => rel !== source.relPath)
-      : probe.matched
+      ? matched.filter((rel) => rel !== source.relPath)
+      : matched
   ).filter(reported);
   const filesScanned = probe.files.filter(reported).length;
 
@@ -1106,16 +1131,6 @@ export async function noteLifecycle(
     willMutate: apply,
     matchList: guarded,
   });
-
-  const basename =
-    destination === null
-      ? BASENAME_REWRITE.notNeeded
-      : decideBasename(probe.files, source.relPath, destination.relPath);
-
-  const mainRetargets =
-    destination === null ? [] : mainRetargetsFor(probe.files, source, destination, basename);
-  const repairs =
-    destination === null ? [] : bareNameRepairs(probe.files, source.relPath, destination.relPath);
 
   let snapshot: NoteLifecycleResult["snapshot"] = null;
   let rewritten: ReadonlyArray<string> = [];
