@@ -311,6 +311,98 @@ describe("maybeFreshenIndex", () => {
     expect(decision).toBe(FRESHEN_SKIP.spawnFailed);
     expect(existsSync(join(vault, ".open-second-brain", FRESHEN_CLAIM_FILE))).toBe(false);
   });
+
+  test("force spawns despite a fresh index - a write that just happened is due by definition", () => {
+    expect(
+      maybeFreshenIndex(config, { lastIndexedAt: ago(5), nowMs: NOW, spawn, force: true }),
+    ).toBe("spawned");
+    expect(calls).toHaveLength(1);
+    // The child argv is the same run the interval path starts: same
+    // command, same claim protocol.
+    expect(calls[0]!.join(" ")).toContain(`search index --vault ${vault}`);
+  });
+
+  test("force with the interval at 0 still refuses - config off means off", () => {
+    const offConfig = {
+      ...config,
+      freshen: { intervalSeconds: 0, embeddings: false, configPath: "/cfg/config.yaml" },
+    } as unknown as ResolvedSearchConfig;
+    expect(
+      maybeFreshenIndex(offConfig, { lastIndexedAt: ago(300), nowMs: NOW, spawn, force: true }),
+    ).toBe(FRESHEN_SKIP.off);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("force with no freshen settings at all still refuses", () => {
+    const { freshen: _drop, ...rest } = config as unknown as Record<string, unknown>;
+    expect(
+      maybeFreshenIndex(rest as unknown as ResolvedSearchConfig, {
+        lastIndexedAt: ago(300),
+        nowMs: NOW,
+        spawn,
+        force: true,
+      }),
+    ).toBe(FRESHEN_SKIP.off);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("an index never stamped stays self-heal's even under force", () => {
+    expect(maybeFreshenIndex(config, { lastIndexedAt: null, nowMs: NOW, spawn, force: true })).toBe(
+      FRESHEN_SKIP.noIndex,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("claim exclusivity holds under force: the second claimant spawns nothing", () => {
+    expect(
+      maybeFreshenIndex(config, { lastIndexedAt: ago(300), nowMs: NOW, spawn, force: true }),
+    ).toBe("spawned");
+    expect(
+      maybeFreshenIndex(config, { lastIndexedAt: ago(300), nowMs: NOW, spawn, force: true }),
+    ).toBe(FRESHEN_SKIP.claimed);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an active backoff from a failed run still refuses under force", () => {
+    writeFreshenState(join(vault, ".open-second-brain"), {
+      failures: 1,
+      backoffUntil: new Date(NOW + 30_000).toISOString(),
+      lastOutcome: "failed",
+      lastRunAt: ago(10),
+      lastDurationMs: 100,
+      lastError: "boom",
+      lastChanged: null,
+    });
+    expect(
+      maybeFreshenIndex(config, { lastIndexedAt: ago(300), nowMs: NOW, spawn, force: true }),
+    ).toBe(FRESHEN_SKIP.backoff);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("an indexer already holding the writer lock is left alone under force", () => {
+    const release = acquireWriterLockSync(config.dbPath);
+    try {
+      expect(
+        maybeFreshenIndex(config, { lastIndexedAt: ago(300), nowMs: NOW, spawn, force: true }),
+      ).toBe(FRESHEN_SKIP.writerLock);
+      expect(calls).toHaveLength(0);
+    } finally {
+      release();
+    }
+  });
+
+  test("a read-only open never freshens a vault it does not own, force included", () => {
+    expect(
+      maybeFreshenIndex(config, {
+        lastIndexedAt: ago(300),
+        nowMs: NOW,
+        spawn,
+        force: true,
+        readOnly: true,
+      }),
+    ).toBe(FRESHEN_SKIP.readOnly);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("claim races", () => {

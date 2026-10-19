@@ -347,6 +347,17 @@ export interface MaybeFreshenOptions {
   readonly lastIndexedAt: string | null;
   /** A read-only open (cross-vault, recall sources): never write there. */
   readonly readOnly?: boolean;
+  /**
+   * Skip the freshness gate and spawn whenever the remaining guards
+   * allow. This is the post-write shape: the caller just changed the
+   * vault, so the stamp is due by definition and comparing it against
+   * the interval would answer the wrong question. Config off still
+   * means off (`intervalSeconds <= 0` refuses whatever the flag says),
+   * an index that was never stamped stays self-heal's, and the claim
+   * exclusivity, the failure backoff and the writer-lock probe all
+   * stand exactly as on the interval path.
+   */
+  readonly force?: boolean;
   readonly nowMs?: number;
   /** Test seam: replaces the detached spawn. */
   readonly spawn?: (argv: string[]) => void;
@@ -371,17 +382,28 @@ export function maybeFreshenIndex(
       lastIndexedAt: opts.lastIndexedAt,
       intervalSeconds: freshen.intervalSeconds,
     };
-    // Every search lands here: decide on the index stamp alone first and
-    // read the state file for the backoff only once the index is due.
-    const due = decideFreshen({ ...input, backoffUntilMs: null });
-    if (due.action === "skip") return due.reason;
-    const backoffUntil = readFreshenState(dir).backoffUntil;
-    const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
-    const decision = decideFreshen({
-      ...input,
-      backoffUntilMs: Number.isFinite(backoffMs) ? backoffMs : null,
-    });
-    if (decision.action === "skip") return decision.reason;
+    if (opts.force === true) {
+      // The freshness comparison is the one gate force exists to skip;
+      // everything else decides for the same reasons as on the interval
+      // path. The stamp check doubles as the self-heal boundary: an
+      // index that was never stamped is rebuilt there, not here.
+      if (opts.lastIndexedAt === null) return FRESHEN_SKIP.noIndex;
+      const backoffUntil = readFreshenState(dir).backoffUntil;
+      const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
+      if (Number.isFinite(backoffMs) && backoffMs > nowMs) return FRESHEN_SKIP.backoff;
+    } else {
+      // Every search lands here: decide on the index stamp alone first and
+      // read the state file for the backoff only once the index is due.
+      const due = decideFreshen({ ...input, backoffUntilMs: null });
+      if (due.action === "skip") return due.reason;
+      const backoffUntil = readFreshenState(dir).backoffUntil;
+      const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
+      const decision = decideFreshen({
+        ...input,
+        backoffUntilMs: Number.isFinite(backoffMs) ? backoffMs : null,
+      });
+      if (decision.action === "skip") return decision.reason;
+    }
     if (isWriterLockHeld(config.dbPath)) return FRESHEN_SKIP.writerLock;
     const claim = tryClaimFreshen(dir, nowMs);
     if (!("token" in claim)) return claim.skip;
