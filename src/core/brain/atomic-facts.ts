@@ -12,7 +12,8 @@
 
 import {
   entityMatchForms,
-  matchFormOccursIn,
+  matchFormVariants,
+  matchVariantsOccurIn,
   normalizeEntityName,
   type EntityLexiconHandle,
   type ValidateEntityLabelOptions,
@@ -160,9 +161,18 @@ export function anchorEntityForms(
   opts: ValidateEntityLabelOptions = {},
 ): ReadonlyArray<string> {
   const haystack = normalizeEntityName(text);
+  // The haystack expands through its match variants ONCE per call, not
+  // once per form: the same hoist entityAnchors makes, so a decompose
+  // pass over an assertion x entity grid tokenizes the text once per
+  // call instead of per form per entity. Identical verdicts -
+  // `matchFormOccursIn` is exactly this comparison with the expansion
+  // inlined.
+  const haystackVariants = matchFormVariants(haystack);
   return Object.freeze(
     entityMatchForms(forms, opts).filter(
-      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH && matchFormOccursIn(f, haystack),
+      (f) =>
+        f.length >= MIN_ANCHOR_FORM_LENGTH &&
+        matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
     ),
   );
 }

@@ -8,7 +8,11 @@
  * mentions Bob.
  */
 
-import { matchFormOccursIn, normalizeEntityName } from "../entities/canonical.ts";
+import {
+  matchFormVariants,
+  matchVariantsOccurIn,
+  normalizeEntityName,
+} from "../entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /**
@@ -58,15 +62,23 @@ export interface ContaminationInput {
 /**
  * The inclusion test behind the check - the twins' copy of
  * fact-extraction's anchoring rule, kept verbatim through the one
- * canonical match-form rule ({@link matchFormOccursIn}) since F3
+ * canonical match-form rule ({@link matchVariantsOccurIn}) since F3
  * (note-change truth maintenance): separator-folded on both sides, a
  * slug-prefixed form matching at the path-segment boundary, and every
  * occurrence word-bounded, so the fold never plants a mid-word hit
- * literal matching did not already have.
+ * literal matching did not already have. Takes the haystack ALREADY
+ * expanded through {@link matchFormVariants} - the caller expands each
+ * text once, the same hoist `entityAnchors` makes, not once per entity
+ * per source.
  */
-function mentions(haystack: string, entity: ContaminationEntityLike): boolean {
+function mentions(
+  haystackVariants: ReadonlyArray<string>,
+  entity: ContaminationEntityLike,
+): boolean {
   const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-  return forms.some((f) => f.length >= 3 && matchFormOccursIn(f, haystack));
+  return forms.some(
+    (f) => f.length >= 3 && matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
+  );
 }
 
 /**
@@ -78,14 +90,17 @@ export function checkEntityContamination(input: ContaminationInput): Contaminati
   if (input.entities.length === 0 || input.conclusion.trim() === "") {
     return Object.freeze({ clean: true, violations: Object.freeze([]) });
   }
-  const conclusion = normalizeEntityName(input.conclusion);
-  const sources = input.sources.map((s) => normalizeEntityName(s));
+  // Each text expands through its match variants exactly once, up
+  // front: identical verdicts, the grid of entities x texts never
+  // re-tokenizes a haystack.
+  const conclusionVariants = matchFormVariants(normalizeEntityName(input.conclusion));
+  const sourceVariants = input.sources.map((s) => matchFormVariants(normalizeEntityName(s)));
 
   const violations: ContaminationViolation[] = [];
   for (const entity of input.entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
-    if (!mentions(conclusion, entity)) continue;
-    const cited = sources.some((source) => mentions(source, entity));
+    if (!mentions(conclusionVariants, entity)) continue;
+    const cited = sourceVariants.some((variants) => mentions(variants, entity));
     if (!cited) violations.push(Object.freeze({ entityId: entity.id, name: entity.name }));
   }
   violations.sort((a, b) => (a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0));

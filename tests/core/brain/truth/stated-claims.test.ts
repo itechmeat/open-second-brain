@@ -59,6 +59,13 @@ const ALICE: AtomicEntityLike = {
   status: "active",
 };
 
+const ATLAS_PRIME: AtomicEntityLike = {
+  id: "ent-atlas-prime",
+  name: "Atlas Prime",
+  aliases: [],
+  status: "active",
+};
+
 describe("anchorEntityForms", () => {
   test("returns the quality-gated normalized forms that occur in the text", () => {
     expect(anchorEntityForms("Alice Mason joined Google.", ["Alice Mason", "Google"])).toEqual([
@@ -245,6 +252,42 @@ describe("appendStatedClaims", () => {
     expect(outcome.ungrounded).toEqual([]);
     expect(outcome.committed).toHaveLength(1);
     expect(outcome.committed[0]!.event.entity).toBe("alice mason");
+  });
+
+  test("a claim whose text spells the entity with different separators still anchors", () => {
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(
+        vault,
+        {
+          ...PAYLOAD,
+          text: "atlas-prime joined Google in June after leaving Meta.",
+          claims: [claim({ subject: "Atlas Prime", object: "Google" })],
+        },
+        { entities: [ATLAS_PRIME] },
+      ),
+    );
+    // The text hyphenates the name the claim states spaced: separator
+    // runs are interchangeable at match time, so the folded verdict
+    // resolves one token sequence either way and the claim commits
+    // under the canonical spelling.
+    expect(outcome.ungrounded).toEqual([]);
+    expect(outcome.committed).toHaveLength(1);
+    expect(outcome.committed[0]!.event.entity).toBe("atlas prime");
+  });
+
+  test("a mid-word occurrence never anchors: Canada does not anchor Ada", () => {
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(vault, {
+        ...PAYLOAD,
+        text: "The Canada rollout touched Google in June.",
+        claims: [claim({ subject: "Ada", object: "Google" })],
+      }),
+    );
+    // "Canada" contains "ada" as a substring, but every occurrence must
+    // sit at a word boundary, so the mid-word hit never anchors the
+    // subject while the object still does.
+    expect(outcome.committed).toEqual([]);
+    expect(outcome.ungrounded[0]!.reasons).toEqual(["subject_unanchored"]);
   });
 
   test("a claim with an empty subject reports missing_subject", () => {

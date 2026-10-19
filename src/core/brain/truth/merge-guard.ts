@@ -9,7 +9,11 @@
  * anchors) merges exactly as today.
  */
 
-import { matchFormOccursIn, normalizeEntityName } from "../entities/canonical.ts";
+import {
+  matchFormVariants,
+  matchVariantsOccurIn,
+  normalizeEntityName,
+} from "../entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /** Categories guarded by default: people and organisations. */
@@ -54,23 +58,30 @@ export interface MergeGuardVerdict {
  * inclusion rule as fact-extraction's `entityAnchors`, restricted to the
  * guarded categories - shared verbatim since F3 (note-change truth
  * maintenance) through the one canonical match-form rule
- * ({@link matchFormOccursIn}): separator-folded on both sides, a
+ * ({@link matchVariantsOccurIn}): separator-folded on both sides, a
  * slug-prefixed form matching at the path-segment boundary, and every
  * occurrence word-bounded, so the fold never plants a mid-word hit
- * literal matching did not already have.
+ * literal matching did not already have. The haystack expands through
+ * its match variants ONCE per call - the same hoist `entityAnchors`
+ * makes - not once per form per entity.
  */
 function guardedAnchors(
   text: string,
   entities: ReadonlyArray<GuardEntityLike>,
   categories: ReadonlySet<string>,
 ): string[] {
-  const haystack = normalizeEntityName(text);
+  const haystackVariants = matchFormVariants(normalizeEntityName(text));
   const ids: string[] = [];
   for (const entity of entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     if (!categories.has(entity.category.toLowerCase())) continue;
     const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
-    if (forms.some((f) => f.length >= 3 && matchFormOccursIn(f, haystack))) ids.push(entity.id);
+    if (
+      forms.some(
+        (f) => f.length >= 3 && matchVariantsOccurIn(matchFormVariants(f), haystackVariants),
+      )
+    )
+      ids.push(entity.id);
   }
   return ids.toSorted();
 }
