@@ -147,6 +147,9 @@ async function toolBrainNoteLifecycle(
       // A note the caller may not read at its reach is refused exactly
       // as a missing one.
       readable: readableAtContextReach(ctx),
+      // The post-write refresh resolves through the server's own config
+      // path, like every other search-resolving call in this file.
+      ...(ctx.configPath !== null ? { refreshConfigPath: ctx.configPath } : {}),
     });
     return renderResult(res);
   } catch (err) {

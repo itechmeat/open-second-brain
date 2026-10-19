@@ -421,6 +421,31 @@ describe("the detached refresh an applied write claims", () => {
     expect(res.references?.index.state).toBe(INDEX_EVIDENCE.stale);
   });
 
+  test("the claim resolves through the config file the caller passed, not the environment alone", async () => {
+    // The interval is 0 by CONFIG FILE here - the suite-wide env default
+    // is scrubbed - so the claim reads `off` only if it resolves the
+    // search config through the caller's refreshConfigPath. Resolved
+    // without it, the default interval stands and the rename claims a
+    // run the operator's config refused.
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    atomicWriteFileSync(configPath, `vault: ${vault}\nsearch_freshen_interval_s: 0\n`);
+    const key = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+    const saved = process.env[key];
+    delete process.env[key];
+    try {
+      const res = await noteLifecycle(vault, {
+        ...renameInput(true),
+        refreshConfigPath: configPath,
+      });
+      expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+      expect(res.references?.refreshReason).toBe("off");
+    } finally {
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    }
+  });
+
   test("claim exclusivity prevents doubles: a second applied write spawns nothing", async () => {
     withFreshenOn();
     await stampIndex(new Date().toISOString());

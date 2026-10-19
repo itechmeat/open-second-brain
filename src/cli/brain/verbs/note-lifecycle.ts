@@ -186,6 +186,12 @@ export async function cmdBrainNoteLifecycle(argv: string[]): Promise<number> {
       deleteLinked: flags["delete-linked"] === true,
       expect: expectCount,
       strict: flags["strict"] === true,
+      // The post-write refresh resolves through the config file this
+      // invocation already resolved the vault from, the same rule the
+      // search verbs read (`--config`, else the default): a non-default
+      // config's index path and freshen settings are the ones the claim
+      // reads and the child spawns with.
+      refreshConfigPath: config,
     });
     if (flags["json"] === true) okJson(renderJson(res));
     else ok(renderText(res));

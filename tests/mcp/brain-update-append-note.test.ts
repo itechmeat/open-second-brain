@@ -77,6 +77,37 @@ function seedNote(rel: string, body: string, frontmatter = ""): void {
 const updateTool = NOTES_TOOLS.find((t) => t.name === "brain_update_note")!;
 const appendTool = NOTES_TOOLS.find((t) => t.name === "brain_append_note")!;
 
+// The freshen seam both claim describes below intercept. Module scope so
+// the update and the append tests share ONE registration and ONE
+// teardown - two private copies of a mock that must be un-registered is
+// exactly how a leaked mock starts.
+const FRESHEN_MODULE = "../../src/core/search/freshen.ts";
+let realFreshen: Record<string, unknown> | null = null;
+let forcedCalls: Array<{ vault: string; opts: Record<string, unknown> }> = [];
+
+/** Intercept the freshen machinery at the deferred-import seam. */
+async function mockFreshenSpawned(): Promise<void> {
+  realFreshen = { ...(await import(FRESHEN_MODULE)) };
+  forcedCalls = [];
+  mock.module(FRESHEN_MODULE, () => ({
+    ...realFreshen,
+    maybeFreshenIndex: (config: { vault: string }, opts: Record<string, unknown>) => {
+      forcedCalls.push({ vault: config.vault, opts });
+      return "spawned" as const;
+    },
+  }));
+}
+
+afterEach(() => {
+  // This runner's mock registration outlives mock.restore() across test
+  // FILES, so the teardown re-registers the REAL module object instead:
+  // whatever leaks past this file is freshen.ts itself, byte for byte.
+  if (realFreshen !== null) mock.module(FRESHEN_MODULE, () => realFreshen);
+  mock.restore();
+  realFreshen = null;
+  forcedCalls = [];
+});
+
 /** Stamp the vault's index with an old instant: the claim's stale gate must pass. */
 async function stampIndexStale(): Promise<void> {
   const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../src/core/search/store.ts");
@@ -110,33 +141,6 @@ function withIntervalEnv(value: string): () => void {
  * default keeps every OTHER test in this file inert.
  */
 describe("brain_update_note - the post-write refresh claim", () => {
-  // This runner's mock registration outlives mock.restore() across test
-  // FILES, so the teardown re-registers the REAL module object instead:
-  // whatever leaks past this file is freshen.ts itself, byte for byte.
-  const FRESHEN_MODULE = "../../src/core/search/freshen.ts";
-  let realFreshen: Record<string, unknown> | null = null;
-  let forcedCalls: Array<{ vault: string; opts: Record<string, unknown> }> = [];
-
-  afterEach(() => {
-    if (realFreshen !== null) mock.module(FRESHEN_MODULE, () => realFreshen);
-    mock.restore();
-    realFreshen = null;
-    forcedCalls = [];
-  });
-
-  /** Intercept the freshen machinery at the deferred-import seam. */
-  async function mockFreshenSpawned(): Promise<void> {
-    realFreshen = { ...(await import(FRESHEN_MODULE)) };
-    forcedCalls = [];
-    mock.module(FRESHEN_MODULE, () => ({
-      ...realFreshen,
-      maybeFreshenIndex: (config: { vault: string }, opts: Record<string, unknown>) => {
-        forcedCalls.push({ vault: config.vault, opts });
-        return "spawned" as const;
-      },
-    }));
-  }
-
   test("a content edit claims one forced refresh: the seam sees force, and the receipt says claimed", async () => {
     seedNote("Notes/Doc.md", "old body", "title: Doc");
     // An index exists and is stale: the claim's stale gate passes and
@@ -184,6 +188,36 @@ describe("brain_update_note - the post-write refresh claim", () => {
       expect(res["index_refresh_reason"]).toBe("off");
     } finally {
       restore();
+    }
+  });
+
+  test("the claim resolves through the server's own config file, not the environment alone", async () => {
+    seedNote("Notes/Doc.md", "old body", "title: Doc");
+    // The freshen-off decision arrives by CONFIG FILE here - the env
+    // var the suite defaults to 0 is scrubbed - and the claim reads it
+    // only because it resolves the search config through the server's
+    // configPath. Resolved without it, the default interval stands and
+    // the edit claims a run the operator's config refused.
+    await stampIndexStale();
+    atomicWriteFileSync(
+      join(configHome, "config.yaml"),
+      `vault: ${vault}\nagent_name: claude\nsearch_freshen_interval_s: 0\n`,
+    );
+    const key = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+    const saved = process.env[key];
+    delete process.env[key];
+    try {
+      const res = (await updateTool.handler(ctx, {
+        path: "Notes/Doc.md",
+        content: "new body",
+      })) as Record<string, unknown>;
+
+      expect(res["updated"]).toBe(true);
+      expect(res["index_refresh"]).toBe("not_claimed");
+      expect(res["index_refresh_reason"]).toBe("off");
+    } finally {
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
     }
   });
 
@@ -330,6 +364,59 @@ describe("brain_update_note", () => {
   });
 });
 
+describe("brain_append_note - the post-write refresh claim", () => {
+  test("an applied append claims one forced refresh: the seam sees force, and the receipt says claimed", async () => {
+    // An append writes body bytes, so it is a content edit: the release
+    // notes' "a content edit claims" covers it, and an append that left
+    // the index stale for an interval would be the gap the claim exists
+    // to close.
+    seedNote("Notes/Doc.md", "first", "title: Doc");
+    await stampIndexStale();
+    await mockFreshenSpawned();
+    const restore = withIntervalEnv("60");
+    try {
+      const res = (await appendTool.handler(ctx, {
+        path: "Notes/Doc.md",
+        content: "second",
+      })) as Record<string, unknown>;
+
+      expect(res["appended"]).toBe(true);
+      expect(res["index_refresh"]).toBe("claimed");
+      expect(res["index_refresh_reason"]).toBeNull();
+      expect(forcedCalls).toHaveLength(1);
+      expect(forcedCalls[0]!.vault).toBe(vault);
+      expect(forcedCalls[0]!.opts["force"]).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test("config off does not claim: the receipt says not_claimed and names off", async () => {
+    seedNote("Notes/Doc.md", "first", "title: Doc");
+    await stampIndexStale();
+    const restore = withIntervalEnv("0");
+    try {
+      const res = (await appendTool.handler(ctx, {
+        path: "Notes/Doc.md",
+        content: "second",
+      })) as Record<string, unknown>;
+
+      expect(res["appended"]).toBe(true);
+      expect(res["index_refresh"]).toBe("not_claimed");
+      expect(res["index_refresh_reason"]).toBe("off");
+    } finally {
+      restore();
+    }
+  });
+
+  test("a refused append wrote nothing, so it claims nothing", async () => {
+    // The typed refusal is thrown before any claim is attempted, so the
+    // freshen machinery is never reached and nothing can leak.
+    await rejectedMcpError(appendTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" }));
+    expect(forcedCalls).toHaveLength(0);
+  });
+});
+
 describe("brain_append_note", () => {
   test("is registered and requires path and content", () => {
     expect(appendTool).toBeDefined();
@@ -443,7 +530,18 @@ describe("the lint attached to the update / append receipts", () => {
   test("a clean append carries the flag, the path and the write id, in that order", async () => {
     seedNote("Notes/CleanA.md", "first", "title: CleanA");
     const res = await call(appendTool, { path: "Notes/CleanA.md", content: "second" });
-    expect(Object.keys(res)).toEqual(["appended", "path", "write_id"]);
+    // The shape is pinned in full so a field cannot arrive unannounced.
+    // The refresh-claim marker joined the update receipt when content
+    // edits started claiming a refresh, and the append - a content edit
+    // of its own - claims under the same vocabulary (freshening is off
+    // suite-wide, so it reads not_claimed with its reason).
+    expect(Object.keys(res)).toEqual([
+      "appended",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
     expect(res).toMatchObject({ appended: true, path: "Notes/CleanA.md" });
     expect(res["write_id"]).toMatch(NOTE_WRITE_ID_RE);
     expect("audit_reason" in res).toBe(false);

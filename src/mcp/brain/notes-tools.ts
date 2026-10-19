@@ -340,8 +340,14 @@ async function toolBrainCreateNote(
     // writes that must resolve without a reindex, and the PR says a
     // create claims. Fire-and-forget, never failing the write it
     // follows; a skip or a staged create authored nothing at the target,
-    // so neither claims and neither carries the marker.
-    const claim = res.created ? await claimNoteWriteRefresh(ctx.vault) : null;
+    // so neither claims and neither carries the marker. The claim
+    // resolves through the SERVER's own config path - the same file
+    // every other search-resolving call in this file reads - so a
+    // non-default config's index path and freshen settings are the ones
+    // the evidence reads and the child spawns with.
+    const claim = res.created
+      ? await claimNoteWriteRefresh(ctx.vault, undefined, undefined, ctx.configPath ?? undefined)
+      : null;
     return await noteWriteResult(ctx, res.created ? [res.path] : [], {
       created: res.created,
       outcome: res.outcome,
@@ -454,7 +460,11 @@ async function toolBrainUpdateNote(
   // same detached index refresh the lifecycle's writes claim, with the
   // marker on the receipt under the same vocabulary. A byte-identical
   // re-apply wrote nothing, so it claims nothing and carries no marker.
-  const claim = result.updated ? await claimNoteWriteRefresh(ctx.vault) : null;
+  // The claim resolves through the server's own config path, like every
+  // other search-resolving call here.
+  const claim = result.updated
+    ? await claimNoteWriteRefresh(ctx.vault, undefined, undefined, ctx.configPath ?? undefined)
+    : null;
   return noteWriteResult(ctx, result.updated ? [result.path] : [], {
     updated: result.updated,
     path: result.path,
@@ -478,11 +488,22 @@ async function toolBrainAppendNote(
   const result = runSingleWrite(ctx, op, "brain_append_note");
   // Skipped-append receipts follow the skipped-update shape: no bytes
   // landed, so no page to lint and no audit half to mistake.
+  //
+  // An APPLIED append wrote body bytes, so it is a content edit and
+  // claims the same detached index refresh the update claims - the one
+  // note-write surface left claiming nothing, and the only one whose
+  // receipt contradicted the "a content edit claims" line. The claim
+  // resolves through the server's own config path, like every other
+  // search-resolving call here.
+  const claim = result.appended
+    ? await claimNoteWriteRefresh(ctx.vault, undefined, undefined, ctx.configPath ?? undefined)
+    : null;
   return noteWriteResult(ctx, result.appended ? [result.path] : [], {
     appended: result.appended,
     path: result.path,
     ...(result.appended ? auditFields(result) : {}),
     ...pathAdvisoryFields(result),
+    ...(claim !== null ? refreshClaimFields(claim) : {}),
   });
 }
 

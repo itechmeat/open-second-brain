@@ -457,6 +457,14 @@ export interface NoteLifecycleInput {
    * detached in the first place.
    */
   readonly refreshSpawn?: (argv: string[]) => void;
+  /**
+   * The config file the post-write refresh resolves the search config
+   * through - the caller's `--config` (or the MCP server's config path),
+   * so the claim reads the same index and spawns the child with the same
+   * freshen settings the rest of the invocation used. Absent, the config
+   * resolves from the environment alone.
+   */
+  readonly refreshConfigPath?: string;
 }
 
 export interface NoteLifecycleResult {
@@ -984,8 +992,14 @@ export async function noteLifecycle(
         },
       );
       snapshot = Object.freeze({ runId: gated.snapshot.runId, path: gated.snapshot.path });
-      const index = await readIndexEvidence(vault, true);
-      const claim = await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now);
+      const index = await readIndexEvidence(vault, true, input.refreshConfigPath);
+      const claim = await claimPostWriteRefresh(
+        vault,
+        index,
+        input.refreshSpawn,
+        input.now,
+        input.refreshConfigPath,
+      );
       return finish(
         action,
         source.relPath,
@@ -1082,14 +1096,20 @@ export async function noteLifecycle(
     },
   });
 
-  const index = await readIndexEvidence(vault, apply);
+  const index = await readIndexEvidence(vault, apply, input.refreshConfigPath);
   // The refresh claim trails the evidence read on purpose: the evidence
   // must describe the index as this call left it, and the claim starts a
   // DETACHED run that will not have landed by any instant this call can
   // observe. A plan-only run aged nothing and claims nothing - and
   // refused nothing, so its reason is null rather than a borrowed token.
   const claim = apply
-    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now)
+    ? await claimPostWriteRefresh(
+        vault,
+        index,
+        input.refreshSpawn,
+        input.now,
+        input.refreshConfigPath,
+      )
     : { refresh: INDEX_REFRESH.notClaimed, refreshReason: null };
 
   return finish(

@@ -141,11 +141,18 @@ const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
  * did. The other two states are facts about the index file itself and
  * read the same either way.
  */
-export async function readIndexEvidence(vault: string, wrote: boolean): Promise<IndexEvidence> {
+export async function readIndexEvidence(
+  vault: string,
+  wrote: boolean,
+  configPath?: string,
+): Promise<IndexEvidence> {
   try {
     const { resolveSearchConfig } = await import("../../search/index.ts");
     const { LAST_INDEXED_AT_STATE_KEY, Store } = await import("../../search/store.ts");
-    const config = resolveSearchConfig({ vault });
+    const config = resolveSearchConfig({
+      vault,
+      ...(configPath !== undefined ? { configPath } : {}),
+    });
     if (!existsSync(config.dbPath)) {
       return Object.freeze({
         state: INDEX_EVIDENCE.absent,
@@ -222,7 +229,13 @@ const NO_INDEX_CLAIM: PostWriteRefreshClaim = Object.freeze({
  * the injected test seam; absent, the child is the real detached run.
  * `now` is the caller's injected clock: passed through as the decision's
  * `nowMs`, so the freshness and backoff judgements are made on the same
- * instant the rest of the run is reproducible against. There is no
+ * instant the rest of the run is reproducible against. `configPath` is
+ * the config file the CALLER resolved its own world through - the CLI's
+ * `--config`, the MCP server's config path - so the claim reads the same
+ * index and spawns the child with the same freshen settings the rest of
+ * the invocation used; absent, the config resolves from the environment
+ * alone, exactly as a caller that passed no config path resolves
+ * everything else. There is no
  * freshness floor against the write's own instant: the index stamp marks
  * when a run FINISHED, and a run that finished after the write began may
  * have scanned before the write landed, so a stamp cannot prove the
@@ -236,6 +249,7 @@ export async function claimPostWriteRefresh(
   index: IndexEvidence,
   spawn?: (argv: string[]) => void,
   now?: Date,
+  configPath?: string,
 ): Promise<PostWriteRefreshClaim> {
   // Stale is the only state that describes an index this call aged. An
   // absent index holds nothing to refresh, an unreadable one has no
@@ -246,7 +260,10 @@ export async function claimPostWriteRefresh(
     const { resolveSearchConfig } = await import("../../search/index.ts");
     const { FRESHEN_SKIP, markFreshenPending, maybeFreshenIndex } =
       await import("../../search/freshen.ts");
-    const config = resolveSearchConfig({ vault });
+    const config = resolveSearchConfig({
+      vault,
+      ...(configPath !== undefined ? { configPath } : {}),
+    });
     const decision = maybeFreshenIndex(config, {
       lastIndexedAt: index.lastIndexedAt,
       force: true,
@@ -303,7 +320,8 @@ export async function claimNoteWriteRefresh(
   vault: string,
   spawn?: (argv: string[]) => void,
   now?: Date,
+  configPath?: string,
 ): Promise<PostWriteRefreshClaim> {
-  const index = await readIndexEvidence(vault, true);
-  return claimPostWriteRefresh(vault, index, spawn, now);
+  const index = await readIndexEvidence(vault, true, configPath);
+  return claimPostWriteRefresh(vault, index, spawn, now, configPath);
 }

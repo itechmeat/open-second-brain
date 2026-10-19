@@ -163,6 +163,28 @@ describe("brain_create_note - the post-write refresh claim", () => {
     }
   });
 
+  test("the claim resolves through the server's own config file, not the environment alone", async () => {
+    // The freshen-off decision arrives by CONFIG FILE here - no env var
+    // is set - and the claim reads it only because it resolves the
+    // search config through the server's configPath, the file every
+    // other search-resolving call in the tool reads. Resolved without
+    // it, the default interval stands and the create claims a run the
+    // operator's config refused.
+    await stampIndexStale();
+    atomicWriteFileSync(
+      join(configHome, "config.yaml"),
+      `vault: ${vault}\nagent_name: claude\nsearch_freshen_interval_s: 0\n`,
+    );
+    const res = (await handler(ctx, {
+      path: "Notes/ConfigOff.md",
+      content: "the config file's off is the claim's off",
+    })) as Record<string, unknown>;
+
+    expect(res["created"]).toBe(true);
+    expect(res["index_refresh"]).toBe("not_claimed");
+    expect(res["index_refresh_reason"]).toBe("off");
+  });
+
   test("a skipped create wrote nothing, so it carries no refresh marker at all", async () => {
     await handler(ctx, { path: "Notes/There.md", content: "first\n" });
     const res = (await handler(ctx, {
