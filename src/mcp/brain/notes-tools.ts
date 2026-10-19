@@ -765,7 +765,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_append_note",
     description:
-      "Append Markdown text to the body of an existing vault note, written atomically. A missing target is refused. Reuses the create-note safety envelope: path traversal, the Brain root, vault-scope-excluded paths, and writes outside the declared write binding are refused. An applied append claims a detached index refresh.",
+      "Append Markdown text to an existing vault note's body, written atomically. A missing target is refused. Reuses the create-note safety envelope: traversal, the Brain root, excluded paths, and writes outside the declared write binding are refused. An applied append claims a detached index refresh.",
     inputSchema: {
       type: "object",
       properties: {
