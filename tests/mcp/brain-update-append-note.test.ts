@@ -410,10 +410,20 @@ describe("brain_append_note - the post-write refresh claim", () => {
   });
 
   test("a refused append wrote nothing, so it claims nothing", async () => {
-    // The typed refusal is thrown before any claim is attempted, so the
-    // freshen machinery is never reached and nothing can leak.
-    await rejectedMcpError(appendTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" }));
-    expect(forcedCalls).toHaveLength(0);
+    // The typed refusal is thrown before any claim is attempted. The
+    // mock is installed and freshening is ON so the assertion has
+    // something to catch: a claim hoisted above the write would light
+    // the seam up on its way to the refusal.
+    seedNote("Notes/Real.md", "first", "title: Real");
+    await stampIndexStale();
+    await mockFreshenSpawned();
+    const restore = withIntervalEnv("60");
+    try {
+      await rejectedMcpError(appendTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" }));
+      expect(forcedCalls).toHaveLength(0);
+    } finally {
+      restore();
+    }
   });
 });
 

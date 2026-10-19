@@ -865,11 +865,14 @@ describe("the relink arm is opt-in on the tool too", () => {
 
   test("force_cost rides the same boolean rule relink_apply does", async () => {
     // The literal `=== true` read left the exact bug the relink_apply
-    // coercion fixed alive one argument over: `force_cost: "true"` was
-    // silently ignored (the run answering ok over an override that never
-    // happened) and `"yes"` was silently demoted to the default instead
-    // of refused. The string spelling is a real true; everything else
-    // that is not a boolean is a refusal naming the argument.
+    // coercion fixed alive one argument over. What is pinned here is the
+    // coercion contract on THIS argument: the string spelling is ADMITTED
+    // (not refused - the admission contract the relink_apply string test
+    // pins through the same helper), and every non-boolean junk value is
+    // refused by name, where the old read silently demoted it to the
+    // default. That the admitted true then overrides the embedding cost
+    // gate is the spend gate's own pin (the embedding-spend-preview
+    // suite drives forceCost through the gate directly).
     writeRelinkFixture();
     const stringTrue = await callTool({ operation: "run", force_cost: "true" });
     expect(stringTrue.error).toBeUndefined();
