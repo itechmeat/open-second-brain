@@ -45,7 +45,14 @@
  * `## Raw` section is out of the rewrite's reach - the section is the
  * anchor's only home, and this pass does not restructure pages - so it is
  * counted by neither arm: a dry run never reports an addition no apply
- * could make.
+ * could make. The same holds for a codec-compressed section: the bytes
+ * on disk hold the reversible compressed form, whose collapsed whitespace
+ * runs can hide the `entities:` line from a line-level rewrite, so the
+ * pass skips those signals outright rather than write a line the next
+ * parse never reads. The apply arm writes against the bytes it read
+ * (`expectBefore`): a page edited or moved between the read and the
+ * rename fails the write instead of losing that edit, and the next pass
+ * retries.
  *
  * The pass never calls a model: the recomputation is a file walk, an
  * index build and pure matching, bounded by the caller's safeguard like
@@ -360,6 +367,16 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       if (sources.length === 0) continue;
       pageSourced++;
 
+      // A codec-compressed raw section is out of the rewrite's reach,
+      // like a page without a Raw section: `raw` above is the EXPANDED
+      // text, but the bytes on disk hold the compressed form, where a
+      // collapsed whitespace run can merge the `entities:` line into the
+      // line above it - a byte-level rewrite would append a second line
+      // the next parse never reads. Counted by neither arm: a dry run
+      // never reports an addition no apply could make, and run-to-run
+      // numbers stay idempotent.
+      if (signal.rawCodec === true) continue;
+
       const stored = storedAnchorIds(signal.raw);
       const added: string[] = [];
       const push = (id: string): void => {
@@ -392,12 +409,16 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       }
       if (added.length === 0) continue;
       const nextLine = `entities: ${[...stored, ...added].join(", ")}`;
-      let next: string | undefined;
+      let before: string | null = null;
       try {
-        next = rewriteRawEntitiesLine(readFileSync(path, "utf8"), nextLine);
+        before = readFileSync(path, "utf8");
       } catch {
-        next = undefined;
+        before = null;
       }
+      // `rewriteRawEntitiesLine` is a pure string fold and never throws;
+      // an unreadable page lands here as `null` and reads as no Raw
+      // section below.
+      const next = before === null ? undefined : rewriteRawEntitiesLine(before, nextLine);
       // No `## Raw` section: the anchor has no home on this page, so no
       // arm counts it - a dry run never reports an addition no apply
       // could make, and run-to-run numbers stay idempotent.
@@ -410,7 +431,14 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       }
       if (!apply) continue;
       try {
-        atomicWriteFileSync(path, next);
+        // The bytes read above are the write's expectation, re-checked
+        // immediately before the rename: an edit that lands between the
+        // read and the write fails here instead of being discarded, and
+        // a concurrent move fails instead of recreating the page at its
+        // old path. The rollback below covers the drift failure too -
+        // the signal is reported by its absence, and the next pass
+        // recomputes the same additions, idempotently.
+        atomicWriteFileSync(path, next, { expectBefore: before });
       } catch {
         // A page that cannot be rewritten is reported by its absence: the
         // next pass recomputes the same additions, idempotently.

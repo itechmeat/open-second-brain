@@ -715,6 +715,14 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
   }
   const raw =
     rawSection !== undefined && rawCodec === CODEC_VERSION ? expand(rawSection) : rawSection;
+  // Read the marker back beside the expanded `raw` (additive optional):
+  // `raw` alone cannot tell a byte-level rewriter that the section on
+  // disk is the compressed form, and a rewriter that edits the file's
+  // bytes while its anchor reads come from the expanded text would write
+  // a line the next parse never reads. A mismatched marker already threw
+  // above, so true here means exactly "expanded on read, compressed on
+  // disk".
+  const storedCodec = rawCodec === CODEC_VERSION && rawSection !== undefined;
 
   // Capture-extension optional fields. Absence stays as `undefined`
   // on the returned object — never coerced to a default, so callers
@@ -778,6 +786,7 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     ...(scope !== undefined ? { scope } : {}),
     ...(source !== undefined ? { source } : {}),
     ...(raw !== undefined ? { raw } : {}),
+    ...(storedCodec ? { rawCodec: true } : {}),
     ...(source_type !== undefined ? { source_type } : {}),
     ...(schema_type !== undefined ? { schema_type } : {}),
     ...(dedup_hash !== undefined ? { dedup_hash } : {}),

@@ -49,6 +49,17 @@ describe("signal raw codec", () => {
     expect(parseSignal(path).raw).toBe(RAW);
   });
 
+  test("parseSignal reads the marker back beside the expanded raw", () => {
+    // `raw` alone cannot tell a byte-level rewriter that the section on
+    // disk is the compressed form; the parsed flag carries that fact.
+    const compressed = parseSignal(write(true));
+    expect(compressed.rawCodec).toBe(true);
+    expect(compressed.raw).toBe(RAW);
+    const verbatim = parseSignal(write(false));
+    expect(verbatim.rawCodec).toBeUndefined();
+    expect(verbatim.raw).toBe(RAW);
+  });
+
   test("with rawCodec: the stored body is shorter than verbatim", () => {
     const compressed = readFileSync(write(true), "utf8").length;
     const verbatim = readFileSync(write(false), "utf8").length;

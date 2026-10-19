@@ -27,7 +27,7 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { writeFrontmatterAtomic } from "../../../../src/core/vault.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import type { ProgressEvent } from "../../../../src/core/brain/progress.ts";
-import { writeSignal } from "../../../../src/core/brain/signal.ts";
+import { writeSignal, parseSignal } from "../../../../src/core/brain/signal.ts";
 import { LANE_TASK, LANE_TASKS, isLaneTask } from "../../../../src/core/brain/maintenance/lane.ts";
 import { buildLaneTasks } from "../../../../src/core/brain/maintenance/lane-tasks.ts";
 import { isOperation } from "../../../../src/core/brain/safeguard.ts";
@@ -94,6 +94,10 @@ function writePageSourcedSignal(input: {
   readonly topic?: string;
   /** Write the page with no `## Raw` section at all (v0.10.1 shape). */
   readonly noRawSection?: boolean;
+  /** Store the raw body codec-compressed (the `_raw_codec` marker). */
+  readonly rawCodec?: boolean;
+  /** Verbatim raw body overriding the stored-ids / placeholder default. */
+  readonly rawBody?: string;
 }): void {
   const sourceRefs = input.sourceRefs ?? [input.sourceRef ?? ""];
   writeSignal(vault, {
@@ -109,9 +113,12 @@ function writePageSourcedSignal(input: {
     dedup_hash: `hash-${input.principle.length}-${sourceRefs.join(".").replace(/\W/g, "")}`,
     ...(input.noRawSection
       ? {}
-      : input.storedEntityIds.length > 0
-        ? { raw: `entities: ${input.storedEntityIds.join(", ")}` }
-        : { raw: "_(not provided)_" }),
+      : input.rawBody !== undefined
+        ? { raw: input.rawBody }
+        : input.storedEntityIds.length > 0
+          ? { raw: `entities: ${input.storedEntityIds.join(", ")}` }
+          : { raw: "_(not provided)_" }),
+    ...(input.rawCodec ? { rawCodec: true } : {}),
   });
 }
 
@@ -319,6 +326,48 @@ describe("runRelinkAnchors", () => {
     expect(applied.signalsChanged).toBe(0);
     expect(applied.anchorsAdded).toBe(0);
     expect(readFileSync(join(brainDirs(vault).inbox, file), "utf8")).toBe(before);
+  });
+
+  test("a codec-compressed signal is out of the rewrite's reach and counted by neither arm", () => {
+    // The compressed section collapses whitespace runs, so a blank-line
+    // run merges the `entities:` line into the line above it: a
+    // byte-level rewrite would find no line to replace, append a second
+    // one, and the next parse - which reads the FIRST entities line of
+    // the EXPANDED section - would never see it. The signal is out of
+    // the pass's reach, like a page without a Raw section.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      // Four newlines collapse into one run marker, merging the entities
+      // line into the preceding line on disk; Atlas is stored, Ada is the
+      // addition the pass must NOT claim it can make.
+      rawBody: "progress notes\n\n\n\nentities: ent-project-atlas",
+      rawCodec: true,
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+    const before = readFileSync(file, "utf8");
+    expect(before).toContain("_raw_codec");
+
+    const dry = runRelinkAnchors(vault, { now: NOW });
+    expect(dry.signalsPageSourced).toBe(1);
+    expect(dry.signalsChanged).toBe(0);
+    expect(dry.anchorsAdded).toBe(0);
+
+    const applied = runRelinkAnchors(vault, { now: NOW, apply: true });
+    expect(applied.signalsChanged).toBe(0);
+    expect(applied.anchorsAdded).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    // The stored record still parses, expanded, with the marker read back.
+    const parsed = parseSignal(file);
+    expect(parsed.rawCodec).toBe(true);
+    expect(parsed.raw).toBe("progress notes\n\n\n\nentities: ent-project-atlas");
   });
 
   test("two consecutive dry runs report identical numbers", () => {

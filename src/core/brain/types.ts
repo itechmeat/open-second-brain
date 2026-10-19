@@ -874,6 +874,18 @@ export interface BrainSignal {
   /** Optional free-form raw body following the frontmatter. */
   readonly raw?: string;
   /**
+   * True when the raw body is stored codec-compressed on disk (the
+   * `_raw_codec` marker, v0.22.0): `raw` above is the section's
+   * EXPANDED text, while the bytes on disk hold its reversible
+   * compressed form. A reader that rewrites a signal page from its file
+   * bytes must not treat the compressed section as verbatim text - a
+   * collapsed whitespace run can merge the `entities:` line into the
+   * line above it, so a byte-level rewrite would append a second line a
+   * later parse never reads. Absent (equivalently false) on every
+   * default verbatim signal.
+   */
+  readonly rawCodec?: boolean;
+  /**
    * Origin of the signal (§9 / §16). Absent on signals written by
    * older OSB versions — downstream code must treat undefined as
    * semantically equivalent to `live`, never inject a default.
