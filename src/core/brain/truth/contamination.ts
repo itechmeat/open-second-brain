@@ -61,10 +61,11 @@ export interface ContaminationInput {
 }
 
 /**
- * One entity's inclusion-test inputs, precomputed: the gate-passing
- * normalized forms, each already expanded into its match variants, so an
- * entity is tokenized ONCE per check no matter how many texts it is
- * tested against.
+ * One entity's inclusion-test inputs, precomputed: every normalized form,
+ * each already expanded into its match variants, so an entity is
+ * tokenized ONCE per check no matter how many texts it is tested against.
+ * The length floor is not applied here - `mentions` gates each form at
+ * every use, so a short form costs one variant expansion and answers no.
  */
 interface PreparedEntity {
   readonly entity: ContaminationEntityLike;
