@@ -225,6 +225,7 @@ export const LANE_TASK = Object.freeze({
   reindex: OPERATION.reindex,
   bridges: OPERATION.bridges,
   clusters: OPERATION.clusters,
+  relink: OPERATION.relink,
 } as const);
 
 export type LaneTask = (typeof LANE_TASK)[keyof typeof LANE_TASK];
@@ -239,6 +240,7 @@ export const LANE_TASKS: ReadonlyArray<LaneTask> = Object.freeze([
   LANE_TASK.reindex,
   LANE_TASK.bridges,
   LANE_TASK.clusters,
+  LANE_TASK.relink,
 ]);
 
 /**

@@ -62,6 +62,8 @@ export const OPERATION = Object.freeze({
   reindex: "reindex",
   bridges: "bridges",
   clusters: "clusters",
+  /** The anchor-relink maintenance pass (note-change truth maintenance). */
+  relink: "relink",
   maintenance: "maintenance",
   architect: "architect",
   sessions: "sessions",
@@ -75,6 +77,7 @@ export const OPERATIONS: ReadonlyArray<Operation> = Object.freeze([
   OPERATION.reindex,
   OPERATION.bridges,
   OPERATION.clusters,
+  OPERATION.relink,
   OPERATION.maintenance,
   OPERATION.architect,
   OPERATION.sessions,

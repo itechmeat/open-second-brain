@@ -1458,8 +1458,14 @@ const DIRECT_WRITE_ROWS = 83;
  * page-merge.ts`) rewrites the survivor page, and retargets inbound
  * relation edges, through `writeFrontmatterAtomic` - note-shaped
  * frontmatter pages, written through the shared writer by design.
+ *
+ * 124 -> 125: the maintenance lane's anchor-relink pass
+ * (`src/core/brain/maintenance/relink-anchors-task.ts`) rewrites a
+ * signal page's `entities:` line in place through the shared atomic
+ * writer on the apply arm - a dry-run-by-default repair pass over
+ * existing signal pages, writing no note of its own.
  */
-const SHARED_HELPER_ROWS = 124;
+const SHARED_HELPER_ROWS = 125;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1594,9 +1600,13 @@ const UNSTAMPED_DIRECT_ROWS = 82;
  * state; no origin stamp). 120 -> 121: the entity page-merge
  * (`src/core/brain/entities/page-merge.ts`) rewrites entity pages through
  * the shared frontmatter writer (a lifecycle merge of two pages; no origin
- * stamp on the merge lane).
+ * stamp on the merge lane). 121 -> 122: the maintenance lane's
+ * anchor-relink pass (`src/core/brain/maintenance/relink-anchors-task.ts`)
+ * rewrites a signal page's `entities:` line through the shared atomic
+ * writer on the apply arm - a dry-run-by-default repair pass over
+ * existing signal pages; no origin stamp on a maintenance repair.
  */
-const UNSTAMPED_SHARED_ROWS = 121;
+const UNSTAMPED_SHARED_ROWS = 122;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

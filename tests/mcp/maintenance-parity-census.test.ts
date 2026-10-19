@@ -556,7 +556,11 @@ describe("an unknown retry name is refused by name on both surfaces", () => {
 
 /** Measured caps on the tool's text: the registry keeps every description short. */
 const TOOL_DESCRIPTION_MAX = 300;
-const RETRY_PROPERTY_DESCRIPTION_MAX = 160;
+// The retry_tasks description enumerates the known lane tasks, so the fifth
+// task's registration (note-change truth maintenance) grew the measured
+// length; the cap moved with the population rather than shortening the text
+// that names what an operator may retry.
+const RETRY_PROPERTY_DESCRIPTION_MAX = 168;
 
 describe("the tool's text stays inside its budget", () => {
   test("description and retry_tasks property are measured, and name no configured task", () => {

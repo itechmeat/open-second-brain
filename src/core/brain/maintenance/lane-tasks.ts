@@ -36,6 +36,7 @@ import {
 } from "./custom-tasks.ts";
 import { LANE_TASK, type LaneTask, type LaneTaskId, type MaintenanceTask } from "./lane.ts";
 import { createLaneReindex, type LaneReindex } from "./reindex-task.ts";
+import { runRelinkAnchors } from "./relink-anchors-task.ts";
 
 export interface LaneTaskBuildOptions {
   readonly vault: string;
@@ -147,6 +148,22 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
         } finally {
           await store.close();
         }
+      },
+    },
+    // The anchor-relink pass (note-change truth maintenance) closes the
+    // lane: it reads the signal tree and the entity index only, so it
+    // needs no store. A lane pass PREVIEWS by contract - the report is
+    // what would change, and no signal page is rewritten until a caller
+    // asks `runRelinkAnchors` for the apply arm itself. The pass never
+    // calls a model and returns no spend receipt.
+    {
+      name: LANE_TASK.relink,
+      run: async () => {
+        runRelinkAnchors(vault, {
+          now,
+          safeguard: safeguardFor(LANE_TASK.relink),
+          ...laneProgress,
+        });
       },
     },
   ];

@@ -94,6 +94,7 @@ import { join, relative, resolve } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { PROGRESS_KIND } from "../../src/core/brain/progress.ts";
+import { LANE_TASKS } from "../../src/core/brain/maintenance/lane.ts";
 import { OPERATION, type Operation } from "../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -187,6 +188,19 @@ interface EmitterSite {
    * failure too, so a stale reason cannot outlive the condition it names.
    */
   readonly noAdvanceReason?: string;
+  /**
+   * How many terminators this entry point's stream legitimately carries,
+   * when it is more than one. The default is one: a verb drives ONE
+   * operation, and a second ending would make a finished run, a crashed
+   * run and a hung run indistinguishable. A DISPATCHER breaks that shape
+   * on purpose: the maintenance lane forwards the caller's sink to every
+   * task it runs (the choice `brain-maintenance-progress.test.ts`
+   * asserts - the lane never speaks in its own name), and each child
+   * counter closes its own stage, so an N-task lane writes N endings and
+   * the run's own ending is the LAST terminator on the stream. Declared
+   * per entry point below, never inferred.
+   */
+  readonly terminators?: number;
 }
 
 const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
@@ -281,6 +295,20 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.sessions,
     stage: "mentions",
   },
+  // The anchor-relink lane pass (note-change truth maintenance). It is a
+  // LANE task, so its only surface is `maintenance run`, which forwards the
+  // sink to each task: the stream carries the pass's own walk. The signal
+  // walk advances once per `sig-*.md` page in the inbox and processed
+  // trees - before any parse - so any signal in the fixture produces the
+  // advance, whichever arm the dream task earlier in the lane moved it to.
+  "core/brain/maintenance/relink-anchors-task.ts#runRelinkAnchors": {
+    entryPoint: "o2b brain maintenance run --progress",
+    operation: OPERATION.relink,
+    stage: "signals",
+    // The lane is a dispatcher: one terminator per child task it runs,
+    // with the run's own ending last (see {@link EmitterSite.terminators}).
+    terminators: LANE_TASKS.length,
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,6 +329,9 @@ let sessionHome: string;
 let sessionVault: string;
 /** A vault whose continuity ledger holds mined mentions, for the hallways fold. */
 let hallwaysVault: string;
+/** A bootstrapped vault with one signal, for the maintenance lane's relink walk. */
+let maintenanceVault: string;
+let maintenanceConfig: string;
 
 /**
  * One run of one entry point, with `--progress` on.
@@ -340,6 +371,10 @@ const ENTRY_POINTS: Readonly<Record<string, () => Promise<RunResult>>> = Object.
     }),
   "o2b brain hallways mine --progress": () =>
     runCli(["brain", "hallways", "mine", "--vault", hallwaysVault, "--progress"]),
+  "o2b brain maintenance run --progress": () =>
+    runCli(["brain", "maintenance", "run", "--vault", maintenanceVault, "--progress"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: maintenanceConfig },
+    }),
 });
 
 beforeAll(async () => {
@@ -451,6 +486,27 @@ beforeAll(async () => {
     hallwaysVault,
   ]);
   expect(imported.returncode).toBe(0);
+
+  // The maintenance fixture: a bootstrapped vault holding ONE signal, so
+  // the relink walk's stage has a denominator and at least one `advanced`
+  // record on the driven path. The signal is dated NOW because an old
+  // unconsumed signal leaves the contradiction window and the dream task
+  // ahead of the relink walk archives it out of both trees the walk scans.
+  maintenanceVault = join(tmp, "maintenance-vault");
+  mkdirSync(maintenanceVault, { recursive: true });
+  maintenanceConfig = join(tmp, "maintenance-config.yaml");
+  atomicWriteFileSync(maintenanceConfig, `vault: ${maintenanceVault}\n`);
+  bootstrapBrain(maintenanceVault, { configPath: maintenanceConfig });
+  writeSignal(maintenanceVault, {
+    topic: "census-relink",
+    signal: "positive",
+    agent: "claude",
+    principle: "Prefer the census-relink approach",
+    created_at: new Date().toISOString(),
+    date: new Date().toISOString().slice(0, 10),
+    slug: "census-relink",
+    scope: "writing",
+  });
 });
 
 afterAll(() => {
@@ -498,6 +554,16 @@ describe("progress emitter census", () => {
 
     // Sequential, not concurrent: `runCli` runs in-process and swaps
     // process-wide state, so two overlapping runs corrupt each other.
+    // The terminator expectation is per ENTRY POINT: a dispatcher that
+    // forwards the sink to every task it runs carries one terminator per
+    // child counter, so the widest declared allowance for the entry point
+    // is the contract its sites promise (the default stays exactly one).
+    const terminatorsAllowed = new Map<string, number>();
+    for (const decl of Object.values(EMITTERS)) {
+      const expected = decl.terminators ?? 1;
+      const known = terminatorsAllowed.get(decl.entryPoint) ?? 1;
+      if (expected > known) terminatorsAllowed.set(decl.entryPoint, expected);
+    }
     for (const [name, drive] of Object.entries(ENTRY_POINTS)) {
       // oxlint-disable-next-line no-await-in-loop
       const run = await drive();
@@ -517,9 +583,12 @@ describe("progress emitter census", () => {
       const terminators = records.filter(
         (r) => r["kind"] === PROGRESS_KIND.finished || r["kind"] === PROGRESS_KIND.stopped,
       );
-      if (terminators.length !== 1) {
-        failures.push(`${name}: ${terminators.length} terminator(s) for one run, expected 1`);
-      } else if (records.at(-1) !== terminators[0]) {
+      const allowed = terminatorsAllowed.get(name) ?? 1;
+      if (terminators.length !== allowed) {
+        failures.push(
+          `${name}: ${terminators.length} terminator(s) for one run, expected ${allowed}`,
+        );
+      } else if (allowed === 1 && records.at(-1) !== terminators[0]) {
         failures.push(`${name}: records arrived after the terminator`);
       }
     }

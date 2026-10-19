@@ -125,6 +125,7 @@ const YIELDS_TO_EVENT_LOOP: Readonly<Record<Operation, boolean>> = Object.freeze
   [OPERATION.bridges]: false,
   [OPERATION.clusters]: false,
   [OPERATION.architect]: false,
+  [OPERATION.relink]: false,
   [OPERATION.reindex]: true,
   [OPERATION.maintenance]: true,
   // The session sweep is synchronous end to end: the walk and the hash
