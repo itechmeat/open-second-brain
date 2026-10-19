@@ -367,11 +367,11 @@ const MAX_RETRY_TASKS = LANE_TASKS.length + CUSTOM_TASK_MAX;
  * itself, and so does the string `"true"` - clients commonly round-trip
  * booleans as strings, and a literal `=== true` read turned that spelling
  * into a preview that still reported `verdict: ok`, the caller never the
- * wiser. `false`, `"false"`, absence and `null` answer `undefined` (the
- * caller's default applies). Every OTHER value - `"yes"`, `1`, a nested
- * object - is an INVALID_PARAMS refusal naming the argument, the same
- * shape `coerceBoolOptional` throws for a non-boolean: refused, never
- * silently demoted to the argument's default.
+ * wiser. `false` and `"false"` answer `false`; absence and `null` answer
+ * `undefined` (the caller's default applies). Every OTHER value - `"yes"`,
+ * `1`, a nested object - is an INVALID_PARAMS refusal naming the argument,
+ * the same shape `coerceBoolOptional` throws for a non-boolean: refused,
+ * never silently demoted to the argument's default.
  */
 function coerceOptionalBool(args: Record<string, unknown>, key: string): boolean | undefined {
   const raw = args[key];
@@ -503,7 +503,11 @@ async function toolBrainMaintenance(
     ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     searchConfig,
     now,
-    forceCost: args["force_cost"] === true,
+    // One boolean rule per call: force_cost rides the same coercion
+    // relink_apply does, so the string spelling applies and a junk value
+    // is refused by name instead of silently spending the caller's
+    // default.
+    forceCost: coerceOptionalBool(args, "force_cost") === true,
     relinkApply: coerceOptionalBool(args, "relink_apply") === true,
     safeguardFor: laneSafeguard,
     ...(onProgress ? { onProgress } : {}),

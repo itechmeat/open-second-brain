@@ -862,4 +862,23 @@ describe("the relink arm is opt-in on the tool too", () => {
     expect(one.error?.code).toBe(INVALID_PARAMS);
     expect(one.error?.message).toContain("relink_apply");
   });
+
+  test("force_cost rides the same boolean rule relink_apply does", async () => {
+    // The literal `=== true` read left the exact bug the relink_apply
+    // coercion fixed alive one argument over: `force_cost: "true"` was
+    // silently ignored (the run answering ok over an override that never
+    // happened) and `"yes"` was silently demoted to the default instead
+    // of refused. The string spelling is a real true; everything else
+    // that is not a boolean is a refusal naming the argument.
+    writeRelinkFixture();
+    const stringTrue = await callTool({ operation: "run", force_cost: "true" });
+    expect(stringTrue.error).toBeUndefined();
+
+    const yes = await callTool({ operation: "run", force_cost: "yes" });
+    expect(yes.error?.code).toBe(INVALID_PARAMS);
+    expect(yes.error?.message).toContain("force_cost");
+    const one = await callTool({ operation: "run", force_cost: 1 });
+    expect(one.error?.code).toBe(INVALID_PARAMS);
+    expect(one.error?.message).toContain("force_cost");
+  });
 });
