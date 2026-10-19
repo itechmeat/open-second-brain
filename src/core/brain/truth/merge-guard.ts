@@ -64,8 +64,10 @@ export interface MergeGuardVerdict {
  * boundary, and every occurrence leading-edge-checked, so the fold never
  * plants a mid-word hit nothing anchored before. The haystack expands
  * ONCE per call - the same hoist `entityAnchors` makes, not once per
- * form per entity - and each entity's forms expand alongside their
- * normalization, once per entity, never inside the match predicate.
+ * form per entity - while an entity's forms normalize together first and
+ * expand inside the short-circuiting `.some`, so each form's variants
+ * are built at most once per entity and only for an entity already in
+ * scope (an out-of-scope entity's labels never reach the matcher).
  */
 function guardedAnchors(
   text: string,
