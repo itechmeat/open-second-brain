@@ -270,8 +270,25 @@ describe("matchFormVariants", () => {
     expect(matchFormVariants("tcp/ip")).toEqual(["tcp/ip"]);
   });
 
-  test("a slug tail at the minimum form length still expands", () => {
-    expect(matchFormVariants("notes/tcp")).toEqual(["notes/tcp", "tcp"]);
+  test("a slug tail is minted only from a registry entity-type folder prefix", () => {
+    // M1 (PR 268 review): the tail fired on ANY slash-containing name -
+    // "Warner/Chappell" minted "chappell", "Sony/ATV" minted "atv" - and
+    // a person named Bob Chappell stopped being protected by the merge
+    // guard. The tail is the slug of an entity PAGE, so it is minted
+    // only when the prefix before the slash is one of the registry's
+    // entity-type folders (the categories entity ids are minted from).
+    expect(matchFormVariants("warner/chappell")).toEqual(["warner/chappell"]);
+    expect(matchFormVariants("sony/atv")).toEqual(["sony/atv"]);
+    expect(matchFormVariants("people/ada_lovelace")).toContain("ada lovelace");
+    expect(matchFormVariants("company/acme corp")).toContain("acme corp");
+  });
+
+  test("a slug tail at the minimum form length still expands (folder prefixes only)", () => {
+    // "notes" is not one of the registry's entity-type folders, so the
+    // segment gate refuses the tail long before the floor is consulted;
+    // a folder-prefixed form at the floor still expands.
+    expect(matchFormVariants("notes/tcp")).toEqual(["notes/tcp"]);
+    expect(matchFormVariants("people/tcp")).toEqual(["people/tcp", "tcp"]);
   });
 
   test("edge separator runs vanish instead of planting empty tokens", () => {

@@ -152,6 +152,29 @@ const MATCH_SEPARATOR_JOINS: ReadonlyArray<string> = [" ", "-", "_"];
  */
 export const MIN_ANCHOR_FORM_LENGTH = 3;
 
+/**
+ * The entity-type folders of the canonical entity registry: the category
+ * slugs entity pages (`Brain/entities/<category>/<id>.md`) and entity ids
+ * (`ent-<category>-<slug>`) are minted from. Declared here - the leaf
+ * kernel every anchoring consumer shares - so the registry names its own
+ * folder vocabulary exactly once and every reader derives from the one
+ * list: {@link matchFormVariants} gates the slug tail on it, and the
+ * merge guard's default guarded categories ARE this list (re-exported
+ * there under its guard-facing name).
+ */
+export const ENTITY_TYPE_FOLDERS: ReadonlyArray<string> = Object.freeze([
+  "people",
+  "person",
+  "org",
+  "organization",
+  "organisation",
+  "company",
+  "team",
+]);
+
+/** Set form of {@link ENTITY_TYPE_FOLDERS} for the tail gate's lookups. */
+const ENTITY_TYPE_FOLDER_SET: ReadonlySet<string> = new Set(ENTITY_TYPE_FOLDERS);
+
 /** The joins a string's separator-delimited tokens expand to, or nothing. */
 function separatorVariantsOf(s: string): string[] {
   const tokens = s.split(MATCH_SEPARATOR_RUN_RE).filter((token) => token !== "");
@@ -171,7 +194,9 @@ function separatorVariantsOf(s: string): string[] {
  *     of a comparison must expand - the kernels fold the needle AND the
  *     haystack - because a variant class only describes its own
  *     spellings, not the text it might occur in.
- *   - A slug-prefixed form also matches at a path-segment boundary: the
+ *   - A form prefixed by a registry entity-type folder
+ *     ({@link ENTITY_TYPE_FOLDERS} - the categories entity pages and ids
+ *     are minted from) also matches at a path-segment boundary: the
  *     variants of the form's LAST `/`-segment (the slug itself) are
  *     appended, so `people/ada_lovelace` also occurs in a text that
  *     only says `ada lovelace`. The segment prefix is registry
@@ -179,8 +204,11 @@ function separatorVariantsOf(s: string): string[] {
  *     is an emitted needle in its own right, every tail variant meets
  *     {@link MIN_ANCHOR_FORM_LENGTH}, the same floor the kernels apply
  *     to full forms (`AC/DC` emits no `dc` for a standalone word to
- *     match). The FULL form is never floored here: gating it stays the
- *     caller's call, unchanged.
+ *     match). The FULL form is never floored or gated here: gating it
+ *     stays the caller's call, unchanged. A slash after any other prefix
+ *     carries no registry decoration - "Warner/Chappell" is one name
+ *     with a slash in it, not a directory path - so `Warner/Chappell`
+ *     mints no `chappell` and `Sony/ATV` no `atv` (M1, PR 268 review).
  *
  * The output is Set-deduped in a deterministic order (full-form variants
  * first, the last-segment tail after) and never empty for a non-empty
@@ -196,8 +224,11 @@ export function matchFormVariants(form: string): string[] {
   for (const variant of separatorVariantsOf(form)) out.add(variant);
   const lastSlash = form.lastIndexOf("/");
   if (lastSlash >= 0) {
-    for (const variant of separatorVariantsOf(form.slice(lastSlash + 1))) {
-      if (variant.length >= MIN_ANCHOR_FORM_LENGTH) out.add(variant);
+    const folder = form.slice(0, lastSlash).toLowerCase();
+    if (ENTITY_TYPE_FOLDER_SET.has(folder)) {
+      for (const variant of separatorVariantsOf(form.slice(lastSlash + 1))) {
+        if (variant.length >= MIN_ANCHOR_FORM_LENGTH) out.add(variant);
+      }
     }
   }
   return [...out];

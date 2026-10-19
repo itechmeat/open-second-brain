@@ -10,6 +10,7 @@
  */
 
 import {
+  ENTITY_TYPE_FOLDERS,
   MIN_ANCHOR_FORM_LENGTH,
   matchFormVariants,
   matchVariantsOccurIn,
@@ -17,16 +18,15 @@ import {
 } from "../entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
-/** Categories guarded by default: people and organisations. */
-export const GUARDED_ENTITY_CATEGORIES: ReadonlyArray<string> = Object.freeze([
-  "people",
-  "person",
-  "org",
-  "organization",
-  "organisation",
-  "company",
-  "team",
-]);
+/**
+ * Categories guarded by default: people and organisations. The registry's
+ * own entity-type folder vocabulary ({@link ENTITY_TYPE_FOLDERS} - the
+ * categories entity ids are minted from), re-exported under its
+ * guard-facing name so the two can never drift: the same list that
+ * mints entity folders guards entity merges and gates the matcher's
+ * slug tail.
+ */
+export const GUARDED_ENTITY_CATEGORIES: ReadonlyArray<string> = ENTITY_TYPE_FOLDERS;
 
 /** The slice of a registry entity the guard needs. */
 export interface GuardEntityLike {

@@ -189,6 +189,31 @@ describe("guardEntityMerge (pure)", () => {
     expect(verdict.allowed).toBe(false);
   });
 
+  test("a slash-bearing company name no longer anchors through its bare tail", () => {
+    // M1 (PR 268 review): the slug tail fired on ANY slash-containing
+    // name, so keep "Bob Chappell left the firm" also anchored the
+    // Warner/Chappell organization through the tail "chappell", the
+    // anchor sets overlapped, and the merge was allowed. The tail is
+    // minted only from a registry entity-type folder prefix, so the
+    // person and the organization stay disjoint and the veto holds.
+    const bob = person("ent-people-bob-chappell", "Bob Chappell");
+    const warner: GuardEntityLike = {
+      id: "ent-company-warner-chappell",
+      category: "company",
+      name: "Warner/Chappell",
+      aliases: [],
+      status: "active",
+    };
+    const verdict = guardEntityMerge({
+      keepText: "Bob Chappell left the firm",
+      dropText: "Warner/Chappell left the firm",
+      entities: [bob, warner],
+    });
+    expect(verdict.keepAnchors).toEqual(["ent-people-bob-chappell"]);
+    expect(verdict.dropAnchors).toEqual(["ent-company-warner-chappell"]);
+    expect(verdict.allowed).toBe(false);
+  });
+
   test("default guarded categories cover people and orgs", () => {
     expect(GUARDED_ENTITY_CATEGORIES).toContain("people");
     expect(GUARDED_ENTITY_CATEGORIES).toContain("org");
