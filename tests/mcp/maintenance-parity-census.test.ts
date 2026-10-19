@@ -829,4 +829,35 @@ describe("the relink arm is opt-in on the tool too", () => {
     expect(relink.anchorsAdded).toBe(1);
     expect(readFileSync(signalPath, "utf8")).toBe(before);
   });
+
+  test('relink_apply as the string "true" applies, not previews', async () => {
+    // Clients commonly round-trip a boolean as a string. The literal
+    // `=== true` read turned that spelling into a PREVIEW that still
+    // reported `verdict: ok` - the caller believed it had applied and
+    // read a clean run over changes that were never written.
+    const signalPath = writeRelinkFixture();
+    const res = await callTool({ operation: "run", relink_apply: "true" });
+    expect(res.error).toBeUndefined();
+    const relink = toolPayload(res)["relink"] as {
+      apply: boolean;
+      signalsChanged: number;
+    };
+    expect(relink.apply).toBe(true);
+    expect(relink.signalsChanged).toBe(1);
+    expect(readFileSync(signalPath, "utf8")).toContain("entities: ent-people-ada-lovelace");
+  });
+
+  test('a relink_apply value that is neither boolean nor "true"/"false" is refused, not previewed', async () => {
+    // The refusal, not the silent preview, is the contract for everything
+    // else: "yes" and 1 must come back INVALID_PARAMS naming the argument
+    // - a caller that misread the schema stops and corrects instead of
+    // reading an ok verdict over a run that applied nothing.
+    writeRelinkFixture();
+    const yes = await callTool({ operation: "run", relink_apply: "yes" });
+    expect(yes.error?.code).toBe(INVALID_PARAMS);
+    expect(yes.error?.message).toContain("relink_apply");
+    const one = await callTool({ operation: "run", relink_apply: 1 });
+    expect(one.error?.code).toBe(INVALID_PARAMS);
+    expect(one.error?.message).toContain("relink_apply");
+  });
 });

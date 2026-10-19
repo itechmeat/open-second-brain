@@ -350,7 +350,7 @@ async function toolBrainSecrets(
  * Advertised bound for `retry_tasks`: the widest list any install can
  * need, the built-ins plus the custom-task cap. The handler refuses
  * against the tasks THIS install registered, which can be fewer; naming
- * more tasks than the lane dispatches is a mistake, not a request.
+ * more tasks than the lane has is a mistake, not a request.
  *
  * The `maxItems` this feeds into the schema is ADVERTISEMENT, not
  * enforcement - nothing in the request path validates a JSON Schema.
@@ -361,6 +361,26 @@ async function toolBrainSecrets(
  * does validate refuses before spending a round trip.
  */
 const MAX_RETRY_TASKS = LANE_TASKS.length + CUSTOM_TASK_MAX;
+
+/**
+ * An optional boolean argument, read through one rule. `true` passes as
+ * itself, and so does the string `"true"` - clients commonly round-trip
+ * booleans as strings, and a literal `=== true` read turned that spelling
+ * into a preview that still reported `verdict: ok`, the caller never the
+ * wiser. `false`, `"false"`, absence and `null` answer `undefined` (the
+ * caller's default applies). Every OTHER value - `"yes"`, `1`, a nested
+ * object - is an INVALID_PARAMS refusal naming the argument, the same
+ * shape `coerceBoolOptional` throws for a non-boolean: refused, never
+ * silently demoted to the argument's default.
+ */
+function coerceOptionalBool(args: Record<string, unknown>, key: string): boolean | undefined {
+  const raw = args[key];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new MCPError(INVALID_PARAMS, `argument '${key}' must be a boolean`);
+}
 
 /** The refusal of a lane run below local reach; it names nothing in the vault. */
 export const MAINTENANCE_RUN_LOCAL_ONLY = "brain_maintenance: run executes at local reach only";
@@ -484,7 +504,7 @@ async function toolBrainMaintenance(
     searchConfig,
     now,
     forceCost: args["force_cost"] === true,
-    relinkApply: args["relink_apply"] === true,
+    relinkApply: coerceOptionalBool(args, "relink_apply") === true,
     safeguardFor: laneSafeguard,
     ...(onProgress ? { onProgress } : {}),
   });
