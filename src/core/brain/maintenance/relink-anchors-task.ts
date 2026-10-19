@@ -84,7 +84,10 @@
  * kept for the shaped raw a codec stores. The apply arm writes against
  * the bytes it read (`expectBefore`): a page edited or moved between the
  * read and the rename fails the write instead of losing that edit, and
- * the next pass retries.
+ * the next pass retries. The byte gates are re-run on those bytes too
+ * ({@link decideRawRewrite}): a page edited between the parse and the
+ * apply read is judged by what it now IS, not what the parse saw, so a
+ * Raw turned quote or codec in that window is skipped like any other.
  *
  * The pass never calls a model: the recomputation is a file walk, an
  * index build and pure matching, bounded by the caller's safeguard like
@@ -294,6 +297,74 @@ export function rewriteRawEntitiesLine(contents: string, nextLine: string): stri
   }
   lines.splice(insertAt, 0, nextLine);
   return lines.join("\n");
+}
+
+/**
+ * The Raw section the BYTES carry - the span `rewriteRawEntitiesLine`
+ * itself would rewrite (the lines between the `## Raw` heading and the
+ * next heading), trimmed, or `undefined` when the bytes hold no such
+ * heading or only blank lines. The drift re-check below re-runs the
+ * shape gate on this span, so the gate and the writer judge the same
+ * bytes.
+ */
+function rawSectionBytes(contents: string): string | undefined {
+  const lines = contents.split("\n");
+  const rawIdx = lines.findIndex((line) => line.trim() === "## Raw");
+  if (rawIdx < 0) return undefined;
+  let end = lines.length;
+  for (let i = rawIdx + 1; i < lines.length; i++) {
+    if (lines[i]!.startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  const section = lines
+    .slice(rawIdx + 1, end)
+    .join("\n")
+    .trim();
+  return section.length > 0 ? section : undefined;
+}
+
+/** What the byte-level drift re-check decided about one signal page. */
+export type RawRewriteDecision =
+  | { readonly action: "rewrite"; readonly next: string }
+  | { readonly action: "no-home" }
+  | { readonly action: "unsafe-shape" };
+
+const NO_REWRITE_HOME: RawRewriteDecision = Object.freeze({ action: "no-home" } as const);
+
+/**
+ * Decide the raw-line rewrite against the bytes a fresh read just
+ * returned - the drift re-check for the window between the pass's
+ * `parseSignal` (whose bytes every gate above judged) and this read. A
+ * page edited in that window would otherwise have the rewrite run on
+ * bytes no gate checked: a Raw turned prose - a verbatim quote - or a
+ * codec form is exactly the overwrite the shape gate exists to prevent,
+ * and a line rebuilt from the parse's stored ids would drop an id the
+ * edit stored. The decision re-runs the SAME hold-out on the rewrite's
+ * own bytes and rebuilds the stored half from them: a section that is
+ * neither the extractor's one-line shape nor a fillable placeholder (nor
+ * absent) is `unsafe-shape` and the caller skips the signal entirely; a
+ * page with no Raw section at all is `no-home`; anything else rewrites
+ * with the ids the bytes themselves store, so an edit that widened the
+ * list keeps its ids and one that withdrew them is not resurrected. The
+ * caller still writes through `expectBefore`, so an edit landing after
+ * this read fails the write instead of being discarded.
+ */
+export function decideRawRewrite(before: string, added: ReadonlyArray<string>): RawRewriteDecision {
+  const bytesRaw = rawSectionBytes(before);
+  if (bytesRaw !== undefined && bytesRaw !== RAW_PLACEHOLDER && !isExtractorRawShape(bytesRaw)) {
+    return { action: "unsafe-shape" };
+  }
+  const byteStored =
+    bytesRaw === undefined || bytesRaw === RAW_PLACEHOLDER ? [] : storedAnchorIds(bytesRaw);
+  const nextLine = `entities: ${[
+    ...byteStored,
+    ...added.filter((id) => !byteStored.includes(id)),
+  ].join(", ")}`;
+  // `rewriteRawEntitiesLine` is a pure string fold and never throws.
+  const next = rewriteRawEntitiesLine(before, nextLine);
+  return next === undefined ? NO_REWRITE_HOME : { action: "rewrite", next };
 }
 
 /** The wikilink target inside a signal `source:` entry, without the alias tail. */
@@ -525,6 +596,10 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         skippedRawShape++;
         continue;
       }
+      // The apply arm re-runs this same gate on the bytes it actually
+      // rewrites ({@link decideRawRewrite}): the parse's bytes can go
+      // stale before the write, and the rewrite trusts only its own
+      // read.
 
       const stored = storedAnchorIds(signal.raw);
       const added: string[] = [];
@@ -572,21 +647,33 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         for (const id of ids) push(id);
       }
       if (added.length === 0) continue;
-      const nextLine = `entities: ${[...stored, ...added].join(", ")}`;
       let before: string | null = null;
       try {
         before = readFileSync(path, "utf8");
       } catch {
         before = null;
       }
-      // `rewriteRawEntitiesLine` is a pure string fold and never throws;
-      // an unreadable page lands here as `null` and reads as no Raw
-      // section below.
-      const next = before === null ? undefined : rewriteRawEntitiesLine(before, nextLine);
-      // No `## Raw` section: the anchor has no home on this page, so no
-      // arm counts it - a dry run never reports an addition no apply
-      // could make, and run-to-run numbers stay idempotent.
-      if (next === undefined) continue;
+      // The gates above judged the bytes the PARSE read; these are the
+      // bytes the rewrite would touch. A page edited between the parse
+      // and this read would have the rewrite run on bytes no gate
+      // checked, and a line rebuilt from the parse's `stored` would drop
+      // an id the edit stored. The decision re-runs the shape gate on
+      // the rewrite's own bytes and rebuilds the stored half from them;
+      // `expectBefore` still pins these bytes to the rename below.
+      const decision = before === null ? NO_REWRITE_HOME : decideRawRewrite(before, added);
+      if (decision.action === "unsafe-shape") {
+        // The same hold-out as the parse-time gate, on the truth bytes:
+        // skipped ENTIRELY, counted, never written. The next pass reads
+        // the page as it now stands and answers the same way.
+        skippedRawShape++;
+        continue;
+      }
+      // No `## Raw` section in the bytes (an unreadable page lands here
+      // as `null` and reads the same): the anchor has no home on this
+      // page, so no arm counts it - a dry run never reports an addition
+      // no apply could make, and run-to-run numbers stay idempotent.
+      if (decision.action === "no-home") continue;
+      const next = decision.next;
       changed++;
       addedTotal += added.length;
       for (const source of sources) {

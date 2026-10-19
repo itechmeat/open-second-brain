@@ -33,7 +33,10 @@ import { LANE_TASK, LANE_TASKS, isLaneTask } from "../../../../src/core/brain/ma
 import { buildLaneTasks } from "../../../../src/core/brain/maintenance/lane-tasks.ts";
 import { isOperation } from "../../../../src/core/brain/safeguard.ts";
 import { resolveSearchConfig } from "../../../../src/core/search/index.ts";
-import { runRelinkAnchors } from "../../../../src/core/brain/maintenance/relink-anchors-task.ts";
+import {
+  decideRawRewrite,
+  runRelinkAnchors,
+} from "../../../../src/core/brain/maintenance/relink-anchors-task.ts";
 
 const NOW = new Date("2026-10-19T04:00:00Z");
 
@@ -963,6 +966,99 @@ describe("the rewrite touches only the extractor's own raw shape", () => {
     expect(entitiesLineOf(inboxFiles()[0]!)).toBe(
       "entities: ent-project-atlas, ent-people-ada-lovelace",
     );
+  });
+});
+
+describe("the apply arm re-gates the bytes it actually rewrites", () => {
+  // The parse's bytes can go stale before the write: a page edited
+  // between the pass's parseSignal and the apply read would otherwise
+  // have the rewrite run on bytes no gate checked - the quote overwrite
+  // the shape gate exists to prevent, back through the second read.
+  // `decideRawRewrite` is the drift re-check: the SAME hold-out, judged
+  // on the rewrite's own bytes, with the stored half rebuilt from them.
+
+  test("a Raw turned quote between parse and read is refused, not overwritten", () => {
+    // The parse saw the extractor's one-line raw; by the time the apply
+    // arm reads the page, the section is a verbatim quote whose own line
+    // starts with `entities:` - the exact bytes the old flow happily
+    // rewrote. The byte gate answers unsafe-shape.
+    const before = [
+      "---",
+      "kind: brain-signal",
+      "---",
+      "## Raw",
+      "entities: ent-project-atlas",
+      "Ada Lovelace joined the review.",
+      "",
+    ].join("\n");
+    expect(decideRawRewrite(before, ["ent-people-ada-lovelace"])).toEqual({
+      action: "unsafe-shape",
+    });
+  });
+
+  test("a Raw turned codec between parse and read is refused", () => {
+    // Same window, opposite edit: the section on disk is now the
+    // reversible compressed form, whose collapsed whitespace can hide
+    // the entities line from a line-level rewrite.
+    const before = [
+      "---",
+      "kind: brain-signal",
+      "_raw_codec: 0.22.0",
+      "---",
+      "## Raw",
+      "x\x1Fzcompressed\x1Fz",
+      "",
+    ].join("\n");
+    expect(decideRawRewrite(before, ["ent-people-ada-lovelace"])).toEqual({
+      action: "unsafe-shape",
+    });
+  });
+
+  test("an edit that widened the stored list keeps its ids", () => {
+    // The parse read `entities: a`; the apply read sees `entities: a, b`
+    // - a concurrent edit stored `b`. The rebuilt line keeps it: the
+    // pass is additive, and a line built from the parse's stale `stored`
+    // would have dropped it.
+    const before = "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n";
+    expect(decideRawRewrite(before, ["ent-c"])).toEqual({
+      action: "rewrite",
+      next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b, ent-c\n",
+    });
+  });
+
+  test("an edit that withdrew the stored list is not resurrected", () => {
+    // The parse read `entities: a`; the apply read sees the placeholder
+    // - the anchor list was withdrawn after the parse. The rebuilt line
+    // carries only the pass's own additions.
+    const before = "---\nkind: brain-signal\n---\n## Raw\n_(not provided)_\n";
+    expect(decideRawRewrite(before, ["ent-c"])).toEqual({
+      action: "rewrite",
+      next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-c\n",
+    });
+  });
+
+  test("an id the bytes already store is never duplicated", () => {
+    const before = "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a\n";
+    expect(decideRawRewrite(before, ["ent-a", "ent-b"])).toEqual({
+      action: "rewrite",
+      next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n",
+    });
+  });
+
+  test("bytes with no Raw section have no home, as before", () => {
+    expect(decideRawRewrite("---\nkind: brain-signal\n---\n\nsome body\n", ["ent-a"])).toEqual({
+      action: "no-home",
+    });
+  });
+
+  test("the unchanged page rewrites exactly as the parse-level flow did", () => {
+    // The common case: the bytes match the parse, so the decision is the
+    // old rewrite, stored ids first and the additions appended.
+    const before = "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a\n";
+    expect(decideRawRewrite(before, ["ent-b"])).toEqual({
+      action: "rewrite",
+      next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n",
+    });
   });
 });
 
