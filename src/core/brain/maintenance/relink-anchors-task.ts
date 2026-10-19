@@ -23,10 +23,15 @@
  * pass adds is exactly a form the extractor itself would attach today.
  * Link-derived ids come from the page-link resolver
  * ({@link ../intake/page-entity-links.ts}), the same resolver a
- * page-sourced extraction caller would use, with the entity pages
- * filtered at {@link MAINTENANCE_LANE_REACH} - the lane's declared local
- * reach, the one at which a repair pass may see everything it is
- * repairing.
+ * page-sourced extraction caller would use. The resolver's `visible`
+ * predicate binds at the reach the SIGNAL ITSELF is readable at, not at
+ * the lane's: a signal any remote-reach reader can list only ever
+ * receives ids whose entity page and source page are readable at that
+ * reach, because an id written into a listable signal is disclosed to
+ * every reader that can list it - and this pass never removes an anchor,
+ * so the disclosure would be permanent. A signal reserved against remote
+ * reads keeps {@link MAINTENANCE_LANE_REACH}: the lane is a local repair
+ * pass, and what it heals for a local-only page never leaves the host.
  *
  * ## Additive only, and dry-run by default
  *
@@ -64,7 +69,8 @@ import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
-import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
+import { MAINTENANCE_LANE_REACH, TRANSPORT_REACH } from "../../graph/transport-reach.ts";
+import type { TransportReach } from "../../graph/transport-reach.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { buildEntityIndex } from "../entities/index-builder.ts";
@@ -280,11 +286,21 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   const agent = "maintenance";
   const now = opts.now;
   const reachCache: FrontmatterCache = new Map();
-  // The lane's declared reach: everything it reads, it reads as a local
-  // repair pass, and the same predicate decides what the link-derived
-  // half may name.
-  const visible = (rel: string): boolean =>
-    isPathReadableAtReach(vault, rel, MAINTENANCE_LANE_REACH, reachCache);
+  // Reach-matched resolution: the visible predicate a signal's
+  // attachments bind is the one at the reach the SIGNAL ITSELF is
+  // readable at, not the lane's. A signal any remote-reach reader can
+  // list must never receive an id whose entity page - or whose source
+  // page - that reader cannot open: the id would sit in a file the
+  // reader can list, and this pass never removes an anchor, so the
+  // disclosure would be permanent. A local-only signal keeps the lane's
+  // reach: the pass is a local repair pass, and what it heals for a
+  // local-only page never leaves the host.
+  const visibleAt =
+    (reach: TransportReach) =>
+    (rel: string): boolean =>
+      isPathReadableAtReach(vault, rel, reach, reachCache);
+  const laneVisible = visibleAt(MAINTENANCE_LANE_REACH);
+  const remoteVisible = visibleAt(TRANSPORT_REACH.remote);
   // Vault-relative form of an absolute path. Derived with `relative`
   // rather than a length-based slice so a caller that handed down a
   // non-normalized vault root (a trailing separator, a redundant segment)
@@ -303,13 +319,18 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   const anchorables = apply
     ? buildAnchorables(vault, index, agent, now)
     : buildAnchorablesQuietly(vault, index);
-  const linkResolver: EntityLinkAccessor = entityLinkResolver(vault, { visible });
-  // One stat + read + parse per DISTINCT source page, not per signal:
-  // the inbox commonly holds several signals citing the same page, and
-  // the page's link-derived ids cannot change mid-pass. A page that
-  // cannot be read (or is oversized) caches an empty list - the same
-  // contributes-no-links answer the uncached path gave.
-  const linkIdsByPage = new Map<string, ReadonlyArray<string>>();
+  // One resolver per reach, built on first use: each resolves through
+  // its own view of the entity index (a page the predicate refuses is
+  // dropped before any spelling can answer), and a vault with no
+  // page-sourced signal in scope pays for neither. The link-derived ids
+  // cache beside them, keyed per reach - the same source page answers a
+  // remote-readable signal with its visible links and a local-only
+  // signal with all of them, so one shared map would let whichever
+  // signal read the page first decide for the other.
+  let laneResolver: EntityLinkAccessor | undefined;
+  let remoteResolver: EntityLinkAccessor | undefined;
+  const laneLinkIds = new Map<string, ReadonlyArray<string>>();
+  const remoteLinkIds = new Map<string, ReadonlyArray<string>>();
 
   const progress = progressCounter(OPERATION.relink, opts.onProgress);
   const perSource = new Map<string, { signals: number; anchorsAdded: number }>();
@@ -354,10 +375,30 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         unreadable++;
         continue;
       }
-      // Every source pointer that resolves to a real page in this vault.
-      // A session pointer names no page and resolves to nothing, which is
-      // exactly the out-of-scope answer. Deduped: two pointers to one
-      // page are one source - it is read once and counted once.
+      // Every source pointer that resolves to a real page in this vault
+      // AT THE SIGNAL'S OWN REACH. A session pointer names no page and
+      // resolves to nothing, which is exactly the out-of-scope answer; a
+      // page the signal's reach withholds is identical to absent, so a
+      // remotely readable signal is never fed the links of a page its
+      // readers cannot open. Deduped: two pointers to one page are one
+      // source - it is read once and counted once.
+      const remotelyReadable = isPathReadableAtReach(
+        vault,
+        relOf(path),
+        TRANSPORT_REACH.remote,
+        reachCache,
+      );
+      const visible = remotelyReadable ? remoteVisible : laneVisible;
+      const linkResolver = remotelyReadable
+        ? (remoteResolver ??= entityLinkResolver(vault, { visible: remoteVisible }))
+        : (laneResolver ??= entityLinkResolver(vault, { visible: laneVisible }));
+      // The per-page id cache of THIS signal's reach: one stat + read +
+      // parse per DISTINCT source page, not per signal - the inbox
+      // commonly holds several signals citing the same page, and the
+      // page's link-derived ids cannot change mid-pass. A page that
+      // cannot be read (or is oversized) caches an empty list - the same
+      // contributes-no-links answer the uncached path gave.
+      const linkIdsByPage = remotelyReadable ? remoteLinkIds : laneLinkIds;
       const sources = [
         ...new Set(
           (signal.source ?? []).flatMap((entry) => {

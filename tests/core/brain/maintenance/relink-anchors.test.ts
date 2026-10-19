@@ -28,6 +28,7 @@ import { writeFrontmatterAtomic } from "../../../../src/core/vault.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import type { ProgressEvent } from "../../../../src/core/brain/progress.ts";
 import { writeSignal, parseSignal } from "../../../../src/core/brain/signal.ts";
+import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { LANE_TASK, LANE_TASKS, isLaneTask } from "../../../../src/core/brain/maintenance/lane.ts";
 import { buildLaneTasks } from "../../../../src/core/brain/maintenance/lane-tasks.ts";
 import { isOperation } from "../../../../src/core/brain/safeguard.ts";
@@ -59,6 +60,7 @@ function writeEntityNode(
   name: string,
   aliases: ReadonlyArray<string> = [],
   status = "active",
+  visibility?: "private",
 ): void {
   const dir = join(brainDirs(vault).entities, category);
   mkdirSync(dir, { recursive: true });
@@ -71,6 +73,7 @@ function writeEntityNode(
       name,
       ...(aliases.length > 0 ? { aliases: [...aliases] } : {}),
       status,
+      ...(visibility !== undefined ? { visibility } : {}),
       created_at: "2026-10-19T00:00:00Z",
       updated_at: "2026-10-19T00:00:00Z",
       tags: ["brain", "brain/entity"],
@@ -84,6 +87,20 @@ function writeSourcePage(rel: string, body: string): void {
   const abs = join(vault, rel);
   mkdirSync(join(abs, ".."), { recursive: true });
   writeFileSync(abs, body, "utf8");
+}
+
+/** A source page reserved against remote reads (`visibility: private`). */
+function writePrivateSourcePage(rel: string, body: string): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFrontmatterAtomic(abs, { visibility: "private" }, body, { overwrite: true });
+}
+
+/** Restamp a stored signal page `visibility: private` (local-only readers). */
+function markSignalPrivate(file: string): void {
+  const path = join(brainDirs(vault).inbox, file);
+  const [meta, body] = parseFrontmatter(path);
+  writeFrontmatterAtomic(path, { ...meta, visibility: "private" }, body, { overwrite: true });
 }
 
 function writePageSourcedSignal(input: {
@@ -579,6 +596,110 @@ describe("runRelinkAnchors", () => {
     expect(report.signalsScanned).toBe(1);
     expect(report.signalsUnreadable).toBe(1);
     expect(report.signalsPageSourced).toBe(0);
+  });
+});
+
+describe("the resolution binds at the reach the signal itself is readable at", () => {
+  test("a remotely readable signal never gains a private entity page's id", () => {
+    // The signal page carries no visibility reservation, so every
+    // remote-reach reader can list it. Its resolution therefore binds at
+    // remote reach: the public link attaches, and the private page's id
+    // adds nothing - writing it would disclose the record to every
+    // reader that can list the signal, and the pass never removes an
+    // anchor, so the leak would be permanent.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("people", "ent-people-secret-person", "Secret Person", [], "active", "private");
+    writeSourcePage(
+      "notes/meeting.md",
+      ["# Meeting", "", "- [[ent-people-ada-lovelace]]", "- [[ent-people-secret-person]]"].join(
+        "\n",
+      ),
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    const file = inboxFiles()[0]!;
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.anchorsAdded).toBe(1);
+    expect(entitiesLineOf(file)).toBe("entities: ent-people-ada-lovelace");
+    const body = readFileSync(join(brainDirs(vault).inbox, file), "utf8");
+    expect(body).not.toContain("ent-people-secret-person");
+  });
+
+  test("the same fixture with a local-only signal still gains the private anchor", () => {
+    // A signal page reserved against remote reads stays a local-reach
+    // fact: the lane is a local repair pass, and it heals what only a
+    // local reader sees. Nothing about the signal leaves the host, so
+    // the private id costs no disclosure here.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("people", "ent-people-secret-person", "Secret Person", [], "active", "private");
+    writeSourcePage(
+      "notes/meeting.md",
+      ["# Meeting", "", "- [[ent-people-ada-lovelace]]", "- [[ent-people-secret-person]]"].join(
+        "\n",
+      ),
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    markSignalPrivate(inboxFiles()[0]!);
+    const file = inboxFiles()[0]!;
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.anchorsAdded).toBe(2);
+    expect(entitiesLineOf(file)).toBe(
+      "entities: ent-people-ada-lovelace, ent-people-secret-person",
+    );
+  });
+
+  test("a remotely readable signal whose source page is private is out of scope", () => {
+    // The source filter binds at the same per-signal reach as the
+    // resolver: a signal any remote reader can list gains nothing from a
+    // page that reader cannot open - reading the page's links at the
+    // lane's reach while writing the ids into a remotely readable page
+    // would launder the page's contents past its own reservation.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writePrivateSourcePage("notes/secret.md", "# Secret\n\n- [[ent-people-ada-lovelace]]\n");
+    writePageSourcedSignal({
+      sourceRef: "notes/secret.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    const file = inboxFiles()[0]!;
+    const before = readFileSync(join(brainDirs(vault).inbox, file), "utf8");
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    expect(readFileSync(join(brainDirs(vault).inbox, file), "utf8")).toBe(before);
+  });
+
+  test("a local-only signal still reads its private source page at the lane's reach", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writePrivateSourcePage("notes/secret.md", "# Secret\n\n- [[ent-people-ada-lovelace]]\n");
+    writePageSourcedSignal({
+      sourceRef: "notes/secret.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+    });
+    markSignalPrivate(inboxFiles()[0]!);
+    const file = inboxFiles()[0]!;
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.anchorsAdded).toBe(1);
+    expect(entitiesLineOf(file)).toBe("entities: ent-people-ada-lovelace");
   });
 });
 
