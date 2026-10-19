@@ -32,9 +32,10 @@ export const FRESHEN_CLAIM_FILE = "freshen.claim";
 export const FRESHEN_STATE_FILE = "freshen-state.json";
 
 /**
- * The pending-write marker a forced refresh claim leaves when another run
- * already holds the claim (`freshen-pending.json`, beside the state
- * file). The claim's exclusivity means exactly one run is in flight, and
+ * The pending-write marker a forced refresh claim leaves when a run is
+ * already in flight (`freshen-pending.json`, beside the state file) -
+ * the claim held, or the index writer lock probed held, which is the
+ * same run mid-pass. The claim's exclusivity means exactly one run is in flight, and
  * that run may have scanned past the write before it landed - its stamp
  * cannot prove it saw the write, and until the next interval its
  * freshness suppresses freshen-on-read. The marker is the queue: the

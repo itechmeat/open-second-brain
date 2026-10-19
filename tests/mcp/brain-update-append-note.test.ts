@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -187,6 +187,46 @@ describe("brain_update_note - the post-write refresh claim", () => {
       expect(res["index_refresh"]).toBe("not_claimed");
       expect(res["index_refresh_reason"]).toBe("off");
     } finally {
+      restore();
+    }
+  });
+
+  test("a writer-locked index still queues the write: the receipt names writer_lock and the marker stands", async () => {
+    seedNote("Notes/Doc.md", "old body", "title: Doc");
+    // An index exists and is stale, the interval is on, and the REAL
+    // machinery runs - no seam. The index writer lock is HELD: the shape
+    // of a detached refresh mid-pass, which holds it for the bulk of its
+    // run, where the lock probe answers before the claim is ever
+    // consulted. A write that took the lock's answer home unmarked would
+    // be dropped for a whole interval by the run's fresh stamp - the
+    // exact mid-refresh drop the pending marker exists to prevent.
+    await stampIndexStale();
+    const { acquireWriterLockSync } = await import("../../src/core/search/store/writer-lock.ts");
+    const { FRESHEN_PENDING_FILE, readFreshenPending } = await import(FRESHEN_MODULE);
+    const dbPath = resolveSearchConfig({ vault, configPath: ctx.configPath! }).dbPath;
+    const release = acquireWriterLockSync(dbPath);
+    const scanStart = Date.now();
+    const restore = withIntervalEnv("60");
+    try {
+      const res = (await updateTool.handler(ctx, {
+        path: "Notes/Doc.md",
+        content: "new body",
+      })) as Record<string, unknown>;
+
+      expect(res["updated"]).toBe(true);
+      expect(res["index_refresh"]).toBe("not_claimed");
+      expect(res["index_refresh_reason"]).toBe("writer_lock");
+      // The queue: a durable marker beside the freshen state says a
+      // write is pending since an instant after this test's own scan
+      // start, so the in-flight child's settle runs the one bounded
+      // extra pass that covers it before it releases the claim.
+      const stateDir = dirname(dbPath);
+      const marker = readFreshenPending(stateDir);
+      expect(marker).not.toBeNull();
+      expect(marker!.since).toBeGreaterThanOrEqual(scanStart);
+      expect(existsSync(join(stateDir, FRESHEN_PENDING_FILE))).toBe(true);
+    } finally {
+      release();
       restore();
     }
   });

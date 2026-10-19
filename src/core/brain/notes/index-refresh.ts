@@ -277,16 +277,24 @@ export async function claimPostWriteRefresh(
       // inside it. Every refusal now names itself on the result that
       // carries it, so `not_claimed` is never the whole answer.
       //
-      // `claimed` is the one refusal that is a QUEUE, not a dead end: a
-      // run is in flight and may already have scanned past this write,
-      // and its fresh stamp would otherwise suppress freshen-on-read for
-      // a whole interval. The marker beside the freshen state says a
-      // write is pending since this instant; the child compares it with
-      // its scan start before releasing the claim and runs one bounded
-      // extra pass when it is newer. Every other refusal has no run to
-      // inform, and an off config has a run to NOT inform - neither
-      // marks.
-      if (decision === FRESHEN_SKIP.claimed) {
+      // `claimed` and `writer_lock` are the two refusals that are a
+      // QUEUE, not a dead end: a run is in flight either way.
+      // `claimed` is the freshen claim held while the child runs - its
+      // fresh stamp would otherwise suppress freshen-on-read for a whole
+      // interval. `writer_lock` is the SAME run while it holds the index
+      // writer lock - the bulk of its pass - where the lock probe
+      // answers before the claim is ever consulted; a write that took
+      // the lock's answer home unmarked would be exactly the mid-refresh
+      // drop the marker exists to prevent. (A lock held by a NON-freshen
+      // writer - a manual index - leaves the marker for the next freshen
+      // child, whose scan start is later than the marker's instant, so
+      // its settle drops it as covered.) The marker beside the freshen
+      // state says a write is pending since this instant; the child
+      // compares it with its scan start before releasing the claim and
+      // runs one bounded extra pass when it is newer. Every other
+      // refusal has no run to inform, and an off config has a run to NOT
+      // inform - neither marks.
+      if (decision === FRESHEN_SKIP.claimed || decision === FRESHEN_SKIP.writerLock) {
         markFreshenPending(dirname(config.dbPath), now?.getTime() ?? Date.now());
       }
       return Object.freeze({
