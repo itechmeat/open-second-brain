@@ -267,7 +267,59 @@ describe("lexicon-gated anchoring (recall-quality A2)", () => {
     const anchorables = buildAnchorables(vault, buildEntityIndex(vault), "test-agent", NOW);
     expect(anchorables).toHaveLength(1);
     expect(anchorables[0]!.id).toBe("ent-people-junk");
-    expect(anchorables[0]!.forms).toEqual(["atlas prime"]);
+    // The surviving alias form, expanded once into its separator-variant
+    // match forms (note-change truth maintenance, F3): the haystack fold
+    // means the anchorable carries every spelling its class answers to.
+    expect(anchorables[0]!.forms).toEqual(["atlas prime", "atlas-prime", "atlas_prime"]);
+  });
+});
+
+/**
+ * Separator-tolerant anchoring (note-change truth maintenance, F3): the
+ * occurrence kernel matches separator-variant match forms with BOTH sides
+ * folded - runs of space, hyphen and underscore are interchangeable, a
+ * slug-prefixed form also matches at a path-segment boundary, and a
+ * word-boundary rule keeps the fold from planting mid-word hits literal
+ * matching did not already have.
+ */
+describe("anchorEntityForms - separator-tolerant matching (F3)", () => {
+  test("spaced text anchors a hyphenated form", () => {
+    expect(anchorEntityForms("Ada Lovelace wrote the first notes.", ["ada-lovelace"])).toEqual([
+      "ada-lovelace",
+    ]);
+  });
+
+  test("spaced text anchors an underscored form", () => {
+    expect(anchorEntityForms("Ada Lovelace wrote the first notes.", ["ada_lovelace"])).toEqual([
+      "ada_lovelace",
+    ]);
+  });
+
+  test("spaced text anchors a slug-prefixed form at the path-segment boundary", () => {
+    expect(
+      anchorEntityForms("Ada Lovelace wrote the first notes.", ["people/ada_lovelace"]),
+    ).toEqual(["people/ada_lovelace"]);
+  });
+
+  test("hyphenated text anchors a spaced form (the haystack folds too)", () => {
+    expect(anchorEntityForms("The ada-lovelace memoir survived.", ["Ada Lovelace"])).toEqual([
+      "ada lovelace",
+    ]);
+  });
+
+  test("underscored text anchors a hyphenated form", () => {
+    expect(anchorEntityForms("the ada_lovelace memoir", ["ada-lovelace"])).toEqual([
+      "ada-lovelace",
+    ]);
+  });
+
+  test("a mid-word occurrence never anchors, literal or folded", () => {
+    expect(anchorEntityForms("Canada borders three oceans.", ["Ada"])).toEqual([]);
+    expect(anchorEntityForms("canada lovelace ruled the charts.", ["ada lovelace"])).toEqual([]);
+  });
+
+  test("forms shorter than the minimum never participate, folded or not", () => {
+    expect(anchorEntityForms("ada-lovelace wrote.", ["lo"])).toEqual([]);
   });
 });
 

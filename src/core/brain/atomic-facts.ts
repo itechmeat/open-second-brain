@@ -12,6 +12,7 @@
 
 import {
   entityMatchForms,
+  matchFormOccursIn,
   normalizeEntityName,
   type EntityLexiconHandle,
   type ValidateEntityLabelOptions,
@@ -129,13 +130,21 @@ const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /**
  * The occurrence-anchoring kernel (truth-correctable-time-aware,
- * task 4): the quality-gated normalized match forms that literally
- * occur in `text`. Candidate labels pass through the quality gate
+ * task 4): the quality-gated normalized match forms that occur in
+ * `text`. Candidate labels pass through the quality gate
  * (sanitize decoration, then normalize, drop structurally-invalid
  * forms) before matching, and forms shorter than
- * {@link MIN_ANCHOR_FORM_LENGTH} never participate. Pure: no I/O, no
- * registry - so this layer never resolves the lexicon itself. The one
- * kernel every occurrence-anchoring caller shares - the assertion
+ * {@link MIN_ANCHOR_FORM_LENGTH} never participate. Since F3
+ * (note-change truth maintenance) the occurrence test itself is
+ * separator-tolerant: both the form AND the haystack expand through
+ * {@link matchFormVariants} - runs of space, hyphen and underscore are
+ * interchangeable, a slug-prefixed form also matches at a path-segment
+ * boundary - and every occurrence must sit at a word boundary, so the
+ * fold never plants a mid-word hit literal matching did not already
+ * have (`canada` never anchors `ada`). The returned forms are still the
+ * gate's normalized forms, never the expanded variants. Pure: no I/O,
+ * no registry - so this layer never resolves the lexicon itself. The
+ * one kernel every occurrence-anchoring caller shares - the assertion
  * decomposer and the agent-stated claim verdicts both anchor through
  * it, and each vault-aware caller resolves the SAME store-learned
  * lexicon through `resolveEntityLexicon` and threads it in here
@@ -153,7 +162,7 @@ export function anchorEntityForms(
   const haystack = normalizeEntityName(text);
   return Object.freeze(
     entityMatchForms(forms, opts).filter(
-      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH && haystack.includes(f),
+      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH && matchFormOccursIn(f, haystack),
     ),
   );
 }

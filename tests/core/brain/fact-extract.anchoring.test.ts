@@ -153,3 +153,60 @@ describe("routeExtractedFacts anchoring with a junk-label node", () => {
     expect(anchored!).toContain("ent-orgs-globex");
   });
 });
+
+/**
+ * Separator-tolerant anchoring at the capture boundary (note-change truth
+ * maintenance, F3): a fact's text anchors a stored form spelled with a
+ * different separator run, a slug-prefixed form anchors through its last
+ * path segment, and the word-boundary rule keeps a mid-word mention out of
+ * the persisted `entities:` field.
+ */
+describe("routeExtractedFacts separator-tolerant anchoring (F3)", () => {
+  test("spaced fact text anchors a hyphenated stored name", () => {
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada-Lovelace");
+    const dedup = new Map<string, DedupIndexEntry>();
+    const result = routeExtractedFacts(vault, {
+      facts: [{ family: "quantity", text: "ada lovelace shipped 5 units", line: 1 }],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-4",
+      dedup,
+    });
+    expect(result.created).toBe(1);
+    const anchored = inboxSignalBodies().find((b) => b.includes("entities:"));
+    expect(anchored).toBeDefined();
+    expect(anchored!).toContain("ent-people-ada-lovelace");
+  });
+
+  test("spaced fact text anchors a slug-prefixed alias form", () => {
+    // The stored name cannot match the text, so only the slug-prefixed
+    // alias - through its last path segment - can anchor the node.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Initech", ["people/ada_lovelace"]);
+    const dedup = new Map<string, DedupIndexEntry>();
+    const result = routeExtractedFacts(vault, {
+      facts: [{ family: "quantity", text: "ada lovelace shipped 5 units", line: 1 }],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-5",
+      dedup,
+    });
+    expect(result.created).toBe(1);
+    const anchored = inboxSignalBodies().find((b) => b.includes("entities:"));
+    expect(anchored).toBeDefined();
+    expect(anchored!).toContain("ent-people-ada-lovelace");
+  });
+
+  test("a mid-word mention never anchors into a signal", () => {
+    writeEntityNode("people", "ent-people-ada", "Ada");
+    const dedup = new Map<string, DedupIndexEntry>();
+    const result = routeExtractedFacts(vault, {
+      facts: [{ family: "quantity", text: "canada shipped 5 units", line: 1 }],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-6",
+      dedup,
+    });
+    expect(result.created).toBe(1);
+    expect(inboxSignalBodies().every((b) => !b.includes("ent-people-ada"))).toBe(true);
+  });
+});

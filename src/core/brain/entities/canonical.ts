@@ -182,6 +182,95 @@ export function matchFormVariants(form: string): string[] {
 }
 
 /**
+ * A letter or digit in ANY script: the word characters a match must not
+ * sit inside. The fold is deliberately NOT on this list - a separator is
+ * exactly where one token ends and the next begins, so `ada` may anchor
+ * inside `ada-lovelace` but never inside `canada`.
+ */
+const MATCH_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
+ * True when the code point ending just before index `i` is a letter or
+ * digit. Steps over a surrogate pair so an astral letter is judged whole
+ * rather than as a lone (always non-word) code unit.
+ */
+function matchWordCharBefore(s: string, i: number): boolean {
+  if (i <= 0) return false;
+  const start =
+    i >= 2 && isLowSurrogate(s.charCodeAt(i - 1)) && isHighSurrogate(s.charCodeAt(i - 2))
+      ? i - 2
+      : i - 1;
+  return MATCH_WORD_CHAR_RE.test(s.slice(start, i));
+}
+
+/** True when the code point starting at index `i` is a letter or digit. */
+function matchWordCharAfter(s: string, i: number): boolean {
+  if (i >= s.length) return false;
+  const end =
+    i + 1 < s.length && isHighSurrogate(s.charCodeAt(i)) && isLowSurrogate(s.charCodeAt(i + 1))
+      ? i + 2
+      : i + 1;
+  return MATCH_WORD_CHAR_RE.test(s.slice(i, end));
+}
+
+/**
+ * True when `variant` occurs in one folded haystack string at a word
+ * boundary: some occurrence of it has neither a letter nor a digit
+ * directly before or after it. The word-boundary rule is what keeps the
+ * separator fold from planting mid-word hits literal `includes` matching
+ * did not already have (`canada` never anchors `ada`, folded spellings
+ * included); an occurrence beside a separator or the string edge is a
+ * token edge and anchors.
+ */
+function variantOccursAtWordBoundary(variant: string, haystack: string): boolean {
+  let at = haystack.indexOf(variant);
+  while (at >= 0) {
+    if (!matchWordCharBefore(haystack, at) && !matchWordCharAfter(haystack, at + variant.length)) {
+      return true;
+    }
+    at = haystack.indexOf(variant, at + 1);
+  }
+  return false;
+}
+
+/**
+ * True when ANY of the needle's match variants occurs at a word boundary
+ * in ANY of the haystack's match variants - the one comparison the
+ * anchoring kernels and their twins share. Both arrays come from
+ * {@link matchFormVariants}: the needle's variants are precomputed by the
+ * caller where it already precomputes forms, and the haystack's variants
+ * are expanded once per text, never once per entity. Pure: no I/O.
+ */
+export function matchVariantsOccurIn(
+  formVariants: ReadonlyArray<string>,
+  haystackVariants: ReadonlyArray<string>,
+): boolean {
+  return formVariants.some((variant) =>
+    haystackVariants.some((haystack) => variantOccursAtWordBoundary(variant, haystack)),
+  );
+}
+
+/**
+ * One-shot convenience over {@link matchFormVariants} and
+ * {@link matchVariantsOccurIn}: does the single normalized form `form`
+ * occur, separator-folded and word-bounded, in the normalized haystack
+ * text? For callers that match one form at a time; a caller holding
+ * precomputed variant lists calls {@link matchVariantsOccurIn} directly
+ * so the haystack expands once, not once per form.
+ */
+export function matchFormOccursIn(form: string, normalizedHaystack: string): boolean {
+  return matchVariantsOccurIn(matchFormVariants(form), matchFormVariants(normalizedHaystack));
+}
+
+/**
  * The kernel's shape pass, WITHOUT the quote fold: NFC, trim, collapse
  * whitespace runs, lowercase. Separated from {@link normalizeEntityName}
  * so {@link differsOnlyByQuoteVariant} can name the difference the fold

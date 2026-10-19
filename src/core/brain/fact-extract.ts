@@ -38,6 +38,8 @@ import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
   entityMatchForms,
+  matchFormVariants,
+  matchVariantsOccurIn,
   normalizeEntityName,
   sanitizeEntityLabel,
   validateEntityLabel,
@@ -272,7 +274,13 @@ const DURABILITY_LOG_TEXT_MAX_LEN = 200;
 /** Minimum normalised form length that participates in substring matching. */
 const MIN_ANCHOR_FORM_LENGTH = 3;
 
-/** A registry entity reduced to its clean, matchable label forms. */
+/**
+ * A registry entity reduced to its clean, matchable label forms, each
+ * expanded once into its separator-variant match forms (note-change truth
+ * maintenance, F3) and the expansion Set-deduped. Precomputed HERE - once
+ * per capture, not once per fact - so the per-fact kernel never re-derives
+ * a variant.
+ */
 export interface AnchorableEntity {
   readonly id: string;
   readonly forms: ReadonlyArray<string>;
@@ -316,9 +324,17 @@ export function buildAnchorables(
       // Fall through: entityMatchForms drops the junk name form itself, so a
       // valid alias still yields an anchorable form.
     }
-    const forms = entityMatchForms([entity.name, ...entity.aliases], { lexicon }).filter(
-      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
-    );
+    // Separator-variant expansion (F3) happens ONCE here, per capture: the
+    // gate-filtered normalized forms become their match variants, Set-deduped
+    // in the generator's deterministic order. MIN_ANCHOR_FORM_LENGTH still
+    // gates the ORIGINAL forms - an expansion never rescues a short one.
+    const forms = [
+      ...new Set(
+        entityMatchForms([entity.name, ...entity.aliases], { lexicon })
+          .filter((f) => f.length >= MIN_ANCHOR_FORM_LENGTH)
+          .flatMap((f) => matchFormVariants(f)),
+      ),
+    ];
     if (forms.length === 0) continue;
     out.push({ id: entity.id, forms });
   }
@@ -327,16 +343,21 @@ export function buildAnchorables(
 
 /**
  * Resolve canonical-entity anchors for a fact: every anchorable registry
- * entity whose normalised label form appears in the fact text. The
- * canonicalization kernel is the comparison boundary, so facts and the
- * registry compare like with like.
+ * entity whose match forms occur in the fact text. The canonicalization
+ * kernel is the comparison boundary, so facts and the registry compare
+ * like with like - and since F3 (note-change truth maintenance) both
+ * sides fold: the haystack expands through {@link matchFormVariants} once
+ * per fact, each entity's precomputed variants are compared through the
+ * shared word-bounded rule ({@link matchVariantsOccurIn}), so a spaced
+ * text anchors a hyphenated or slug-prefixed form while the fold never
+ * plants a mid-word hit literal matching did not already have.
  */
 function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: string): string[] {
   if (anchorables.length === 0) return [];
-  const haystack = normalizeEntityName(factText);
+  const haystackVariants = matchFormVariants(normalizeEntityName(factText));
   const ids: string[] = [];
   for (const entity of anchorables) {
-    if (entity.forms.some((f) => haystack.includes(f))) ids.push(entity.id);
+    if (matchVariantsOccurIn(entity.forms, haystackVariants)) ids.push(entity.id);
   }
   return ids;
 }
