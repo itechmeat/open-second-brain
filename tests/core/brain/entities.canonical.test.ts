@@ -338,6 +338,42 @@ describe("matchVariantsOccurIn - the word-boundary rule", () => {
     expect(matchVariantsOccurIn(["ada"], ["会ada議"])).toBe(true);
     expect(matchVariantsOccurIn(["ada"], ["会adable議"])).toBe(false);
   });
+
+  test("the other no-space scripts suspend the boundary like CJK", () => {
+    // Lao, Khmer and Myanmar are written without word spaces too; their
+    // adjacency is no boundary evidence, exactly like Han and kana.
+    expect(matchVariantsOccurIn(["ວຽງຈັນ"], ["ຢູ່ວຽງຈັນແລ້ວ"])).toBe(true);
+    expect(matchVariantsOccurIn(["ក្រុងព្រៃនគរ"], ["ក្រុងព្រៃនគរក្រោយ"])).toBe(true);
+    expect(matchVariantsOccurIn(["ရန်ကုန်"], ["ရန်ကုန်မြို့"])).toBe(true);
+  });
+
+  test("an attached Korean particle does not block: the mention still anchors", () => {
+    // 조사 attach to a noun with no space, so a trailing Hangul letter
+    // on its own is not evidence of a mid-word hit: the pre-rule
+    // literal matching anchored these, and the boundary rule applied
+    // verbatim would have silenced every Korean mention.
+    expect(matchVariantsOccurIn(["김철수"], ["김철수는 출석했다"])).toBe(true);
+    expect(matchVariantsOccurIn(["김철수"], ["회의록: 김철수의 결재"])).toBe(true);
+    expect(matchVariantsOccurIn(["김철수"], ["김철수에서 만났다"])).toBe(true);
+    expect(matchVariantsOccurIn(["김철수"], ["김철수와 김영희"])).toBe(true);
+  });
+
+  test("a Korean mention inside a longer Hangul word still requires the boundary", () => {
+    // The particle allowance ends at a token edge: a NON-particle
+    // Hangul neighbour is a longer word (`김철수민`, `김철수은행`), and
+    // a name-internal particle spelling cannot bridge it.
+    expect(matchVariantsOccurIn(["김철수"], ["김철수민"])).toBe(false);
+    expect(matchVariantsOccurIn(["김철수"], ["김철수은행"])).toBe(false);
+    expect(matchVariantsOccurIn(["김철수"], ["김철수도서관"])).toBe(false);
+  });
+
+  test("a leading-side Korean neighbour still blocks", () => {
+    // The particle allowance is trailing-only: Korean attaches no
+    // prefixes, so Hangul on the leading side remains a blocked
+    // substring hit.
+    expect(matchVariantsOccurIn(["철수"], ["박철수는 출석했다"])).toBe(false);
+    expect(matchVariantsOccurIn(["김철수"], ["오늘김철수는 출석했다"])).toBe(false);
+  });
 });
 
 // ----- Lexicon verdict growth (recall-quality wave, S1) ----------------------

@@ -213,17 +213,34 @@ const MATCH_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 
 /**
  * The scripts written WITHOUT word spaces - Han, Hiragana, Katakana,
- * Thai. In a run of such text every letter touches a letter, so a
- * neighbouring letter is not evidence of a mid-word hit the way it is in
- * a spaced script: `田中太郎` never occurs in `田中太郎は` at a word
- * boundary, and a boundary rule applied there verbatim would have
- * silenced every CJK mention the pre-rule literal `includes` matching
- * anchored. For a neighbour from one of these scripts the boundary
- * requirement is therefore suspended - the script keeps its literal
- * behavior back, spaced scripts keep the rule (a Latin neighbour blocks
- * even inside otherwise-CJK text).
+ * Thai, Lao, Khmer, Myanmar. In a run of such text every letter touches
+ * a letter, so a neighbouring letter is not evidence of a mid-word hit
+ * the way it is in a spaced script: `田中太郎` never occurs in
+ * `田中太郎は` at a word boundary, and a boundary rule applied there
+ * verbatim would have silenced every CJK mention the pre-rule literal
+ * `includes` matching anchored. For a neighbour from one of these
+ * scripts the boundary requirement is therefore suspended - the script
+ * keeps its literal behavior back, spaced scripts keep the rule (a
+ * Latin neighbour blocks even inside otherwise-CJK text). Korean is
+ * deliberately NOT on this list: it writes spaces between words, so a
+ * trailing Hangul letter is handled by the particle probe below instead
+ * of a blanket suspension.
  */
-const NO_SPACE_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}]/u;
+const NO_SPACE_SCRIPT_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/**
+ * A Korean particle (josa): one of the suffixes Korean grammar attaches
+ * to a noun with no space, so `김철수는` is the name `김철수` plus the
+ * topic particle, not a longer word. Ordered longest-first so the
+ * alternation is greedy - `에서` must win over `에`, or the run would
+ * stop a syllable short and its tail would read as a stray Hangul
+ * letter. The list is the common written set; an exotic particle merely
+ * costs an anchor (the pre-rule behavior for that mention), never a
+ * false one.
+ */
+const HANGUL_PARTICLE_RE =
+  /^(?:에게서|에서는|으로는|으로서|으로써|이라는|이라도|에서|에게|한테|으로|로써|로서|처럼|만큼|보다|마다|부터|까지|조차|밖에|이나|라도|이랑|하고|이라|라는|은|는|이|가|을|를|에|와|과|도|만|로|의|야|여|랑|들)/u;
 
 /**
  * True when `codePoint` belongs to a script written without word spaces
@@ -233,6 +250,34 @@ const NO_SPACE_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana
  */
 function boundaryNotRequiredForScripts(codePoint: string): boolean {
   return NO_SPACE_SCRIPT_RE.test(codePoint);
+}
+
+/**
+ * True when the Hangul text at `start` opens a run of one or more
+ * attached particles (see {@link HANGUL_PARTICLE_RE}) that reaches a
+ * token boundary: the run ends at the string edge, a separator, or a
+ * letter from any other script. This is the trailing-side Korean
+ * counterpart of the no-space suspension - `는` in `김철수는` is glued
+ * to the name by grammar, not a mid-word letter - while a longer name
+ * such as `김철수민` carries a NON-particle Hangul neighbour that still
+ * requires the boundary. Korean keeps a real boundary check instead of
+ * joining the blanket suspension, and the allowance is trailing-only:
+ * Korean attaches no prefixes, so a leading-side Hangul neighbour still
+ * blocks.
+ */
+function hangulParticleRunAtBoundary(haystack: string, start: number): boolean {
+  let at = start;
+  for (;;) {
+    const particle = HANGUL_PARTICLE_RE.exec(haystack.slice(at));
+    if (particle === null) break;
+    at += particle[0].length;
+  }
+  // No particle attaches here: the trailing neighbour is a plain Hangul
+  // letter and the boundary requirement stands.
+  if (at === start) return false;
+  if (at >= haystack.length) return true;
+  const after = codePointAfter(haystack, at);
+  return after === null || !MATCH_WORD_CHAR_RE.test(after);
 }
 
 function isHighSurrogate(code: number): boolean {
@@ -272,11 +317,13 @@ function codePointAfter(s: string, i: number): string | null {
  * boundary: some occurrence of it has no letter or digit directly
  * before or after it - UNLESS that neighbour belongs to a script
  * written without word spaces (see {@link NO_SPACE_SCRIPT_RE}), whose
- * adjacency suspends the requirement on that side. The word-boundary
- * rule is what keeps the separator fold from planting mid-word hits
- * literal `includes` matching did not already have (`canada` never
- * anchors `ada`, folded spellings included); an occurrence beside a
- * separator or the string edge is a token edge and anchors.
+ * adjacency suspends the requirement on that side, or the trailing
+ * neighbour is a Korean particle run that reaches a token edge (see
+ * {@link hangulParticleRunAtBoundary}). The word-boundary rule is what
+ * keeps the separator fold from planting mid-word hits literal
+ * `includes` matching did not already have (`canada` never anchors
+ * `ada`, folded spellings included); an occurrence beside a separator
+ * or the string edge is a token edge and anchors.
  */
 function variantOccursAtWordBoundary(variant: string, haystack: string): boolean {
   // An empty variant occurs everywhere and nowhere - refuse it rather
@@ -289,7 +336,10 @@ function variantOccursAtWordBoundary(variant: string, haystack: string): boolean
     const blockedBefore =
       before !== null && MATCH_WORD_CHAR_RE.test(before) && !boundaryNotRequiredForScripts(before);
     const blockedAfter =
-      after !== null && MATCH_WORD_CHAR_RE.test(after) && !boundaryNotRequiredForScripts(after);
+      after !== null &&
+      MATCH_WORD_CHAR_RE.test(after) &&
+      !boundaryNotRequiredForScripts(after) &&
+      !hangulParticleRunAtBoundary(haystack, at + variant.length);
     if (!blockedBefore && !blockedAfter) return true;
     at = haystack.indexOf(variant, at + 1);
   }
