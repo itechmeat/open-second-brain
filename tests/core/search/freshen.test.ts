@@ -28,6 +28,7 @@ import {
   readFreshenState,
   releaseFreshen,
   settleFreshenPending,
+  takeFreshenPending,
   writeFreshenState,
 } from "../../../src/core/search/freshen.ts";
 import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
@@ -498,11 +499,65 @@ describe("the pending-refresh marker a refused forced claim leaves", () => {
     expect(() => clearFreshenPending(dir)).not.toThrow();
   });
 
-  test("a marker newer than the scan start runs ONE more pass, and the pass that covers it clears it", async () => {
+  test("a take puts the marker back on restore, and drops it on drop", () => {
     markFreshenPending(dir, NOW);
+    const taken = takeFreshenPending(dir)!;
+    expect(taken.pending).toEqual({ since: NOW });
+    // While taken, the path is empty: a concurrent reader sees no marker.
+    expect(readFreshenPending(dir)).toBeNull();
+    taken.restore();
+    expect(readFreshenPending(dir)).toEqual({ since: NOW });
+
+    const again = takeFreshenPending(dir)!;
+    again.drop();
+    expect(readFreshenPending(dir)).toBeNull();
+  });
+
+  test("a writer that re-marks while the settle holds a take keeps the path", () => {
+    // The race the take exists to close: the old read-then-clear settle
+    // could unlink a marker a writer had JUST written newer, losing the
+    // newest write its instant stood for. The restore answers the
+    // occupied path atomically - the newer marker stays, the taken one
+    // is superseded, never merged.
+    markFreshenPending(dir, NOW);
+    const taken = takeFreshenPending(dir)!;
+    markFreshenPending(dir, NOW + 60_000);
+    taken.restore();
+    expect(readFreshenPending(dir)).toEqual({ since: NOW + 60_000 });
+
+    // And a drop of a stale take never touches a newer marker either.
+    const stale = takeFreshenPending(dir)!;
+    expect(stale.pending).toEqual({ since: NOW + 60_000 });
+    markFreshenPending(dir, NOW + 120_000);
+    stale.drop();
+    expect(readFreshenPending(dir)).toEqual({ since: NOW + 120_000 });
+  });
+
+  test("a take of an absent marker is null, and a torn marker survives a settle untouched", async () => {
+    expect(takeFreshenPending(dir)).toBeNull();
+    // A torn marker is not a readable instant: the settle neither runs
+    // a pass on it nor destroys the file - the next real mark overwrites
+    // it, and the next run judges the readable one.
+    writeFileSync(join(dir, FRESHEN_PENDING_FILE), "{ not json", "utf8");
+    let passes = 0;
+    const ran = await settleFreshenPending(dir, NOW, async () => {
+      passes++;
+    });
+    expect(ran).toBe(false);
+    expect(passes).toBe(0);
+    expect(existsSync(join(dir, FRESHEN_PENDING_FILE))).toBe(true);
+  });
+
+  test("a marker newer than the scan start runs ONE more pass, and the pass that covers it clears it", async () => {
+    // Instants are pinned to the real clock here because the settle
+    // compares the extra pass against its own scan start, which is
+    // real: `Date.now()` in this suite ran ahead of any fixed fixture,
+    // and a clock behind the fixture would flip the verdict.
+    const markedAt = Date.now() - 1_000;
+    markFreshenPending(dir, markedAt);
     // The in-flight run started scanning BEFORE the write landed: its
     // stamp cannot prove it saw the write, so the child owes one pass.
-    const scanStart = NOW - 5_000;
+    const scanStart = markedAt - 5_000;
     let passes = 0;
     const ran = await settleFreshenPending(dir, scanStart, async () => {
       passes++;

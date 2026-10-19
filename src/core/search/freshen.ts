@@ -16,7 +16,7 @@
  * lock probe and one exclusive create.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { appendMetric } from "../brain/metrics.ts";
@@ -302,10 +302,10 @@ export function markFreshenPending(dir: string, nowMs: number): void {
   }
 }
 
-/** The pending marker, or `null` when there is none or it is torn. */
-export function readFreshenPending(dir: string): FreshenPending | null {
+/** The pending marker at an arbitrary path, or `null` when torn or absent. */
+function readPendingAt(path: string): FreshenPending | null {
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, FRESHEN_PENDING_FILE), "utf8")) as {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
       since?: unknown;
     };
     if (typeof parsed.since !== "number" || !Number.isFinite(parsed.since)) return null;
@@ -315,6 +315,11 @@ export function readFreshenPending(dir: string): FreshenPending | null {
   }
 }
 
+/** The pending marker, or `null` when there is none or it is torn. */
+export function readFreshenPending(dir: string): FreshenPending | null {
+  return readPendingAt(join(dir, FRESHEN_PENDING_FILE));
+}
+
 /** Drop the pending marker. An absent marker is nothing to fail a run over. */
 export function clearFreshenPending(dir: string): void {
   try {
@@ -322,6 +327,58 @@ export function clearFreshenPending(dir: string): void {
   } catch {
     // Already gone.
   }
+}
+
+/** A marker taken off its path by {@link takeFreshenPending}, held for the settle. */
+export interface TakenFreshenPending {
+  /** The marker as it stood on the path, or `null` when its file was torn. */
+  readonly pending: FreshenPending | null;
+  /**
+   * Put the taken marker back. A writer that re-marked while the settle
+   * held this take keeps the path: the link answers that atomically
+   * (EEXIST means the path is occupied again), and the newer instant
+   * supersedes the taken one, the marker naming the YOUNGEST uncovered
+   * write.
+   */
+  restore(): void;
+  /** Drop the taken marker: the pass that ran covered it. */
+  drop(): void;
+}
+
+/**
+ * Take the pending marker off its path atomically, so the settle can
+ * judge and clear it without racing the writers that mark between the
+ * settle's read and its unlink - the one window a plain
+ * read-then-clear leaves open, and exactly the lost write the marker
+ * exists to prevent. The rename moves whatever stands at the path NOW
+ * (a later writer's marker can only land after it), and `restore` puts
+ * the take back unless a newer marker claimed the path in between.
+ * `null` when there was no marker to take.
+ */
+export function takeFreshenPending(dir: string): TakenFreshenPending | null {
+  const path = join(dir, FRESHEN_PENDING_FILE);
+  const held = `${path}.${randomUUID()}.settle`;
+  try {
+    renameSync(path, held);
+  } catch {
+    return null; // No marker (or the directory refused): nothing queued.
+  }
+  const pending = readPendingAt(held);
+  return {
+    pending,
+    restore: () => {
+      try {
+        linkSync(held, path);
+      } catch {
+        // The path is occupied again: a writer re-marked mid-settle
+        // with a younger instant, which supersedes ours.
+      }
+      unlinkQuietly(held);
+    },
+    drop: () => {
+      unlinkQuietly(held);
+    },
+  };
 }
 
 /**
@@ -341,6 +398,10 @@ export function clearFreshenPending(dir: string): void {
  *   - a caller that cannot run a pass (a config that never resolved)
  *     leaves the marker exactly as it stands.
  *
+ * The marker is judged through {@link takeFreshenPending}, so a writer
+ * that re-marks between the take and the clear keeps its newer marker
+ * on the path instead of being unlinked by this settle.
+ *
  * Returns whether the extra pass ran. Throws only what `runPass`
  * throws - the caller decides how a failed extra pass is reported.
  */
@@ -349,19 +410,36 @@ export async function settleFreshenPending(
   scanStartedAtMs: number,
   runPass: (() => Promise<void>) | null,
 ): Promise<boolean> {
-  const marker = readFreshenPending(dir);
-  if (marker === null) return false;
-  if (marker.since <= scanStartedAtMs) {
+  const taken = takeFreshenPending(dir);
+  if (taken === null) return false;
+  const { pending } = taken;
+  if (pending !== null && pending.since <= scanStartedAtMs) {
     // This run's scan began after the pending write: the pass that just
     // finished covered it, and the marker's work is done.
-    clearFreshenPending(dir);
+    taken.drop();
     return false;
   }
-  if (runPass === null) return false;
+  if (runPass === null || pending === null) {
+    // No pass to run (or no readable marker to act on): the take goes
+    // back - superseded, not merged, if a writer re-marked meanwhile.
+    taken.restore();
+    return false;
+  }
   const secondStart = Date.now();
   await runPass();
-  const after = readFreshenPending(dir);
-  if (after !== null && after.since <= secondStart) clearFreshenPending(dir);
+  if (pending.since <= secondStart) {
+    // The extra pass started after the marker's instant, so it covered
+    // the pending write - and the marker goes with it. A marker that
+    // outlived its own coverage would push every later run into an
+    // extra pass forever.
+    taken.drop();
+  } else {
+    // The write landed after the extra pass's scan start: this run
+    // cannot prove it saw the write, so the marker survives for the
+    // next run - superseded, not merged, if a writer re-marked during
+    // the pass.
+    taken.restore();
+  }
   return true;
 }
 
