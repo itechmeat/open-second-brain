@@ -10,7 +10,11 @@ import { setPriority } from "node:os";
 import { dirname } from "node:path";
 
 import { formatDegradationNotice } from "../../../core/integrity/degradation.ts";
-import { recordFreshenOutcome, releaseFreshen } from "../../../core/search/freshen.ts";
+import {
+  recordFreshenOutcome,
+  releaseFreshen,
+  settleFreshenPending,
+} from "../../../core/search/freshen.ts";
 import {
   createSafeguard,
   resolveSafeguardTimeoutMs,
@@ -236,6 +240,14 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
  * records its outcome and backoff in the per-device state file, and
  * releases the claim it was handed whatever happens. Nothing is printed:
  * every stream of a detached child is ignored.
+ *
+ * Before the claim goes, the run settles the pending-write marker
+ * ({@link settleFreshenPending}): a write that landed while this run
+ * held the claim queued itself there, and this run's fresh stamp would
+ * otherwise suppress freshen-on-read until the next interval with the
+ * write still unindexed. The settle runs at most ONE extra incremental
+ * pass, and it never keeps the claim past its own end - the release
+ * below happens in every arm.
  */
 async function runFreshenChild(
   flags: SearchVerbFlags,
@@ -247,9 +259,23 @@ async function runFreshenChild(
   } catch {
     // Not permitted here (or not supported): run at normal priority.
   }
+  // The scan-start instant the settle is judged against: anything the
+  // pass actually read was on disk after this.
   const startedAt = Date.now();
   let cfg: ResolvedSearchConfig | undefined;
   let stateDir = stateDirFlag;
+  const runIncrementalPass = async (): Promise<void> => {
+    if (cfg === undefined || stateDir === undefined) return;
+    const passStartedAt = Date.now();
+    const stats = await indexVault(cfg, {
+      embeddings: cfg.freshen?.embeddings === true,
+    });
+    recordFreshenOutcome(cfg.vault, stateDir, {
+      outcome: "completed",
+      durationMs: Date.now() - passStartedAt,
+      changed: stats.added + stats.updated + stats.deleted,
+    });
+  };
   try {
     cfg = resolveConfig(flags);
     stateDir ??= dirname(cfg.dbPath);
@@ -275,7 +301,23 @@ async function runFreshenChild(
     }
     return 1;
   } finally {
-    if (stateDir !== undefined) releaseFreshen(stateDir, token);
+    if (stateDir !== undefined) {
+      try {
+        await settleFreshenPending(stateDir, startedAt, runIncrementalPass);
+      } catch (e) {
+        // The extra pass is best-effort: a failure in it is recorded
+        // like any run failure, and an uncovered marker survives for
+        // the next run to cover and clear.
+        if (cfg !== undefined) {
+          recordFreshenOutcome(cfg.vault, stateDir, {
+            outcome: "failed",
+            durationMs: 0,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      releaseFreshen(stateDir, token);
+    }
   }
 }
 

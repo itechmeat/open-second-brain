@@ -14,15 +14,20 @@ import { join } from "node:path";
 
 import {
   claimFreshen,
+  clearFreshenPending,
   decideFreshen,
   FRESHEN_CLAIM_FILE,
+  FRESHEN_PENDING_FILE,
   FRESHEN_SKIP,
   freshenCommand,
   freshenSpawnOptions,
+  markFreshenPending,
   maybeFreshenIndex,
   nextBackoffMs,
+  readFreshenPending,
   readFreshenState,
   releaseFreshen,
+  settleFreshenPending,
   writeFreshenState,
 } from "../../../src/core/search/freshen.ts";
 import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
@@ -460,6 +465,115 @@ describe("claim races", () => {
     );
     const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
     expect(outs.map((o) => o.trim()).filter((o) => o === "won")).toHaveLength(1);
+  });
+});
+
+describe("the pending-refresh marker a refused forced claim leaves", () => {
+  // A write that lands while another run holds the claim used to be
+  // answered `not_claimed` and forgotten: the in-flight run may already
+  // have walked past the changed files, and its fresh stamp then
+  // suppressed freshen-on-read for a whole interval. The marker is the
+  // queue: the forced caller writes "pending since <instant>" beside the
+  // freshen state, and the child - before releasing the claim - runs ONE
+  // more incremental pass when the marker is newer than its scan start.
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "osb-freshen-pending-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("marks, reads and clears beside the freshen state", () => {
+    expect(readFreshenPending(dir)).toBeNull();
+    markFreshenPending(dir, NOW);
+    // Same directory the claim and the state live in - the child is
+    // handed exactly this directory as `--freshen-state`.
+    const raw = JSON.parse(readFileSync(join(dir, FRESHEN_PENDING_FILE), "utf8")) as {
+      since: number;
+    };
+    expect(raw.since).toBe(NOW);
+    expect(readFreshenPending(dir)).toEqual({ since: NOW });
+    clearFreshenPending(dir);
+    expect(readFreshenPending(dir)).toBeNull();
+    // Clearing an absent marker is nothing to fail a write over.
+    expect(() => clearFreshenPending(dir)).not.toThrow();
+  });
+
+  test("a marker newer than the scan start runs ONE more pass, and the pass that covers it clears it", async () => {
+    markFreshenPending(dir, NOW);
+    // The in-flight run started scanning BEFORE the write landed: its
+    // stamp cannot prove it saw the write, so the child owes one pass.
+    const scanStart = NOW - 5_000;
+    let passes = 0;
+    const ran = await settleFreshenPending(dir, scanStart, async () => {
+      passes++;
+    });
+    expect(ran).toBe(true);
+    expect(passes).toBe(1);
+    // The extra pass started after the marker's instant, so it covered
+    // the pending write - and the marker goes with it. A marker that
+    // outlived its own coverage would push every later run into an
+    // extra pass forever.
+    expect(readFreshenPending(dir)).toBeNull();
+  });
+
+  test("a marker the main pass already covered is cleared without a second pass", async () => {
+    markFreshenPending(dir, NOW - 60_000);
+    const scanStart = NOW; // the run started after the pending write
+    let passes = 0;
+    const ran = await settleFreshenPending(dir, scanStart, async () => {
+      passes++;
+    });
+    expect(ran).toBe(false);
+    expect(passes).toBe(0);
+    expect(readFreshenPending(dir)).toBeNull();
+  });
+
+  test("the bound holds: a marker landing during the extra pass survives it, and no second pass runs", async () => {
+    // Instants are pinned to the real clock here because the settle
+    // compares markers against its own scan starts, which are real:
+    // `Date.now()` in this suite ran ahead of any fixed fixture.
+    markFreshenPending(dir, Date.now() - 1_000);
+    const scanStart = Date.now() - 5_000;
+    let passes = 0;
+    let passStart = 0;
+    const ran = await settleFreshenPending(dir, scanStart, async () => {
+      passes++;
+      passStart = Date.now();
+      // Another write lands while the extra pass is in flight: the
+      // forced caller re-marks with the newer instant. One extra pass
+      // is the bound - this write waits for the next run, which covers
+      // it and clears the marker then.
+      markFreshenPending(dir, passStart + 60_000);
+    });
+    expect(ran).toBe(true);
+    expect(passes).toBe(1);
+    // Newer than the extra pass's own scan start: NOT covered by it.
+    expect(readFreshenPending(dir)).toEqual({ since: passStart + 60_000 });
+    // The NEXT run's child, with its own later scan start, covers it.
+    let nextPasses = 0;
+    await settleFreshenPending(dir, passStart + 120_000, async () => {
+      nextPasses++;
+    });
+    expect(nextPasses).toBe(0);
+    expect(readFreshenPending(dir)).toBeNull();
+  });
+
+  test("a child that cannot run a pass (config unresolvable) leaves the marker for the next run", async () => {
+    markFreshenPending(dir, NOW);
+    const ran = await settleFreshenPending(dir, NOW - 5_000, null);
+    expect(ran).toBe(false);
+    // Still queued - dropping it here would be the silent loss the
+    // marker exists to prevent.
+    expect(readFreshenPending(dir)).toEqual({ since: NOW });
+  });
+
+  test("no marker, no pass", async () => {
+    let passes = 0;
+    const ran = await settleFreshenPending(dir, NOW - 5_000, async () => {
+      passes++;
+    });
+    expect(ran).toBe(false);
+    expect(passes).toBe(0);
   });
 });
 

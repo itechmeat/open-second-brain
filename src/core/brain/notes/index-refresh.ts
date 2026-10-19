@@ -17,6 +17,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 
 import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
@@ -243,7 +244,8 @@ export async function claimPostWriteRefresh(
   if (index.state !== INDEX_EVIDENCE.stale) return NO_INDEX_CLAIM;
   try {
     const { resolveSearchConfig } = await import("../../search/index.ts");
-    const { maybeFreshenIndex } = await import("../../search/freshen.ts");
+    const { FRESHEN_SKIP, markFreshenPending, maybeFreshenIndex } =
+      await import("../../search/freshen.ts");
     const config = resolveSearchConfig({ vault });
     const decision = maybeFreshenIndex(config, {
       lastIndexedAt: index.lastIndexedAt,
@@ -257,6 +259,19 @@ export async function claimPostWriteRefresh(
       // - so the throwing arm below never ran for a spawn that failed
       // inside it. Every refusal now names itself on the result that
       // carries it, so `not_claimed` is never the whole answer.
+      //
+      // `claimed` is the one refusal that is a QUEUE, not a dead end: a
+      // run is in flight and may already have scanned past this write,
+      // and its fresh stamp would otherwise suppress freshen-on-read for
+      // a whole interval. The marker beside the freshen state says a
+      // write is pending since this instant; the child compares it with
+      // its scan start before releasing the claim and runs one bounded
+      // extra pass when it is newer. Every other refusal has no run to
+      // inform, and an off config has a run to NOT inform - neither
+      // marks.
+      if (decision === FRESHEN_SKIP.claimed) {
+        markFreshenPending(dirname(config.dbPath), now?.getTime() ?? Date.now());
+      }
       return Object.freeze({
         refresh: INDEX_REFRESH.notClaimed,
         refreshReason: decision,

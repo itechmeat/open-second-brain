@@ -27,7 +27,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
@@ -46,6 +46,11 @@ import {
 import { RECOVERABILITY_STATE } from "../../../../src/core/brain/gates/recoverability.ts";
 import { CountGuardError } from "../../../../src/core/brain/count-guard.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import {
+  FRESHEN_PENDING_FILE,
+  readFreshenPending,
+  settleFreshenPending,
+} from "../../../../src/core/search/freshen.ts";
 
 let vault: string;
 let configHome: string;
@@ -499,6 +504,81 @@ describe("the detached refresh an applied write claims", () => {
     // no-index token, not a bare unexplained refusal.
     expect(res.references?.refreshReason).toBe("no_index");
     expect(spawned).toHaveLength(0);
+  });
+
+  test("a write landing while a run is in flight is queued: two rapid renames produce a second pass", async () => {
+    withFreshenOn();
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    const first: string[][] = [];
+    const second: string[][] = [];
+
+    // The first rename claims the run; the intercepted spawn never runs
+    // a child, so the claim stays held - the shape of a refresh still in
+    // flight.
+    await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => first.push(argv),
+    });
+    // The run's scan has (conceptually) started; the second rename lands
+    // DURING it.
+    const scanStart = Date.now();
+    const two = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/New.md",
+      to: "Projects/Newer.md",
+      apply: true,
+      refreshSpawn: (argv: string[]) => second.push(argv),
+    });
+
+    expect(two.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(second).toHaveLength(0);
+    // ...but the write is no longer dropped. A durable marker beside the
+    // freshen state says a write is pending since that instant.
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const stateDir = dirname(resolveSearchConfig({ vault }).dbPath);
+    const marker = readFreshenPending(stateDir);
+    expect(marker).not.toBeNull();
+    expect(marker!.since).toBeGreaterThanOrEqual(scanStart);
+    expect(existsSync(join(stateDir, FRESHEN_PENDING_FILE))).toBe(true);
+
+    // The child's settle, before releasing the claim: the marker is
+    // newer than the scan start, so ONE bounded extra pass runs and the
+    // pass that covered it clears the marker. No loop, no leak.
+    let passes = 0;
+    const ran = await settleFreshenPending(stateDir, scanStart, async () => {
+      passes++;
+    });
+    expect(ran).toBe(true);
+    expect(passes).toBe(1);
+    expect(readFreshenPending(stateDir)).toBeNull();
+  });
+
+  test("an interval of 0 never spawns and never marks - config off means off", async () => {
+    saveInterval();
+    process.env[FRESHEN_INTERVAL_ENV] = "0";
+    await stampIndex(new Date().toISOString());
+    note("Projects/Old.md", "x\n");
+    // A held claim, so anything that tried to refresh would answer
+    // `claimed` - only config-off stands between this write and it.
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const stateDir = dirname(resolveSearchConfig({ vault }).dbPath);
+    const { claimFreshen } = await import("../../../../src/core/search/freshen.ts");
+    expect(claimFreshen(stateDir, Date.now())).toBeString();
+    const spawned: string[][] = [];
+
+    const res = await noteLifecycle(vault, {
+      ...renameInput(true),
+      refreshSpawn: (argv: string[]) => spawned.push(argv),
+    });
+
+    expect(res.references?.refresh).toBe(INDEX_REFRESH.notClaimed);
+    expect(res.references?.refreshReason).toBe("off");
+    expect(spawned).toHaveLength(0);
+    // Off is off: no run is queued either, because an operator who
+    // disabled freshening asked for exactly that.
+    expect(readFreshenPending(stateDir)).toBeNull();
+    expect(existsSync(join(stateDir, FRESHEN_PENDING_FILE))).toBe(false);
   });
 
   test("a spawn failure never fails the write", async () => {

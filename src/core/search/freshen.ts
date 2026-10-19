@@ -32,6 +32,25 @@ export const FRESHEN_CLAIM_FILE = "freshen.claim";
 export const FRESHEN_STATE_FILE = "freshen-state.json";
 
 /**
+ * The pending-write marker a forced refresh claim leaves when another run
+ * already holds the claim (`freshen-pending.json`, beside the state
+ * file). The claim's exclusivity means exactly one run is in flight, and
+ * that run may have scanned past the write before it landed - its stamp
+ * cannot prove it saw the write, and until the next interval its
+ * freshness suppresses freshen-on-read. The marker is the queue: the
+ * child reads it before releasing the claim and runs one bounded extra
+ * incremental pass when the marker is newer than its scan start. See
+ * {@link settleFreshenPending}.
+ */
+export const FRESHEN_PENDING_FILE = "freshen-pending.json";
+
+/** A write waiting for a pass that can provably cover it. */
+export interface FreshenPending {
+  /** Milliseconds since the epoch: when the pending write landed. */
+  readonly since: number;
+}
+
+/**
  * Metrics surface for background runs. A row is written only when a run
  * changed the index or failed: an idle machine would otherwise append one
  * row a minute to a synced file for nothing.
@@ -261,6 +280,89 @@ export function releaseFreshen(dir: string, token: string): void {
   } catch {
     // Absent or unreadable: nothing of ours to release.
   }
+}
+
+/**
+ * Record that a write landed at `nowMs` and is waiting for a pass that
+ * can provably cover it. Always overwrites with the newest instant: the
+ * marker must never name an instant older than the youngest uncovered
+ * write, or a pass would clear it while the newer write is still
+ * missing. Best-effort, like every other piece of freshen bookkeeping -
+ * a marker that cannot be written costs the write its second pass, not
+ * the write itself.
+ */
+export function markFreshenPending(dir: string, nowMs: number): void {
+  try {
+    atomicWriteFileSync(
+      join(dir, FRESHEN_PENDING_FILE),
+      JSON.stringify({ since: nowMs } satisfies FreshenPending) + "\n",
+    );
+  } catch {
+    // Best effort: the next forced claim re-marks.
+  }
+}
+
+/** The pending marker, or `null` when there is none or it is torn. */
+export function readFreshenPending(dir: string): FreshenPending | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, FRESHEN_PENDING_FILE), "utf8")) as {
+      since?: unknown;
+    };
+    if (typeof parsed.since !== "number" || !Number.isFinite(parsed.since)) return null;
+    return { since: parsed.since };
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the pending marker. An absent marker is nothing to fail a run over. */
+export function clearFreshenPending(dir: string): void {
+  try {
+    unlinkSync(join(dir, FRESHEN_PENDING_FILE));
+  } catch {
+    // Already gone.
+  }
+}
+
+/**
+ * The freshen child's settle, run before it releases the claim.
+ *
+ * A forced write that arrived while THIS run held the claim left a
+ * marker naming the instant its write landed. The run's own pass covers
+ * everything up to its scan start, so:
+ *
+ *   - a marker at or before the scan start is covered - clear it;
+ *   - a newer marker is not: run ONE more incremental pass - the bound
+ *     is one extra pass, never a loop - and clear the marker afterwards
+ *     only if it still names an instant the extra pass's own scan start
+ *     covers. A still-newer marker (a write landing during the extra
+ *     pass) survives for the next run, which covers and clears it the
+ *     same way;
+ *   - a caller that cannot run a pass (a config that never resolved)
+ *     leaves the marker exactly as it stands.
+ *
+ * Returns whether the extra pass ran. Throws only what `runPass`
+ * throws - the caller decides how a failed extra pass is reported.
+ */
+export async function settleFreshenPending(
+  dir: string,
+  scanStartedAtMs: number,
+  runPass: (() => Promise<void>) | null,
+): Promise<boolean> {
+  const marker = readFreshenPending(dir);
+  if (marker === null) return false;
+  if (marker.since <= scanStartedAtMs) {
+    // This run's scan began after the pending write: the pass that just
+    // finished covered it, and the marker's work is done.
+    clearFreshenPending(dir);
+    return false;
+  }
+  if (runPass === null) return false;
+  const secondStart = Date.now();
+  await runPass();
+  const after = readFreshenPending(dir);
+  if (after !== null && after.since <= secondStart) clearFreshenPending(dir);
+  return true;
 }
 
 function str(v: unknown): string | null {
