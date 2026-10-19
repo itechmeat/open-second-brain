@@ -39,6 +39,15 @@
  *      third-party note without asking whether the caller may read that
  *      note, so a restricted caller's report named a page withheld from
  *      it.
+ *  16. the repair rules joined the destination-collapsing rules in one
+ *      ordered reduce, so a repair rule whose `from` was the
+ *      destination's own bare basename rewrote the spellings the main
+ *      pass had JUST written - repointing the renamed note's inbound
+ *      links onto an unrelated note.
+ *  19. a refused refresh claim recorded nothing on the diagnostic when
+ *      the freshen machinery answered with a skip token instead of
+ *      throwing, and one transient failure read as broken forever
+ *      because a successful claim never cleared the slot.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -404,6 +413,59 @@ describe("a refresh claim whose machinery raises", () => {
     expect(res.applied).toBe(true);
     expect(lastRefreshClaimFailureMessage()).toBe("freshen machinery exploded");
   });
+
+  test("a refusal that answers instead of throwing is recorded, and a later success clears it (19)", async () => {
+    // The freshen machinery refuses INSIDE itself - a spawn that failed
+    // there answers with a skip token and does not throw - so the bare
+    // catch above never ran for it: the diagnostic stayed empty and a
+    // broken freshen path was indistinguishable from a silent one.
+    realFreshen = { ...(await import(FRESHEN_MODULE)) };
+    mock.module(FRESHEN_MODULE, () => ({
+      maybeFreshenIndex: () => "spawn_failed",
+    }));
+    note("Projects/Old.md", "x\n");
+    const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
+    const { LAST_INDEXED_AT_STATE_KEY, Store } =
+      await import("../../../../src/core/search/store.ts");
+    const stampIndex = async (): Promise<void> => {
+      const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
+      store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
+      await store.close();
+    };
+    await stampIndex();
+
+    const refused = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.rename,
+      path: "Projects/Old.md",
+      to: "Projects/New.md",
+      apply: true,
+      refreshSpawn: () => {},
+    });
+
+    expect(refused.references.refresh).toBe(INDEX_REFRESH.notClaimed);
+    // The skip token IS the reason: it lands on the diagnostic verbatim.
+    expect(lastRefreshClaimFailureMessage()).toBe("spawn_failed");
+
+    // And a claim that succeeds clears the slot, so one transient
+    // refusal does not read as a permanently broken freshen path.
+    mock.module(FRESHEN_MODULE, () => realFreshen!);
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
+    try {
+      await stampIndex();
+      const claimed = await noteLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.rename,
+        path: "Projects/New.md",
+        to: "Projects/Newer.md",
+        apply: true,
+        refreshSpawn: () => {},
+      });
+      expect(claimed.references.refresh).toBe(INDEX_REFRESH.claimed);
+      expect(lastRefreshClaimFailureMessage()).toBeNull();
+    } finally {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+    }
+  });
 });
 
 describe("index evidence on a plan-only run (7)", () => {
@@ -474,6 +536,28 @@ describe("a repair derived from a page the caller may not read (15)", () => {
     });
 
     expect(res.references.rewrittenSpellings).toContainEqual({ from: "New", to: "B/New" });
+  });
+});
+
+describe("a destination-collapsing pass that chained into the repair rules (16)", () => {
+  test("a repair rule never rewrites a link the main pass just produced", async () => {
+    note("Projects/Widget.md", "x\n");
+    note("Docs/Old.md", "the sole carrier of the contested bare name\n");
+    note("Notes/Ref.md", "[[Projects/Widget]] and [[Old]]\n");
+
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.move,
+      path: "Projects/Widget.md",
+      to: "Old.md",
+      apply: true,
+    });
+
+    // The first link names the moved note, now at Old.md; the second
+    // names the note that always lived at Docs/Old.md. Chained rules
+    // collapsed both onto Docs/Old - every inbound reference to the
+    // renamed note repointed at a note it never named.
+    expect(read("Notes/Ref.md")).toBe("[[Old]] and [[Docs/Old]]\n");
+    expect(res.references.filesRewritten).toBe(1);
   });
 });
 

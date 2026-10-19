@@ -577,20 +577,26 @@ const APPEND_ONLY_REL: ReadonlyArray<string> = Object.freeze([BRAIN_LOG_REL]);
 const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
 
 /**
- * The message the most recent post-write refresh claim raised, or `null`
- * while every claim either spawned or refused for a stated reason.
- * Module-level because {@link claimPostWriteRefresh} has no seam to hand
- * a sink through - the same shape the session line reader's high-water
- * mark uses - and because the token that lands on the report is
- * deliberately coarse: `not_claimed` covers "configured off" and
- * "tried and failed" alike, so a permanently broken freshen path would
+ * The reason the most recent refresh claim did not end in a spawned run,
+ * or `null` while every claim either spawned or refused for a stated
+ * reason recorded earlier and since cleared. Module-level because
+ * {@link claimPostWriteRefresh} has no seam to hand a sink through - the
+ * same shape the session line reader's high-water mark uses - and
+ * because the token that lands on the report is deliberately coarse:
+ * `not_claimed` covers "configured off", "tried and failed" and "another
+ * run holds the claim" alike, so a permanently broken freshen path would
  * otherwise be indistinguishable from a deliberate one, with nothing
- * anywhere naming the difference. Never thrown: the write already
- * happened, and the claim is best-effort by design.
+ * anywhere naming the difference. Both kinds of refusal land here - the
+ * skip token the freshen machinery answered with, or the message of an
+ * error it raised - and a claim that SPAWNS clears the slot, so one
+ * transient failure does not read as broken forever. Never thrown: the
+ * write already happened, and the claim is best-effort by design. The
+ * reader exists for the tests that pin this behaviour; no production
+ * surface renders it.
  */
 let lastRefreshClaimFailure: string | null = null;
 
-/** The failure message of the most recent refused refresh claim, or `null`. */
+/** The reason the most recent refused refresh claim gave, or `null`. */
 export function lastRefreshClaimFailureMessage(): string | null {
   return lastRefreshClaimFailure;
 }
@@ -730,7 +736,19 @@ async function claimPostWriteRefresh(
       ...(spawn !== undefined ? { spawn } : {}),
       ...(now !== undefined ? { nowMs: now.getTime() } : {}),
     });
-    return decision === "spawned" ? INDEX_REFRESH.claimed : INDEX_REFRESH.notClaimed;
+    if (decision !== "spawned") {
+      // A refusal is a stated reason, not a thrown one: the freshen
+      // machinery answers with a skip token - `spawn_failed` among them
+      // - so the throwing arm below never ran for a spawn that failed
+      // inside it, and the diagnostic stayed empty. Every refusal now
+      // names itself; the token stays `not_claimed` on the report.
+      lastRefreshClaimFailure = decision;
+      return INDEX_REFRESH.notClaimed;
+    }
+    // A claim that spawned clears the slot, so one transient refusal is
+    // not misread later as a permanently broken freshen path.
+    lastRefreshClaimFailure = null;
+    return INDEX_REFRESH.claimed;
   } catch (err) {
     // The token stays `not_claimed` - the report's vocabulary does not
     // grow a third member for a branch nothing can act on - but the
@@ -1094,8 +1112,10 @@ export async function noteLifecycle(
       ? BASENAME_REWRITE.notNeeded
       : decideBasename(probe.files, source.relPath, destination.relPath);
 
-  const retargets =
-    destination === null ? [] : retargetsFor(probe.files, source, destination, basename);
+  const mainRetargets =
+    destination === null ? [] : mainRetargetsFor(probe.files, source, destination, basename);
+  const repairs =
+    destination === null ? [] : bareNameRepairs(probe.files, source.relPath, destination.relPath);
 
   let snapshot: NoteLifecycleResult["snapshot"] = null;
   let rewritten: ReadonlyArray<string> = [];
@@ -1181,13 +1201,41 @@ export async function noteLifecycle(
     // error propagated and the caller got no result at all - no `from`,
     // no `to`, no evidence - leaving a half-applied rename
     // indistinguishable from one that never started.
-    const pass = retargetWikilinks(vault, retargets, {
+    //
+    // TWO passes, in this order. The repairs go FIRST, over each file's
+    // original link texts: a repair's `from` is the destination's own
+    // bare basename, which is exactly what the destination-collapsing
+    // pass rewrites links TO, so chaining the two rule sets through one
+    // ordered reduce let the repair rule consume the spellings the main
+    // pass had just written - repointing the renamed note's own inbound
+    // links at the third-party note the repair belonged to. With the
+    // repairs ahead of the main pass, each original link is rewritten by
+    // the one rule that names it and no rule ever sees another rule's
+    // output. Both passes obey the same never-rewrite scope.
+    const repairPass =
+      repairs.length > 0
+        ? retargetWikilinks(vault, repairs, {
+            root: VAULT_ROOT_REL,
+            apply: true,
+            neverRewrite: APPEND_ONLY_REL,
+          })
+        : null;
+    const mainPass = retargetWikilinks(vault, mainRetargets, {
       root: VAULT_ROOT_REL,
       apply: true,
       neverRewrite: APPEND_ONLY_REL,
     });
-    rewritten = pass.rewritten.filter(reported);
-    rewriteFailures = pass.failed.filter((failure) => reported(failure.path));
+    rewritten = [...new Set([...(repairPass?.rewritten ?? []), ...mainPass.rewritten])]
+      .toSorted()
+      .filter(reported);
+    const failureByPath = new Map<string, string>();
+    for (const failure of [...(repairPass?.failed ?? []), ...mainPass.failed]) {
+      if (!failureByPath.has(failure.path)) failureByPath.set(failure.path, failure.reason);
+    }
+    rewriteFailures = [...failureByPath]
+      .filter(([rel]) => reported(rel))
+      .map(([path, reason]) => ({ path, reason }))
+      .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
 
   // The MOVE destroys nothing - the bytes are reachable under the
@@ -1240,7 +1288,8 @@ export async function noteLifecycle(
     // pages: the report answers as a vault without the page would. The
     // main pairs are derived solely from the paths this call was given,
     // so no pair of theirs can name a page the caller chose not to see.
-    retargets.flatMap((r) =>
+    // The repairs are listed first because they are applied first.
+    [...repairs, ...mainRetargets].flatMap((r) =>
       r.to === undefined || (r.carrierRel !== undefined && !reported(r.carrierRel))
         ? []
         : [{ from: r.from, to: r.to }],
@@ -1379,7 +1428,7 @@ function bareNameRepairs(
 }
 
 /**
- * The spellings this relocation will actually rewrite, aimed at the
+ * The destination-collapsing spellings of this relocation, aimed at the
  * MINIMAL spelling the destination resolves under once the move has
  * landed ({@link minimalSpellingFor} over the post-move population):
  * every old spelling of the source collapses onto the one shortest form
@@ -1389,13 +1438,19 @@ function bareNameRepairs(
  * longer than it went in. The bare basename of the SOURCE is included
  * only when {@link decideBasename} cleared it, so the
  * `rewrittenSpellings` a caller reads back is the list that was applied
- * and not the list that was considered - and the repairs
- * {@link bareNameRepairs} derives ride the same pass, so they obey the
- * same never-rewrite scope and the same length-first ordering. Each
- * repair carries the page its spelling was derived from, so the report
- * can withhold a pair whose carrier the caller may not read.
+ * and not the list that was considered.
+ *
+ * The repairs {@link bareNameRepairs} derives are NOT in this list, and
+ * that is the point: a repair's `from` is the destination's own bare
+ * basename - exactly what these pairs rewrite links TO - so one ordered
+ * reduce over both would let the repair rule consume the spellings the
+ * main pass had just written, repointing the renamed note's own inbound
+ * links at the repaired third-party note. The repairs run as a pass of
+ * their own, FIRST, over each file's original link texts, so one rule's
+ * output is never another rule's input. The separate pass obeys the
+ * same never-rewrite scope as this one.
  */
-function retargetsFor(
+function mainRetargetsFor(
   files: ReadonlyArray<string>,
   source: ResolvedNoteTarget,
   destination: ResolvedNoteTarget,
@@ -1412,7 +1467,6 @@ function retargetsFor(
   if (basename === BASENAME_REWRITE.applied) {
     pairs.push({ from: basenameOf(source.relPath), to });
   }
-  pairs.push(...bareNameRepairs(files, source.relPath, destination.relPath));
   return Object.freeze(pairs);
 }
 
