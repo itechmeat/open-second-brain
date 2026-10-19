@@ -357,6 +357,22 @@ describe("anchorEntityForms - separator-tolerant matching (F3)", () => {
     // written without word spaces never reads as a mid-word hit.
     expect(anchorEntityForms("田中太郎は会議に出席した。", ["田中太郎"])).toEqual(["田中太郎"]);
   });
+
+  test("an inflected mention anchors the base form (the boundary binds the leading side only)", () => {
+    // H1 (PR 268 review): Russian and German attach endings to names with
+    // no space, and the two-sided boundary rule refused every inflected
+    // spelling the literal `includes` matching used to anchor. Only the
+    // character before the hit must be a token edge.
+    expect(anchorEntityForms("Ивана повысили до директора.", ["Иван"])).toEqual(["иван"]);
+    expect(anchorEntityForms("Встреча с Иваном перенесена.", ["Иван"])).toEqual(["иван"]);
+    expect(anchorEntityForms("Annas Buch liegt auf dem Tisch.", ["Anna"])).toEqual(["anna"]);
+  });
+
+  test("an attached Korean particle does not block the anchor", () => {
+    // 조사 attach to a noun with no space: "김철수는" is the name plus the
+    // topic particle, not a longer word.
+    expect(anchorEntityForms("김철수는 회의에 출석했다.", ["김철수"])).toEqual(["김철수"]);
+  });
 });
 
 /**

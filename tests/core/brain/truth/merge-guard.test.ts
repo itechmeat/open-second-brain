@@ -171,6 +171,24 @@ describe("guardEntityMerge (pure)", () => {
     expect(verdict.allowed).toBe(false);
   });
 
+  test("inflected Russian names fire the protected-name path (leading-only boundary)", () => {
+    // H1 (PR 268 review): Russian attaches case endings to names with no
+    // space - "Ивана", "Петра" - and the two-sided boundary rule silenced
+    // both sides, letting claims about different people collapse. The
+    // leading-only rule keeps the veto: each side anchors its own person
+    // through the inflected spelling and the sets are disjoint.
+    const ivan = person("ent-people-ivan", "Иван");
+    const petr = person("ent-people-petr", "Петр");
+    const verdict = guardEntityMerge({
+      keepText: "Ивана повысили до директора",
+      dropText: "Петра повысили до директора",
+      entities: [ivan, petr],
+    });
+    expect(verdict.keepAnchors).toEqual(["ent-people-ivan"]);
+    expect(verdict.dropAnchors).toEqual(["ent-people-petr"]);
+    expect(verdict.allowed).toBe(false);
+  });
+
   test("default guarded categories cover people and orgs", () => {
     expect(GUARDED_ENTITY_CATEGORIES).toContain("people");
     expect(GUARDED_ENTITY_CATEGORIES).toContain("org");

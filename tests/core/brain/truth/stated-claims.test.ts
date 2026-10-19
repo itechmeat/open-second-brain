@@ -290,6 +290,23 @@ describe("appendStatedClaims", () => {
     expect(outcome.ungrounded[0]!.reasons).toEqual(["subject_unanchored"]);
   });
 
+  test("an inflected subject anchors: the boundary rule binds the leading side only", () => {
+    // H1 (PR 268 review): Russian attaches case endings with no space, so
+    // "Ивана" is the accusative of "Иван" - the two-sided rule refused
+    // the hit and reported the claim subject_unanchored. Only the
+    // character before the hit must be a token edge.
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(vault, {
+        ...PAYLOAD,
+        text: "Ивана повысили до директора, а Google одобрил бюджет.",
+        claims: [claim({ subject: "Иван", object: "Google" })],
+      }),
+    );
+    expect(outcome.ungrounded).toEqual([]);
+    expect(outcome.committed).toHaveLength(1);
+    expect(outcome.committed[0]!.event.entity).toBe("иван");
+  });
+
   test("a claim with an empty subject reports missing_subject", () => {
     const outcome = withDeviceId("", () =>
       appendStatedClaims(vault, { ...PAYLOAD, claims: [claim({ subject: "  " })] }),

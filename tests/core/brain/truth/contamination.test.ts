@@ -113,6 +113,35 @@ describe("checkEntityContamination (pure)", () => {
     expect(result.clean).toBe(true);
     expect(result.violations).toHaveLength(0);
   });
+
+  test("an inflected mention in the conclusion is a violation when no source cites it", () => {
+    // H1 (PR 268 review), missed violation: Russian attaches case
+    // endings with no space, so the two-sided boundary rule silenced the
+    // conclusion's "Иваном" and a conclusion asserting an uncited
+    // entity's presence read as clean. The leading-only rule anchors it.
+    const result = checkEntityContamination({
+      conclusion: "Встреча с Иваном перенесена на четверг",
+      sources: ["Протокол встречи: повестка без участников"],
+      entities: [person("ent-people-ivan", "Иван")],
+    });
+    expect(result.clean).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]!.entityId).toBe("ent-people-ivan");
+  });
+
+  test("an inflected mention in a source clears the cited entity", () => {
+    // H1 (PR 268 review), false alarm: the conclusion names "Иван" while
+    // the cited source says "Ивану" - the two-sided rule refused the
+    // source hit and flagged a properly cited conclusion. The
+    // leading-only rule restores the citation.
+    const result = checkEntityContamination({
+      conclusion: "Иван утвердил бюджет",
+      sources: ["Ивану показали проект бюджета на утреннем созвоне"],
+      entities: [person("ent-people-ivan", "Иван")],
+    });
+    expect(result.clean).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
 });
 
 describe("deepSynthesis wiring", () => {

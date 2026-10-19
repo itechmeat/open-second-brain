@@ -214,70 +214,29 @@ const MATCH_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 /**
  * The scripts written WITHOUT word spaces - Han, Hiragana, Katakana,
  * Thai, Lao, Khmer, Myanmar. In a run of such text every letter touches
- * a letter, so a neighbouring letter is not evidence of a mid-word hit
- * the way it is in a spaced script: `田中太郎` never occurs in
- * `田中太郎は` at a word boundary, and a boundary rule applied there
- * verbatim would have silenced every CJK mention the pre-rule literal
- * `includes` matching anchored. For a neighbour from one of these
- * scripts the boundary requirement is therefore suspended - the script
- * keeps its literal behavior back, spaced scripts keep the rule (a
- * Latin neighbour blocks even inside otherwise-CJK text). Korean is
+ * a letter, so a LEADING letter is not evidence of a mid-word hit the
+ * way it is in a spaced script: `田中太郎` never occurs in
+ * `鈴木花子と田中太郎` at a word boundary, and a boundary rule applied
+ * there verbatim would have silenced every CJK mention the pre-rule
+ * literal `includes` matching anchored. For a leading neighbour from one
+ * of these scripts the boundary requirement is therefore suspended - the
+ * script keeps its literal behavior back, spaced scripts keep the rule
+ * (a Latin neighbour blocks even inside otherwise-CJK text). Korean is
  * deliberately NOT on this list: it writes spaces between words, so a
- * trailing Hangul letter is handled by the particle probe below instead
- * of a blanket suspension.
+ * leading Hangul letter keeps blocking - Korean attaches no prefixes,
+ * and `박철수` must not anchor `철수`.
  */
 const NO_SPACE_SCRIPT_RE =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
 /**
- * A Korean particle (josa): one of the suffixes Korean grammar attaches
- * to a noun with no space, so `김철수는` is the name `김철수` plus the
- * topic particle, not a longer word. Ordered longest-first so the
- * alternation is greedy - `에서` must win over `에`, or the run would
- * stop a syllable short and its tail would read as a stray Hangul
- * letter. The list is the common written set; an exotic particle merely
- * costs an anchor (the pre-rule behavior for that mention), never a
- * false one.
- */
-const HANGUL_PARTICLE_RE =
-  /^(?:에게서|에서는|으로는|으로서|으로써|이라는|이라도|에서|에게|한테|으로|로써|로서|처럼|만큼|보다|마다|부터|까지|조차|밖에|이나|라도|이랑|하고|이라|라는|은|는|이|가|을|를|에|와|과|도|만|로|의|야|여|랑|들)/u;
-
-/**
  * True when `codePoint` belongs to a script written without word spaces
- * (see {@link NO_SPACE_SCRIPT_RE}): a neighbour from one of these
- * scripts never blocks an occurrence, because adjacency there carries
- * no word-boundary information.
+ * (see {@link NO_SPACE_SCRIPT_RE}): a leading neighbour from one of
+ * these scripts never blocks an occurrence, because adjacency there
+ * carries no word-boundary information.
  */
 function boundaryNotRequiredForScripts(codePoint: string): boolean {
   return NO_SPACE_SCRIPT_RE.test(codePoint);
-}
-
-/**
- * True when the Hangul text at `start` opens a run of one or more
- * attached particles (see {@link HANGUL_PARTICLE_RE}) that reaches a
- * token boundary: the run ends at the string edge, a separator, or a
- * letter from any other script. This is the trailing-side Korean
- * counterpart of the no-space suspension - `는` in `김철수는` is glued
- * to the name by grammar, not a mid-word letter - while a longer name
- * such as `김철수민` carries a NON-particle Hangul neighbour that still
- * requires the boundary. Korean keeps a real boundary check instead of
- * joining the blanket suspension, and the allowance is trailing-only:
- * Korean attaches no prefixes, so a leading-side Hangul neighbour still
- * blocks.
- */
-function hangulParticleRunAtBoundary(haystack: string, start: number): boolean {
-  let at = start;
-  for (;;) {
-    const particle = HANGUL_PARTICLE_RE.exec(haystack.slice(at));
-    if (particle === null) break;
-    at += particle[0].length;
-  }
-  // No particle attaches here: the trailing neighbour is a plain Hangul
-  // letter and the boundary requirement stands.
-  if (at === start) return false;
-  if (at >= haystack.length) return true;
-  const after = codePointAfter(haystack, at);
-  return after === null || !MATCH_WORD_CHAR_RE.test(after);
 }
 
 function isHighSurrogate(code: number): boolean {
@@ -302,28 +261,21 @@ function codePointBefore(s: string, i: number): string | null {
   return s.slice(start, i);
 }
 
-/** The code point starting at index `i`, or null at the string edge. */
-function codePointAfter(s: string, i: number): string | null {
-  if (i >= s.length) return null;
-  const end =
-    i + 1 < s.length && isHighSurrogate(s.charCodeAt(i)) && isLowSurrogate(s.charCodeAt(i + 1))
-      ? i + 2
-      : i + 1;
-  return s.slice(i, end);
-}
-
 /**
- * True when `variant` occurs in one folded haystack string at a word
- * boundary: some occurrence of it has no letter or digit directly
- * before or after it - UNLESS that neighbour belongs to a script
- * written without word spaces (see {@link NO_SPACE_SCRIPT_RE}), whose
- * adjacency suspends the requirement on that side, or the trailing
- * neighbour is a Korean particle run that reaches a token edge (see
- * {@link hangulParticleRunAtBoundary}). The word-boundary rule is what
- * keeps the separator fold from planting mid-word hits literal
- * `includes` matching did not already have (`canada` never anchors
- * `ada`, folded spellings included); an occurrence beside a separator
- * or the string edge is a token edge and anchors.
+ * True when `variant` occurs in one folded haystack string with a clean
+ * LEADING edge: some occurrence of it has no letter or digit directly
+ * before it - UNLESS that neighbour belongs to a script written without
+ * word spaces (see {@link NO_SPACE_SCRIPT_RE}), whose adjacency suspends
+ * the requirement. The trailing side is unchecked (H1, PR 268 review):
+ * every language that attaches endings to a name with no space - Russian
+ * `Ивана`, the German genitive `Annas`, a Korean particle run like
+ * `김철수는` - lost those mentions under a two-sided rule, and a
+ * trailing character is an inflection until proven otherwise. The
+ * leading-side rule is what keeps the separator fold from planting
+ * mid-word hits nothing anchored before (`canada` never anchors `ada`:
+ * the letter before the hit blocks it, folded spellings included); an
+ * occurrence beside a separator or the string edge is a token edge and
+ * anchors.
  */
 function variantOccursAtWordBoundary(variant: string, haystack: string): boolean {
   // An empty variant occurs everywhere and nowhere - refuse it rather
@@ -332,27 +284,22 @@ function variantOccursAtWordBoundary(variant: string, haystack: string): boolean
   let at = haystack.indexOf(variant);
   while (at >= 0) {
     const before = codePointBefore(haystack, at);
-    const after = codePointAfter(haystack, at + variant.length);
     const blockedBefore =
       before !== null && MATCH_WORD_CHAR_RE.test(before) && !boundaryNotRequiredForScripts(before);
-    const blockedAfter =
-      after !== null &&
-      MATCH_WORD_CHAR_RE.test(after) &&
-      !boundaryNotRequiredForScripts(after) &&
-      !hangulParticleRunAtBoundary(haystack, at + variant.length);
-    if (!blockedBefore && !blockedAfter) return true;
+    if (!blockedBefore) return true;
     at = haystack.indexOf(variant, at + 1);
   }
   return false;
 }
 
 /**
- * True when ANY of the needle's match variants occurs at a word boundary
- * in ANY of the haystack's match variants - the one comparison the
- * anchoring kernels and their twins share. Both arrays come from
- * {@link matchFormVariants}: the needle's variants are precomputed by the
- * caller where it already precomputes forms, and the haystack's variants
- * are expanded once per text, never once per entity. Pure: no I/O.
+ * True when ANY of the needle's match variants occurs with a clean
+ * leading edge in ANY of the haystack's match variants - the one
+ * comparison the anchoring kernels and their twins share. Both arrays
+ * come from {@link matchFormVariants}: the needle's variants are
+ * precomputed by the caller where it already precomputes forms, and the
+ * haystack's variants are expanded once per text, never once per entity.
+ * Pure: no I/O.
  */
 export function matchVariantsOccurIn(
   formVariants: ReadonlyArray<string>,
@@ -366,10 +313,10 @@ export function matchVariantsOccurIn(
 /**
  * One-shot convenience over {@link matchFormVariants} and
  * {@link matchVariantsOccurIn}: does the single normalized form `form`
- * occur, separator-folded and word-bounded, in the normalized haystack
- * text? For callers that match one form at a time; a caller holding
- * precomputed variant lists calls {@link matchVariantsOccurIn} directly
- * so the haystack expands once, not once per form.
+ * occur, separator-folded and leading-edge-checked, in the normalized
+ * haystack text? For callers that match one form at a time; a caller
+ * holding precomputed variant lists calls {@link matchVariantsOccurIn}
+ * directly so the haystack expands once, not once per form.
  */
 export function matchFormOccursIn(form: string, normalizedHaystack: string): boolean {
   return matchVariantsOccurIn(matchFormVariants(form), matchFormVariants(normalizedHaystack));

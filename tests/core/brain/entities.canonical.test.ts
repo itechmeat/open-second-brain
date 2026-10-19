@@ -333,10 +333,13 @@ describe("matchVariantsOccurIn - the word-boundary rule", () => {
   });
 
   test("the boundary rule still holds between spaced scripts and CJK text", () => {
-    // The suspension is per neighbour script: a Latin neighbour still
-    // blocks even in otherwise-CJK text.
+    // The suspension is per neighbour script: a LATIN neighbour on the
+    // leading side still blocks even in otherwise-CJK text, while the
+    // trailing side is unchecked (H1) - "adable" reads as the hit plus
+    // an ending, like "Ивана" or "Annas".
     expect(matchVariantsOccurIn(["ada"], ["会ada議"])).toBe(true);
-    expect(matchVariantsOccurIn(["ada"], ["会adable議"])).toBe(false);
+    expect(matchVariantsOccurIn(["ada"], ["会adable議"])).toBe(true);
+    expect(matchVariantsOccurIn(["ada"], ["xada議"])).toBe(false);
   });
 
   test("the other no-space scripts suspend the boundary like CJK", () => {
@@ -358,19 +361,30 @@ describe("matchVariantsOccurIn - the word-boundary rule", () => {
     expect(matchVariantsOccurIn(["김철수"], ["김철수와 김영희"])).toBe(true);
   });
 
-  test("a Korean mention inside a longer Hangul word still requires the boundary", () => {
-    // The particle allowance ends at a token edge: a NON-particle
-    // Hangul neighbour is a longer word (`김철수민`, `김철수은행`), and
-    // a name-internal particle spelling cannot bridge it.
-    expect(matchVariantsOccurIn(["김철수"], ["김철수민"])).toBe(false);
-    expect(matchVariantsOccurIn(["김철수"], ["김철수은행"])).toBe(false);
-    expect(matchVariantsOccurIn(["김철수"], ["김철수도서관"])).toBe(false);
+  test("an inflected mention anchors: the boundary rule binds the leading side only", () => {
+    // H1 (PR 268 review): every language that attaches endings to a name
+    // with no space lost its matches under the two-sided rule - Russian
+    // "Ивана/Ивану/Иваном", the German genitive "Annas". A trailing
+    // character is an ending until proven otherwise, so only the
+    // character BEFORE the hit must be a token edge.
+    expect(matchVariantsOccurIn(["иван"], ["иван"])).toBe(true);
+    expect(matchVariantsOccurIn(["иван"], ["ивана повысили до директора"])).toBe(true);
+    expect(matchVariantsOccurIn(["иван"], ["встреча с иваном перенесена"])).toBe(true);
+    expect(matchVariantsOccurIn(["anna"], ["annas buch liegt hier"])).toBe(true);
+  });
+
+  test("a trailing Hangul letter no longer blocks (the pre-rule literal behavior)", () => {
+    // The trailing side admits any character, so a NON-particle Hangul
+    // neighbour anchors too - exactly what the pre-rule literal
+    // `includes` matching did. The precision the particle probe bought on
+    // the trailing side is subsumed by the leading-only rule.
+    expect(matchVariantsOccurIn(["김철수"], ["김철수민"])).toBe(true);
+    expect(matchVariantsOccurIn(["김철수"], ["김철수은행"])).toBe(true);
   });
 
   test("a leading-side Korean neighbour still blocks", () => {
-    // The particle allowance is trailing-only: Korean attaches no
-    // prefixes, so Hangul on the leading side remains a blocked
-    // substring hit.
+    // Korean attaches no prefixes, so Hangul on the leading side remains
+    // a blocked substring hit - the leading-side rules are untouched.
     expect(matchVariantsOccurIn(["철수"], ["박철수는 출석했다"])).toBe(false);
     expect(matchVariantsOccurIn(["김철수"], ["오늘김철수는 출석했다"])).toBe(false);
   });
