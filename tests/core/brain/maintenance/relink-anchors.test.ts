@@ -358,7 +358,9 @@ describe("runRelinkAnchors", () => {
     // byte-level rewrite would find no line to replace, append a second
     // one, and the next parse - which reads the FIRST entities line of
     // the EXPANDED section - would never see it. The signal is out of
-    // the pass's reach, like a page without a Raw section.
+    // the pass's reach, like a page without a Raw section - and the
+    // raw-shape gate does not claim it: the codec gate runs first, so
+    // the skip is the byte form's, counted by neither arm.
     writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
     writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
     writeSourcePage(
@@ -381,6 +383,7 @@ describe("runRelinkAnchors", () => {
 
     const dry = runRelinkAnchors(vault, { now: NOW });
     expect(dry.signalsPageSourced).toBe(1);
+    expect(dry.signalsSkippedRawShape).toBe(0);
     expect(dry.signalsChanged).toBe(0);
     expect(dry.anchorsAdded).toBe(0);
 
@@ -392,6 +395,38 @@ describe("runRelinkAnchors", () => {
     const parsed = parseSignal(file);
     expect(parsed.rawCodec).toBe(true);
     expect(parsed.raw).toBe("progress notes\n\n\n\nentities: ent-project-atlas");
+  });
+
+  test("an extractor-shaped raw stored codec-compressed is still held out by the codec flag", () => {
+    // The shape gate subsumes the old codec skip only for PROSE sections;
+    // it must not wave through the one signal whose expanded raw IS the
+    // extractor's line: on disk the section is the compressed form, and
+    // a byte-level rewrite there would append a line the next parse
+    // never reads. The flag keeps that signal out, counted by neither
+    // arm, exactly as before.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: ["ent-project-atlas"],
+      rawBody: "entities: ent-project-atlas",
+      rawCodec: true,
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+    const before = readFileSync(file, "utf8");
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.signalsSkippedRawShape).toBe(0);
+    expect(report.signalsChanged).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
   });
 
   test("two consecutive dry runs report identical numbers", () => {
@@ -766,6 +801,118 @@ describe("the pass reads only server-stamped sources", () => {
     expect(report.signalsPageSourced).toBe(1);
     expect(report.anchorsAdded).toBe(1);
     expect(entitiesLineOf(file)).toBe("entities: ent-people-ada-lovelace");
+  });
+});
+
+describe("the rewrite touches only the extractor's own raw shape", () => {
+  test("a quote line starting with entities: is never overwritten", () => {
+    // An extracted stamp on a hand-joined page: the Raw section is a
+    // verbatim quote whose first line happens to start with `entities:`.
+    // The old line-level rewrite read that line as the anchor line,
+    // counted its free text as stored anchors, and overwrote the quote's
+    // own words. The shape check refuses: the raw is not the extractor's
+    // single `entities:` line, so the signal is skipped and counted.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      rawBody: "entities: ent-project-atlas\nAda Lovelace joined the review.",
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+    const before = readFileSync(file, "utf8");
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsPageSourced).toBe(1);
+    expect(report.signalsSkippedRawShape).toBe(1);
+    expect(report.signalsChanged).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  test("a quote with a heading never gets a mid-quote splice", () => {
+    // The raw-section rewrite used to stop at the first `## ` line while
+    // the parser read to EOF, so an entities line spliced into a quote
+    // containing a heading landed mid-quote. The shape check refuses the
+    // page before any line is touched.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      rawBody: "Ada said:\n\n## Verbatim\n\nthe review concluded with five follow-ups.",
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+    const before = readFileSync(file, "utf8");
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsSkippedRawShape).toBe(1);
+    expect(report.signalsChanged).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  test("an extracted signal with malformed raw is skipped with a count", () => {
+    // One line, but not the extractor's: nothing about it is an anchor
+    // line, and splicing one in after it would edit a record the pass
+    // has no business editing. Skipped, counted, never written.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "the review concluded with five follow-ups",
+      storedEntityIds: [],
+      rawBody: "just a note line",
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+    const before = readFileSync(file, "utf8");
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsSkippedRawShape).toBe(1);
+    expect(report.signalsChanged).toBe(0);
+    expect(report.anchorsAdded).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  test("the shape check is exact: the extractor's own line is still rewritten", () => {
+    // The positive twin: the exact shape `routeExtractedFacts` writes -
+    // one `entities: <ids>` line, nothing else - is the one shape the
+    // rewrite still serves, so the pass keeps healing narrow extractor
+    // anchor lists.
+    writeEntityNode("people", "ent-people-ada-lovelace", "Ada Lovelace");
+    writeEntityNode("project", "ent-project-atlas", "Atlas Prime");
+    writeSourcePage(
+      "notes/meeting.md",
+      "# Meeting\n\n- [[ent-people-ada-lovelace]] joined the review.\n",
+    );
+    writePageSourcedSignal({
+      sourceRef: "notes/meeting.md",
+      principle: "Atlas Prime shipped five units to the depot",
+      storedEntityIds: ["ent-project-atlas"],
+    });
+    const file = join(brainDirs(vault).inbox, inboxFiles()[0]!);
+
+    const report = runRelinkAnchors(vault, { now: NOW, apply: true });
+
+    expect(report.signalsSkippedRawShape).toBe(0);
+    expect(report.signalsChanged).toBe(1);
+    expect(entitiesLineOf(inboxFiles()[0]!)).toBe(
+      "entities: ent-project-atlas, ent-people-ada-lovelace",
+    );
   });
 });
 

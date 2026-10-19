@@ -59,18 +59,28 @@
  * preview that wrote the log would not be a preview. With `apply` the
  * changed signal pages are rewritten in place through the atomic writer,
  * the stored ids first and the added ones appended, and the audit is
- * stamped exactly as the capture path stamps it. A signal without a
- * `## Raw` section is out of the rewrite's reach - the section is the
- * anchor's only home, and this pass does not restructure pages - so it is
- * counted by neither arm: a dry run never reports an addition no apply
- * could make. The same holds for a codec-compressed section: the bytes
- * on disk hold the reversible compressed form, whose collapsed whitespace
- * runs can hide the `entities:` line from a line-level rewrite, so the
- * pass skips those signals outright rather than write a line the next
- * parse never reads. The apply arm writes against the bytes it read
- * (`expectBefore`): a page edited or moved between the read and the
- * rename fails the write instead of losing that edit, and the next pass
- * retries.
+ * stamped exactly as the capture path stamps it. The rewrite's only safe
+ * home is the extractor's own raw shape: one `entities: <ids>` line,
+ * exactly what `routeExtractedFacts` writes for a fact that anchored. An
+ * in-scope signal whose Raw holds anything else is carrying prose - a
+ * verbatim quote - and a line-level rewrite there overwrote the quote's
+ * own `entities:` line, spliced an anchor line into a quote, or landed
+ * mid-quote past a heading; such a signal is skipped ENTIRELY, counted in
+ * `signalsSkippedRawShape`, never written. A signal whose raw reads as
+ * absent (no `## Raw` section, or the legacy placeholder) is not a shape
+ * failure - the extractor writes no raw at all for a fact that anchored
+ * nothing - and the rewrite's own support decides below whether the
+ * anchor has a home, so a page without the section stays counted by
+ * neither arm: a dry run never reports an addition no apply could make.
+ * The same hold-out covers a codec-compressed section: the bytes on disk
+ * hold the reversible compressed form, whose collapsed whitespace runs
+ * can hide the `entities:` line from a line-level rewrite, so the pass
+ * skips those signals outright rather than write a line the next parse
+ * never reads - the gate the raw-shape check subsumes for prose sections,
+ * kept for the shaped raw a codec stores. The apply arm writes against
+ * the bytes it read (`expectBefore`): a page edited or moved between the
+ * read and the rename fails the write instead of losing that edit, and
+ * the next pass retries.
  *
  * The pass never calls a model: the recomputation is a file walk, an
  * index build and pure matching, bounded by the caller's safeguard like
@@ -132,6 +142,14 @@ export interface RelinkAnchorsReport {
    * resolved to at least one vault page at the signal's own reach.
    */
   readonly signalsPageSourced: number;
+  /**
+   * In-scope signals skipped because their Raw section is not the
+   * extractor's own single `entities:` line shape - counted, never
+   * written: the rewrite's only safe home is the shape
+   * `routeExtractedFacts` itself writes, and anything else in `## Raw`
+   * is a quote the pass has no business editing.
+   */
+  readonly signalsSkippedRawShape: number;
   /** Signals with at least one anchor to add - rewritten on `apply`. */
   readonly signalsChanged: number;
   /** Total anchors added (or would be added) across every signal. */
@@ -215,6 +233,23 @@ function storedAnchorIds(raw: string | undefined): string[] {
     }
   }
   return [];
+}
+
+/**
+ * Is `raw` EXACTLY the shape the extractor writes - one `entities: <ids>`
+ * line, nothing else? The rewrite's only safe home. `storedAnchorIds`
+ * trusts the first `entities:` line it finds, and a Raw section holding
+ * author prose - a verbatim quote - can carry such a line as its own
+ * words: rewriting there overwrote the quote's text, spliced an anchor
+ * line into it, or landed mid-quote past a heading the parser reads past
+ * and the line-rewrite stops at. A single line, `entities: `-prefixed,
+ * parsing to at least one id: anything else skips the signal (counted,
+ * never written), and the section stays byte-identical.
+ */
+function isExtractorRawShape(raw: string): boolean {
+  if (raw.includes("\n") || raw.includes("\r")) return false;
+  if (!raw.startsWith("entities: ")) return false;
+  return storedAnchorIds(raw).length > 0;
 }
 
 /**
@@ -354,6 +389,7 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
   let scanned = 0;
   let unreadable = 0;
   let pageSourced = 0;
+  let skippedRawShape = 0;
   let changed = 0;
   let addedTotal = 0;
 
@@ -451,6 +487,27 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       // numbers stay idempotent.
       if (signal.rawCodec === true) continue;
 
+      // The rewrite's only safe home is the extractor's own raw shape:
+      // one `entities: <ids>` line, exactly what `routeExtractedFacts`
+      // writes for a fact that anchored. An in-scope signal whose Raw
+      // holds anything else is carrying prose - a verbatim quote - and a
+      // line-level rewrite there overwrote the quote's own `entities:`
+      // line, spliced an anchor line into a quote, or landed mid-quote
+      // past a heading (the parser reads the section to EOF; the rewrite
+      // stopped at the first `## ` line). Skipped ENTIRELY, counted,
+      // never written; the check runs on the PARSED raw - the expanded
+      // text for a codec signal - and the codec gate above still owns
+      // the byte form, since a shaped raw compressed on disk is just as
+      // out of the byte-level rewrite's reach as before. A signal whose
+      // raw reads as absent (no `## Raw` section, or the legacy
+      // placeholder) is not a shape failure: the extractor writes no raw
+      // at all for a fact that anchored nothing, and the rewrite's own
+      // support decides below whether one can be filled.
+      if (signal.raw !== undefined && !isExtractorRawShape(signal.raw)) {
+        skippedRawShape++;
+        continue;
+      }
+
       const stored = storedAnchorIds(signal.raw);
       const added: string[] = [];
       const push = (id: string): void => {
@@ -538,6 +595,7 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
     signalsScanned: scanned,
     signalsUnreadable: unreadable,
     signalsPageSourced: pageSourced,
+    signalsSkippedRawShape: skippedRawShape,
     signalsChanged: changed,
     anchorsAdded: addedTotal,
     perSource: [...perSource.entries()]
