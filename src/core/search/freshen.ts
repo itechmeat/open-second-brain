@@ -358,21 +358,6 @@ export interface MaybeFreshenOptions {
    * stand exactly as on the interval path.
    */
   readonly force?: boolean;
-  /**
-   * The instant the caller's write BEGAN, when the caller knows it. A
-   * forced run exists because the write made the vault newer than the
-   * index; an index stamped at or after the write's own start cannot be
-   * staler than the write - a run landed while it was in progress - so
-   * forcing another would re-run what just finished. This is the floor
-   * that keeps a stream of applied writes from chaining one detached
-   * run after another forever: back-to-back writes collapse into the
-   * run already in flight or just completed, exactly as the interval
-   * gate collapses them for readers. Absent, every forced run spawns
-   * once the remaining guards allow - the plain post-write shape. An
-   * unparseable stamp counts as due, as everywhere else: claiming it
-   * fresh would leave the index stale forever.
-   */
-  readonly writeStartedAtMs?: number;
   readonly nowMs?: number;
   /** Test seam: replaces the detached spawn. */
   readonly spawn?: (argv: string[]) => void;
@@ -403,17 +388,16 @@ export function maybeFreshenIndex(
       // path. The stamp check doubles as the self-heal boundary: an
       // index that was never stamped is rebuilt there, not here.
       if (opts.lastIndexedAt === null) return FRESHEN_SKIP.noIndex;
-      // The freshness floor the write instant restores: force skips the
-      // interval, not every judgement about the stamp. An index stamped
-      // at or after the write began already ran past it, and `fresh` is
-      // the honest token for that - the same answer the interval path
-      // gives a young index.
-      if (opts.writeStartedAtMs !== undefined) {
-        const stampedMs = Date.parse(opts.lastIndexedAt);
-        if (Number.isFinite(stampedMs) && stampedMs >= opts.writeStartedAtMs) {
-          return FRESHEN_SKIP.fresh;
-        }
-      }
+      // No freshness floor on the stamp: the stamp marks when a run
+      // FINISHED, and a run that finished after the write began may well
+      // have scanned before the write landed - its stamp cannot prove it
+      // saw the write. A forced run that skipped on such a stamp would
+      // leave the write unindexed until the next interval or the next
+      // write, silently. The collapse the floor promised is the claim
+      // machinery's: a run already in flight holds the claim, so a write
+      // landing during it starts nothing. Back-to-back applied writes
+      // spawn one run each, capped by that exclusivity and the failure
+      // backoff - the price of every run provably covering its write.
       const backoffUntil = readFreshenState(dir).backoffUntil;
       const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
       if (Number.isFinite(backoffMs) && backoffMs > nowMs) return FRESHEN_SKIP.backoff;

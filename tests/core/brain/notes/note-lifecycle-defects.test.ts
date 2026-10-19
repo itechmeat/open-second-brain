@@ -602,7 +602,7 @@ describe("the plan's blast radius covers the repair pass (17)", () => {
 });
 
 describe("the forced refresh against the write's own instant (18)", () => {
-  test("an index stamped after the write began claims nothing", async () => {
+  test("an index stamped after the write began still claims this write's run", async () => {
     note("Projects/Old.md", "x\n");
     const { resolveSearchConfig } = await import("../../../../src/core/search/index.ts");
     const { LAST_INDEXED_AT_STATE_KEY, Store } =
@@ -610,11 +610,13 @@ describe("the forced refresh against the write's own instant (18)", () => {
     const store = await Store.open(resolveSearchConfig({ vault }), { mode: "write" });
     store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
     await store.close();
-    // Freshen ON, and the write's own clock is BEFORE the stamp: a run
-    // landed after this write began, so this write cannot have produced
-    // staleness that run has not already seen. Forcing another run would
-    // re-run what just finished - which is how a stream of small writes
-    // kept one detached indexer running back-to-back forever.
+    // Freshen ON, and the write's own clock is BEFORE the stamp. The
+    // stamp still claims nothing about this write: it marks when a run
+    // FINISHED, and a run that finished after the write began may have
+    // scanned before the write landed - so a stamp cannot prove the
+    // index has seen the write, and a floor that skipped on one would
+    // silently leave this write unindexed until the next interval or
+    // the next write. The claim therefore spawns.
     const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
     process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
     const spawned: string[][] = [];
@@ -627,11 +629,15 @@ describe("the forced refresh against the write's own instant (18)", () => {
         now: new Date("2026-08-01T00:00:00.000Z"),
         refreshSpawn: (argv: string[]) => spawned.push(argv),
       });
-      expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
+      expect(res.references.refresh).toBe(INDEX_REFRESH.claimed);
     } finally {
-      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+      // Restore whatever the environment ACTUALLY held, including its
+      // absence - writing "0" back when the variable was unset leaks a
+      // freshen setting onto every follower test file in the process.
+      if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+      else process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved;
     }
-    expect(spawned).toHaveLength(0);
+    expect(spawned).toHaveLength(1);
   });
 
   test("a write that began after the last stamp still claims its refresh", async () => {
@@ -643,7 +649,7 @@ describe("the forced refresh against the write's own instant (18)", () => {
     store.setState(LAST_INDEXED_AT_STATE_KEY, "2026-08-15T00:00:00.000Z");
     await store.close();
     // The ordinary post-write shape: the stamp predates the write, so
-    // the index has not seen the write and the floor must not skip it.
+    // the index has not seen the write and the claim must spawn.
     const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
     process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "60";
     const spawned: string[][] = [];
@@ -658,7 +664,8 @@ describe("the forced refresh against the write's own instant (18)", () => {
       });
       expect(res.references.refresh).toBe(INDEX_REFRESH.claimed);
     } finally {
-      process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
+      if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"];
+      else process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved;
     }
     expect(spawned).toHaveLength(1);
   });

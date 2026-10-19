@@ -322,48 +322,15 @@ describe("maybeFreshenIndex", () => {
     expect(calls[0]!.join(" ")).toContain(`search index --vault ${vault}`);
   });
 
-  test("force still skips an index stamped after the write began - the freshness floor", () => {
-    // The write began BEFORE the last index pass: a run landed after the
-    // write started, so the write cannot have produced staleness that
-    // run has not seen. Without this floor, a stream of small writes
-    // chained one forced run after another forever.
-    expect(
-      maybeFreshenIndex(config, {
-        lastIndexedAt: ago(5),
-        nowMs: NOW,
-        spawn,
-        force: true,
-        writeStartedAtMs: NOW - 30_000,
-      }),
-    ).toBe(FRESHEN_SKIP.fresh);
-    expect(calls).toHaveLength(0);
-  });
-
-  test("a write that began after the last stamp still forces its run", () => {
-    expect(
-      maybeFreshenIndex(config, {
-        lastIndexedAt: ago(5),
-        nowMs: NOW,
-        spawn,
-        force: true,
-        writeStartedAtMs: NOW,
-      }),
-    ).toBe("spawned");
-    expect(calls).toHaveLength(1);
-  });
-
-  test("an unparseable stamp stays due even when the write predates it", () => {
-    expect(
-      maybeFreshenIndex(config, {
-        lastIndexedAt: "not a date",
-        nowMs: NOW,
-        spawn,
-        force: true,
-        writeStartedAtMs: NOW - 30_000,
-      }),
-    ).toBe("spawned");
-    expect(calls).toHaveLength(1);
-  });
+  // There is deliberately no freshness floor against the write's own
+  // instant: the stamp marks when a run FINISHED, and a run that finished
+  // after the write began may have scanned before the write landed - a
+  // stamp cannot prove the index has seen the write, so a floor built on
+  // one would silently leave the write unindexed until the next interval
+  // or the next write. The test above is the pin: the youngest stamp
+  // that is not "never stamped" still spawns. A run already in flight is
+  // the collapse that remains, and the claim exclusivity test below
+  // holds it.
 
   test("force with the interval at 0 still refuses - config off means off", () => {
     const offConfig = {

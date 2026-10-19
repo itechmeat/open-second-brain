@@ -709,14 +709,14 @@ async function readIndexEvidence(vault: string, wrote: boolean): Promise<IndexEv
  * `now` is the caller's injected clock: passed through as the decision's
  * `nowMs`, so the freshness and backoff judgements are made on the same
  * instant the rest of the run is reproducible against, and not on
- * whichever wall clock happens to execute it. `writeStartedAtMs` is the
- * instant the write began, captured once at the operation's entry: the
- * forced run keeps a freshness floor against it - an index stamped at or
- * after the write's start cannot be staler than the write, and forcing
- * another run would re-run what just finished - so a stream of applied
- * writes collapses into the runs already in flight instead of chaining
- * one detached indexer after another forever. The claim machinery
- * itself - exclusivity, backoff, the writer-lock probe - is untouched.
+ * whichever wall clock happens to execute it. There is no freshness
+ * floor against the write's own instant: the index stamp marks when a
+ * run FINISHED, and a run that finished after the write began may have
+ * scanned before the write landed, so a stamp cannot prove the index
+ * has seen the write - a floor built on it would silently drop the one
+ * refresh the write needs. Back-to-back applied writes spawn one run
+ * each; the claim machinery itself - exclusivity, backoff, the
+ * writer-lock probe - caps them.
  *
  * The imports are deferred for the same reason
  * {@link readIndexEvidence}'s are: the search barrel reaches back into
@@ -728,7 +728,6 @@ async function claimPostWriteRefresh(
   index: IndexEvidence,
   spawn: ((argv: string[]) => void) | undefined,
   now: Date | undefined,
-  writeStartedAtMs: number,
 ): Promise<IndexRefresh> {
   // Stale is the only state that describes an index this call aged. An
   // absent index holds nothing to refresh, an unreadable one has no
@@ -741,7 +740,6 @@ async function claimPostWriteRefresh(
     const decision = maybeFreshenIndex(resolveSearchConfig({ vault }), {
       lastIndexedAt: index.lastIndexedAt,
       force: true,
-      writeStartedAtMs,
       ...(spawn !== undefined ? { spawn } : {}),
       ...(now !== undefined ? { nowMs: now.getTime() } : {}),
     });
@@ -1028,13 +1026,6 @@ export async function noteLifecycle(
   input: NoteLifecycleInput,
 ): Promise<NoteLifecycleResult> {
   const apply = input.apply === true;
-  // The instant this write began, on the caller's clock when one was
-  // injected. The post-write refresh claim keeps a freshness floor
-  // against it - an index stamped at or after this instant already ran
-  // past the write - so a stream of applied writes cannot chain one
-  // detached indexer run after another forever. Captured once here, at
-  // the entry every arm starts from.
-  const writeStartedAtMs = (input.now ?? new Date()).getTime();
   // Vault-identity write guard (context-integrity-gates, Unit J). Asserted
   // on the planning path too: a plan names real vault paths, and computing
   // one against a vault this process was not pointed at is already the
@@ -1198,13 +1189,7 @@ export async function noteLifecycle(
       );
       snapshot = Object.freeze({ runId: gated.snapshot.runId, path: gated.snapshot.path });
       const index = await readIndexEvidence(vault, true);
-      const refresh = await claimPostWriteRefresh(
-        vault,
-        index,
-        input.refreshSpawn,
-        input.now,
-        writeStartedAtMs,
-      );
+      const refresh = await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now);
       return finish(
         action,
         source.relPath,
@@ -1306,7 +1291,7 @@ export async function noteLifecycle(
   // DETACHED run that will not have landed by any instant this call can
   // observe. A plan-only run aged nothing and claims nothing.
   const refresh = apply
-    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now, writeStartedAtMs)
+    ? await claimPostWriteRefresh(vault, index, input.refreshSpawn, input.now)
     : INDEX_REFRESH.notClaimed;
 
   return finish(
