@@ -241,13 +241,16 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
  * releases the claim it was handed whatever happens. Nothing is printed:
  * every stream of a detached child is ignored.
  *
- * Before the claim goes, the run settles the pending-write marker
- * ({@link settleFreshenPending}): a write that landed while this run
- * held the claim queued itself there, and this run's fresh stamp would
- * otherwise suppress freshen-on-read until the next interval with the
- * write still unindexed. The settle runs at most ONE extra incremental
- * pass, and it never keeps the claim past its own end - the release
- * below happens in every arm.
+ * Before the claim goes, a run whose main pass COMPLETED settles the
+ * pending-write marker ({@link settleFreshenPending}): a write that
+ * landed while this run held the claim queued itself there, and this
+ * run's fresh stamp would otherwise suppress freshen-on-read until the
+ * next interval with the write still unindexed. The settle runs at most
+ * ONE extra incremental pass, and it never keeps the claim past its own
+ * end - the release below happens in every arm. A run whose main pass
+ * did not complete (a config that never resolved, a lock it did not
+ * get, a pass that threw) touched no files, so it leaves the marker for
+ * the next run, which is the caller that can provably cover it.
  */
 async function runFreshenChild(
   flags: SearchVerbFlags,
@@ -264,6 +267,14 @@ async function runFreshenChild(
   const startedAt = Date.now();
   let cfg: ResolvedSearchConfig | undefined;
   let stateDir = stateDirFlag;
+  // Whether the MAIN pass completed. Only a run whose main pass
+  // completed may settle the pending marker: the settle's covered
+  // branch clears markers at or before this run's scan start, and a run
+  // that never scanned would clear markers it cannot have covered. The
+  // documented rule is the other one - a caller that cannot run a pass
+  // (a config that never resolved, a lock it did not get, a pass that
+  // threw) leaves the marker exactly as it stands for the next run.
+  let mainPassCompleted = false;
   const runIncrementalPass = async (): Promise<void> => {
     if (cfg === undefined || stateDir === undefined) return;
     const passStartedAt = Date.now();
@@ -287,6 +298,7 @@ async function runFreshenChild(
       durationMs: Date.now() - startedAt,
       changed: stats.added + stats.updated + stats.deleted,
     });
+    mainPassCompleted = true;
     return 0;
   } catch (e) {
     // Another writer holds the index (a manual run, the watcher, the
@@ -302,18 +314,24 @@ async function runFreshenChild(
     return 1;
   } finally {
     if (stateDir !== undefined) {
-      try {
-        await settleFreshenPending(stateDir, startedAt, runIncrementalPass);
-      } catch (e) {
-        // The extra pass is best-effort: a failure in it is recorded
-        // like any run failure, and an uncovered marker survives for
-        // the next run to cover and clear.
-        if (cfg !== undefined) {
-          recordFreshenOutcome(cfg.vault, stateDir, {
-            outcome: "failed",
-            durationMs: 0,
-            error: e instanceof Error ? e.message : String(e),
-          });
+      if (mainPassCompleted) {
+        const extraStartedAt = Date.now();
+        try {
+          await settleFreshenPending(stateDir, startedAt, runIncrementalPass);
+        } catch (e) {
+          // The extra pass is best-effort: a failure in it is recorded
+          // like any run failure, at its real duration, and an
+          // uncovered marker survives for the next run to cover and
+          // clear. A lock it did not get is the benign skip the main
+          // pass treats it as - recording it as a failure would push
+          // the backoff up for another writer's ordinary run.
+          if (!(e instanceof SearchError && e.code === "INDEX_LOCKED") && cfg !== undefined) {
+            recordFreshenOutcome(cfg.vault, stateDir, {
+              outcome: "failed",
+              durationMs: Date.now() - extraStartedAt,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
         }
       }
       releaseFreshen(stateDir, token);
