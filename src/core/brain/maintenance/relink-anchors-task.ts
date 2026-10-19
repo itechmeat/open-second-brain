@@ -325,9 +325,29 @@ function rawSectionBytes(contents: string): string | undefined {
   return section.length > 0 ? section : undefined;
 }
 
+/**
+ * True when the bytes' frontmatter carries the `_raw_codec` marker: the
+ * body on disk is the reversible COMPRESSED form, whatever it spells.
+ * The parse-time codec gate reads the same marker from the parsed
+ * frontmatter; the drift re-check reads it from the raw bytes because
+ * the parse's copy can go stale.
+ */
+function hasRawCodecMarker(contents: string): boolean {
+  const lines = contents.split("\n");
+  if (lines[0]?.trim() !== "---") return false;
+  const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  if (close < 0) return false;
+  return lines.slice(1, close).some((line) => line.trim().startsWith("_raw_codec:"));
+}
+
 /** What the byte-level drift re-check decided about one signal page. */
 export type RawRewriteDecision =
-  | { readonly action: "rewrite"; readonly next: string }
+  | {
+      readonly action: "rewrite";
+      readonly next: string;
+      /** The ids the rewrite actually appends - not one of them was stored. */
+      readonly appended: ReadonlyArray<string>;
+    }
   | { readonly action: "no-home" }
   | { readonly action: "unsafe-shape" };
 
@@ -341,30 +361,43 @@ const NO_REWRITE_HOME: RawRewriteDecision = Object.freeze({ action: "no-home" } 
  * bytes no gate checked: a Raw turned prose - a verbatim quote - or a
  * codec form is exactly the overwrite the shape gate exists to prevent,
  * and a line rebuilt from the parse's stored ids would drop an id the
- * edit stored. The decision re-runs the SAME hold-out on the rewrite's
- * own bytes and rebuilds the stored half from them: a section that is
+ * edit stored. The decision re-runs the SAME hold-outs on the rewrite's
+ * own bytes - the codec marker in the frontmatter, the raw shape in the
+ * section - and rebuilds the stored half from them: a section that is
  * neither the extractor's one-line shape nor a fillable placeholder (nor
  * absent) is `unsafe-shape` and the caller skips the signal entirely; a
  * page with no Raw section at all is `no-home`; anything else rewrites
  * with the ids the bytes themselves store, so an edit that widened the
- * list keeps its ids and one that withdrew them is not resurrected. The
- * caller still writes through `expectBefore`, so an edit landing after
- * this read fails the write instead of being discarded.
+ * list keeps its ids, one that withdrew them is not resurrected, and one
+ * that already stored a computed id makes `appended` - not the parse's
+ * additions - the truth about what this rewrite adds. The caller still
+ * writes through `expectBefore`, so an edit landing after this read
+ * fails the write instead of being discarded.
  */
 export function decideRawRewrite(before: string, added: ReadonlyArray<string>): RawRewriteDecision {
+  // The codec gate first, on the marker the bytes themselves carry: a
+  // compressed section is out of the line rewrite's reach even where the
+  // compressed SPELLING happens to read as the extractor's one line -
+  // the collapse that hid the section's real content is the whole
+  // reason the parse-time gate skips codec signals outright.
+  if (hasRawCodecMarker(before)) return { action: "unsafe-shape" };
   const bytesRaw = rawSectionBytes(before);
   if (bytesRaw !== undefined && bytesRaw !== RAW_PLACEHOLDER && !isExtractorRawShape(bytesRaw)) {
     return { action: "unsafe-shape" };
   }
   const byteStored =
     bytesRaw === undefined || bytesRaw === RAW_PLACEHOLDER ? [] : storedAnchorIds(bytesRaw);
-  const nextLine = `entities: ${[
-    ...byteStored,
-    ...added.filter((id) => !byteStored.includes(id)),
-  ].join(", ")}`;
+  const appended = added.filter((id) => !byteStored.includes(id));
+  if (appended.length === 0) {
+    // Every id the pass computed is already on the page - a concurrent
+    // edit stored it after the parse. Nothing to add, nothing to count:
+    // the truthful answer is the same no-op the no-home path gives.
+    return NO_REWRITE_HOME;
+  }
+  const nextLine = `entities: ${[...byteStored, ...appended].join(", ")}`;
   // `rewriteRawEntitiesLine` is a pure string fold and never throws.
   const next = rewriteRawEntitiesLine(before, nextLine);
-  return next === undefined ? NO_REWRITE_HOME : { action: "rewrite", next };
+  return next === undefined ? NO_REWRITE_HOME : { action: "rewrite", next, appended };
 }
 
 /** The wikilink target inside a signal `source:` entry, without the alias tail. */
@@ -674,11 +707,17 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       // no apply could make, and run-to-run numbers stay idempotent.
       if (decision.action === "no-home") continue;
       const next = decision.next;
+      // The appended half, not the computed `added`, is what this
+      // rewrite actually adds: a concurrent edit that stored some or all
+      // of `added` between the parse and the read made the rest of the
+      // count a no-op write - and a dry run must never report an
+      // addition the apply arm would not make.
+      const appended = decision.appended;
       changed++;
-      addedTotal += added.length;
+      addedTotal += appended.length;
       for (const source of sources) {
         const rollup = perSource.get(source.rel)!;
-        rollup.anchorsAdded += added.length;
+        rollup.anchorsAdded += appended.length;
       }
       if (!apply) continue;
       try {
@@ -694,10 +733,10 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
         // A page that cannot be rewritten is reported by its absence: the
         // next pass recomputes the same additions, idempotently.
         changed--;
-        addedTotal -= added.length;
+        addedTotal -= appended.length;
         for (const source of sources) {
           const rollup = perSource.get(source.rel)!;
-          rollup.anchorsAdded -= added.length;
+          rollup.anchorsAdded -= appended.length;
         }
       }
     }

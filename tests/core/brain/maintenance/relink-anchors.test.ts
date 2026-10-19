@@ -996,17 +996,20 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     });
   });
 
-  test("a Raw turned codec between parse and read is refused", () => {
-    // Same window, opposite edit: the section on disk is now the
-    // reversible compressed form, whose collapsed whitespace can hide
-    // the entities line from a line-level rewrite.
+  test("a Raw turned codec between parse and read is refused, even when the compressed form spells the extractor's line", () => {
+    // Same window, opposite edit: the frontmatter now carries the
+    // `_raw_codec` marker, so the section on disk is the reversible
+    // compressed form. The collapse that hid the section's real content
+    // can leave ONE line that starts with `entities: ` and parses to an
+    // id - the shape gate alone would accept it and rewrite the
+    // compressed bytes - so the marker itself is what refuses here.
     const before = [
       "---",
       "kind: brain-signal",
       "_raw_codec: 0.22.0",
       "---",
       "## Raw",
-      "x\x1Fzcompressed\x1Fz",
+      "entities: ent-project-atlas",
       "",
     ].join("\n");
     expect(decideRawRewrite(before, ["ent-people-ada-lovelace"])).toEqual({
@@ -1018,12 +1021,22 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     // The parse read `entities: a`; the apply read sees `entities: a, b`
     // - a concurrent edit stored `b`. The rebuilt line keeps it: the
     // pass is additive, and a line built from the parse's stale `stored`
-    // would have dropped it.
+    // would have dropped it. `appended` names what the rewrite adds.
     const before = "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n";
     expect(decideRawRewrite(before, ["ent-c"])).toEqual({
       action: "rewrite",
       next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b, ent-c\n",
+      appended: ["ent-c"],
     });
+  });
+
+  test("an edit that already stored every computed id makes the rewrite a no-op", () => {
+    // The parse computed `ent-b` as an addition; a concurrent edit stored
+    // it before the apply read. The truthful answer is nothing to add -
+    // no rewrite, nothing counted - where the old flow would have
+    // counted a write of byte-identical contents.
+    const before = "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n";
+    expect(decideRawRewrite(before, ["ent-b"])).toEqual({ action: "no-home" });
   });
 
   test("an edit that withdrew the stored list is not resurrected", () => {
@@ -1034,6 +1047,7 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     expect(decideRawRewrite(before, ["ent-c"])).toEqual({
       action: "rewrite",
       next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-c\n",
+      appended: ["ent-c"],
     });
   });
 
@@ -1042,6 +1056,7 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     expect(decideRawRewrite(before, ["ent-a", "ent-b"])).toEqual({
       action: "rewrite",
       next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n",
+      appended: ["ent-b"],
     });
   });
 
@@ -1058,6 +1073,7 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
     expect(decideRawRewrite(before, ["ent-b"])).toEqual({
       action: "rewrite",
       next: "---\nkind: brain-signal\n---\n## Raw\nentities: ent-a, ent-b\n",
+      appended: ["ent-b"],
     });
   });
 });
