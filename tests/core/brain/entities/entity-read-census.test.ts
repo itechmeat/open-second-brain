@@ -141,10 +141,6 @@ const UNSCOPED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/cli/brain/verbs/facts.ts":
     "hands the whole index to `decomposeAtomicFacts`, which applies the " +
     "shared predicate at its own boundary.",
-  "src/core/brain/maintenance/relink-anchors-task.ts":
-    "hands the whole index to `buildAnchorables`, which applies the " +
-    "shared predicate at its own boundary; its link-derived half resolves " +
-    "through the page-link resolver, which scopes the same way.",
   "src/cli/brain/verbs/entity.ts":
     "`brain entity list --status quarantine` IS the named exit from quarantine. " +
     "The explicit ask is the operator asking to see what a read scope hides, it " +
