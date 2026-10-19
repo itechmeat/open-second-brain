@@ -365,11 +365,11 @@ describe("the refresh claim decision on the injected clock", () => {
     } finally {
       process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = saved ?? "0";
     }
-    // Under the injected instant the stamp is newer than the write, so
-    // the forced refresh refuses on the spot - by the freshness floor
-    // here, and by the backoff when the stamp predates the write.
-    // Deciding on the wall clock instead would spawn right past a
-    // refusal the caller's own timeline says is active.
+    // Under the injected instant the failure backoff is still active, so
+    // the forced refresh refuses: force skips the freshness interval
+    // gate only, and the backoff stands. Deciding on the wall clock
+    // instead would spawn right past a refusal the caller's own timeline
+    // says is active.
     expect(res.references.refresh).toBe(INDEX_REFRESH.notClaimed);
   });
 });
