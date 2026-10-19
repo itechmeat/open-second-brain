@@ -998,11 +998,13 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
 
   test("a Raw turned codec between parse and read is refused, even when the compressed form spells the extractor's line", () => {
     // Same window, opposite edit: the frontmatter now carries the
-    // `_raw_codec` marker, so the section on disk is the reversible
-    // compressed form. The collapse that hid the section's real content
-    // can leave ONE line that starts with `entities: ` and parses to an
-    // id - the shape gate alone would accept it and rewrite the
-    // compressed bytes - so the marker itself is what refuses here.
+    // `_raw_codec` marker beside a real section, so the bytes on disk
+    // are the reversible compressed form. The collapse that hid the
+    // section's real content can leave ONE line that starts with
+    // `entities: ` and parses to an id - the shape gate alone would
+    // accept it and rewrite the compressed bytes - so the marker itself
+    // is what refuses here, with the parse-time codec gate's own
+    // uncounted answer.
     const before = [
       "---",
       "kind: brain-signal",
@@ -1013,8 +1015,26 @@ describe("the apply arm re-gates the bytes it actually rewrites", () => {
       "",
     ].join("\n");
     expect(decideRawRewrite(before, ["ent-people-ada-lovelace"])).toEqual({
-      action: "unsafe-shape",
+      action: "codec",
     });
+  });
+
+  test("a codec marker over an absent or placeholder section is not a codec page", () => {
+    // The parse gate fires for a marker AND a real section only
+    // (`rawCodec` is storedCodec: marker + rawSection), so the mirror
+    // falls through for these and the old flow's answers stand: a
+    // placeholder is still fillable, a missing section still has no
+    // home - neither is counted as anything.
+    const placeholder =
+      "---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n## Raw\n_(not provided)_\n";
+    expect(decideRawRewrite(placeholder, ["ent-c"])).toEqual({
+      action: "rewrite",
+      next: "---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n## Raw\nentities: ent-c\n",
+      appended: ["ent-c"],
+    });
+    expect(
+      decideRawRewrite("---\nkind: brain-signal\n_raw_codec: 0.22.0\n---\n\nbody\n", ["ent-c"]),
+    ).toEqual({ action: "no-home" });
   });
 
   test("an edit that widened the stored list keeps its ids", () => {

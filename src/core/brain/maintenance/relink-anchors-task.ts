@@ -349,6 +349,7 @@ export type RawRewriteDecision =
       readonly appended: ReadonlyArray<string>;
     }
   | { readonly action: "no-home" }
+  | { readonly action: "codec" }
   | { readonly action: "unsafe-shape" };
 
 const NO_REWRITE_HOME: RawRewriteDecision = Object.freeze({ action: "no-home" } as const);
@@ -358,30 +359,37 @@ const NO_REWRITE_HOME: RawRewriteDecision = Object.freeze({ action: "no-home" } 
  * returned - the drift re-check for the window between the pass's
  * `parseSignal` (whose bytes every gate above judged) and this read. A
  * page edited in that window would otherwise have the rewrite run on
- * bytes no gate checked: a Raw turned prose - a verbatim quote - or a
- * codec form is exactly the overwrite the shape gate exists to prevent,
- * and a line rebuilt from the parse's stored ids would drop an id the
- * edit stored. The decision re-runs the SAME hold-outs on the rewrite's
- * own bytes - the codec marker in the frontmatter, the raw shape in the
- * section - and rebuilds the stored half from them: a section that is
- * neither the extractor's one-line shape nor a fillable placeholder (nor
- * absent) is `unsafe-shape` and the caller skips the signal entirely; a
- * page with no Raw section at all is `no-home`; anything else rewrites
- * with the ids the bytes themselves store, so an edit that widened the
- * list keeps its ids, one that withdrew them is not resurrected, and one
- * that already stored a computed id makes `appended` - not the parse's
- * additions - the truth about what this rewrite adds. The caller still
- * writes through `expectBefore`, so an edit landing after this read
- * fails the write instead of being discarded.
+ * bytes no gate checked: a Raw turned prose - a verbatim quote - is the
+ * overwrite the shape gate exists to prevent, and a line rebuilt from
+ * the parse's stored ids would drop an id the edit stored. The decision
+ * re-runs the SAME hold-outs, with the parse gates' own semantics, on
+ * the rewrite's own bytes: a codec marker beside a real section is the
+ * parse-time codec gate's answer (`codec` - skipped like that gate,
+ * counted by neither arm); a section that is neither the extractor's
+ * one-line shape nor a fillable placeholder (nor absent) is
+ * `unsafe-shape` and the caller skips the signal entirely, counted where
+ * the parse-time shape gate counts; a page with no Raw section at all is
+ * `no-home`; anything else rewrites with the ids the bytes themselves
+ * store, so an edit that widened the list keeps its ids, one that
+ * withdrew them is not resurrected, and one that already stored a
+ * computed id makes `appended` - not the parse's additions - the truth
+ * about what this rewrite adds. The caller still writes through
+ * `expectBefore`, so an edit landing after this read fails the write
+ * instead of being discarded.
  */
 export function decideRawRewrite(before: string, added: ReadonlyArray<string>): RawRewriteDecision {
-  // The codec gate first, on the marker the bytes themselves carry: a
-  // compressed section is out of the line rewrite's reach even where the
-  // compressed SPELLING happens to read as the extractor's one line -
-  // the collapse that hid the section's real content is the whole
-  // reason the parse-time gate skips codec signals outright.
-  if (hasRawCodecMarker(before)) return { action: "unsafe-shape" };
   const bytesRaw = rawSectionBytes(before);
+  // The codec gate, on the marker the bytes themselves carry - but only
+  // where the parse gate fires too: `rawCodec` is true for a marker AND
+  // a real section, so a marker over an absent or placeholder section is
+  // not a codec page and falls through to the shape logic below, where
+  // the old flow already answered it. The compression is out of the line
+  // rewrite's reach even where the compressed SPELLING happens to read
+  // as the extractor's one line - the collapse that hid the section's
+  // real content is the whole reason the gate skips codec pages.
+  if (hasRawCodecMarker(before) && bytesRaw !== undefined && bytesRaw !== RAW_PLACEHOLDER) {
+    return { action: "codec" };
+  }
   if (bytesRaw !== undefined && bytesRaw !== RAW_PLACEHOLDER && !isExtractorRawShape(bytesRaw)) {
     return { action: "unsafe-shape" };
   }
@@ -694,6 +702,12 @@ export function runRelinkAnchors(vault: string, opts: RelinkAnchorsOptions): Rel
       // the rewrite's own bytes and rebuilds the stored half from them;
       // `expectBefore` still pins these bytes to the rename below.
       const decision = before === null ? NO_REWRITE_HOME : decideRawRewrite(before, added);
+      if (decision.action === "codec") {
+        // The parse-time codec gate's answer, on the truth bytes:
+        // skipped, counted by neither arm - the same page condition gets
+        // the same report numbers whatever the timing.
+        continue;
+      }
       if (decision.action === "unsafe-shape") {
         // The same hold-out as the parse-time gate, on the truth bytes:
         // skipped ENTIRELY, counted, never written. The next pass reads
