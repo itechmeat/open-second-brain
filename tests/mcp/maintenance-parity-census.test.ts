@@ -65,6 +65,16 @@ import {
 } from "../../src/core/brain/maintenance/custom-tasks.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
+// Measured caps on the tool's text: the registry keeps every description
+// short. Imported rather than restated so the two ratchets cannot drift -
+// the retry_tasks description enumerates the known lane tasks, so a lane
+// task's registration grows the measured length and the cap moves with the
+// population rather than shortening the text that names what an operator
+// may retry.
+import {
+  PROPERTY_DESCRIPTION_MAX as RETRY_PROPERTY_DESCRIPTION_MAX,
+  TOOL_DESCRIPTION_MAX,
+} from "../../src/mcp/registry-guard.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
@@ -553,14 +563,6 @@ describe("an unknown retry name is refused by name on both surfaces", () => {
     for (const task of LANE_TASKS) expect(message).toContain(task);
   });
 });
-
-/** Measured caps on the tool's text: the registry keeps every description short. */
-const TOOL_DESCRIPTION_MAX = 300;
-// The retry_tasks description enumerates the known lane tasks, so the fifth
-// task's registration (note-change truth maintenance) grew the measured
-// length; the cap moved with the population rather than shortening the text
-// that names what an operator may retry.
-const RETRY_PROPERTY_DESCRIPTION_MAX = 168;
 
 describe("the tool's text stays inside its budget", () => {
   test("description and retry_tasks property are measured, and name no configured task", () => {

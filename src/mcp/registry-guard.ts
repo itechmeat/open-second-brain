@@ -49,7 +49,12 @@
 import type { ToolDefinition } from "./tool-contract.ts";
 
 export const TOOL_DESCRIPTION_MAX = 300;
-export const PROPERTY_DESCRIPTION_MAX = 160;
+// The retry_tasks description enumerates the known lane tasks, so a fifth
+// task's registration (note-change truth maintenance) grew the measured
+// length; the cap moved with the population rather than shortening the text
+// that names what an operator may retry. This is the same number the
+// maintenance parity census measures against - keep the two in agreement.
+export const PROPERTY_DESCRIPTION_MAX = 168;
 
 /**
  * Shortest reason that can justify a preview-budget exemption. Sits with
