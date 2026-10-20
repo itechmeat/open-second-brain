@@ -353,6 +353,7 @@ describe("the mutation stage does not absorb a safeguard stop", () => {
       quarantined: [],
       topicKeyContentions: [],
       signalsToArchive: new Map(),
+      crossTopicRules: [],
     };
   }
 

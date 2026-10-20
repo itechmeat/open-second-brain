@@ -1467,8 +1467,14 @@ const DIRECT_WRITE_ROWS = 83;
  * signal page's `entities:` line in place through the shared atomic
  * writer on the apply arm - a dry-run-by-default repair pass over
  * existing signal pages, writing no note of its own.
+ *
+ * 125 -> 126: the cross-topic rule promotion (`src/core/brain/
+ * dream-plan-cross-topic.ts`) writes its `Brain/cross-topic-rules.json`
+ * daily-budget ledger through the shared atomic writer when a promotion
+ * fires - machine state beside the rollup ledger, written only on the
+ * changed path, needing no exclusion.
  */
-const SHARED_HELPER_ROWS = 125;
+const SHARED_HELPER_ROWS = 126;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1608,8 +1614,12 @@ const UNSTAMPED_DIRECT_ROWS = 82;
  * rewrites a signal page's `entities:` line through the shared atomic
  * writer on the apply arm - a dry-run-by-default repair pass over
  * existing signal pages; no origin stamp on a maintenance repair.
+ * 122 -> 123: the cross-topic rule promotion (`src/core/brain/
+ * dream-plan-cross-topic.ts`) writes its `Brain/cross-topic-rules.json`
+ * daily-budget ledger through the shared atomic writer when a promotion
+ * fires (machine state beside the rollup ledger; no origin stamp).
  */
-const UNSTAMPED_SHARED_ROWS = 122;
+const UNSTAMPED_SHARED_ROWS = 123;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

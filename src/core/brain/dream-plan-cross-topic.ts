@@ -1,0 +1,358 @@
+/**
+ * Cross-topic rule promotion (t_642bc2b8): the pure planner that elects
+ * ONE recurring cross-topic rule per owner token per calendar day, plus
+ * the `Brain/cross-topic-rules.json` ledger that carries that budget.
+ *
+ * One reason to change: what makes a pattern "recurring across topics"
+ * and what may be promoted about it. The deterministic, always-available
+ * signal is shared principle text across distinct topic buckets - the
+ * lexical layer the same-topic merge machinery (`findSimilarPairs`,
+ * `findMergeCandidates`) is blind to by construction, since both bucket
+ * entries by topic before comparing. This module inverts that walk:
+ * pairs are only considered ACROSS buckets, so a cluster is by
+ * construction something no same-topic pass could have acted on.
+ *
+ * The promoted artifact is an ordinary unconfirmed preference
+ * (`provenance: "inferred"`, `evidenced_by` wikilinks to every source,
+ * `related` lineage), written by the dream apply stage through
+ * `writePreferenceTxn` and left to the normal refresh/confirm/retire
+ * machinery afterwards. The planner is pure - no I/O, no wall clock;
+ * the ledger is read by the caller and the date comes from the pass's
+ * injected `now`, so the same corpus elects the same rule on every
+ * machine and a rerun plans nothing.
+ *
+ * Deliberate limits, named rather than hidden:
+ *
+ *   - Sources are never modified or retired. The planner only reads
+ *     `scan.preferences` and enqueues one new entry; the promotion is
+ *     append-only by construction.
+ *   - A source the same pass plans to retire is not eligible: citing a
+ *     rule the run is about to move into `retired/` would hang evidence
+ *     off a moved file.
+ *   - Sources must share one normalized owner token (ownerless counts
+ *     as the shared token). A cross-owner cluster is never promoted, so
+ *     owner-scoped recall cannot leak one agent's rules into another's
+ *     rule body.
+ *   - Because the rule restates a source verbatim, the hygiene dedup
+ *     detector and the digest's merge suggestions WILL eventually
+ *     nominate it against its own sources. Teaching those predicates to
+ *     skip pairs where one side cites the other is a follow-up unit;
+ *     this module only keeps its own output idempotent (content-derived
+ *     slug) so re-runs never multiply the artifact.
+ *   - Topic-keyed recall (`query.ts` compares raw topic bytes) will not
+ *     surface the rule: its synthetic topic is a key no signal carries.
+ *     The `related` lineage and evidence wikilinks are the way back to
+ *     it; stretching recall into that key is deliberately out of scope.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { sha256Hex } from "../integrity/digest.ts";
+import {
+  preferenceSlug,
+  topicKey,
+  RETIRED_ID_PREFIX,
+  type PlanState,
+  type ScanResult,
+} from "./dream-plan.ts";
+import type { RefreshResult } from "./dream-refresh.ts";
+import { preferenceOwner } from "./owner-scoped-facts.ts";
+import { crossTopicLedgerPath } from "./paths.ts";
+import { jaccard, tokenise } from "./similarity.ts";
+import { isoDate } from "./time.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainConfig } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+/**
+ * Minimum distinct folded topic buckets before a cluster may fire.
+ * Two is the smallest honest "across topics"; one would re-implement
+ * the same-topic merge machinery.
+ */
+export const DEFAULT_CROSS_TOPIC_MIN_TOPICS = 2;
+
+/**
+ * Principle-similarity floor for a cross-bucket pair. Matches the
+ * merge-suggestion detector's level (`merge-candidates.ts`): strict
+ * enough that a fired cluster reads as "the same rule stated twice in
+ * two subjects", loose enough that paraphrase counts.
+ */
+export const DEFAULT_CROSS_TOPIC_JACCARD = 0.6;
+
+/** On-disk ledger schema version. */
+export const CROSS_TOPIC_LEDGER_VERSION = 1;
+
+/** Slug prefix of every promoted rule, reserved by content shape. */
+const CROSS_SLUG_PREFIX = "cross-";
+
+/** Separator of the slug hash input (sorted source ids). */
+const SLUG_ID_JOIN = "\n";
+
+/** Separator of the synthetic topic display. */
+const TOPIC_JOIN = " + ";
+
+/** Resolved knobs the planner plans against. */
+export interface ResolvedCrossTopicConfig {
+  readonly minTopics: number;
+  readonly jaccard: number;
+}
+
+/**
+ * Resolve the planner knobs from the `cross_topic:` block. The block
+ * absent, or present with `enabled: false`, is OFF: `null` tells the
+ * caller to skip the planner (and the ledger read) entirely, which is
+ * what keeps an un-opted-in vault byte-identical.
+ */
+export function resolveCrossTopicConfig(cfg: BrainConfig): ResolvedCrossTopicConfig | null {
+  const block = cfg.cross_topic;
+  if (!block?.enabled) return null;
+  return Object.freeze({
+    minTopics: block.min_topics ?? DEFAULT_CROSS_TOPIC_MIN_TOPICS,
+    jaccard: block.jaccard ?? DEFAULT_CROSS_TOPIC_JACCARD,
+  });
+}
+
+/**
+ * Persisted daily budget: the last calendar date each owner token
+ * promoted a cross-topic rule. Read fail-open (absent or unparseable
+ * treats every owner as under budget - a corrupt ledger must never
+ * block the pass it audits).
+ */
+export interface CrossTopicLedger {
+  readonly version: number;
+  readonly last_promoted: Readonly<Record<string, string>>;
+}
+
+/** Read the ledger, or null when absent or unparseable (treated as fresh). */
+export function readCrossTopicLedger(vault: string): CrossTopicLedger | null {
+  const path = crossTopicLedgerPath(vault);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<CrossTopicLedger>;
+    return Object.freeze({
+      version: typeof parsed.version === "number" ? parsed.version : CROSS_TOPIC_LEDGER_VERSION,
+      last_promoted: Object.freeze({ ...parsed.last_promoted }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the ledger. Called only when a promotion fired. */
+export function writeCrossTopicLedger(vault: string, ledger: CrossTopicLedger): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J), the
+  // same discipline as the rollup ledger: the shared atomic writer
+  // keeps the write-site census exactly as it was.
+  assertVaultIdentityForWrite(vault);
+  atomicWriteFileSync(crossTopicLedgerPath(vault), `${JSON.stringify(ledger, null, 2)}\n`);
+}
+
+/** One eligible source preference, projected for the pair walk. */
+interface Source {
+  /** Raw scanned id (`pref-<slug>`, or a hand-authored bare id). */
+  readonly id: string;
+  /** Normalized slug behind {@link id}. */
+  readonly slug: string;
+  /** The normalized `pref-<slug>` form used for output and hashing. */
+  readonly normalizedId: string;
+  /** Folded topic key (the same fold the consolidation pass uses). */
+  readonly key: string;
+  /** Raw topic display as the file spells it. */
+  readonly topic: string;
+  readonly principle: string;
+  readonly tokens: ReadonlySet<string>;
+  /** Budget token: the owner's normalized token, or "" when ownerless. */
+  readonly ownerKey: string;
+}
+
+export interface CrossTopicPlannerInput {
+  readonly scan: ScanResult;
+  /**
+   * Post-refresh status: a preference the refresh pass promotes to
+   * `confirmed` THIS run is an eligible source even though its scanned
+   * frontmatter still says `unconfirmed` - the apply stage will have
+   * promoted it before the cross-topic write lands.
+   */
+  readonly refresh: RefreshResult;
+  /** Resolved knobs, or null when the feature is off. */
+  readonly config: ResolvedCrossTopicConfig | null;
+  /** Prior ledger, or null when none has been written yet. */
+  readonly ledger: CrossTopicLedger | null;
+  /** The pass's injected clock; the budget date comes from here. */
+  readonly now: Date;
+  /** Entries are pushed onto `plan.crossTopicRules`. */
+  readonly plan: PlanState;
+}
+
+export interface CrossTopicPlannerResult {
+  readonly fired: boolean;
+  /**
+   * The complete updated ledger to persist when `fired`; null otherwise,
+   * so a below-threshold or budgeted-out pass never touches the file -
+   * the same byte-identical opt-out the rollup ledger uses.
+   */
+  readonly ledger: CrossTopicLedger | null;
+}
+
+/**
+ * Plan the pass's cross-topic promotions. Deterministic in its inputs:
+ * sources are walked in code-unit id order, edges in that order, roots
+ * are the smallest member index, clusters are elected by their sorted
+ * source-id join, and at most one cluster per owner token fires (the
+ * daily budget, stamped into the returned ledger).
+ */
+export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPlannerResult {
+  const { scan, refresh, config, ledger, now, plan } = input;
+  if (config === null) return { fired: false, ledger: null };
+  const today = isoDate(now);
+
+  const sources = collectSources(scan, refresh, plan);
+  const clusters = electClusters(sources, config);
+  const lastPromoted: Record<string, string> = { ...ledger?.last_promoted };
+  let fired = false;
+
+  for (const cluster of clusters) {
+    const ownerKey = cluster.members[0]!.ownerKey;
+    // The daily budget: one promotion per owner token per calendar
+    // day, checked BEFORE anything else so a budgeted-out pass is a
+    // no-op rather than a changed run that wrote nothing.
+    if (lastPromoted[ownerKey] === today) continue;
+    const normalizedIds = cluster.members.map((m) => m.normalizedId);
+    const slug = `${CROSS_SLUG_PREFIX}${sha256Hex(normalizedIds.join(SLUG_ID_JOIN)).slice(0, 12)}`;
+    if (slugTaken(slug, scan)) continue;
+    lastPromoted[ownerKey] = today;
+    fired = true;
+    const representative = cluster.members[0]!;
+    plan.crossTopicRules.push(
+      Object.freeze({
+        slug,
+        topic: [...new Set(cluster.members.map((m) => m.topic))].sort().join(TOPIC_JOIN),
+        principle: representative.principle,
+        evidencedBy: Object.freeze(normalizedIds.map((id) => `[[${id}]]`)),
+        related: Object.freeze(normalizedIds),
+        ...(ownerKey ? { owner: ownerKey } : {}),
+      }),
+    );
+  }
+
+  return {
+    fired,
+    ledger: fired
+      ? Object.freeze({
+          version: CROSS_TOPIC_LEDGER_VERSION,
+          last_promoted: Object.freeze(lastPromoted),
+        })
+      : null,
+  };
+}
+
+/**
+ * The eligible source pool: confirmed preferences (at scan time or by
+ * this run's refresh) that the pass is not retiring, projected and
+ * sorted by raw id in code-unit order so every downstream choice is a
+ * property of the corpus alone.
+ */
+function collectSources(scan: ScanResult, refresh: RefreshResult, plan: PlanState): Source[] {
+  const retiring = new Set(plan.retires.map((r) => r.slug));
+  const sources: Source[] = [];
+  for (const record of scan.preferences) {
+    const slug = preferenceSlug(record.pref.id);
+    const confirmed =
+      record.pref.status === BRAIN_PREFERENCE_STATUS.confirmed || refresh.confirmed.has(slug);
+    if (!confirmed || retiring.has(slug)) continue;
+    const owner = preferenceOwner(record.pref);
+    sources.push({
+      id: record.pref.id,
+      slug,
+      normalizedId: `pref-${slug}`,
+      key: topicKey(record.pref.topic),
+      topic: record.pref.topic,
+      principle: record.pref.principle,
+      tokens: tokenise(record.pref.principle),
+      ownerKey: owner ?? "",
+    });
+  }
+  sources.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return sources;
+}
+
+interface Cluster {
+  /** Members in code-unit id order (the source pool's order). */
+  readonly members: Source[];
+  /** Sorted-id join; the cluster's deterministic election key. */
+  readonly idJoin: string;
+}
+
+/**
+ * Union sources across bucket boundaries wherever their principles are
+ * similar enough, then keep the components that span at least
+ * `min_topics` distinct buckets and share one owner token, ordered by
+ * their sorted source-id join.
+ *
+ * Same-bucket pairs never edge, so a bucket of mutual near-duplicates
+ * is invisible here by construction - that is the merge machinery's
+ * job, and it already has it.
+ */
+function electClusters(
+  sources: ReadonlyArray<Source>,
+  config: ResolvedCrossTopicConfig,
+): Cluster[] {
+  const parent = sources.map((_, i) => i);
+  const find = (start: number): number => {
+    let i = start;
+    while (parent[i] !== i) {
+      const grandparent = parent[parent[i]!]!;
+      parent[i] = grandparent;
+      i = grandparent;
+    }
+    return i;
+  };
+  for (let i = 0; i < sources.length; i++) {
+    for (let j = i + 1; j < sources.length; j++) {
+      const a = sources[i]!;
+      const b = sources[j]!;
+      if (a.key === b.key) continue;
+      if (a.ownerKey !== b.ownerKey) continue;
+      if (jaccard(a.tokens, b.tokens) < config.jaccard) continue;
+      const ra = find(i);
+      const rb = find(j);
+      if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+    }
+  }
+
+  const byRoot = new Map<number, Source[]>();
+  for (let i = 0; i < sources.length; i++) {
+    const root = find(i);
+    const members = byRoot.get(root) ?? [];
+    members.push(sources[i]!);
+    byRoot.set(root, members);
+  }
+
+  const clusters: Cluster[] = [];
+  for (const members of byRoot.values()) {
+    const keys = new Set(members.map((m) => m.key));
+    if (keys.size < config.minTopics) continue;
+    clusters.push({ members, idJoin: members.map((m) => m.normalizedId).join(SLUG_ID_JOIN) });
+  }
+  clusters.sort((a, b) => (a.idJoin < b.idJoin ? -1 : a.idJoin > b.idJoin ? 1 : 0));
+  return clusters;
+}
+
+/**
+ * Whether the promoted file (or its tombstone) already exists. The
+ * content-derived slug makes this exact: the same source set maps to
+ * one slug forever, so a present id - live or retired - is proof the
+ * cluster already promoted, and a rerun must plan nothing.
+ */
+function slugTaken(slug: string, scan: ScanResult): boolean {
+  for (const p of scan.preferences) {
+    if (preferenceSlug(p.pref.id) === slug) return true;
+  }
+  for (const r of scan.retired) {
+    const retiredSlug = r.id.startsWith(RETIRED_ID_PREFIX)
+      ? r.id.slice(RETIRED_ID_PREFIX.length)
+      : r.id;
+    if (retiredSlug === slug) return true;
+  }
+  return false;
+}
