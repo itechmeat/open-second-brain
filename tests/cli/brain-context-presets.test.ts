@@ -42,6 +42,23 @@ test("brain context-presets show/suggest/diff returns dry-run diagnostics", asyn
     reason: "context window 128000 tokens resolved from declared matched long-context",
   });
 
+  // The disagreeing-model case: a declared table id that also matches a
+  // hint must suggest the mapping the pack budget derives from.
+  const hintAndTable = await runCli([
+    "brain",
+    "context-presets",
+    "suggest",
+    "--model",
+    "gpt-4.1-mini",
+    "--json",
+  ]);
+  expect(hintAndTable.returncode).toBe(0);
+  expect(JSON.parse(hintAndTable.stdout)).toMatchObject({
+    preset_id: "long-context",
+    confidence: "high",
+    reason: "context window 1000000 tokens resolved from declared matched long-context",
+  });
+
   const diff = await runCli([
     "brain",
     "context-presets",

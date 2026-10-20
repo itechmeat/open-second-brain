@@ -4,6 +4,7 @@ import {
   diffContextPreset,
   getContextPreset,
   listContextPresets,
+  presetForWindowTokens,
   suggestContextPreset,
 } from "../../../src/core/brain/context-presets.ts";
 
@@ -62,18 +63,46 @@ describe("context budget presets", () => {
     });
   });
 
-  test("a hint match never masquerades as a resolved window in the same call", () => {
-    // The vocabulary accident the recon names, in full: "gemini" contains
-    // the hint "mini", so the hint answers byte-identically to every
-    // release before the resolver - and no window resolution is claimed
-    // for the same call.
+  test("a resolved window beats a model hint; a hint-only model keeps the hint", () => {
+    // "gemini-2.5-pro-1m" contains the hint "mini", but the id also
+    // carries a published `-1m` suffix. The resolver decides, because the
+    // derivation surfaces size every budget from this same resolved
+    // window - the suggestion must name the mapping the pack uses.
     const suggestion = suggestContextPreset({ model: "gemini-2.5-pro-1m" });
-    expect(suggestion).toMatchObject({
+    expect(suggestion).toEqual({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 1000000 tokens resolved from suffix matched long-context",
+      preset: getContextPreset("long-context")!,
+      resolvedWindow: { windowTokens: 1_000_000, source: "suffix", clamped: false },
+    });
+    // A hint-only model - the resolver has nothing published for it - keeps
+    // today's byte-identical hint answer, and no window resolution is
+    // claimed for the same call.
+    const hintOnly = suggestContextPreset({ model: "gemini-2.5-flash" });
+    expect(hintOnly).toMatchObject({
       preset_id: "tight-context",
       confidence: "high",
       reason: "model hint matched tight-context",
     });
-    expect(suggestion.resolvedWindow).toBeUndefined();
+    expect(hintOnly.resolvedWindow).toBeUndefined();
+  });
+
+  test("a table-declared window beats a hint, so suggest agrees with the pack budget", () => {
+    // The disagreeing-model case the review names: `gpt-4.1-mini` matches
+    // the "mini" hint AND the declared table. The pack derives from the
+    // resolved 1M window and budgets long-context; the suggestion used to
+    // answer tight-context from the hint - two mappings for one model.
+    const suggestion = suggestContextPreset({ model: "gpt-4.1-mini" });
+    expect(suggestion).toEqual({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 1000000 tokens resolved from declared matched long-context",
+      preset: getContextPreset("long-context")!,
+      resolvedWindow: { windowTokens: 1_000_000, source: "declared", clamped: false },
+    });
+    // The mapping the pack sizes from names the same preset.
+    expect(presetForWindowTokens(suggestion.resolvedWindow!.windowTokens).id).toBe("long-context");
   });
 
   test("an explicit window keeps today's exact answer with nothing resolved", () => {

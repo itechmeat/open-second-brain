@@ -85,6 +85,16 @@ describe("brain_context_presets tool", () => {
       confidence: "medium",
       reason: "context window 200000 tokens resolved from default matched long-context",
     });
+    // The disagreeing-model case: "gpt-4.1-mini" matches the "mini" hint
+    // AND the declared table. The suggestion must name the long-context
+    // mapping the pack budget derives from, not the hint's tight-context.
+    await expect(
+      callPresets({ operation: "suggest", model: "gpt-4.1-mini" }),
+    ).resolves.toMatchObject({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 1000000 tokens resolved from declared matched long-context",
+    });
     // No model and no window keeps the conservative fallback.
     await expect(callPresets({ operation: "suggest" })).resolves.toMatchObject({
       preset_id: "tight-context",

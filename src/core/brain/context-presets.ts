@@ -34,10 +34,12 @@ export interface ContextPresetSuggestion {
   readonly reason: string;
   readonly preset: ContextBudgetPreset;
   /**
-   * Present only when the window was RESOLVED from the model id - the
-   * path taken when no explicit window was given and no `model_hints`
-   * substring matched. A hint match never masquerades as a resolved
-   * window: the two mechanisms do not both fire for one call.
+   * Present only when the window was RESOLVED from the model id through
+   * the shared resolver AND that resolution decided the preset (a
+   * declared table hit, a `1m` suffix, or the default when no hint
+   * outranks it). An explicit window is the caller's own number, and a
+   * hint-only model answers from its hint: neither claims a resolved
+   * window.
    */
   readonly resolvedWindow?: ResolvedModelWindow;
 }
@@ -133,16 +135,10 @@ export function presetForWindowTokens(window: number): ContextBudgetPreset {
 
 export function suggestContextPreset(input: ContextPresetSuggestionInput): ContextPresetSuggestion {
   const model = input.model?.toLowerCase() ?? "";
-  const byModel = PRESETS.find((preset) => preset.model_hints.some((hint) => model.includes(hint)));
-  if (byModel) {
-    return {
-      preset_id: byModel.id,
-      confidence: "high",
-      reason: `model hint matched ${byModel.id}`,
-      preset: byModel,
-    };
-  }
 
+  // An explicit window is the caller's own number and wins over anything
+  // heuristic, exactly as the operator-config channel wins in the
+  // resolver - it keeps today's exact answer, with nothing resolved.
   const window = input.contextWindowTokens;
   if (window !== undefined && Number.isFinite(window)) {
     const byWindow = presetForWindowTokens(window);
@@ -154,21 +150,47 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
     };
   }
 
-  // No hint and no explicit window: resolve the window from the model id
-  // through the shared resolver (declared table > `1m` suffix > default)
-  // and size from the resolved window. The resolution source is disclosed
-  // in the reason and carried structurally; a `default`-sourced window is
-  // an assumption about the host, not a published fact, so it answers
-  // with `medium` confidence. Without a model id nothing is resolvable
-  // and the conservative fallback below stands, byte-identical.
+  // The window resolves FIRST, through the same resolver every derived
+  // budget sizes from, so a suggestion can never name a different mapping
+  // than the pack uses for the same model (the reviewed disagreement: a
+  // table-declared id that also matches a hint answered tight-context
+  // here while the pack budgeted long-context). A `model_hints`
+  // substring answers only when the resolver has nothing published to
+  // say - a hint-only model keeps its byte-identical hint answer, and a
+  // hint never masquerades as a resolved window.
   if (model !== "") {
     const resolved = resolveModelContextWindowTokens({ model: input.model });
+    if (resolved.source !== "default") {
+      const byWindow = presetForWindowTokens(resolved.windowTokens);
+      const clampedNote = resolved.clamped ? " (clamped)" : "";
+      return {
+        preset_id: byWindow.id,
+        confidence: "high",
+        reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source}${clampedNote} matched ${byWindow.id}`,
+        preset: byWindow,
+        resolvedWindow: resolved,
+      };
+    }
+    const byModel = PRESETS.find((preset) =>
+      preset.model_hints.some((hint) => model.includes(hint)),
+    );
+    if (byModel) {
+      return {
+        preset_id: byModel.id,
+        confidence: "high",
+        reason: `model hint matched ${byModel.id}`,
+        preset: byModel,
+      };
+    }
+    // The default-sourced window is an assumption about the host, not a
+    // published fact, so it answers with `medium` confidence; the
+    // resolution source is disclosed in the reason and carried
+    // structurally.
     const byWindow = presetForWindowTokens(resolved.windowTokens);
-    const clampedNote = resolved.clamped ? " (clamped)" : "";
     return {
       preset_id: byWindow.id,
-      confidence: resolved.source === "default" ? "medium" : "high",
-      reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source}${clampedNote} matched ${byWindow.id}`,
+      confidence: "medium",
+      reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source} matched ${byWindow.id}`,
       preset: byWindow,
       resolvedWindow: resolved,
     };
