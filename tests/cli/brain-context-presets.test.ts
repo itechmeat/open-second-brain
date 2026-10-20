@@ -59,6 +59,24 @@ test("brain context-presets show/suggest/diff returns dry-run diagnostics", asyn
     reason: "context window 1000000 tokens resolved from declared matched long-context",
   });
 
+  // A hint-only model - nothing published resolves for the id - answers
+  // from its hint; the pack budget derivation applies the same fallback,
+  // so both surfaces name one mapping for the model.
+  const hintOnly = await runCli([
+    "brain",
+    "context-presets",
+    "suggest",
+    "--model",
+    "gemini-2.5-flash",
+    "--json",
+  ]);
+  expect(hintOnly.returncode).toBe(0);
+  expect(JSON.parse(hintOnly.stdout)).toMatchObject({
+    preset_id: "tight-context",
+    confidence: "high",
+    reason: "model hint matched tight-context",
+  });
+
   const diff = await runCli([
     "brain",
     "context-presets",

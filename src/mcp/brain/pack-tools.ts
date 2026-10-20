@@ -68,6 +68,7 @@ import {
   diffContextPreset,
   getContextPreset,
   listContextPresets,
+  presetForResolvedWindow,
   presetForWindowTokens,
   suggestContextPreset,
   type ContextPresetCurrentConfig,
@@ -262,9 +263,12 @@ async function toolBrainContextPack(
   // Derived budget (t_a567cc12): an explicit `max_tokens` is first-class
   // and untouched. When it is omitted, the budget derives from the model
   // context window the resolver resolves, through the matching preset's
-  // `context_pack.max_tokens` - the curated mapping. With nothing
-  // resolvable the call refuses exactly as before: the pinned decision is
-  // never a silent default budget.
+  // `context_pack.max_tokens` - the curated mapping. A `default`-sourced
+  // window defers to the model's hint preset, the same mapping
+  // `brain_context_presets` suggest answers, so one model gets one budget
+  // and one suggestion on every surface. With nothing resolvable the call
+  // refuses exactly as before: the pinned decision is never a silent
+  // default budget.
   let maxTokens: number;
   let maxTokensSource: ModelWindowSource | undefined;
   if (maxTokensArg !== undefined) {
@@ -282,7 +286,11 @@ async function toolBrainContextPack(
         "brain_context_pack: max_tokens must be a positive integer",
       );
     }
-    maxTokens = presetForWindowTokens(resolved.windowTokens).context_pack.max_tokens;
+    // The hint fallback rides along exactly when the resolver's answer is
+    // the default-sourced assumption, so a hint-only model budgets the
+    // preset `brain_context_presets` suggest names for it; the source
+    // disclosed on the wire stays the window's.
+    maxTokens = presetForResolvedWindow(model, resolved).context_pack.max_tokens;
     maxTokensSource = resolved.source;
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
@@ -1232,12 +1240,12 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "Strict upper bound on the returned slice's tokens. Omitted: derives from the resolved model window, channel named in `max_tokens_source`; nothing resolvable is refused.",
+            "Strict upper bound on the returned slice's tokens. Omitted: derives from the resolved model window, channel named in `max_tokens_source`; a `default`-sourced window defers to the model's preset hint. Nothing resolvable is refused.",
         },
         model: {
           type: "string",
           description:
-            "Optional model id hint. With `max_tokens` omitted, the context window resolves from this id (declared table, `-1m` suffix, or default) after operator and env overrides.",
+            "Optional model id hint. With `max_tokens` omitted, the context window resolves from this id (declared table, `-1m` suffix, or default) after operator and env overrides; an id nothing published resolves budgets from its preset hint, the same mapping `brain_context_presets` suggest names.",
         },
         query: {
           type: "string",

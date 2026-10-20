@@ -120,7 +120,10 @@ export function getContextPreset(id: string): ContextBudgetPreset | null {
  * The preset whose window bucket contains `window`. The one definition of
  * the bucket mapping - suggest sizes from it, and so does every surface
  * that derives a budget from a resolved window (t_a567cc12) - so a caller
- * can never size from a different mapping than a suggestion named.
+ * can never size from a different mapping than a suggestion named. A
+ * budget derived for a MODEL goes through {@link presetForResolvedWindow},
+ * which layers the shared hint fallback on this mapping when the
+ * resolver's answer is the default-sourced assumption.
  */
 export function presetForWindowTokens(window: number): ContextBudgetPreset {
   const hit = PRESETS.find(
@@ -133,12 +136,55 @@ export function presetForWindowTokens(window: number): ContextBudgetPreset {
   return hit ?? PRESETS[0]!;
 }
 
+/**
+ * The `model_hints` fallback, defined once: the preset whose hint list
+ * contains a substring of the id. {@link suggestContextPreset} answers
+ * from it when the resolver has nothing published to say, and
+ * {@link presetForResolvedWindow} budgets from it on exactly the same
+ * condition - so a hint-only model suggests and budgets one mapping.
+ */
+function hintPresetForModel(model: string | null | undefined): ContextBudgetPreset | null {
+  const id = model?.toLowerCase() ?? "";
+  if (id === "") return null;
+  return PRESETS.find((preset) => preset.model_hints.some((hint) => id.includes(hint))) ?? null;
+}
+
+/**
+ * The preset a DERIVED budget sizes from for one model id: the mapping
+ * the resolved window names - except when that answer is the resolver's
+ * `default`-sourced assumption about the host, where the same
+ * `model_hints` fallback {@link suggestContextPreset} answers with
+ * applies, so a hint-only id (the reviewed disagreement: `gemini-2.5-flash`
+ * suggested tight-context from its hint while the pack budgeted
+ * long-context from the default window) budgets and suggests one mapping.
+ * An id the table knows resolves from the table on both surfaces and
+ * never from its hint; a model-free call (an operator channel resolved
+ * the window) has no hint to apply and sizes from the resolved window.
+ * The window's `source` stays what the surface discloses either way.
+ */
+export function presetForResolvedWindow(
+  model: string | null | undefined,
+  resolved: ResolvedModelWindow,
+): ContextBudgetPreset {
+  if (resolved.source === "default") {
+    const byHint = hintPresetForModel(model);
+    if (byHint !== null) return byHint;
+  }
+  return presetForWindowTokens(resolved.windowTokens);
+}
+
 export function suggestContextPreset(input: ContextPresetSuggestionInput): ContextPresetSuggestion {
   const model = input.model?.toLowerCase() ?? "";
 
-  // An explicit window is the caller's own number and wins over anything
-  // heuristic, exactly as the operator-config channel wins in the
-  // resolver - it keeps today's exact answer, with nothing resolved.
+  // Order (deliberate, changed by this branch from the hint-first order
+  // it replaced): an explicit window wins over a matching `model_hints`
+  // substring. The window is authoritative - it is the caller's own
+  // number for the deployment at hand, the same figure a derived budget
+  // sizes from, just as the operator-config channel is authoritative in
+  // the resolver - while a hint is a heuristic read off the id, and a
+  // hint answers only when the resolver has nothing published to say. A
+  // caller passing both therefore gets the window's mapping, and nothing
+  // is resolved: the number was given, not inferred.
   const window = input.contextWindowTokens;
   if (window !== undefined && Number.isFinite(window)) {
     const byWindow = presetForWindowTokens(window);
@@ -152,12 +198,13 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
 
   // The window resolves FIRST, through the same resolver every derived
   // budget sizes from, so a suggestion can never name a different mapping
-  // than the pack uses for the same model (the reviewed disagreement: a
-  // table-declared id that also matches a hint answered tight-context
-  // here while the pack budgeted long-context). A `model_hints`
-  // substring answers only when the resolver has nothing published to
-  // say - a hint-only model keeps its byte-identical hint answer, and a
-  // hint never masquerades as a resolved window.
+  // than the pack uses for the same model: a table-declared id that also
+  // matches a hint answers from the table here AND in the pack budget
+  // (the reviewed disagreement), and a hint-only id falls to the SAME
+  // `model_hints` fallback on both surfaces - the pack derivation applies
+  // it through presetForResolvedWindow whenever the resolver's
+  // answer is the default-sourced assumption. A hint never masquerades as
+  // a resolved window: the hint answer claims no `resolvedWindow`.
   if (model !== "") {
     const resolved = resolveModelContextWindowTokens({ model: input.model });
     if (resolved.source !== "default") {
@@ -171,9 +218,7 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
         resolvedWindow: resolved,
       };
     }
-    const byModel = PRESETS.find((preset) =>
-      preset.model_hints.some((hint) => model.includes(hint)),
-    );
+    const byModel = hintPresetForModel(input.model);
     if (byModel) {
       return {
         preset_id: byModel.id,

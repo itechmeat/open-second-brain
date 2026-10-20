@@ -4,9 +4,11 @@ import {
   diffContextPreset,
   getContextPreset,
   listContextPresets,
+  presetForResolvedWindow,
   presetForWindowTokens,
   suggestContextPreset,
 } from "../../../src/core/brain/context-presets.ts";
+import { resolveModelContextWindowTokens } from "../../../src/core/brain/model-window.ts";
 
 describe("context budget presets", () => {
   test("exposes named tight and long context presets", () => {
@@ -105,6 +107,43 @@ describe("context budget presets", () => {
     expect(presetForWindowTokens(suggestion.resolvedWindow!.windowTokens).id).toBe("long-context");
   });
 
+  test("a hint-only model budgets the same preset suggest answers", () => {
+    // The remaining disagreement the review names: for an id the declared
+    // table does not know, the resolver answers the default window, the
+    // pack budgeted long-context (24k) from it, while suggest answered the
+    // hint (tight-context, 4k) - two mappings for one model. The budget
+    // derivation now applies the same `model_hints` fallback suggest uses
+    // whenever the resolver's source is "default"; the disclosed source
+    // stays the window's.
+    for (const id of ["gemini-2.5-flash", "claude-3-haiku"]) {
+      const suggestion = suggestContextPreset({ model: id });
+      expect(suggestion).toMatchObject({
+        preset_id: "tight-context",
+        confidence: "high",
+        reason: "model hint matched tight-context",
+      });
+      const resolved = resolveModelContextWindowTokens({ model: id });
+      expect(resolved.source).toBe("default");
+      const budgetPreset = presetForResolvedWindow(id, resolved);
+      expect(budgetPreset.id).toBe(suggestion.preset_id);
+      expect(budgetPreset.context_pack.max_tokens).toBe(suggestion.preset.context_pack.max_tokens);
+    }
+    // A table-known id keeps the table's mapping and never its hint, on
+    // both surfaces: "gpt-4.1-mini" matches "mini" but resolves declared 1M.
+    const declared = resolveModelContextWindowTokens({ model: "gpt-4.1-mini" });
+    expect(declared.source).toBe("declared");
+    expect(presetForResolvedWindow("gpt-4.1-mini", declared).id).toBe("long-context");
+    expect(suggestContextPreset({ model: "gpt-4.1-mini" }).preset_id).toBe("long-context");
+    // No model, no hint to fall back on: the resolved window decides.
+    expect(
+      presetForResolvedWindow(undefined, {
+        windowTokens: 200_000,
+        source: "default",
+        clamped: false,
+      }).id,
+    ).toBe("long-context");
+  });
+
   test("an explicit window keeps today's exact answer with nothing resolved", () => {
     const suggestion = suggestContextPreset({ model: "kimi-k2", contextWindowTokens: 8000 });
     expect(suggestion).toMatchObject({
@@ -113,6 +152,35 @@ describe("context budget presets", () => {
       reason: "context window 8000 tokens matched tight-context",
     });
     expect(suggestion.resolvedWindow).toBeUndefined();
+  });
+
+  test("an explicit window beats a model hint when both are given", () => {
+    // The shipped order, pinned in both directions of the disagreement:
+    // the `model_hints` check used to run first, so `gpt-4o-mini` with an
+    // explicit 128000 window answered tight-context from the "mini" hint
+    // while the window named long-context. The window is authoritative -
+    // it is the caller's own number for the deployment at hand, the same
+    // figure a derived budget sizes from - and a hint answers only when
+    // the resolver has nothing to say, so the window's mapping wins.
+    const hintTight = suggestContextPreset({
+      model: "gpt-4o-mini",
+      contextWindowTokens: 128_000,
+    });
+    expect(hintTight).toEqual({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 128000 tokens matched long-context",
+      preset: getContextPreset("long-context")!,
+    });
+    // The number was given, not resolved: nothing is claimed.
+    expect(hintTight.resolvedWindow).toBeUndefined();
+    expect(
+      suggestContextPreset({ model: "claude-sonnet-4", contextWindowTokens: 8_000 }),
+    ).toMatchObject({
+      preset_id: "tight-context",
+      confidence: "high",
+      reason: "context window 8000 tokens matched tight-context",
+    });
   });
 
   test("no model and no window keeps the conservative fallback", () => {

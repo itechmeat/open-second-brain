@@ -101,4 +101,18 @@ describe("brain_context_presets tool", () => {
       confidence: "low",
     });
   });
+
+  test("a hint-only model answers its hint, the mapping the pack budget derives", async () => {
+    // "gemini-2.5-flash" is unknown to the declared table: the resolver
+    // answers the default window, but the hint decides on BOTH surfaces -
+    // this suggest answer and the pack budget derivation that applies the
+    // same fallback when the resolver's source is "default".
+    await expect(
+      callPresets({ operation: "suggest", model: "gemini-2.5-flash" }),
+    ).resolves.toMatchObject({
+      preset_id: "tight-context",
+      confidence: "high",
+      reason: "model hint matched tight-context",
+    });
+  });
 });

@@ -176,6 +176,39 @@ test("brain context-pack derives from a 1m-suffix model", async () => {
   expect(json.max_tokens_source).toBe("suffix");
 });
 
+test("brain context-pack budgets a hint-only model from its hint, like suggest", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "gemini-2.5-flash", "--json"],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  // Unknown to the declared table, the resolver answers the default
+  // window; the budget defers to the model's hint (tight-context), the
+  // same mapping `brain context-presets suggest` answers for the id.
+  expect(json.max_tokens).toBe(4_000);
+  expect(json.max_tokens_source).toBe("default");
+});
+
+test("brain context-pack keeps the declared mapping for a table-known hinted model", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "gpt-4.1-mini", "--json"],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  // "gpt-4.1-mini" matches the "mini" hint AND the declared table; the
+  // declared 1M window decides on both surfaces, never the hint.
+  expect(json.max_tokens).toBe(24_000);
+  expect(json.max_tokens_source).toBe("declared");
+});
+
 test("brain context-pack derives from the vault context block without --model", async () => {
   writePref("core", "core principle", "tier: core");
   writeFileSync(

@@ -8,12 +8,14 @@
  * `--max-tokens` is optional (t_a567cc12): when it is omitted, the
  * budget derives from the model context window the shared resolver
  * resolves - the vault's `context:` block, the environment override, or
- * `--model`, in that precedence - through the matching preset. With
- * nothing resolvable the verb refuses exactly as it always has: never a
- * silent default budget.
+ * `--model`, in that precedence - through the matching preset. An id
+ * nothing published resolves (no table row, no `1m` suffix) budgets from
+ * its preset hint, the same mapping `brain context-presets suggest`
+ * answers. With nothing resolvable the verb refuses exactly as it always
+ * has: never a silent default budget.
  */
 
-import { presetForWindowTokens } from "../../../core/brain/context-presets.ts";
+import { presetForResolvedWindow } from "../../../core/brain/context-presets.ts";
 import {
   resolveModelContextWindowTokens,
   type ModelWindowSource,
@@ -77,7 +79,11 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
       ...(operatorWindow !== undefined ? { operatorWindowTokens: operatorWindow } : {}),
       ...(envWindow !== undefined ? { envWindowTokens: envWindow } : {}),
     });
-    maxTokens = presetForWindowTokens(resolved.windowTokens).context_pack.max_tokens;
+    // The hint fallback rides along exactly when the resolver's answer is
+    // the default-sourced assumption, so a hint-only model budgets the
+    // preset `brain context-presets suggest` names for it; the source
+    // printed below stays the window's.
+    maxTokens = presetForResolvedWindow(model, resolved).context_pack.max_tokens;
     maxTokensSource = resolved.source;
   }
 

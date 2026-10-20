@@ -1097,6 +1097,31 @@ describe("brain_context_pack tool — derived budget", () => {
     expect(out["max_tokens_source"]).toBe("suffix");
   });
 
+  test("a hint-only model budgets the preset suggest answers for it", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // "gemini-2.5-flash" is unknown to the declared table: the resolver
+    // answers the default window, which used to budget long-context (24k)
+    // while suggest answered the model's hint (tight-context, 4k). The
+    // derivation applies the same hint fallback suggest uses, so one model
+    // gets one mapping; the disclosed source stays the window's.
+    const out = await callPack(server, { model: "gemini-2.5-flash" });
+    expect(out["max_tokens"]).toBe(4_000);
+    expect(out["max_tokens_source"]).toBe("default");
+  });
+
+  test("a table-known model still ignores its hint", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // "gpt-4.1-mini" matches the "mini" hint AND the declared table: the
+    // declared 1M window decides the budget, never the hint.
+    const out = await callPack(server, { model: "gpt-4.1-mini" });
+    expect(out["max_tokens"]).toBe(24_000);
+    expect(out["max_tokens_source"]).toBe("declared");
+  });
+
   test("the operator context block resolves without a model", async () => {
     writeOnePref();
     writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 150000\n");
