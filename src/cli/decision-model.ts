@@ -19,9 +19,9 @@
  *                    the daily gate. A use that is off is refused by
  *                    name before anything is sent. A promote verdict
  *                    writes the machine-side tuning mark only when the
- *                    grade record exists and the counted spend stayed
- *                    under the gate; anything else leaves the gate
- *                    exactly as it was.
+ *                    grade record exists and the day's recorded spend
+ *                    stayed under the gate; anything else leaves the
+ *                    gate exactly as it was.
  *   eval list        the cached grade records, oldest first, in prose or
  *                    `--json`; malformed records are skipped with a named
  *                    note, never silently.

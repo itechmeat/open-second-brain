@@ -11,7 +11,7 @@
  * against the fake provider - no real model calls in tests.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +28,7 @@ import {
   decisionEvalSpecHash,
   type DecisionEvalSpec,
 } from "../../../src/core/decision-model/eval-spec.ts";
-import { runDecisionModelEval } from "../../../src/core/decision-model/eval/grade.ts";
+import { runDecisionModelEval, scoreRecall } from "../../../src/core/decision-model/eval/grade.ts";
 import {
   resetTuningMarkCache,
   validatedTuningMark,
@@ -427,10 +427,12 @@ describe("runDecisionModelEval", () => {
     expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
   });
 
-  test("a promote whose counted spend passed the daily cost gate refuses the mark", async () => {
-    // Every request starts under the gate but the run's total lands past
-    // it: the verdict is promote and the spend is real, yet the mark
-    // waits for a run whose counted spend stayed under the gate.
+  test("a promote whose day's recorded spend reached the daily cost gate refuses the mark", async () => {
+    // The gate reads the vault's total for the whole UTC day - this run's
+    // own records included, alongside anything else that spent today. The
+    // run's records push that day total past the gate: the verdict is
+    // promote and the spend is real, yet the day's recorded spend has
+    // reached the gate, so the mark waits for a run that stays under it.
     const result = await runDecisionModelEval("rerank", {
       config: evalConfig({ dailyCostGateUsd: 42.5, inputPriceUsdPerMtok: 1 }),
       provider: new FakeDecisionProvider({
@@ -444,8 +446,52 @@ describe("runDecisionModelEval", () => {
     expect(result.counted.error).toBe(0);
     expect(todaySpendUsd(vault)).toBeGreaterThanOrEqual(42.5);
     expect(result.mark_written).toBe(false);
-    expect(result.mark_note).toMatch(/cost gate/);
+    expect(result.mark_note).toMatch(/today's recorded spend reached the daily cost gate/);
+    expect(result.mark_note).not.toMatch(/run's counted spend/);
     expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+  });
+
+  test("an unreadable day-spend log refuses the mark by name instead of throwing", async () => {
+    // `todaySpendUsd` throws when the call log cannot be read, and the
+    // mark decision runs after the measurement and the grade record are
+    // already written - so the throw must fold into the refusal, the way
+    // the gate itself treats an unreadable log (over the limit), never
+    // escape `runDecisionModelEval` at this stage. The mock raises only
+    // once the run's grade record is on disk: the pre-request gate
+    // consults the same read, and there the log is still readable - the
+    // log breaks between the measurement and the mark, the exact race
+    // this stage must survive.
+    const RECORD_MODULE = "../../../src/core/decision-model/record.ts";
+    // This runner's mock registration outlives mock.restore() across test
+    // FILES, so the teardown re-registers the REAL module object instead:
+    // whatever leaks past this file is record.ts itself, byte for byte.
+    const realRecord = { ...(await import(RECORD_MODULE)) };
+    mock.module(RECORD_MODULE, () => ({
+      ...realRecord,
+      todaySpendUsd: (v: string, n: Date) => {
+        if (realRecord.listDecisionModelEvalGrades(v).grades.length > 0) {
+          throw new Error("the call log could not be read");
+        }
+        return realRecord.todaySpendUsd(v, n);
+      },
+    }));
+    try {
+      const result = await runDecisionModelEval("rerank", {
+        config: evalConfig(),
+        provider: new FakeDecisionProvider({ answer: byLabelRule }),
+        markSource: stateEnv,
+      });
+      expect(result.verdict).toBe("promote");
+      // The measurement and its review evidence are already on disk.
+      expect(result.grade_record_id).not.toBeNull();
+      expect(listDecisionModelEvalGrades(vault).grades).toHaveLength(1);
+      expect(result.mark_written).toBe(false);
+      expect(result.mark_note).toMatch(/could not be read/);
+      expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+    } finally {
+      mock.module(RECORD_MODULE, () => realRecord);
+      mock.restore();
+    }
   });
 
   test("a counted error past the baseline holds even under a permissive ceiling", async () => {
@@ -522,6 +568,71 @@ describe("runDecisionModelEval", () => {
     ).rejects.toThrow(/preregistration/);
     expect(provider.requests).toHaveLength(0);
     expect(listDecisionModelCalls(vault)).toHaveLength(0);
+  });
+});
+
+/** One gold-labeled recall note, for the scorer's regret-rule pins. */
+const labeledNote = (useful: boolean) => ({ title: "n", text: "t", useful });
+
+/**
+ * Answers for the scorer's pins: one `helps_<k>` per slot, `undefined`
+ * meaning the question went unanswered (helps null), plus `inject_any`.
+ */
+function recallAnswers(
+  helps: ReadonlyArray<number | undefined>,
+  injectAny: number | undefined,
+): Record<string, { valid: boolean; value: number }> {
+  const out: Record<string, { valid: boolean; value: number }> = {};
+  helps.forEach((p, k) => {
+    if (p !== undefined) out[`helps_${k}`] = { valid: true, value: p };
+  });
+  if (injectAny !== undefined) out["inject_any"] = { valid: true, value: injectAny };
+  return out;
+}
+
+/** One recall item with the given gold labels, for the scorer's pins. */
+const recallItem = (useful: ReadonlyArray<boolean>) => ({
+  id: "it",
+  kind: "recall_inject" as const,
+  prompt: "What should I know?",
+  notes: useful.map(labeledNote),
+});
+
+describe("scoreRecall's abstain regret rule", () => {
+  // The committed fixture grammar requires every item to carry a useful
+  // note, so the no-useful-note rule is pinned here, directly on the
+  // scorer.
+
+  test("an abstain over an item with no useful note is not a regret", () => {
+    // inject_any below the pinned any_min abstains the whole brief - but
+    // nothing in it is gold-useful, so withholding loses nothing and the
+    // item must not count as a failure.
+    const scored = scoreRecall(recallItem([false, false]), recallAnswers([0.01, 0.01], 0.01));
+    expect(scored).toEqual({ verdict: true, baseline: true, degraded: false });
+  });
+
+  test("a withheld brief over an item with no useful note is not a regret", () => {
+    // The other withholding arm: every helps below the pinned note_min,
+    // so enforce drops the whole brief. No gold-useful note is lost.
+    const scored = scoreRecall(recallItem([false, false]), recallAnswers([0.01, 0.01], 0.99));
+    expect(scored).toEqual({ verdict: true, baseline: true, degraded: false });
+  });
+
+  test("a kept brief over an item with no useful note is not a regret", () => {
+    // Sanity on the same labels: a kept note and no abstain stays a pass.
+    const scored = scoreRecall(recallItem([false, false]), recallAnswers([0.9, 0.01], 0.99));
+    expect(scored).toEqual({ verdict: true, baseline: true, degraded: false });
+  });
+
+  test("an abstain over an item with a useful note is still a failure", () => {
+    // The useful note would be withheld with the brief: a real regret.
+    const scored = scoreRecall(recallItem([true, false]), recallAnswers([0.99, 0.01], 0.01));
+    expect(scored).toEqual({ verdict: false, baseline: true, degraded: false });
+  });
+
+  test("a dropped useful note is still a failure", () => {
+    const scored = scoreRecall(recallItem([true, false]), recallAnswers([0.01, 0.9], 0.99));
+    expect(scored).toEqual({ verdict: false, baseline: true, degraded: false });
   });
 });
 

@@ -22,9 +22,12 @@
  *   - `recall_inject`: regret - a gold-useful note whose `helps`
  *     probability falls below the pinned `note_min` floor would be
  *     dropped in `enforce`, and an `inject_any` answer below the pinned
- *     `any_min` would withhold the whole brief. The verdict per item is
- *     the enforced filter's own outcome (`recallInjectFilterOutcome`).
- *     Baseline: the deterministic path drops nothing, so regret 0.
+ *     `any_min` would withhold the whole brief - a regret only when the
+ *     item carries at least one gold-useful note, since withholding a
+ *     brief over notes none of which is useful loses nothing. The
+ *     verdict per item is the enforced filter's own outcome
+ *     (`recallInjectFilterOutcome`). Baseline: the deterministic path
+ *     drops nothing, so regret 0.
  *
  * The verdict is the preregistered three-arm rule: promote only when the
  * counted error meets the spec's ceiling, does not regress against the
@@ -33,8 +36,8 @@
  *
  * On a `promote` verdict - and only then, and only for a named threshold
  * profile, only when a grade record exists to review the mark against,
- * and only when the counted spend stayed under the daily cost gate - the
- * runner writes the machine-side tuning mark
+ * and only when the day's recorded spend stayed under the daily cost
+ * gate - the runner writes the machine-side tuning mark
  * (`eval/mark.ts`) under the caller-supplied state root, making it the
  * one code path that can mark a profile tuned. The vault's grade record
  * is the review evidence; the mark is the gate input.
@@ -125,6 +128,22 @@ function errorRate(fails: number, n: number): number | null {
 }
 
 /**
+ * Whether the vault's recorded spend for `now`'s UTC day - the whole
+ * day's total, this run's records included - has reached `gate`. A day
+ * total that cannot be read counts as over the gate (the gate's own
+ * stance on an unreadable log), so a broken call log refuses the mark
+ * by name instead of throwing past the measurement and the grade record
+ * the run has already written.
+ */
+function spendAtOrOverGate(vault: string, now: Date, gate: number): boolean {
+  try {
+    return todaySpendUsd(vault, now) >= gate;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The enforced rerank order's top index - `decisionRerankOrder` at floor
  * 0: movable slots fill from the score-sorted candidates (ties by
  * index), an unanswered candidate at index 0 is pinned there. Null only
@@ -165,8 +184,13 @@ function scoreRerank(
   };
 }
 
-/** Score one recall_inject item: regret-freeness against the pinned floor. */
-function scoreRecall(
+/**
+ * Score one recall_inject item: regret-freeness against the pinned floor.
+ * Exported for the regret-rule pins: the committed fixture grammar
+ * requires every item to carry a useful note, so the no-useful-note
+ * half of the rule is only reachable through a direct call.
+ */
+export function scoreRecall(
   item: Extract<DecisionEvalItem, { kind: "recall_inject" }>,
   answers: ItemAnswers,
 ): { verdict: boolean; baseline: boolean; degraded: boolean } {
@@ -190,7 +214,12 @@ function scoreRecall(
     injectAny,
   );
   const droppedUseful = item.notes.some((n, k) => n.useful && keep[k] === false);
-  if (droppedUseful || abstain) {
+  // Abstaining loses nothing on an item none of whose notes is
+  // gold-useful - the brief it withholds carries no note worth having -
+  // so only an abstain over a gold-useful note is a counted failure
+  // (regret is losing a gold-useful note, nothing else).
+  const hasUseful = item.notes.some((n) => n.useful);
+  if (droppedUseful || (abstain && hasUseful)) {
     return { verdict: false, baseline: true, degraded: false };
   }
   const unansweredUseful = item.notes.some((n, k) => n.useful && helps[k] === null);
@@ -383,9 +412,10 @@ export async function runDecisionModelEval(
 
   // The mark is the gate input and this is its only writer: a promote
   // verdict, a named profile, a state root to write under, a grade
-  // record to review it against, and a counted spend that stayed under
-  // the daily cost gate. A failed write is reported, never thrown - the
-  // measurement already happened and the spend is already counted.
+  // record to review it against, and a day's recorded spend that stayed
+  // under the daily cost gate. A failed write - or a day total that
+  // cannot be read - is reported, never thrown: the measurement already
+  // happened and the spend is already counted.
   const profile = cfg.thresholdProfile ?? null;
   let markWritten = false;
   let markNote: string | null = null;
@@ -407,11 +437,11 @@ export async function runDecisionModelEval(
   } else if (
     cfg.vault !== null &&
     cfg.dailyCostGateUsd > 0 &&
-    todaySpendUsd(cfg.vault, now) >= cfg.dailyCostGateUsd
+    spendAtOrOverGate(cfg.vault, now, cfg.dailyCostGateUsd)
   ) {
     markNote =
-      `the run's counted spend passed the daily cost gate ` +
-      `(${cfg.dailyCostGateUsd} USD); the mark waits for a run whose counted spend stays under it`;
+      `today's recorded spend reached the daily cost gate (${cfg.dailyCostGateUsd} USD) ` +
+      `or could not be read; the mark waits for a run that stays under it`;
   } else {
     const mark: DecisionTuningMark = {
       profile,
