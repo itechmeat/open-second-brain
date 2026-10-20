@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,8 @@ import {
   completeBenchPhase,
   createBenchRun,
   loadBenchRun,
+  nextBenchRunId,
+  readBenchCheckpoint,
 } from "../../../src/core/bench/run-store.ts";
 import { DEFAULT_BENCH_KNOB_PIN, type BenchPinnedKnobs } from "../../../src/core/bench/types.ts";
 
@@ -160,6 +162,63 @@ describe("bench run store", () => {
     expect(() => loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE })).toThrow(
       /predates knob pinning/,
     );
+  });
+});
+
+/**
+ * Checkpoint strictness and atomic persistence (t_d7ce8baf): a checkpoint
+ * naming a phase this build does not know is a named refusal (never a
+ * silent filter), the checkpoint reader is exposed for the preflight, and
+ * every persist lands through temp+rename so a crash leaves the previous
+ * generation intact.
+ */
+describe("checkpoint strictness and atomic persistence", () => {
+  test("a checkpoint naming an unknown phase is refused, naming the build mismatch", () => {
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    const path = join(run.runDir, "checkpoint.json");
+    const tampered = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    tampered["completed_phases"] = ["ingest", "quantum_phase"];
+    writeFileSync(path, `${JSON.stringify(tampered, null, 2)}\n`, "utf8");
+    expect(() => loadBenchRun(runsDir, run.runId)).toThrow(/different build/);
+    expect(() => loadBenchRun(runsDir, run.runId)).toThrow(/quantum_phase/);
+  });
+
+  test("readBenchCheckpoint round-trips and keeps the missing-run message", () => {
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    const checkpoint = readBenchCheckpoint(runsDir, run.runId);
+    expect(checkpoint.run_id).toBe(run.runId);
+    expect(checkpoint.completed_phases).toEqual([]);
+    expect(() => readBenchCheckpoint(runsDir, "run-nope")).toThrow(/bench run not found: run-nope/);
+  });
+
+  test("readBenchCheckpoint refuses corrupt JSON naming the file", () => {
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    const path = join(run.runDir, "checkpoint.json");
+    writeFileSync(path, "{not json", "utf8");
+    expect(() => readBenchCheckpoint(runsDir, run.runId)).toThrow(
+      new RegExp(`${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is not valid JSON`),
+    );
+  });
+
+  test("the next-run-id helper is the id createBenchRun persists", () => {
+    const now = new Date("2026-06-03T12:00:00Z");
+    const pin: BenchPinnedKnobs = { semantic: { enabled: false }, keywordWeight: 0.6 };
+    const predicted = nextBenchRunId(FIXTURE, { now, pinnedKnobs: pin, recallFloor: 0.4 });
+    const run = createBenchRun(runsDir, FIXTURE, { now, pinnedKnobs: pin, recallFloor: 0.4 });
+    expect(predicted).toBe(run.runId);
+    // Deterministic: the preflight can read the same identity the store writes.
+    expect(nextBenchRunId(FIXTURE, { now, pinnedKnobs: pin, recallFloor: 0.4 })).toBe(predicted);
+  });
+
+  test("persist is atomic: no temp files survive a completed phase", () => {
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    completeBenchPhase(run.runDir, run.checkpoint, "ingest");
+    const leftovers = readdirSync(run.runDir).filter((entry) => entry.includes(".tmp"));
+    expect(leftovers).toEqual([]);
+    // The store alone lays down the checkpoint; the vault is the ingest
+    // phase's artifact (the pipeline materializes it before completing
+    // the phase), so a bare create+complete leaves exactly one file.
+    expect(readdirSync(run.runDir).toSorted()).toEqual(["checkpoint.json"]);
   });
 });
 

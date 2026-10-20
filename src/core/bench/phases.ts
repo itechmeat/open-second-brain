@@ -35,6 +35,19 @@ import {
   embedBenchVaultIndex,
   readBenchEmbeddingReceipt,
 } from "./embedding-cache.ts";
+import { countQuestionResults, preflightBenchRun, validateBenchTrace } from "./guards.ts";
+import {
+  benchResultsDir,
+  benchRunDirPath,
+  benchVaultDir,
+  atomicWriteFileSync,
+  completeBenchPhase,
+  createBenchRun,
+  loadBenchRun,
+  nextBenchRunId,
+  phaseDone,
+  type BenchRunHandle,
+} from "./run-store.ts";
 import {
   benchRecallRetriever,
   classifyRecallDecision,
@@ -46,15 +59,6 @@ import {
 import { fixtureHash, materializeBenchVault } from "./fixture.ts";
 import { runJudge } from "./judge.ts";
 import { LONGMEMEVAL_SUITE_NAME, scoreLongMemEvalRecall } from "./longmemeval.ts";
-import {
-  benchResultsDir,
-  benchVaultDir,
-  completeBenchPhase,
-  createBenchRun,
-  loadBenchRun,
-  phaseDone,
-  type BenchRunHandle,
-} from "./run-store.ts";
 import {
   BENCH_REPORT_SCHEMA,
   DEFAULT_BENCH_KNOB_PIN,
@@ -268,6 +272,48 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
     }
   }
   const pinnedKnobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
+  // The run's clock is resolved once so every consumer sees the same
+  // second: the preflight's collision check must read the identity the
+  // store is about to write.
+  const now = opts.now ?? new Date();
+  // The preflight catches every damaged state catchable BEFORE a run
+  // exists (unusable runs dir, fresh-run collision, damaged or tampered
+  // resume target, fixture cross-reference defects), so a refusal can
+  // never leave a run directory behind. Guards add zero stdout and no
+  // knobs: a healthy run is untouched.
+  const freshRunId =
+    opts.resume !== undefined
+      ? undefined
+      : nextBenchRunId(opts.fixture, {
+          now,
+          pinnedKnobs,
+          ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
+          ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
+        });
+  preflightBenchRun({
+    runsDir: opts.runsDir,
+    fixture: opts.fixture,
+    ...(opts.resume !== undefined ? { resume: opts.resume } : {}),
+    ...(freshRunId !== undefined ? { freshRunId } : {}),
+  });
+  // Resolved BEFORE the run is created (t_d7ce8baf): `resolveSearchConfig`
+  // parses the env BEFORE merging overrides, so an env var naming a
+  // provider it does not recognise throws - and that refusal used to
+  // leave an orphan run dir behind. The vault path is computed the way
+  // the store resolves it, so the config here is the config the searches
+  // will run under.
+  const runDir = benchRunDirPath(opts.runsDir, opts.resume ?? freshRunId!);
+  const vault = benchVaultDir(runDir);
+  const config = benchSearchConfig(vault, pinnedKnobs);
+  // The capability gate: the semantic lane is reachable only when the
+  // run's suite declared the embeddings capability, so a pin can never
+  // silently arm a lane the suite never asked for. Same ordering rule:
+  // this refusal also used to orphan a run dir.
+  if (config.semantic.enabled && opts.capabilities?.embeddings !== true) {
+    throw new Error(
+      "bench run pins the semantic lane on without the embeddings capability - declare { embeddings: true } for the suite or keep the semantic lane pinned off",
+    );
+  }
   const run: BenchRunHandle =
     opts.resume !== undefined
       ? loadBenchRun(opts.runsDir, opts.resume, {
@@ -277,24 +323,12 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
           ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
         })
       : createBenchRun(opts.runsDir, opts.fixture, {
-          ...(opts.now !== undefined ? { now: opts.now } : {}),
+          now,
           pinnedKnobs,
           ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
           ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
         });
   let checkpoint = run.checkpoint;
-  const vault = benchVaultDir(run.runDir);
-  // One resolved config for every phase: the pin cannot drift between
-  // the index warmup and the timed retrievals.
-  const config = benchSearchConfig(vault, pinnedKnobs);
-  // The capability gate: the semantic lane is reachable only when the
-  // run's suite declared the embeddings capability, so a pin can never
-  // silently arm a lane the suite never asked for.
-  if (config.semantic.enabled && opts.capabilities?.embeddings !== true) {
-    throw new Error(
-      "bench run pins the semantic lane on without the embeddings capability - declare { embeddings: true } for the suite or keep the semantic lane pinned off",
-    );
-  }
   // Present when this invocation ran the embedding index phase; read
   // back from the run artifact on a resumed run.
   let embeddings: BenchEmbeddingReceipt | undefined;
@@ -342,14 +376,22 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
         pinnedKnobs,
         opts.recallFloor,
       );
-      writeFileSync(
+      atomicWriteFileSync(
         join(benchResultsDir(run.runDir), `${question.id}.json`),
         `${JSON.stringify(retrieved, null, 2)}\n`,
-        "utf8",
       );
     }
     checkpoint = completeBenchPhase(run.runDir, checkpoint, "retrieve");
   }
+
+  // The trace guard, FIRST pass: every fixture question must have a
+  // parseable, correctly-keyed record carrying its category's required
+  // fields, no faulted decisions and no leftover files - refused by name
+  // BEFORE the evaluator scores anything, so a tampered or truncated
+  // trace can never be dressed up as an ordinary failing run. (The
+  // second pass runs pre-write with the assembled report, cross-checking
+  // the published counts against the same trace.)
+  validateBenchTrace({ runDir: run.runDir, fixture: opts.fixture });
 
   // Phase: evaluate - pure over the persisted results; no vault access.
   // Each persisted record is read once and shared by the evaluator and
@@ -420,7 +462,12 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   );
   const judge = runJudge(opts.judgeCmd, results, judgeInputs);
   const report = buildReport(run, opts.fixture, results, judge, embeddings, longmemeval);
-  writeFileSync(join(run.runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  // The trace guard, SECOND pass: the assembled report must agree with
+  // the trace it was built from (same aggregation, including the
+  // standing_instruction headline exclusion) - refused before anything
+  // is written, so a buildReport regression cannot publish silently.
+  validateBenchTrace({ runDir: run.runDir, fixture: opts.fixture, results, report });
+  atomicWriteFileSync(join(run.runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
   if (!phaseDone(checkpoint, "report")) {
     completeBenchPhase(run.runDir, checkpoint, "report");
   }
@@ -913,24 +960,10 @@ function buildReport(
   embeddings?: BenchEmbeddingReceipt,
   longmemeval?: BenchLongMemEvalFamily,
 ): BenchReport {
-  const byCategory: Record<string, { passed: number; total: number }> = {};
-  let passed = 0;
-  let total = 0;
-  for (const result of results) {
-    const bucket = (byCategory[result.category] ??= { passed: 0, total: 0 });
-    bucket.total += 1;
-    if (result.pass) {
-      bucket.passed += 1;
-    }
-    // The standing_instruction category never folds into the headline
-    // (recall-lane-latency): its rate stays the named line of its own in
-    // `by_category`, so adding facet questions to a fixture cannot shift
-    // the headline pass rate a baseline compares.
-    if (result.category !== STANDING_INSTRUCTION_CATEGORY) {
-      total += 1;
-      if (result.pass) passed += 1;
-    }
-  }
+  // ONE copy of the counting rule - the guards' `countQuestionResults`,
+  // which the pre-write trace cross-check (T7) runs against the same
+  // results - so the published counts and their validation cannot drift.
+  const { passed, total, byCategory } = countQuestionResults(results);
   const latencies = results.map((result) => result.latency_ms);
   // The latency family's overlap figure (recall-lane-latency): averaged
   // over the questions that attempted the semantic lane, present only

@@ -13,7 +13,7 @@
  * guard refuses run ids that resolve outside the runs directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
@@ -79,6 +79,63 @@ export function benchResultsDir(runDir: string): string {
   return join(runDir, "results");
 }
 
+/**
+ * The run directory for a run id, resolved exactly the way the store
+ * resolves it. The pipeline needs the path BEFORE the run exists (the
+ * search config is resolved against the run's future vault so a refusal
+ * there can leave no run dir behind) - this is that path, as one fact.
+ */
+export function benchRunDirPath(runsDir: string, runId: string): string {
+  return resolve(runsDir, runId);
+}
+
+/**
+ * The run id a fresh run is about to take: second-precision timestamp
+ * plus the identity hex. One fact, shared by `createBenchRun` and the
+ * pipeline's preflight collision check, so the id the guard reads is the
+ * id the store writes.
+ */
+export function nextBenchRunId(
+  fixture: BenchFixture,
+  opts: {
+    now?: Date;
+    pinnedKnobs?: BenchPinnedKnobs;
+    recallFloor?: number;
+    sample?: BenchSampleRequest;
+  } = {},
+): string {
+  const now = opts.now ?? new Date();
+  const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
+  const identity = benchRunIdentityHash(fixture, knobs, opts.recallFloor, opts.sample);
+  const stamp = now
+    .toISOString()
+    .replace(/[^0-9]/g, "")
+    .slice(0, 14);
+  return `run-${stamp}-${identity.slice(0, 6)}`;
+}
+
+/**
+ * Write `data` atomically: a temp file renamed over the target, so a
+ * crash mid-write leaves the previous generation intact instead of a
+ * truncated published artifact. The bench vector cache established the
+ * pattern (`embedding-cache.ts`); checkpoints, per-question results and
+ * the report all go through it now.
+ */
+export function atomicWriteFileSync(filePath: string, data: string): void {
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, data, "utf8");
+    renameSync(tmp, filePath);
+  } catch (cause) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // The original failure is the one to report.
+    }
+    throw cause;
+  }
+}
+
 export function createBenchRun(
   runsDir: string,
   fixture: BenchFixture,
@@ -92,12 +149,16 @@ export function createBenchRun(
   const now = opts.now ?? new Date();
   const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const hash = fixtureHash(fixture);
+  // The identity is computed from the same inputs the run id was, so the
+  // checkpoint's knobs_hash stays the exact value the id embeds a slice
+  // of (`nextBenchRunId` shares this computation for the collision check).
   const identity = benchRunIdentityHash(fixture, knobs, opts.recallFloor, opts.sample);
-  const stamp = now
-    .toISOString()
-    .replace(/[^0-9]/g, "")
-    .slice(0, 14);
-  const runId = `run-${stamp}-${identity.slice(0, 6)}`;
+  const runId = nextBenchRunId(fixture, {
+    now,
+    pinnedKnobs: knobs,
+    ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
+    ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
+  });
   const runDir = guardedRunDir(runsDir, runId);
   mkdirSync(runDir, { recursive: true });
   const checkpoint: BenchCheckpoint = Object.freeze({
@@ -124,12 +185,7 @@ export function loadBenchRun(
     sample?: BenchSampleRequest;
   } = {},
 ): BenchRunHandle {
-  const runDir = guardedRunDir(runsDir, runId);
-  const path = join(runDir, CHECKPOINT_FILE);
-  if (!existsSync(path)) {
-    throw new Error(`bench run not found: ${runId}`);
-  }
-  const checkpoint = parseCheckpoint(JSON.parse(readFileSync(path, "utf8")));
+  const checkpoint = readBenchCheckpoint(runsDir, runId);
   if (opts.expectFixture !== undefined) {
     const expected = fixtureHash(opts.expectFixture);
     if (expected !== checkpoint.fixture_hash) {
@@ -155,7 +211,7 @@ export function loadBenchRun(
       );
     }
   }
-  return Object.freeze({ runId, runDir, checkpoint });
+  return Object.freeze({ runId, runDir: benchRunDirPath(runsDir, runId), checkpoint });
 }
 
 /** Mark a phase complete (idempotent) and persist the checkpoint. */
@@ -177,8 +233,33 @@ export function phaseDone(checkpoint: BenchCheckpoint, phase: BenchPhase): boole
   return checkpoint.completed_phases.includes(phase);
 }
 
+/**
+ * Read and parse one run's checkpoint. Missing run: the long-standing
+ * "bench run not found" error. Corrupt JSON: a NAMED error carrying the
+ * file path - never a raw SyntaxError; the pipeline's preflight refuses
+ * the same state with the rendering contract before this is reached.
+ */
+export function readBenchCheckpoint(runsDir: string, runId: string): BenchCheckpoint {
+  const runDir = guardedRunDir(runsDir, runId);
+  const path = join(runDir, CHECKPOINT_FILE);
+  if (!existsSync(path)) {
+    throw new Error(`bench run not found: ${runId}`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (cause) {
+    throw new Error(
+      `bench checkpoint at ${path} is not valid JSON: ${
+        cause instanceof Error ? cause.message : String(cause)
+      } - the run directory is damaged; start a fresh run`,
+    );
+  }
+  return parseCheckpoint(raw);
+}
+
 function persist(runDir: string, checkpoint: BenchCheckpoint): void {
-  writeFileSync(join(runDir, CHECKPOINT_FILE), `${JSON.stringify(checkpoint, null, 2)}\n`, "utf8");
+  atomicWriteFileSync(join(runDir, CHECKPOINT_FILE), `${JSON.stringify(checkpoint, null, 2)}\n`);
 }
 
 function parseCheckpoint(raw: unknown): BenchCheckpoint {
@@ -218,10 +299,24 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   ) {
     throw new Error("bench checkpoint: sample must be an object");
   }
-  const completed = phases.filter(
-    (phase): phase is BenchPhase =>
-      typeof phase === "string" && (BENCH_PHASES as ReadonlyArray<string>).includes(phase),
-  );
+  // A phase name this build does not know means the checkpoint was
+  // written by a different build. The old behavior silently FILTERED the
+  // unknown name out and resumed as if the phase never happened - which
+  // re-ran work under an identity that claimed it was done. Refuse by
+  // name instead (the pipeline's preflight refuses the same state with
+  // the `refused (<kind>)` render before this is reached).
+  const completed: BenchPhase[] = [];
+  for (const phase of phases) {
+    if (typeof phase !== "string" || !(BENCH_PHASES as ReadonlyArray<string>).includes(phase)) {
+      throw new Error(
+        `bench checkpoint: unknown phase '${String(phase)}' in completed_phases - ` +
+          "the checkpoint was written by a different build; restart the run",
+      );
+    }
+    // The includes() guard above is the membership proof; the array's
+    // element type does not carry it, so the narrow is asserted here.
+    completed.push(phase as BenchPhase);
+  }
   return Object.freeze({
     run_id: runId,
     fixture_name: fixtureName,

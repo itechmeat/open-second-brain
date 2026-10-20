@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
+import { BenchRefusalError } from "../../../core/bench/guards.ts";
 import { LONGMEMEVAL_SUITE_NAME, loadLongMemEvalFixture } from "../../../core/bench/longmemeval.ts";
 import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
 import { loadReplayBenchFixture } from "../../../core/bench/replay.ts";
@@ -444,18 +445,31 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     typeof flags["recall-floor"] === "string" ? flags["recall-floor"] : undefined,
   );
 
-  const report = await runMemoryBench({
-    fixture,
-    runsDir,
-    ...(suite !== "" ? { suite } : {}),
-    capabilities: registration.capabilities,
-    ...(pinnedKnobs !== null ? { pinnedKnobs } : {}),
-    ...(recallFloor !== undefined ? { recallFloor } : {}),
-    ...(sample !== undefined ? { sample } : {}),
-    ...(loaded.receipt !== undefined ? { suiteReceipt: loaded.receipt } : {}),
-    ...(resume !== undefined && resume !== "" ? { resume } : {}),
-    ...(judgeCmd !== undefined ? { judgeCmd } : {}),
-  });
+  // Refusals render the guard contract on stderr and exit nonzero: the
+  // BenchRefusalError message IS the render - `refused (<kind>): <detail>`
+  // - and every detail names the repair (--resume, a fresh run, a
+  // writable --runs-dir). Any other error keeps propagating to the
+  // dispatcher untouched.
+  let report: BenchReport;
+  try {
+    report = await runMemoryBench({
+      fixture,
+      runsDir,
+      ...(suite !== "" ? { suite } : {}),
+      capabilities: registration.capabilities,
+      ...(pinnedKnobs !== null ? { pinnedKnobs } : {}),
+      ...(recallFloor !== undefined ? { recallFloor } : {}),
+      ...(sample !== undefined ? { sample } : {}),
+      ...(loaded.receipt !== undefined ? { suiteReceipt: loaded.receipt } : {}),
+      ...(resume !== undefined && resume !== "" ? { resume } : {}),
+      ...(judgeCmd !== undefined ? { judgeCmd } : {}),
+    });
+  } catch (e) {
+    if (e instanceof BenchRefusalError) {
+      return fail(`brain bench memory: ${e.message}`);
+    }
+    throw e;
+  }
 
   if (flags["json"] === true) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

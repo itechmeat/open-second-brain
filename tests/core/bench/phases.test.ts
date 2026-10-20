@@ -16,13 +16,16 @@ import {
   benchVectorCacheKey,
 } from "../../../src/core/bench/embedding-cache.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
+import { countQuestionResults } from "../../../src/core/bench/guards.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
+import { completeBenchPhase, createBenchRun } from "../../../src/core/bench/run-store.ts";
 import {
   BENCH_REPORT_SCHEMA,
   DEFAULT_BENCH_KNOB_PIN,
   type BenchPinnedKnobs,
 } from "../../../src/core/bench/types.ts";
+import { cmdBrainBench } from "../../../src/cli/brain/verbs/bench.ts";
 import { LOCAL_DEFAULT_DIMENSION } from "../../../src/core/search/embeddings/local-provider.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/signature.ts";
 
@@ -195,11 +198,14 @@ describe("runMemoryBench", () => {
 
   test("resume with a changed fixture fails fast on the hash guard", async () => {
     const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
-    const changed = parseBenchFixture({
-      ...JSON.parse(JSON.stringify(FIXTURE)),
-      name: "phase-suite",
-      notes: [{ path: "Brain/notes/x.md", body: "different" }],
-    });
+    // Change the fixture CONTENT while keeping every referenced note path:
+    // the preflight's cross-reference guard (P7) must stay out of the way
+    // so the hash guard is the refusal this pin is about.
+    const raw = JSON.parse(JSON.stringify(FIXTURE)) as {
+      notes: Array<{ path: string; body: string }>;
+    };
+    raw.notes[0]!.body = "# Coffee preference\n\nA different body under the same path.\n";
+    const changed = parseBenchFixture(raw);
     await expect(
       runMemoryBench({ fixture: changed, runsDir, resume: first.run_id }),
     ).rejects.toThrow("hash");
@@ -341,6 +347,197 @@ describe("runMemoryBench", () => {
     await expect(
       runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id }),
     ).rejects.toThrow(/run identity mismatch/);
+  }, 30_000);
+
+  test("a passing run publishes exactly the report shape it always had", async () => {
+    const report = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    // The guards add no field: the serialized top-level key order IS the
+    // published shape a baseline diffs.
+    expect(Object.keys(report)).toEqual([
+      "schema",
+      "run_id",
+      "fixture",
+      "fixture_hash",
+      "created_at",
+      "quality",
+      "latency_ms",
+      "context_cost",
+      "failure_modes",
+      "judge",
+      "questions",
+    ]);
+    // The quality family is the shared aggregation, by construction.
+    const counts = countQuestionResults(report.questions);
+    expect(report.quality.passed).toBe(counts.passed);
+    expect(report.quality.total).toBe(counts.total);
+    expect(report.quality.by_category).toEqual(counts.byCategory);
+    // The published file equals the returned report, JSON for JSON.
+    const onDisk = JSON.parse(
+      readFileSync(join(runsDir, report.run_id, "report.json"), "utf8"),
+    ) as unknown;
+    expect(onDisk).toEqual(JSON.parse(JSON.stringify(report)));
+  }, 30_000);
+
+  test("a passing run writes zero stdout from the guards", async () => {
+    const writes: string[] = [];
+    const original = process.stdout.write;
+    process.stdout.write = ((chunk?: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await runMemoryBench({ fixture: FIXTURE, runsDir });
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(writes).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * The integrity guards wired into the pipeline (t_d7ce8baf): refusals
+ * fire BEFORE a run directory can exist (config/capability ordering),
+ * a fresh-run collision preserves the prior run, a tampered run dir is
+ * refused by name before any scoring, and the verb renders the refusal
+ * contract `refused (<kind>): <detail>` on stderr with a nonzero exit.
+ */
+describe("the integrity guards wired in", () => {
+  test("an env-garbage provider refusal leaves no run dir behind", async () => {
+    const envKey = "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER";
+    process.env[envKey] = "no-such-provider";
+    try {
+      await expect(runMemoryBench({ fixture: FIXTURE, runsDir })).rejects.toThrow(
+        /embedding_provider must be/,
+      );
+    } finally {
+      delete process.env[envKey];
+    }
+    expect(readdirSync(runsDir)).toEqual([]);
+  }, 30_000);
+
+  test("a capability-gate refusal leaves no run dir behind", async () => {
+    await expect(
+      runMemoryBench({
+        fixture: FIXTURE,
+        runsDir,
+        pinnedKnobs: { semantic: { enabled: true, provider: "local" } },
+      }),
+    ).rejects.toThrow(/embeddings capability/);
+    expect(readdirSync(runsDir)).toEqual([]);
+  }, 30_000);
+
+  test("a fresh-run collision is refused by name and the prior checkpoint survives", async () => {
+    const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    const checkpointBefore = readFileSync(join(runsDir, first.run_id, "checkpoint.json"), "utf8");
+    await expect(runMemoryBench({ fixture: FIXTURE, runsDir })).rejects.toThrow(
+      new RegExp(`refused \\(run_dir_exists\\).*--resume ${first.run_id}`),
+    );
+    expect(readFileSync(join(runsDir, first.run_id, "checkpoint.json"), "utf8")).toBe(
+      checkpointBefore,
+    );
+    // The refused second run left no run dir of its own.
+    expect(readdirSync(runsDir)).toEqual([first.run_id]);
+    // And resuming the very same run keeps working.
+    const resumed = await runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id });
+    expect(resumed.run_id).toBe(first.run_id);
+  }, 60_000);
+
+  test("ingest-done with the vault deleted is refused before any scoring", async () => {
+    // A partial run: only ingest is checkpointed, then the disposable
+    // vault disappears. Retrieval against the emptied vault would score
+    // an empty corpus and publish ordinary FAILs - refused by name.
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    completeBenchPhase(run.runDir, run.checkpoint, "ingest");
+    rmSync(join(run.runDir, "vault"), { recursive: true, force: true });
+    await expect(runMemoryBench({ fixture: FIXTURE, runsDir, resume: run.runId })).rejects.toThrow(
+      /refused \(run_artifact_missing\)/,
+    );
+    // Refused before scoring: no results and no report exist.
+    expect(existsSync(join(run.runDir, "results"))).toBe(false);
+    expect(existsSync(join(run.runDir, "report.json"))).toBe(false);
+  }, 30_000);
+
+  test("retrieve-done with a result file deleted is refused naming the file", async () => {
+    const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    rmSync(join(runsDir, first.run_id, "results", "q-multi.json"));
+    await expect(
+      runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id }),
+    ).rejects.toThrow(/refused \(run_artifact_missing\).*q-multi\.json/s);
+  }, 60_000);
+
+  test("the bench verb renders the refusal contract and exits nonzero", async () => {
+    // Deterministic refusal #1: the runs dir is a FILE, so the preflight's
+    // usability probe refuses before anything is created.
+    const fixturePath = join(runsDir, "fixture.json");
+    writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        name: "refusal-render",
+        notes: [{ path: "Brain/notes/a.md", body: "alpha note body" }],
+        questions: [
+          {
+            id: "q1",
+            category: "single_hop",
+            query: "alpha",
+            expected_paths: ["Brain/notes/a.md"],
+          },
+        ],
+      }),
+    );
+    const blockedRunsDir = join(runsDir, "blocked-runs");
+    writeFileSync(blockedRunsDir, "not a directory");
+    const stderr: string[] = [];
+    const stdout: string[] = [];
+    const originalErr = process.stderr.write;
+    const originalOut = process.stdout.write;
+    process.stderr.write = ((chunk?: unknown) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    process.stdout.write = ((chunk?: unknown) => {
+      stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const code = await cmdBrainBench([
+        "memory",
+        "--fixture",
+        fixturePath,
+        "--runs-dir",
+        blockedRunsDir,
+      ]);
+      expect(code).not.toBe(0);
+      // Scenario #1's render is asserted before the buffer is reused.
+      expect(stderr.join("")).toContain("refused (runs_dir_unusable)");
+      // Deterministic refusal #2: resuming a run whose checkpoint is corrupt.
+      const brokenDir = join(runsDir, "broken-runs");
+      const { createBenchRun: create } = await import("../../../src/core/bench/run-store.ts");
+      const broken = create(
+        brokenDir,
+        parseBenchFixture(JSON.parse(readFileSync(fixturePath, "utf8"))),
+        {
+          now: new Date("2026-06-03T12:00:00Z"),
+        },
+      );
+      writeFileSync(join(broken.runDir, "checkpoint.json"), "{not json");
+      stderr.length = 0;
+      const corruptCode = await cmdBrainBench([
+        "memory",
+        "--fixture",
+        fixturePath,
+        "--runs-dir",
+        brokenDir,
+        "--resume",
+        broken.runId,
+      ]);
+      expect(corruptCode).not.toBe(0);
+    } finally {
+      process.stderr.write = originalErr;
+      process.stdout.write = originalOut;
+    }
+    expect(stderr.join("")).toContain("refused (checkpoint_unparseable)");
+    // Refusals are stderr-only: stdout stays byte-empty for both.
+    expect(stdout.join("")).toBe("");
   }, 30_000);
 });
 
@@ -487,13 +684,20 @@ describe("the embeddings capability path", () => {
 
   test("a shared cache written under another schema is refused, never honored", async () => {
     const cachePath = join(runsDir, "embedding-cache.json");
-    const run = () =>
-      runMemoryBench({
+    // Each attempt takes its own minute: run ids are second-precision, so
+    // two fresh same-identity runs in one second are a collision refusal
+    // now (P2) - the days of silently resetting an existing run dir.
+    let attempt = 0;
+    const run = () => {
+      const now = new Date(Date.UTC(2026, 5, 1, 0, attempt++, 0));
+      return runMemoryBench({
         fixture: SEMANTIC_FIXTURE,
         runsDir,
         capabilities: CAPABILITIES,
         pinnedKnobs: SEMANTIC_PIN,
+        now,
       });
+    };
     writeFileSync(
       cachePath,
       `${JSON.stringify({ schema: "some.other.vectors.v9", entries: {} }, null, 2)}\n`,
