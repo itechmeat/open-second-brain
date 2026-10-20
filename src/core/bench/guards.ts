@@ -33,10 +33,11 @@ import { accessSync, existsSync, mkdirSync, readFileSync, readdirSync } from "no
 import { join } from "node:path";
 import { constants as fsConstants } from "node:fs";
 
-import { benchResultsDir, benchVaultDir, guardedRunDir } from "./run-store.ts";
+import { benchResultsDir, benchVaultDir, guardedRunDir, parseCheckpoint } from "./run-store.ts";
 import { fixtureHash } from "./fixture.ts";
 import {
   BENCH_PHASES,
+  type BenchCheckpoint,
   type BenchFixture,
   type BenchPhase,
   type BenchQuestionResult,
@@ -253,6 +254,24 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
     }
     lastIndex = index;
   }
+  // The store's parser is the ONE definition of a usable checkpoint, and
+  // it runs HERE: a document that parses as JSON but lacks the required
+  // fields passed the shape checks above (and P5, whenever the artifacts
+  // on disk happened to exist) and then exploded in loadBenchRun as a
+  // plain Error the verb does not catch - a source frame where the
+  // contract promises `refused (checkpoint_unparseable)`. Mapped to that
+  // refusal with the file and the missing fields named. P4a/P4b above
+  // already refused the phase states under their own names, so any
+  // failure left for the parser is a shape failure.
+  let checkpoint: BenchCheckpoint;
+  try {
+    checkpoint = parseCheckpoint(raw);
+  } catch (cause) {
+    refuse(
+      BENCH_REFUSAL.checkpointUnparseable,
+      `${path} is not a usable checkpoint: ${describeCause(cause)} - start a fresh run`,
+    );
+  }
   // P4c: the fixture the resume was given is hashed the way loadBenchRun
   // hashes it and compared BEFORE P5. A different `--fixture`, an edited
   // fixture copy, or a different --sample-seed/--sample-cap (which sample
@@ -261,10 +280,10 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
   // `run_artifact_missing` and advise discarding a run that is healthy
   // under its own fixture.
   const expectedHash = fixtureHash(fixture);
-  if (record["fixture_hash"] !== expectedHash) {
+  if (checkpoint.fixture_hash !== expectedHash) {
     refuse(
       BENCH_REFUSAL.checkpointFixtureMismatch,
-      `${path} records fixture hash '${String(record["fixture_hash"])}' but this resume was given ` +
+      `${path} records fixture hash '${checkpoint.fixture_hash}' but this resume was given ` +
         `a fixture hashing to '${expectedHash}' - ` +
         "resume with the same fixture, seed and cap, or start a fresh run",
     );

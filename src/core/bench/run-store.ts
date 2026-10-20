@@ -264,7 +264,15 @@ function persist(runDir: string, checkpoint: BenchCheckpoint): void {
   atomicWriteFileSync(join(runDir, CHECKPOINT_FILE), `${JSON.stringify(checkpoint, null, 2)}\n`);
 }
 
-function parseCheckpoint(raw: unknown): BenchCheckpoint {
+/**
+ * Parse and validate one raw checkpoint document: the ONE definition of
+ * the shape a resume may act on. Exported so the pipeline's resume
+ * preflight runs this SAME gate before the store loads - a document that
+ * parses as JSON but lacks the required fields is refused there by name
+ * (the file and the missing fields) instead of surfacing here as a plain
+ * Error the CLI does not render (M11).
+ */
+export function parseCheckpoint(raw: unknown): BenchCheckpoint {
   if (raw === null || typeof raw !== "object") {
     throw new Error("bench checkpoint: malformed JSON");
   }
@@ -277,6 +285,11 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   const knobsHash = record["knobs_hash"];
   const pinnedKnobs = record["pinned_knobs"];
   const sample = record["sample"];
+  // The missing fields are NAMED - the preflight renders this message as
+  // the refusal detail, and an operator repairing a damaged run needs to
+  // know which fields the checkpoint lost, not just that it lost some.
+  // (The combined condition is what narrows the fields for the rest of
+  // the parser, so the names are collected inside it.)
   if (
     typeof runId !== "string" ||
     typeof fixtureName !== "string" ||
@@ -284,7 +297,14 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
     typeof createdAt !== "string" ||
     !Array.isArray(phases)
   ) {
-    throw new Error("bench checkpoint: missing required fields");
+    const missing = [
+      ...(typeof runId !== "string" ? ["run_id"] : []),
+      ...(typeof fixtureName !== "string" ? ["fixture_name"] : []),
+      ...(typeof hash !== "string" ? ["fixture_hash"] : []),
+      ...(typeof createdAt !== "string" ? ["created_at"] : []),
+      ...(!Array.isArray(phases) ? ["completed_phases"] : []),
+    ];
+    throw new Error(`bench checkpoint: missing required field(s) ${missing.join(", ")}`);
   }
   if (knobsHash !== undefined && typeof knobsHash !== "string") {
     throw new Error("bench checkpoint: knobs_hash must be a string");

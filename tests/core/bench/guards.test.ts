@@ -270,6 +270,47 @@ describe("preflightBenchRun", () => {
     }
   });
 
+  test("a checkpoint that parses but lacks required fields is refused as unparseable", () => {
+    // M11: {"completed_phases":["ingest"]} passes P3's JSON-object and
+    // phases-array checks (and P5 when the artifacts happen to exist), and
+    // used to explode later in parseCheckpoint as a plain Error the verb
+    // does not catch - a source frame where the contract promises
+    // `refused (checkpoint_unparseable)`. The preflight now runs the SAME
+    // parser, so the refusal names the file and the missing fields.
+    const runDir = join(runsDir, "run-minimal");
+    mkdirSync(join(runDir, "vault", "Brain", "notes"), { recursive: true });
+    writeFileSync(join(runDir, "vault", "Brain", "notes", "a.md"), "alpha note body");
+    writeFileSync(
+      join(runDir, "checkpoint.json"),
+      `${JSON.stringify({ completed_phases: ["ingest"] })}\n`,
+    );
+    try {
+      preflightBenchRun({ runsDir, fixture: FIXTURE, resume: "run-minimal" });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      const refusal = e as BenchRefusalError;
+      expect(refusal).toBeInstanceOf(BenchRefusalError);
+      expect(refusal.kind).toBe("checkpoint_unparseable");
+      expect(refusal.detail).toContain(join(runDir, "checkpoint.json"));
+      expect(refusal.detail).toContain("run_id");
+    }
+    // The empty-phases shape passes P3 AND P5 entirely; the parser gate is
+    // what refuses it, so the run never reaches the raw load error.
+    writeFileSync(join(runDir, "checkpoint.json"), `${JSON.stringify({ completed_phases: [] })}\n`);
+    try {
+      preflightBenchRun({ runsDir, fixture: FIXTURE, resume: "run-minimal" });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      expect((e as BenchRefusalError).kind).toBe("checkpoint_unparseable");
+    }
+    // A checkpoint with the full shape the parser requires still passes.
+    const healthy = writeCheckpoint("run-full-shape", ["ingest"]);
+    writeVault(healthy);
+    expect(() =>
+      preflightBenchRun({ runsDir, fixture: FIXTURE, resume: "run-full-shape" }),
+    ).not.toThrow();
+  });
+
   test("a checkpoint whose completed_phases is not a string array is refused", () => {
     writeCheckpoint("run-shape", "ingest" as unknown as string[]);
     expect(() => preflightBenchRun({ runsDir, fixture: FIXTURE, resume: "run-shape" })).toThrow(
