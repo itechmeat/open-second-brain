@@ -1059,6 +1059,15 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("apply", "boolean"),
           ],
         ),
+        // Both `schema` subcommands parse `--json` (export also `--stdout`),
+        // so the inherited stand-in covers the one and `stdout` is declared
+        // here; `tests/cli/search-query-flag-manifest.test.ts` holds this
+        // row to both parse schemas like every sibling above.
+        command(
+          "schema",
+          "Export or check the versioned search-query JSON Schema artifact (check exits 2 on drift from the descriptor)",
+          [flag("stdout", "boolean")],
+        ),
         // The whole `parseFlags` schema, for the reason the two builders
         // above give: there is no per-verb `--help` on this family, so a
         // flag the manifest does not model is a flag neither help nor

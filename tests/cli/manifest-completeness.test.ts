@@ -54,13 +54,7 @@ const TOP_LEVEL_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
 const BRAIN_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
 
 /** `search` verbs with no manifest entry, and why. */
-const SEARCH_UNLISTED: Readonly<Record<string, string>> = Object.freeze({
-  // t_50c81d5c E4 landed `o2b search schema export|check` during the lane
-  // phase, when Lane C owns src/cli/command-manifest.ts. Task I (the
-  // integrator) adds the manifest row and deletes this exclusion with it.
-  schema:
-    "manifest row deliberately deferred to Task I: Lane C owns command-manifest.ts during the lane phase",
-});
+const SEARCH_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
 
 /** `partner codegraph` verbs with no manifest entry, and why. */
 const PARTNER_CODEGRAPH_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});

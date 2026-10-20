@@ -471,7 +471,12 @@ reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
 classification, per-token `union_records` for uncovered terms, and a
 `completeness` verdict whose `uncovered_but_present_in_corpus` list is the
 false-absence guard. It can also emit opt-in recall telemetry with
-`telemetry: true`.
+`telemetry: true`. The whole query language is published as a versioned
+JSON Schema artifact beside the repo
+(`schemas/brain/search-query.schema.json`, `$id brain.search_query.v1`),
+derived from the same table that serves this inputSchema:
+`o2b search schema export` regenerates it and `o2b search schema check`
+exits 2 when the committed file has drifted from the derivation.
 Since v1.44.0 `explain: true` adds two top-level receipts alongside the
 per-result `score_breakdown`: `retrieval_decision_trace` (evaluated /
 surfaced / excluded counts plus every excluded candidate as a compact
@@ -1994,7 +1999,12 @@ format characters), when it contains NUL, or when it exceeds the cap.
   vocabulary of stable identifiers, and an `empty` corpus statement on a
   zero-result answer no degradation accounts for. Every `degraded[].detail`
   carries identifiers and integers only, never a provider message, a
-  filesystem path, or the query text. The response schema declares the code
+  filesystem path, or the query text. The `index-stale` entry's detail
+  carries `behindCount` when the index-behind census was measured live as
+  the answer was served - the documents the next incremental run would add,
+  update or delete, counted under the same staleness gate that fires the
+  code; a measured zero rides too, and absent means not measured, never a
+  zero. The response schema declares the code
   enum, so a build emitting a code outside the vocabulary fails its own
   contract rather than handing a client a value it cannot interpret. The
   key is absent - never null - on a healthy answer, so an existing

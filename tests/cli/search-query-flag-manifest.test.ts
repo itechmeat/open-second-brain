@@ -225,3 +225,41 @@ describe("the search verbs declare the flags they parse", () => {
     ]);
   });
 });
+
+describe("the schema verb declares the flags its two subcommands parse", () => {
+  // `o2b search schema` sits outside the COVERED table above for one
+  // pinned reason: that table's non-vacuity floor asserts every covered
+  // verb parses `--vault`, and this verb addresses the repo's committed
+  // artifact, not a vault. The same standard still applies, so it is held
+  // here: both subcommand parse schemas are read from the verb and the
+  // manifest row must account for every flag, never the reverse.
+  const MARKER = "export async function cmdSearchSchema";
+  const SOURCE = join(VERBS_DIR, "schema-export.ts");
+
+  function schemaFor(callOpen: string): ReadonlyMap<string, string> {
+    return parsedFlagSchema({ file: SOURCE, marker: MARKER, callOpen });
+  }
+
+  test("every parsed flag is modelled, with the same type", () => {
+    const exportSchema = schemaFor("parseFlags(argv.slice(1), {");
+    const checkSchema = schemaFor("parseFlags(argv.slice(1), { json:");
+    // Pin both reads so a regex that stopped matching cannot pass: export
+    // parses stdout + json, check parses json only.
+    expect(Object.fromEntries(exportSchema)).toEqual({ stdout: "boolean", json: "boolean" });
+    expect(Object.fromEntries(checkSchema)).toEqual({ json: "boolean" });
+    const manifest = comparable(manifestFlagSchema("schema"));
+    expect(mismatches(comparable(exportSchema), manifest, "schema").toSorted()).toEqual([]);
+    expect(mismatches(comparable(checkSchema), manifest, "schema").toSorted()).toEqual([]);
+  });
+
+  test("no modelled flag outlives the parse that would accept it", () => {
+    const parsed = schemaFor("parseFlags(argv.slice(1), {");
+    for (const name of comparable(manifestFlagSchema("schema")).keys()) {
+      expect(`${name} parsed: ${parsed.has(name)}`).toBe(`${name} parsed: true`);
+    }
+  });
+
+  test("the witness flag is reachable from help", () => {
+    expect(manifestFlagSchema("schema").has("stdout")).toBe(true);
+  });
+});
