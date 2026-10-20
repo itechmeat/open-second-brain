@@ -34,6 +34,7 @@ import {
 } from "../../../src/core/bench/guards.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { completeBenchPhase, createBenchRun } from "../../../src/core/bench/run-store.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import type {
   BenchFixture,
   BenchQuestionResult,
@@ -182,13 +183,9 @@ describe("preflightBenchRun", () => {
   });
 
   describe("a chmod-read-only runs directory", () => {
-    // chmod-based unwritable-dir tests are unreliable on Windows and when
-    // running as root: gate the case instead of flaking.
-    const gatedTest =
-      process.platform === "win32" ||
-      (typeof process.geteuid === "function" && process.geteuid() === 0)
-        ? test.skip
-        : test;
+    // chmod cannot build this denial on root or on Windows; the shared
+    // platform fact names that once, and the deny-guard census reads it.
+    const gatedTest = test.skipIf(CHMOD_CANNOT_DENY);
     gatedTest("is refused by the writability probe", () => {
       const readOnly = join(runsDir, "read-only");
       mkdirSync(readOnly);

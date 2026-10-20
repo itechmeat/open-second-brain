@@ -427,9 +427,16 @@ describe("the integrity guards wired in", () => {
   }, 30_000);
 
   test("a fresh-run collision is refused by name and the prior checkpoint survives", async () => {
-    const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    // The injected clock is the point: run ids are second-precision
+    // timestamp + identity hex, so a wall-clock pair of back-to-back runs
+    // collides only when both mint inside the same second - a race this
+    // test lost about one full-suite run in fifty. One fixed instant for
+    // both runs makes the collision a fact of the fixture, not of the
+    // wall clock.
+    const now = new Date("2026-06-03T12:00:00Z");
+    const first = await runMemoryBench({ fixture: FIXTURE, runsDir, now });
     const checkpointBefore = readFileSync(join(runsDir, first.run_id, "checkpoint.json"), "utf8");
-    await expect(runMemoryBench({ fixture: FIXTURE, runsDir })).rejects.toThrow(
+    await expect(runMemoryBench({ fixture: FIXTURE, runsDir, now })).rejects.toThrow(
       new RegExp(`refused \\(run_dir_exists\\).*--resume ${first.run_id}`),
     );
     expect(readFileSync(join(runsDir, first.run_id, "checkpoint.json"), "utf8")).toBe(
@@ -438,7 +445,7 @@ describe("the integrity guards wired in", () => {
     // The refused second run left no run dir of its own.
     expect(readdirSync(runsDir)).toEqual([first.run_id]);
     // And resuming the very same run keeps working.
-    const resumed = await runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id });
+    const resumed = await runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id, now });
     expect(resumed.run_id).toBe(first.run_id);
   }, 60_000);
 
