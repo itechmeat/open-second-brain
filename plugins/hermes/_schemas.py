@@ -287,31 +287,31 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
         'inputSchema': {   'type': 'object',
                            'properties': {   'max_tokens': {   'type': 'integer',
                                                                'minimum': 1,
-                                                               'description': 'Strict upper '
-                                                                              'bound on the '
-                                                                              'returned '
-                                                                              "slice's tokens. "
+                                                               'description': 'Token cap for '
+                                                                              'the slice. '
                                                                               'Omitted: '
                                                                               'derives from '
                                                                               'the resolved '
-                                                                              'model window, '
-                                                                              'channel named '
+                                                                              'window (channel '
                                                                               'in '
                                                                               '`max_tokens_source`; '
-                                                                              'nothing '
+                                                                              '`default` '
+                                                                              'defers to the '
+                                                                              'preset hint). '
+                                                                              'Nothing '
                                                                               'resolvable is '
                                                                               'refused.'},
                                              'model': {   'type': 'string',
-                                                          'description': 'Optional model id '
-                                                                         'hint. With '
-                                                                         '`max_tokens` '
-                                                                         'omitted, the context '
-                                                                         'window resolves from '
-                                                                         'this id (declared '
-                                                                         'table, `-1m` suffix, '
-                                                                         'or default) after '
-                                                                         'operator and env '
-                                                                         'overrides.'},
+                                                          'description': 'Model id. With '
+                                                                         '`max_tokens` omitted '
+                                                                         'the context window '
+                                                                         'resolves from it '
+                                                                         '(operator/env '
+                                                                         'overrides, table, '
+                                                                         '`-1m` suffix, '
+                                                                         'default); an unknown '
+                                                                         'id budgets from its '
+                                                                         'hint.'},
                                              'query': {   'type': 'string',
                                                           'maxLength': 2000,
                                                           'description': 'Optional query. Read '
