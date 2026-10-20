@@ -157,7 +157,7 @@ export function listDecisionModelExtractCommits(
 // ----- eval grade records (preregistered eval, cycle 20261020) ---------------
 
 /**
- * One cached verdict set of the preregistered eval (`eval/grade.ts`):
+ * One cached verdict set of the preregistered evaluation (`eval/grade.ts`):
  * what the graded run measured, under which spec, for which profile and
  * use. These records are REVIEW EVIDENCE only - the authoritative
  * machine-consumed tuning mark lives outside the vault

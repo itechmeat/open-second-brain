@@ -607,10 +607,10 @@ export interface DecisionModelReport {
    */
   readonly use_report?: { readonly use: DecisionModelUse; readonly report: unknown };
   /**
-   * The cached verdict sets of the preregistered eval (`eval/grade.ts`),
-   * oldest first, with the named skip notes. Present whenever the vault
-   * holds at least one, so a vault with none renders no eval section at
-   * all rather than an empty one.
+   * The cached verdict sets of the preregistered evaluation
+   * (`eval/grade.ts`), oldest first, with the named skip notes. Present
+   * whenever the vault holds at least one, so a vault with none renders
+   * no eval section at all rather than an empty one.
    */
   readonly eval?: {
     readonly grades: ReadonlyArray<DecisionEvalGradeLine>;

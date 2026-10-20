@@ -1,6 +1,6 @@
 /**
  * The seeded take and the hash-order dev/counted split behind the
- * preregistered decision-model eval (cycle 20261020, card t_4e1681b3).
+ * preregistered decision-model evaluation (cycle 20261020, card t_4e1681b3).
  *
  * A take is a committed fixture of labeled items whose ids the spec
  * freezes into a membership receipt at preregistration time. The split

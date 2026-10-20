@@ -136,7 +136,7 @@ export function isDecisionThresholdProfile(name: string): boolean {
  *
  * The source table decides first. Only when it says untuned is the
  * optional {@link measuredTuned} reader consulted - the machine-side
- * tuning mark of the preregistered eval (`eval/mark.ts`), whose read is
+ * tuning mark of the preregistered evaluation (`eval/mark.ts`), whose read is
  * therefore never paid for a hand-registered or baseline use, and never
  * paid at all when no reader is injected (today's behavior, which the
  * hand-edit tests pin).
