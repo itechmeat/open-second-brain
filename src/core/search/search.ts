@@ -67,6 +67,7 @@ import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import type { BrainSearchResult } from "./search-result.ts";
 import type {
   IterativeStopReason,
@@ -446,13 +447,19 @@ export async function search(
     });
     const indexAge = indexAgeSeconds(lastIndexedAt, nowMs);
     // The measured behind count rides the index-stale note (t_e4438152):
-    // computed once per search, only when the note will fire, here above
-    // the cache branch so a cache hit serves the same measurement. A
-    // fresh index performs no walk at all; a failed measurement is null
-    // and the note then names the age alone.
+    // computed only when the note will fire, here above the cache branch
+    // so a cache hit serves the same measurement. A fresh index performs
+    // no walk at all; a failed measurement is null and the note then
+    // names the age alone. The measurement is memoized per vault for
+    // {@link INDEX_BEHIND_MEMO_TTL_MS} (finding 24): on a permanently-
+    // stale origin - a read-only cross-vault recall, or freshening off -
+    // the note fires on EVERY search, and without the memo each one paid
+    // a full synchronous vault walk plus a second store open. `o2b
+    // search status` measures live through `indexBehindCount` directly
+    // and never sees this memo.
     const behindCount =
       indexAge !== null && indexAge > INDEX_STALE_SECONDS
-        ? await measureIndexBehind(effectiveConfig)
+        ? await measureIndexBehind(effectiveConfig, lastIndexedAt, nowMs)
         : null;
     const served = (outcome: SearchOutcome): SearchOutcome =>
       withIndexStale(outcome, indexAge, behindCount);
@@ -1146,17 +1153,75 @@ export async function search(
 }
 
 /**
+ * How long a search-path behind-count measurement is reused by later
+ * searches against the same vault. Bounded on purpose: the note's age
+ * stays live, and the count is an upper-bound diagnostic, so a minute of
+ * staleness costs nothing - while the bounded repeat is what keeps a
+ * permanently-stale origin (read-only cross-vault recall, freshening
+ * off) from paying the full stat walk on every query (finding 24).
+ */
+export const INDEX_BEHIND_MEMO_TTL_MS = 60_000;
+
+/** One memoized measurement, valid for the TTL and the index generation. */
+interface BehindMemoEntry {
+  readonly behind: number;
+  readonly measuredAtMs: number;
+  /** The index stamp the measurement was taken against. */
+  readonly lastIndexedAt: string | null;
+}
+
+/**
+ * Per-process memo of the behind-count measurement, one entry per vault
+ * index. The key is the digest of the index path - the absolute path
+ * itself never becomes a map key, appears in no entry, and can therefore
+ * surface through no diagnostic.
+ */
+const behindMemo = new Map<string, BehindMemoEntry>();
+
+/** Sweep trigger: past this many vaults, expired entries are dropped. */
+const BEHIND_MEMO_SWEEP_AT = 32;
+
+/**
  * The measured index-behind count for the index-stale detail
- * (t_e4438152), or `null` when it could not be measured. Deferred
+ * (t_e4438152), or `null` when it could not be measured. Memoized per
+ * vault for {@link INDEX_BEHIND_MEMO_TTL_MS} and per index generation (a
+ * re-stamped index - a freshen run completed - invalidates the entry
+ * immediately), so repeated searches inside the window reuse the
+ * measurement instead of re-walking the vault. Only a real measurement
+ * is memoized: `null` - a failed measurement is not a measurement - is
+ * retried by the next search. Status (`o2b search status`) measures live
+ * through `indexBehindCount` and never consults this memo. Deferred
  * import: `indexer.ts` sits above this module in the graph, and the
  * sanctioned cure for that in this tree is an import evaluated at call
  * time - reached only under the stale gate, so a fresh index never pays
  * it. Never throws: a diagnostic must not fail the answer it annotates.
  */
-async function measureIndexBehind(config: ResolvedSearchConfig): Promise<number | null> {
+export async function measureIndexBehind(
+  config: ResolvedSearchConfig,
+  lastIndexedAt: string | null,
+  nowMs: number = Date.now(),
+): Promise<number | null> {
+  const key = sha256Hex(config.dbPath);
+  const memoed = behindMemo.get(key);
+  if (
+    memoed !== undefined &&
+    nowMs - memoed.measuredAtMs < INDEX_BEHIND_MEMO_TTL_MS &&
+    memoed.lastIndexedAt === lastIndexedAt
+  ) {
+    return memoed.behind;
+  }
   try {
     const { indexBehindCount } = await import("./indexer.ts");
-    return (await indexBehindCount(config))?.behind ?? null;
+    const behind = (await indexBehindCount(config))?.behind ?? null;
+    if (behind !== null) {
+      if (behindMemo.size >= BEHIND_MEMO_SWEEP_AT) {
+        for (const [sweptKey, entry] of behindMemo) {
+          if (nowMs - entry.measuredAtMs >= INDEX_BEHIND_MEMO_TTL_MS) behindMemo.delete(sweptKey);
+        }
+      }
+      behindMemo.set(key, { behind, measuredAtMs: nowMs, lastIndexedAt });
+    }
+    return behind;
   } catch {
     return null;
   }

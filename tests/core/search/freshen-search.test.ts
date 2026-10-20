@@ -15,7 +15,11 @@ import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
-import { search } from "../../../src/core/search/search.ts";
+import {
+  INDEX_BEHIND_MEMO_TTL_MS,
+  measureIndexBehind,
+  search,
+} from "../../../src/core/search/search.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "../../../src/core/search/store/state.ts";
 import type { SearchOutcome, ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import * as walkerModule from "../../../src/core/search/walker.ts";
@@ -199,6 +203,60 @@ test("a stale search performs exactly one walk", async () => {
   setIndexAge(11 * 60);
   const before = walks;
   await search(config(0), { query: "heron", freshenSpawn: spawn });
+  expect(walks).toBe(before + 1);
+});
+
+test("repeated stale searches inside the behind-count memo window walk once", async () => {
+  // Finding 24: on a permanently-stale origin (freshening off here; a
+  // read-only cross-vault origin is the other case) every search used to
+  // pay the full synchronous stat walk plus a vec-loading store open all
+  // over again, forever. Inside the memo window the measurement is
+  // reused, so the second stale search walks nothing.
+  setIndexAge(11 * 60);
+  const before = walks;
+  await search(config(0), { query: "heron", freshenSpawn: spawn });
+  await search(config(0), { query: "heron", freshenSpawn: spawn });
+  expect(walks).toBe(before + 1);
+});
+
+test("the behind-count memo serves the TTL window and expires with the injected clock", async () => {
+  setIndexAge(11 * 60);
+  const before = walks;
+  const cfg = config(0);
+  const stamp = "2026-06-03T12:00:00.000Z";
+  // First measurement under the memo: one walk.
+  expect(await measureIndexBehind(cfg, stamp, 1_000_000)).toBe(0);
+  expect(walks).toBe(before + 1);
+  // Inside the window: served from the memo, no walk.
+  expect(await measureIndexBehind(cfg, stamp, 1_000_000 + INDEX_BEHIND_MEMO_TTL_MS - 1)).toBe(0);
+  expect(walks).toBe(before + 1);
+  // At/after the window: measured again.
+  expect(await measureIndexBehind(cfg, stamp, 1_000_000 + INDEX_BEHIND_MEMO_TTL_MS)).toBe(0);
+  expect(walks).toBe(before + 2);
+});
+
+test("a re-stamped index invalidates the behind-count memo inside the window", async () => {
+  setIndexAge(11 * 60);
+  const before = walks;
+  const cfg = config(0);
+  expect(await measureIndexBehind(cfg, "2026-06-03T12:00:00.000Z", 1_000_000)).toBe(0);
+  expect(walks).toBe(before + 1);
+  // A freshen run re-stamped the index: the memo must not outlive the
+  // index generation it measured, even inside the TTL.
+  expect(await measureIndexBehind(cfg, "2026-06-03T12:00:05.000Z", 1_000_001)).toBe(0);
+  expect(walks).toBe(before + 2);
+});
+
+test("a failed behind-count measurement is not memoized", async () => {
+  setIndexAge(11 * 60);
+  const before = walks;
+  const cfg = config(0);
+  failWalk = true;
+  expect(await measureIndexBehind(cfg, "2026-06-03T12:00:00.000Z", 1_000_000)).toBeNull();
+  expect(walks).toBe(before);
+  failWalk = false;
+  // The next search retries: null was never a measurement.
+  expect(await measureIndexBehind(cfg, "2026-06-03T12:00:00.000Z", 1_000_001)).toBe(0);
   expect(walks).toBe(before + 1);
 });
 
