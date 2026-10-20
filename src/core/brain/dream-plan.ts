@@ -165,6 +165,16 @@ export interface ScanResult {
   readonly retired: RetiredRecord[];
   readonly corrupted: CorruptedEntry[];
   /**
+   * Preferences the scan skipped because a tombstone marks them
+   * (`_status: tombstoned`, Belief lifecycle suite t_7d5a3589). The pass
+   * never plans over them, but the path-only entries still matter to the
+   * cross-topic slug check (finding 64): a tombstoned `pref-cross-*` file
+   * holds the exact path a re-promotion would write, and `overwrite:
+   * false` must never find that path occupied by surprise. Absent on a
+   * scan built by hand.
+   */
+  readonly tombstonedPreferences?: ReadonlyArray<CorruptedEntry>;
+  /**
    * Every entry name in `inbox/archived/`, parseable or not. The archive
    * step checks a move's destination name against this listing rather than
    * against the parsed records, so a tombstoned or corrupt file there still

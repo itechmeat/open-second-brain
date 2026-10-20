@@ -45,6 +45,7 @@
  *     it; stretching recall into that key is deliberately out of scope.
  */
 
+import { basename } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
 import { strictestVisibilityOf } from "../graph/visibility.ts";
@@ -426,6 +427,13 @@ function electClusters(
  * content-derived slug makes this exact: the same source set maps to
  * one slug forever, so a present id - live or retired - is proof the
  * cluster already promoted, and a rerun must plan nothing.
+ *
+ * A `pref-cross-*` path the scan could not parse into a record is just
+ * as taken (finding 64): a tombstoned file keeps its bytes in place and
+ * a corrupted one keeps its filename, and apply's `overwrite: false`
+ * write would throw on either, blocking every later pass. The slug is
+ * read off the filename, which is the only identity such a file still
+ * carries.
  */
 function slugTaken(slug: string, scan: ScanResult): boolean {
   for (const p of scan.preferences) {
@@ -437,5 +445,16 @@ function slugTaken(slug: string, scan: ScanResult): boolean {
       : r.id;
     if (retiredSlug === slug) return true;
   }
+  for (const t of scan.tombstonedPreferences ?? []) {
+    if (unparsedSlug(t.path) === slug) return true;
+  }
+  for (const c of scan.corrupted) {
+    if (unparsedSlug(c.path) === slug) return true;
+  }
   return false;
+}
+
+/** The slug a skipped preference file still carries in its basename. */
+function unparsedSlug(path: string): string {
+  return preferenceSlug(basename(path).replace(/\.md$/, ""));
 }

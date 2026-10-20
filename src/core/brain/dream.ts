@@ -196,6 +196,7 @@ function scanAsAdmitted(
     preferences: scan.preferences.filter((r) => keep(r.path)),
     retired: scan.retired.filter((r) => keep(r.path)),
     corrupted: scan.corrupted.filter((r) => keep(r.path)),
+    tombstonedPreferences: scan.tombstonedPreferences?.filter((r) => keep(r.path)),
   };
 }
 

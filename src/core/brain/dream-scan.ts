@@ -150,11 +150,19 @@ function collectPreferences(
   preferences: PreferenceRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
+  tombstoned: CorruptedEntry[],
 ): void {
   for (const full of files) {
     walk.step();
     const rawMeta = parseFrontmatter(full)[0];
-    if (isTombstoned(rawMeta)) continue;
+    // The tombstoned file stays on disk for audit; the pass never plans
+    // over it, but its path is still recorded (finding 64): the cross-
+    // topic slug check must see a `pref-cross-*` filename it would
+    // otherwise re-plan and collide with under `overwrite: false`.
+    if (isTombstoned(rawMeta)) {
+      tombstoned.push({ path: full });
+      continue;
+    }
     // Belief lifecycle suite (A4): capture the raw superseded_by pointer
     // (the typed parser drops it) so accelerated chain decay can see a
     // temporally-superseded ancestor.
@@ -278,6 +286,7 @@ function scanBrainRun(
   const preferences: PreferenceRecord[] = [];
   const retired: RetiredRecord[] = [];
   const corrupted: CorruptedEntry[] = [];
+  const tombstonedPreferences: CorruptedEntry[] = [];
   // One boundary for all four collectors: the per-file read is where the
   // work is, so it is where the deadline is honoured and where a reader
   // learns the scan is still moving. Collapsed into one object because
@@ -300,7 +309,7 @@ function scanBrainRun(
     () => collectSignals(inbox, true, signals, corrupted, walk),
     () => collectSignals(processed, false, signals, corrupted, walk),
     () => collectSignals(archived, false, signals, corrupted, walk, true),
-    () => collectPreferences(preferenceFiles, preferences, corrupted, walk),
+    () => collectPreferences(preferenceFiles, preferences, corrupted, walk, tombstonedPreferences),
     () => collectRetired(vault, retiredFiles, retired, corrupted, walk),
   ];
   for (const collect of collectors) {
@@ -308,7 +317,14 @@ function scanBrainRun(
     collect();
   }
 
-  return { signals, preferences, retired, corrupted, archivedNames: entryNamesIn(dirs.archived) };
+  return {
+    signals,
+    preferences,
+    retired,
+    corrupted,
+    tombstonedPreferences,
+    archivedNames: entryNamesIn(dirs.archived),
+  };
 }
 
 /** Every entry name directly inside `dir`, or none when it does not exist. */

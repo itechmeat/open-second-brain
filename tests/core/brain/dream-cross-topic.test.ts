@@ -46,6 +46,7 @@ import { parseFrontmatter } from "../../../src/core/vault.ts";
 import { pageVisibility } from "../../../src/core/graph/visibility.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { tombstone } from "../../../src/core/brain/lifecycle/tombstone.ts";
 import { brainConfigPath, crossTopicLedgerPath } from "../../../src/core/brain/paths.ts";
 import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
 import { isoSecond } from "../../../src/core/brain/time.ts";
@@ -144,7 +145,12 @@ function scanOf(preferences: PreferenceRecord[], retired: RetiredRecord[] = []):
   return { signals: [], preferences, retired, corrupted: [] };
 }
 
-/** Run the planner over a scan, returning the result AND the mutated plan. */
+/**
+ * Run the planner over a scan, returning the result AND the mutated plan.
+ * `tombstonedPaths` / `corruptedPaths` are preferences-dir files the scan
+ * saw but did not parse into records: a tombstone keeps the file in place
+ * and an unparseable one lands in `scan.corrupted`.
+ */
 function plan(
   preferences: PreferenceRecord[],
   opts: {
@@ -154,14 +160,23 @@ function plan(
     refresh?: RefreshResult;
     retired?: RetiredRecord[];
     retireSlugs?: string[];
+    tombstonedPaths?: string[];
+    corruptedPaths?: string[];
   } = {},
 ) {
   const planState = emptyPlan();
   for (const slug of opts.retireSlugs ?? []) {
     planState.retires.push({ slug, principle: "x", reason: BRAIN_RETIRED_REASON.staleNoEvidence });
   }
+  const scan: ScanResult = {
+    ...scanOf(preferences, opts.retired ?? []),
+    ...(opts.tombstonedPaths
+      ? { tombstonedPreferences: opts.tombstonedPaths.map((path) => ({ path })) }
+      : {}),
+    ...(opts.corruptedPaths ? { corrupted: opts.corruptedPaths.map((path) => ({ path })) } : {}),
+  };
   const result = planCrossTopicRules({
-    scan: scanOf(preferences, opts.retired ?? []),
+    scan,
     refresh: opts.refresh ?? NO_REFRESH,
     config: opts.config === undefined ? CONFIG : opts.config,
     ledger: opts.ledger ?? null,
@@ -408,6 +423,37 @@ describe("planCrossTopicRules", () => {
       withVisibility(rec("pref-b", "Beta", P_BETA), ["team"]),
     ]);
     expect(planState.crossTopicRules[0]!.visibility).toEqual(["team"]);
+  });
+
+  // ----- Tombstoned / corrupted slugs are still taken (review finding 64) --
+
+  test("a tombstoned pref-cross file takes its slug (finding 64)", () => {
+    const slug = expectedSlug("pref-a", "pref-b");
+    const { result, plan: planState } = plan(
+      [rec("pref-a", "Alpha", P_ALPHA), rec("pref-b", "Beta", P_BETA)],
+      { tombstonedPaths: [`/vault/Brain/preferences/pref-${slug}.md`] },
+    );
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+  });
+
+  test("a corrupted pref-cross file takes its slug too", () => {
+    const slug = expectedSlug("pref-a", "pref-b");
+    const { result, plan: planState } = plan(
+      [rec("pref-a", "Alpha", P_ALPHA), rec("pref-b", "Beta", P_BETA)],
+      { corruptedPaths: [`/vault/Brain/preferences/pref-${slug}.md`] },
+    );
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+  });
+
+  test("an unrelated tombstoned file takes nothing", () => {
+    const { result, plan: planState } = plan(
+      [rec("pref-a", "Alpha", P_ALPHA), rec("pref-b", "Beta", P_BETA)],
+      { tombstonedPaths: ["/vault/Brain/preferences/pref-unrelated.md"] },
+    );
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules).toHaveLength(1);
   });
 
   test("one promotion per owner token per calendar day, dated from the injected now", () => {
@@ -742,6 +788,32 @@ describe("dream pass wiring (end to end)", () => {
     const rule = parsePreference(rulePath);
     expect(rule.provenance).toBe("inferred");
     expect(pageVisibility(parseFrontmatter(rulePath)[0])).toEqual(["private"]);
+  });
+
+  test("a tombstoned promotion never re-fires the slug collision (finding 64)", () => {
+    const vault = makeVault("tombstoned", ENABLED);
+    seedPair(vault);
+    const slug = expectedSlug("pref-alpha", "pref-beta");
+    const rulePath = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+
+    dream(vault, { now: NOW_E2E });
+    expect(existsSync(rulePath)).toBe(true);
+
+    // Tombstone the promoted file in place: the lifecycle keeps the bytes
+    // on disk under `_status: tombstoned`, and the scan drops the record.
+    tombstone({
+      vault,
+      path: `Brain/preferences/pref-${slug}.md`,
+      reason: "superseded by hand",
+      now: new Date("2026-07-19T12:00:00Z"),
+    });
+
+    // Before the fix this pass re-planned the identical content-derived
+    // slug and apply's overwrite:false write threw on the live path,
+    // blocking every later dream run.
+    const day2 = dream(vault, { now: new Date("2026-07-20T10:00:00Z") });
+    expect(day2.cross_topic_rules).toBeUndefined();
+    expect(existsSync(rulePath)).toBe(true);
   });
 
   test("a same-day rerun is a no-op: slug dedup below the changed gate", () => {
