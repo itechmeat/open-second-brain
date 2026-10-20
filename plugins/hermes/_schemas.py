@@ -280,18 +280,38 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                        'hook is unavailable (Cursor, Aider, raw Claude API). Read-only.',
         'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {   'name': 'brain_context_pack',
-        'description': 'Return the highest-tier, most recent vault slice that fits under '
-                       '`max_tokens`. Ordered core → supporting → peripheral, newest first; '
-                       'stops adding pages when the next page would exceed the budget. '
-                       'Read-only.',
+        'description': 'Return the highest-tier, most recent vault slice under `max_tokens` - '
+                       'derived from the model context window when omitted, refused when '
+                       'nothing resolves. Ordered core → supporting → peripheral, newest '
+                       'first; stops when the next page would exceed the budget. Read-only.',
         'inputSchema': {   'type': 'object',
                            'properties': {   'max_tokens': {   'type': 'integer',
                                                                'minimum': 1,
                                                                'description': 'Strict upper '
                                                                               'bound on the '
                                                                               'returned '
-                                                                              "slice's token "
-                                                                              'count.'},
+                                                                              "slice's tokens. "
+                                                                              'Omitted: '
+                                                                              'derives from '
+                                                                              'the resolved '
+                                                                              'model window, '
+                                                                              'channel named '
+                                                                              'in '
+                                                                              '`max_tokens_source`; '
+                                                                              'nothing '
+                                                                              'resolvable is '
+                                                                              'refused.'},
+                                             'model': {   'type': 'string',
+                                                          'description': 'Optional model id '
+                                                                         'hint. With '
+                                                                         '`max_tokens` '
+                                                                         'omitted, the context '
+                                                                         'window resolves from '
+                                                                         'this id (declared '
+                                                                         'table, `-1m` suffix, '
+                                                                         'or default) after '
+                                                                         'operator and env '
+                                                                         'overrides.'},
                                              'query': {   'type': 'string',
                                                           'maxLength': 2000,
                                                           'description': 'Optional query. Read '
@@ -532,7 +552,6 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                                                                                'Absent = no '
                                                                                'ownership '
                                                                                'filtering.'}},
-                           'required': ['max_tokens'],
                            'dependentRequired': {   'recall_scores': ['match_quality'],
                                                     'match_quality': ['recall_scores'],
                                                     'decision_answerable': [   'recall_scores',
