@@ -277,6 +277,22 @@ describe("config template ratchet — generated text", () => {
       }
     }
   });
+
+  test("the context block documents the shipped config-over-env precedence", () => {
+    // Review finding: the doc used to promise the env var wins over
+    // `window_tokens`, the opposite of the shipped resolver
+    // (operator config > operator env > table > suffix > default). The
+    // LIVE-surface byte-equality above deliberately ignores commentary,
+    // so pin this promise in the text itself: an operator reading the
+    // generated `_brain.yaml` must read what the resolver does.
+    expect(DEFAULT_BRAIN_CONFIG_YAML).not.toContain(
+      "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW wins over this key",
+    );
+    expect(DEFAULT_BRAIN_CONFIG_YAML).toContain("This key wins over the");
+    expect(DEFAULT_BRAIN_CONFIG_YAML).toContain(
+      "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW environment variable",
+    );
+  });
 });
 
 describe("config template ratchet — resolved-behaviour identity", () => {
