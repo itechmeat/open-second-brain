@@ -105,6 +105,20 @@ describe("the derived search CLI flag table (t_50c81d5c E3)", () => {
     expect(leaked).toEqual([]);
   });
 
+  test("the verb-local flags stay verb-local, never descriptor-derived", () => {
+    const cliFlagNames = new Set(
+      SEARCH_OPTION_ROWS.filter((row) => row.cliFlag !== null).map((row) => row.cliFlag!),
+    );
+    for (const name of VERB_LOCAL) {
+      expect(`${name} in the table: ${name in SEARCH_QUERY_FLAGS}`).toBe(
+        `${name} in the table: true`,
+      );
+      expect(`${name} descriptor-derived: ${cliFlagNames.has(name)}`).toBe(
+        `${name} descriptor-derived: false`,
+      );
+    }
+  });
+
   test("the table parses the argv shapes the verb needs", () => {
     // Booleans parse bare; strings take a value; string-arrays repeat.
     const parsed = parseFlags(
