@@ -106,6 +106,12 @@ const PINNED_CONTINUITY_KINDS: ReadonlyArray<string> = Object.freeze([
   "negative_recall",
   "decision_model_call",
   "decision_model_extract_commit",
+  // The preregistered-eval wave's additive kind (task C2): one cached
+  // verdict set per graded eval run, written by `eval/grade.ts` next to
+  // the `decision_model_call` rows it correlates with. Review evidence
+  // only - the machine-side gate input is the tuning mark outside the
+  // vault, never this record.
+  "decision_model_eval_grade",
   "session_entity_mention",
   // The storage-lifecycle wave's additive kind: the per-run audit of a
   // confirmed receipt compaction. Disjoint from the Hermes

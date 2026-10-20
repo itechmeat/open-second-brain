@@ -17,9 +17,11 @@ import {
   parseDecisionEvalFixture,
   loadDecisionEvalFixture,
   verifyEvalTake,
-  type DecisionEvalSpec,
 } from "../../../src/core/decision-model/eval/take.ts";
-import { DECISION_EVAL_DEV_FRACTION } from "../../../src/core/decision-model/eval-spec.ts";
+import {
+  DECISION_EVAL_DEV_FRACTION,
+  type DecisionEvalSpec,
+} from "../../../src/core/decision-model/eval-spec.ts";
 
 const IDS = ["rk-001", "rk-002", "rk-003", "rk-004", "rk-005", "rk-006", "rk-007", "rk-008"];
 
@@ -50,7 +52,7 @@ describe("hashOrderSplit", () => {
     expect(reversed.dev).toEqual(forward.dev);
     expect(reversed.counted).toEqual(forward.counted);
     for (const list of [forward.dev, forward.counted]) {
-      expect([...list].toSorted()).toEqual(list);
+      expect([...list].toSorted()).toEqual([...list]);
     }
   });
 

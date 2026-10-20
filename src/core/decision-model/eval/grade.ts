@@ -28,6 +28,12 @@
  * counted error meets the spec's ceiling, does not regress against the
  * baseline, and the counted n is met; a short counted n is its own arm
  * (`not_enough_evidence`), never a pass.
+ *
+ * On a `promote` verdict - and only then, and only for a named threshold
+ * profile - the runner writes the machine-side tuning mark
+ * (`eval/mark.ts`) under the caller-supplied state root, making it the
+ * one code path that can mark a profile tuned. The vault's grade record
+ * is the review evidence; the mark is the gate input.
  */
 
 import type { DecisionModelUse, DecisionProvider } from "../contract.ts";
@@ -42,6 +48,8 @@ import { RECALL_INJECT_QUESTIONS, RERANK_QUESTIONS } from "../questions.ts";
 import { emitDecisionModelEvalGrade, listDecisionModelCalls } from "../record.ts";
 import { runDecision } from "../run.ts";
 import { clip } from "../state.ts";
+import type { PlatformDirsEnv } from "../../platform-dirs.ts";
+import { decisionModelTuningMarkPath, writeTuningMark, type DecisionTuningMark } from "./mark.ts";
 import { loadDecisionEvalFixture, verifyEvalTake, type DecisionEvalItem } from "./take.ts";
 
 type ItemAnswers = Readonly<
@@ -78,6 +86,10 @@ export interface DecisionEvalRunResult {
   readonly verdicts: Readonly<Record<string, boolean>>;
   readonly call_ids: ReadonlyArray<string>;
   readonly grade_record_id: string | null;
+  /** True exactly when a `promote` verdict wrote the machine-side mark. */
+  readonly mark_written: boolean;
+  /** Why no mark was written, when one was not; null on a written mark. */
+  readonly mark_note: string | null;
 }
 
 export interface DecisionEvalRunOptions {
@@ -92,6 +104,13 @@ export interface DecisionEvalRunOptions {
    * explicit spec must still verify against the same fixture.
    */
   readonly spec?: DecisionEvalSpec;
+  /**
+   * Where a `promote` verdict writes the machine-side tuning mark: the
+   * eval CLI passes the running process's platform dirs. Absent or null
+   * (every test, and any caller measuring without deciding) disables mark
+   * writing - a run that only measures leaves no gate input behind.
+   */
+  readonly markSource?: PlatformDirsEnv | null;
 }
 
 function errorRate(fails: number, n: number): number | null {
@@ -329,6 +348,42 @@ export async function runDecisionModelEval(
     ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
   });
 
+  // The mark is the gate input and this is its only writer: a promote
+  // verdict, a named profile and a state root to write under. A failed
+  // write is reported, never thrown - the measurement already happened
+  // and the spend is already counted.
+  const profile = cfg.thresholdProfile ?? null;
+  let markWritten = false;
+  let markNote: string | null = null;
+  if (verdict !== "promote") {
+    markNote = `verdict is '${verdict}'; only a promote writes a tuning mark`;
+  } else if (profile === null) {
+    markNote =
+      "the config carries no threshold profile, so there is no (profile, use) pair to mark";
+  } else if (opts.markSource === null || opts.markSource === undefined) {
+    markNote = "no state root was provided, so the run measured without marking";
+  } else {
+    const mark: DecisionTuningMark = {
+      profile,
+      use,
+      spec_hash: decisionEvalSpecHash(spec),
+      fixture_hash: spec.fixture_hash,
+      thresholds: spec.thresholds,
+      metric: spec.metric,
+      counted_n: countedAgg.n,
+      counted_error: countedError,
+      baseline_error: baselineError,
+      verdict: "promote",
+      created_at: (opts.now ?? new Date()).toISOString(),
+    };
+    try {
+      writeTuningMark(decisionModelTuningMarkPath(opts.markSource, profile, use), mark);
+      markWritten = true;
+    } catch (err) {
+      markNote = `the tuning mark could not be written: ${(err as Error).message}`;
+    }
+  }
+
   return {
     use,
     profile: cfg.thresholdProfile ?? null,
@@ -347,5 +402,7 @@ export async function runDecisionModelEval(
     verdicts: verdictsById,
     call_ids: callIds,
     grade_record_id: record?.id ?? null,
+    mark_written: markWritten,
+    mark_note: markNote,
   };
 }

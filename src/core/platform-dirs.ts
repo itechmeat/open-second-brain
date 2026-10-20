@@ -8,7 +8,8 @@
  * recipe (`cli/partner-codegraph-cron.ts`) emits a bash script that expands
  * `${XDG_STATE_HOME:-$HOME/.local/state}` itself, at cron time on a POSIX
  * host, where it agrees with the POSIX layout below by construction. The
- * state and cache roots have no production caller yet.
+ * cache root and the data root have no production caller yet; the state
+ * root's first is the decision-model tuning mark (`eval/mark.ts`).
  *
  * POSIX (Linux, macOS, the BSDs): the XDG Base Directory layout, with the
  * `XDG_*_HOME` variables honoured and `$HOME/.config`, `$HOME/.local/share`,
@@ -123,6 +124,26 @@ export function stateBaseDir(source: PlatformDirsEnv = processDirsEnv()): string
 /** Base directory for user cache (`$XDG_CACHE_HOME` / `%LOCALAPPDATA%` / `~/.cache`). */
 export function cacheBaseDir(source: PlatformDirsEnv = processDirsEnv()): string {
   return baseDir("cache", source);
+}
+
+/**
+ * This tool's own root under the state base directory:
+ * `<stateBaseDir>/open-second-brain`. Machine-side state lives here -
+ * files the tool itself consumes and that must never sync with the
+ * vault. The decision-model tuning marks (`eval/mark.ts`) are the first
+ * production caller.
+ */
+export function stateRootDir(source: PlatformDirsEnv = processDirsEnv()): string {
+  return join(baseDir("state", source), APP_DIR_NAME);
+}
+
+/**
+ * Machine-side state directory for the decision-model feature: the
+ * tuning marks the config resolver consults sit under it, keyed by
+ * threshold profile and use. Outside every vault by construction.
+ */
+export function decisionModelStateDir(source: PlatformDirsEnv = processDirsEnv()): string {
+  return join(stateRootDir(source), "decision-model");
 }
 
 /**

@@ -131,11 +131,25 @@ export function isDecisionThresholdProfile(name: string): boolean {
   return Object.hasOwn(DECISION_THRESHOLD_PROFILES, name);
 }
 
-/** Whether `use` has tuned thresholds on `profile`; false for an unknown or absent profile. */
-export function thresholdsTunedFor(profile: string | null, use: DecisionModelUse): boolean {
+/**
+ * Whether `use` has tuned thresholds on `profile`; false for an unknown or absent profile.
+ *
+ * The source table decides first. Only when it says untuned is the
+ * optional {@link measuredTuned} reader consulted - the machine-side
+ * tuning mark of the preregistered eval (`eval/mark.ts`), whose read is
+ * therefore never paid for a hand-registered or baseline use, and never
+ * paid at all when no reader is injected (today's behavior, which the
+ * hand-edit tests pin).
+ */
+export function thresholdsTunedFor(
+  profile: string | null,
+  use: DecisionModelUse,
+  measuredTuned?: (() => boolean) | null,
+): boolean {
   if (profile === null || !isDecisionThresholdProfile(profile)) return false;
   const tuned = DECISION_THRESHOLD_PROFILES[profile]!.tuned;
-  return tuned === "baseline" || tuned.includes(use);
+  if (tuned === "baseline" || tuned.includes(use)) return true;
+  return measuredTuned !== null && measuredTuned !== undefined && measuredTuned();
 }
 
 // ----- answerable (advisory, carried by the rerank request) -----------------

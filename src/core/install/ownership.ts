@@ -355,6 +355,23 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
       "command was run from anywhere else.",
     sources: ["src/cli/brain/verbs/bench.ts"],
   },
+  {
+    id: "decision_model_tuning_marks",
+    label: "decision-model tuning marks",
+    location: WINDOWS
+      ? `(${describeBaseDir("state", "win32")})\\open-second-brain\\decision-model\\tuning-marks\\<profile>\\<use>.json`
+      : "${XDG_STATE_HOME:-~/.local/state}/open-second-brain/decision-model/tuning-marks/<profile>/<use>.json",
+    carries_memory: false,
+    created_by: "`o2b decision-model eval run`, when a preregistered eval's verdict is promote",
+    removed_by:
+      "deleting that directory yourself; the machine re-marks a pair only when the eval runs and promotes again",
+    note:
+      "The machine-side gate input that lets an untuned use run enforce, keyed by threshold profile " +
+      "and decision use. It carries hashes, counts and error rates under the eval spec's hash - never " +
+      "vault text - and it is validated against the installed spec on every read, so deleting one " +
+      "merely puts that use back in shadow until the eval promotes it again.",
+    sources: ["src/core/decision-model/eval/mark.ts", "src/core/platform-dirs.ts"],
+  },
 ]);
 
 /**
@@ -629,6 +646,13 @@ export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new M
     "src/cli/search-cron-template.ts",
     "the script path it recommends is built by src/cli/cron-recipe.ts, which is swept; this " +
       "module only supplies the job name and body, so it names no root of its own",
+  ],
+  [
+    "src/core/decision-model/eval/mark.ts",
+    "the tuning-mark root arrives from `decisionModelStateDir()` in `src/core/platform-dirs.ts`, " +
+      "which the sweep already enrols and the machine_config row already attributes, so no home or " +
+      "XDG token appears in this file's own source; the location it writes is the " +
+      "decision_model_tuning_marks row",
   ],
 ]);
 

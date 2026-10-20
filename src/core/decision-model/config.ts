@@ -51,6 +51,7 @@ import {
   DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
   decisionModelPreset,
 } from "./presets.ts";
+import { machineTunedMarkReader } from "./eval/mark.ts";
 import {
   DECISION_THRESHOLD_PROFILE_NAMES,
   isDecisionThresholdProfile,
@@ -117,14 +118,19 @@ function isLoopbackUrl(raw: string | null): boolean {
 
 /**
  * The modes the uses actually run in: `enforce` becomes `shadow` for every
- * use whose thresholds are not tuned for `profile`.
+ * use whose thresholds are not tuned for `profile` - unless the
+ * injected measured reader says the preregistered eval has marked the
+ * pair tuned (the machine-side tuning mark, `eval/mark.ts`).
  */
 function holdToProfile(
   uses: DecisionModelUses,
   profile: string | null,
+  measuredTuned?: ((use: DecisionModelUse) => boolean) | null,
 ): { readonly uses: DecisionModelUses; readonly shadowOnly: ReadonlyArray<DecisionModelUse> } {
   const shadowOnly = DECISION_MODEL_USES.filter(
-    (use) => uses[use] === "enforce" && !thresholdsTunedFor(profile, use),
+    (use) =>
+      uses[use] === "enforce" &&
+      !thresholdsTunedFor(profile, use, measuredTuned ? () => measuredTuned(use) : null),
   );
   if (shadowOnly.length === 0) return { uses, shadowOnly: Object.freeze([]) };
   const out: Record<DecisionModelUse, DecisionModelMode> = { ...uses };
@@ -271,6 +277,15 @@ export interface ResolveDecisionModelOptions {
    * whole policy loader at startup; defaults to the real loader.
    */
   readonly vaultOptOut?: (vault: string) => boolean;
+  /**
+   * The measured-tune reader: consulted only when the source table says
+   * a use is untuned for the resolved profile. Undefined (the default)
+   * reads the machine-side tuning marks under the platform state root -
+   * one TTL-cached file read per untuned pair per minute; null disables
+   * the measured path entirely, which is the behavior every hand-edit
+   * test pins.
+   */
+  readonly measuredTunedMark?: ((profile: string | null, use: DecisionModelUse) => boolean) | null;
 }
 
 function defaultVaultOptOut(vault: string): boolean {
@@ -518,7 +533,19 @@ export function resolveDecisionModelConfig(
       );
     }
   }
-  const held = holdToProfile(configured, thresholdProfile);
+  const held = holdToProfile(
+    configured,
+    thresholdProfile,
+    thresholdProfile === null
+      ? null
+      : (use) =>
+          // Disabled reader (null): the table alone decides. Default
+          // (undefined): the machine-side marks, TTL-cached inside the
+          // mark module.
+          opts.measuredTunedMark !== null
+            ? (opts.measuredTunedMark ?? machineTunedMarkReader())(thresholdProfile, use)
+            : false,
+  );
   const uses = held.uses;
 
   // A self-hosted server on this machine needs no key; anything that leaves
