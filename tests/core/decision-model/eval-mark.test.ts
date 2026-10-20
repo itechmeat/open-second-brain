@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { DecisionRequest } from "../../../src/core/decision-model/contract.ts";
 import {
@@ -25,6 +25,7 @@ import {
 } from "../../../src/core/decision-model/config.ts";
 import {
   decisionEvalSpecFor,
+  decisionEvalSpecHash,
   type DecisionEvalSpec,
 } from "../../../src/core/decision-model/eval-spec.ts";
 import { runDecisionModelEval } from "../../../src/core/decision-model/eval/grade.ts";
@@ -216,19 +217,74 @@ describe("validatedTuningMark", () => {
     resetTuningMarkCache();
     expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
 
-    // A mark is only as good as the thresholds it was measured against:
-    // validating against a spec whose pinned values differ refuses it.
-    resetTuningMarkCache();
+    // A mark is only as good as the thresholds it was measured against.
+    // The on-disk mark here names the drifted spec's own hash and
+    // fixture hash, so the pinned-threshold comparison is the only check
+    // that can refuse it.
     const registry = decisionEvalSpecFor("rerank")!;
     const drifted: DecisionEvalSpec = { ...registry, thresholds: { min_score: 0.5 } };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...valid,
+        spec_hash: decisionEvalSpecHash(drifted),
+        fixture_hash: drifted.fixture_hash,
+        thresholds: registry.thresholds,
+      }),
+      "utf8",
+    );
+    resetTuningMarkCache();
     expect(validatedTuningMark("laya", "rerank", stateEnv, drifted)).toBeNull();
+
+    // The control: a mark that matches the drifted spec on every axis -
+    // including its thresholds - validates, so the refusal above is the
+    // threshold comparison's and nothing else's.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...valid,
+        spec_hash: decisionEvalSpecHash(drifted),
+        fixture_hash: drifted.fixture_hash,
+        thresholds: drifted.thresholds,
+      }),
+      "utf8",
+    );
+    resetTuningMarkCache();
+    expect(validatedTuningMark("laya", "rerank", stateEnv, drifted)).not.toBeNull();
   });
 
-  test("fails closed on a mark keyed for another profile or use, or written by a hold", () => {
+  test("fails closed on a mark keyed for another profile or use, or written by a hold", async () => {
+    // A real promote mark for (laya, rerank) is on disk; every refusal
+    // below is the acceptance check's, not the mere absence of a file.
+    await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    const path = decisionModelTuningMarkPath(stateEnv, "laya", "rerank");
+    const valid = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).not.toBeNull();
+
+    // The same mark dropped under another profile's path (or asked for
+    // under another profile) is refused: a mark tuned for one provider
+    // family says nothing about another.
+    const foreignProfilePath = decisionModelTuningMarkPath(stateEnv, "openjev", "rerank");
+    mkdirSync(dirname(foreignProfilePath), { recursive: true });
+    writeFileSync(foreignProfilePath, JSON.stringify(valid), "utf8");
+    resetTuningMarkCache();
     expect(validatedTuningMark("openjev", "rerank", stateEnv)).toBeNull();
-    expect(validatedTuningMark(null, "rerank", stateEnv)).toBeNull();
-    // No eval has run for recall_inject, and its spec exists: no mark.
+
+    // ...and under another use's path: recall_inject was never measured.
+    const foreignUsePath = decisionModelTuningMarkPath(stateEnv, "laya", "recall_inject");
+    mkdirSync(dirname(foreignUsePath), { recursive: true });
+    writeFileSync(foreignUsePath, JSON.stringify(valid), "utf8");
+    resetTuningMarkCache();
     expect(validatedTuningMark("laya", "recall_inject", stateEnv)).toBeNull();
+
+    // A hold verdict never tunes, whatever the file claims.
+    writeFileSync(path, JSON.stringify({ ...valid, verdict: "hold" }), "utf8");
+    resetTuningMarkCache();
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
   });
 });
 
