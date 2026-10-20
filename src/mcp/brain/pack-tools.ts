@@ -1348,12 +1348,14 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         model: {
           type: "string",
-          description: "Optional model name hint for suggest.",
+          description:
+            "Optional model name hint for suggest. When `context_window_tokens` is absent and no preset hint matches, the window resolves from this id (declared table, `-1m` suffix, or the 200,000-token default) and the reason names the source.",
         },
         context_window_tokens: {
           type: "integer",
           minimum: 1,
-          description: "Optional context-window size hint for suggest.",
+          description:
+            "Optional context-window size hint for suggest. Wins over model-derived resolution.",
         },
         current: {
           type: "object",

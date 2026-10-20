@@ -72,4 +72,23 @@ describe("brain_context_presets tool", () => {
       preserved_overrides: [{ path: "context_pack.max_tokens", current: 9000, preset: 4000 }],
     });
   });
+
+  test("a model-only suggest resolves the window and discloses the source", async () => {
+    await expect(callPresets({ operation: "suggest", model: "gpt-4o" })).resolves.toMatchObject({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 128000 tokens resolved from declared matched long-context",
+    });
+    // Unknown model: the default window answers, marked as an assumption.
+    await expect(callPresets({ operation: "suggest", model: "kimi-k2" })).resolves.toMatchObject({
+      preset_id: "long-context",
+      confidence: "medium",
+      reason: "context window 200000 tokens resolved from default matched long-context",
+    });
+    // No model and no window keeps the conservative fallback.
+    await expect(callPresets({ operation: "suggest" })).resolves.toMatchObject({
+      preset_id: "tight-context",
+      confidence: "low",
+    });
+  });
 });

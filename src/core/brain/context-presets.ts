@@ -1,3 +1,5 @@
+import { resolveModelContextWindowTokens, type ResolvedModelWindow } from "./model-window.ts";
+
 export type ContextPresetId = "tight-context" | "long-context";
 export type ContextPresetConfidence = "high" | "medium" | "low";
 
@@ -31,6 +33,13 @@ export interface ContextPresetSuggestion {
   readonly confidence: ContextPresetConfidence;
   readonly reason: string;
   readonly preset: ContextBudgetPreset;
+  /**
+   * Present only when the window was RESOLVED from the model id - the
+   * path taken when no explicit window was given and no `model_hints`
+   * substring matched. A hint match never masquerades as a resolved
+   * window: the two mechanisms do not both fire for one call.
+   */
+  readonly resolvedWindow?: ResolvedModelWindow;
 }
 
 export interface ContextPresetCurrentConfig {
@@ -130,6 +139,33 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
         confidence: "high",
         reason: `context window ${window} tokens matched ${byWindow.id}`,
         preset: byWindow,
+      };
+    }
+  }
+
+  // No hint and no explicit window: resolve the window from the model id
+  // through the shared resolver (declared table > `1m` suffix > default)
+  // and size from the resolved window. The resolution source is disclosed
+  // in the reason and carried structurally; a `default`-sourced window is
+  // an assumption about the host, not a published fact, so it answers
+  // with `medium` confidence. Without a model id nothing is resolvable
+  // and the conservative fallback below stands, byte-identical.
+  if (model !== "") {
+    const resolved = resolveModelContextWindowTokens({ model: input.model });
+    const byWindow = PRESETS.find(
+      (preset) =>
+        resolved.windowTokens >= preset.context_window_tokens.min &&
+        (preset.context_window_tokens.max === null ||
+          resolved.windowTokens <= preset.context_window_tokens.max),
+    );
+    if (byWindow) {
+      const clampedNote = resolved.clamped ? " (clamped)" : "";
+      return {
+        preset_id: byWindow.id,
+        confidence: resolved.source === "default" ? "medium" : "high",
+        reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source}${clampedNote} matched ${byWindow.id}`,
+        preset: byWindow,
+        resolvedWindow: resolved,
       };
     }
   }

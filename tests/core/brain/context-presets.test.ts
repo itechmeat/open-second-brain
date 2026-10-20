@@ -39,6 +39,61 @@ describe("context budget presets", () => {
     });
   });
 
+  test("a model-only call resolves the window and the reason discloses the source", () => {
+    // Declared table (no hint word in "gpt-4o").
+    expect(suggestContextPreset({ model: "gpt-4o" })).toEqual({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "context window 128000 tokens resolved from declared matched long-context",
+      preset: getContextPreset("long-context"),
+      resolvedWindow: { windowTokens: 128_000, source: "declared", clamped: false },
+    });
+    // Structural 1m suffix, hint-free id.
+    expect(suggestContextPreset({ model: "qwen3-235b-1m" }).reason).toBe(
+      "context window 1000000 tokens resolved from suffix matched long-context",
+    );
+    // Unknown model: the default window, an assumption - medium confidence.
+    expect(suggestContextPreset({ model: "kimi-k2" })).toEqual({
+      preset_id: "long-context",
+      confidence: "medium",
+      reason: "context window 200000 tokens resolved from default matched long-context",
+      preset: getContextPreset("long-context"),
+      resolvedWindow: { windowTokens: 200_000, source: "default", clamped: false },
+    });
+  });
+
+  test("a hint match never masquerades as a resolved window in the same call", () => {
+    // The vocabulary accident the recon names, in full: "gemini" contains
+    // the hint "mini", so the hint answers byte-identically to every
+    // release before the resolver - and no window resolution is claimed
+    // for the same call.
+    const suggestion = suggestContextPreset({ model: "gemini-2.5-pro-1m" });
+    expect(suggestion).toMatchObject({
+      preset_id: "tight-context",
+      confidence: "high",
+      reason: "model hint matched tight-context",
+    });
+    expect(suggestion.resolvedWindow).toBeUndefined();
+  });
+
+  test("an explicit window keeps today's exact answer with nothing resolved", () => {
+    const suggestion = suggestContextPreset({ model: "kimi-k2", contextWindowTokens: 8000 });
+    expect(suggestion).toMatchObject({
+      preset_id: "tight-context",
+      confidence: "high",
+      reason: "context window 8000 tokens matched tight-context",
+    });
+    expect(suggestion.resolvedWindow).toBeUndefined();
+  });
+
+  test("no model and no window keeps the conservative fallback", () => {
+    expect(suggestContextPreset({})).toMatchObject({
+      preset_id: "tight-context",
+      confidence: "low",
+      reason: "no model or context-window hint matched; using conservative default",
+    });
+  });
+
   test("diffs preset values while reporting explicit overrides", () => {
     const diff = diffContextPreset("tight-context", {
       context_pack: {

@@ -26,6 +26,22 @@ test("brain context-presets show/suggest/diff returns dry-run diagnostics", asyn
     confidence: "high",
   });
 
+  // `--model` alone resolves a window and the reason discloses what decided.
+  const modelOnly = await runCli([
+    "brain",
+    "context-presets",
+    "suggest",
+    "--model",
+    "gpt-4o",
+    "--json",
+  ]);
+  expect(modelOnly.returncode).toBe(0);
+  expect(JSON.parse(modelOnly.stdout)).toMatchObject({
+    preset_id: "long-context",
+    confidence: "high",
+    reason: "context window 128000 tokens resolved from declared matched long-context",
+  });
+
   const diff = await runCli([
     "brain",
     "context-presets",
