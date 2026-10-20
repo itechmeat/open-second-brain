@@ -14,10 +14,11 @@
  * The tests mock `node:fs.writeFileSync` (bun `mock.module` retargets the
  * verb's named ESM import), so the red/green difference is observable
  * WITHOUT ever touching the real committed artifact, in either
- * direction.
+ * direction - and the real module is handed back when the file ends, so
+ * suites running later in the same process keep their writes.
  */
 
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 
 import { CliError } from "../../src/cli/argparse.ts";
@@ -28,6 +29,9 @@ import {
 } from "../../src/cli/search/verbs/schema-export.ts";
 
 const written: Array<unknown[]> = [];
+
+// Capture BEFORE the mock: the real writer, handed back in `afterAll`.
+const REAL_WRITE_FILE_SYNC = fs.writeFileSync;
 
 mock.module("node:fs", () => ({
   ...fs,
@@ -56,6 +60,20 @@ describe("o2b search schema export flags", () => {
   afterEach(() => {
     written.length = 0;
     stdout = "";
+  });
+
+  /**
+   * bun test runs every file of one invocation in a SINGLE process, so a
+   * module mock left installed here would silently swallow
+   * `writeFileSync` in every suite that runs after this one - the CLI
+   * e2e suites write their vaults and configs through node:fs. Hand the
+   * real module back before the runner moves on.
+   */
+  afterAll(() => {
+    mock.module("node:fs", () => ({
+      ...fs,
+      writeFileSync: REAL_WRITE_FILE_SYNC,
+    }));
   });
 
   test("--stdout prints the rendered artifact and writes nothing", async () => {
