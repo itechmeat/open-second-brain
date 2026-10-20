@@ -1275,6 +1275,26 @@ describe("brain_pre_compress_pack tool — derived caps", () => {
     expect(out["total_chars"]).toBeLessThanOrEqual(16_000);
   });
 
+  test("a hint-only model derives tight caps, the mapping the pack budgets", async () => {
+    seedTwoLongConfirmedPreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // "gemini-2.5-flash" is unknown to the declared table: the resolver
+    // answers the default window, and the pack budgets its hint
+    // (tight-context, 4k). The pre-compress caps answer from the SAME
+    // mapping - tight's 800/4000 - never from the default window's
+    // long-context caps the raw window bucket would name.
+    const out = await callPreCompress(server, { model: "gemini-2.5-flash" });
+    const items = out["items"] as Array<{ principle: string; trimmed: boolean }>;
+    expect(items).toHaveLength(2);
+    // The tight-context preset caps each entry at 800 code points.
+    for (const item of items) {
+      expect(item.trimmed).toBe(true);
+      expect(item.principle.length).toBe(800);
+    }
+    expect(out["total_chars"]).toBeLessThanOrEqual(4_000);
+  });
+
   test("nothing resolvable keeps the unbounded addendum", async () => {
     seedTwoLongConfirmedPreferences();
     const server = new MCPServer({ vault, configPath });

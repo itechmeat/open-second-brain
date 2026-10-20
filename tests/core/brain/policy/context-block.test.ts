@@ -8,9 +8,13 @@
  * forward-compat, so a misspelled block would otherwise resolve to the
  * default with no sign of why.
  *
- * Out-of-range but well-formed numeric values are ACCEPTED here and
- * clamped by the consumer that resolves them - these parsers store what
- * the operator declared, they do not second-guess it.
+ * Out-of-range but well-formed numeric values are ACCEPTED here - these
+ * parsers store what the operator declared, they do not second-guess it.
+ * What the consumer does next differs by block: the cross-topic resolver
+ * floors its knobs (disclosing every clamp), while the context window's
+ * operator declarations pass through the resolver UNCLAMPED - only the
+ * resolver's guessed answers clamp to its band (model-window.ts;
+ * design decision 2).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -142,7 +146,7 @@ describe("context block", () => {
     expect("context" in config).toBe(false);
   });
 
-  test("out-of-range values are accepted and stored - the resolver clamps, not the parser", () => {
+  test("out-of-range values are accepted and stored - the parser never clamps", () => {
     expect(load("context:\n  window_tokens: 50\n").config.context).toEqual({ window_tokens: 50 });
     expect(load("context:\n  window_tokens: 5000000\n").config.context).toEqual({
       window_tokens: 5000000,
@@ -205,7 +209,7 @@ describe("the model context window env helper", () => {
     });
   });
 
-  test("out-of-range integers are accepted - clamped downstream, not refused", () => {
+  test("out-of-range integers are accepted - passed through downstream, not refused", () => {
     withEnv("50", () => {
       expect(resolveModelContextWindowEnvTokens()).toBe(50);
     });

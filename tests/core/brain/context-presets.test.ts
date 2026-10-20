@@ -66,10 +66,11 @@ describe("context budget presets", () => {
   });
 
   test("a resolved window beats a model hint; a hint-only model keeps the hint", () => {
-    // "gemini-2.5-pro-1m" contains the hint "mini", but the id also
-    // carries a published `-1m` suffix. The resolver decides, because the
-    // derivation surfaces size every budget from this same resolved
-    // window - the suggestion must name the mapping the pack uses.
+    // "gemini-2.5-pro-1m" carries a hint word ("pro" is a whole token of
+    // the id), but the id also carries a published `-1m` suffix. The
+    // resolver decides, because the derivation surfaces size every budget
+    // from this same resolved window - the suggestion must name the
+    // mapping the pack uses.
     const suggestion = suggestContextPreset({ model: "gemini-2.5-pro-1m" });
     expect(suggestion).toEqual({
       preset_id: "long-context",
@@ -142,6 +143,49 @@ describe("context budget presets", () => {
         clamped: false,
       }).id,
     ).toBe("long-context");
+  });
+
+  test("a hint matches a whole token of the id, never a fragment of one", () => {
+    // "mini" is a substring of "gemini" and the declared table has no
+    // gemini rows, so the raw-substring matcher fell every gemini-* id
+    // through to the hint path and matched tight-context first:
+    // gemini-2.5-pro - a 1M-class model whose id also carries "pro" -
+    // was budgeted 4k. A hint now has to EQUAL one delimiter-split token
+    // of the lowercased id: the spurious "mini" hit is gone, and the
+    // genuine "pro" token decides - long-context, 24k.
+    const suggestion = suggestContextPreset({ model: "gemini-2.5-pro" });
+    expect(suggestion).toMatchObject({
+      preset_id: "long-context",
+      confidence: "high",
+      reason: "model hint matched long-context",
+    });
+    expect(suggestion.resolvedWindow).toBeUndefined();
+    const resolved = resolveModelContextWindowTokens({ model: "gemini-2.5-pro" });
+    expect(resolved.source).toBe("default");
+    const budget = presetForResolvedWindow("gemini-2.5-pro", resolved);
+    expect(budget.id).toBe("long-context");
+    expect(budget.context_pack.max_tokens).toBe(24_000);
+
+    // The positive half of the contract: an exact token still matches.
+    // gpt-4.1-mini is table-known, so its production budget answers from
+    // the declared 1M window, but on the hint fallback itself (a
+    // default-sourced answer) the whole token "mini" decides tight.
+    expect(
+      presetForResolvedWindow("gpt-4.1-mini", {
+        windowTokens: 200_000,
+        source: "default",
+        clamped: false,
+      }).id,
+    ).toBe("tight-context");
+
+    // A fragment inside a larger token is not a hit: "ministral" is one
+    // token, so the id falls through to the default window's mapping,
+    // answered with medium confidence and a claimed resolution.
+    expect(suggestContextPreset({ model: "ministral-8b" })).toMatchObject({
+      preset_id: "long-context",
+      confidence: "medium",
+      reason: "context window 200000 tokens resolved from default matched long-context",
+    });
   });
 
   test("an explicit window keeps today's exact answer with nothing resolved", () => {

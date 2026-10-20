@@ -69,7 +69,6 @@ import {
   getContextPreset,
   listContextPresets,
   presetForResolvedWindow,
-  presetForWindowTokens,
   suggestContextPreset,
   type ContextPresetCurrentConfig,
 } from "../../core/brain/context-presets.ts";
@@ -1063,8 +1062,13 @@ async function toolBrainPreCompressPack(
       throw new MCPError(INVALID_PARAMS, `brain_pre_compress_pack: ${(e as Error).message}`);
     }
   }
+  // The hint fallback rides along here exactly as it does in the
+  // context-pack budget above: when the resolver's answer is the
+  // default-sourced assumption, a hint-only model's caps come from its
+  // hint preset, the same mapping the pack and `brain_context_presets`
+  // suggest name - one model, one mapping on every surface.
   const derivedCaps =
-    resolvedCaps !== null ? presetForWindowTokens(resolvedCaps.windowTokens).pre_compress : null;
+    resolvedCaps !== null ? presetForResolvedWindow(model, resolvedCaps).pre_compress : null;
   const effMaxCharsPerMemory = maxCharsPerMemory ?? derivedCaps?.max_chars_per_memory;
   const effMaxTotalChars = maxTotalChars ?? derivedCaps?.max_total_chars;
   const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");

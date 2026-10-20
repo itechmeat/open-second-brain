@@ -138,15 +138,19 @@ export function presetForWindowTokens(window: number): ContextBudgetPreset {
 
 /**
  * The `model_hints` fallback, defined once: the preset whose hint list
- * contains a substring of the id. {@link suggestContextPreset} answers
- * from it when the resolver has nothing published to say, and
- * {@link presetForResolvedWindow} budgets from it on exactly the same
- * condition - so a hint-only model suggests and budgets one mapping.
+ * contains a whole token of the id - the lowercased id split on
+ * `[-_.:/@\s]+`, and the hint must EQUAL one token, so "mini" never
+ * matches inside "gemini" while a real `mini` token still does.
+ * {@link suggestContextPreset} answers from it when the resolver has
+ * nothing published to say, and {@link presetForResolvedWindow} budgets
+ * from it on exactly the same condition - so a hint-only model suggests
+ * and budgets one mapping.
  */
 function hintPresetForModel(model: string | null | undefined): ContextBudgetPreset | null {
   const id = model?.toLowerCase() ?? "";
   if (id === "") return null;
-  return PRESETS.find((preset) => preset.model_hints.some((hint) => id.includes(hint))) ?? null;
+  const tokens = new Set(id.split(/[-_.:/@\s]+/));
+  return PRESETS.find((preset) => preset.model_hints.some((hint) => tokens.has(hint))) ?? null;
 }
 
 /**
@@ -178,7 +182,7 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
 
   // Order (deliberate, changed by this branch from the hint-first order
   // it replaced): an explicit window wins over a matching `model_hints`
-  // substring. The window is authoritative - it is the caller's own
+  // token. The window is authoritative - it is the caller's own
   // number for the deployment at hand, the same figure a derived budget
   // sizes from, just as the operator-config channel is authoritative in
   // the resolver - while a hint is a heuristic read off the id, and a

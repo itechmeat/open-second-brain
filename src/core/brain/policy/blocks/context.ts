@@ -12,10 +12,15 @@
  * promotion or a declared window. Both blocks are pure opt-ins - a whole
  * block absent resolves to the pre-block behaviour byte-identically -
  * and both store what the operator declared rather than second-guessing
- * it: an out-of-range but well-formed number is stored here and clamped
- * (and the clamp disclosed) by the consumer that resolves it. A value of
- * the wrong SHAPE is refused here, because a knob that silently ignored
- * its operator would mislead every run with no sign of why.
+ * it: an out-of-range but well-formed number is stored here, and what
+ * the consumer does next differs by block. The cross-topic resolver
+ * floors its knobs, disclosing every clamp; the context window's
+ * operator declarations are first-hand facts that pass through the
+ * resolver UNCLAMPED (model-window.ts; design decision 2) - only the
+ * resolver's GUESSED answers, the `1m` suffix expansion and the
+ * unknown-model default, are clamped to its band. A value of the wrong
+ * SHAPE is refused here, because a knob that silently ignored its
+ * operator would mislead every run with no sign of why.
  */
 
 import type { BrainContextConfig, BrainCrossTopicConfig } from "../../types.ts";
