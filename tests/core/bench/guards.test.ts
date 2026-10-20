@@ -561,6 +561,24 @@ describe("validateBenchTrace", () => {
     }
   });
 
+  test("an orphaned atomic-write temp does not make a crashed run unresumable", () => {
+    // Finding 29: a SIGKILL between the atomic write and its rename leaves
+    // `<id>.json.<pid>.tmp` in results/ (the rmSync cleanup only runs on a
+    // thrown error), and T6 counting it as an extra refused the resumed
+    // run - the crash recovery the atomic writes and resume exist for
+    // demanded a manual rm first. The writer's own temp shape is exempt.
+    const crashed = retrievalRun(traceRecord({ paths: [] }), "q1.json.424242.tmp");
+    expect(() => validateBenchTrace({ runDir: crashed, fixture: TRACE_FIXTURE })).not.toThrow();
+    // T6 still stands for real junk: any other leftover refuses.
+    const leftover = retrievalRun(traceRecord({ paths: [] }), "q-leftover.json");
+    try {
+      validateBenchTrace({ runDir: leftover, fixture: TRACE_FIXTURE });
+      throw new Error("expected the trace validation to refuse");
+    } catch (e) {
+      expect((e as BenchRefusalError).kind).toBe("trace_extra_results");
+    }
+  });
+
   test("each category family refuses an ABSENT required field but passes present-but-empty", () => {
     // (category, required field, the question, the record with the field
     // present but empty - the legitimate miss the guard must never

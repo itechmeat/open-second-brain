@@ -374,6 +374,18 @@ export interface BenchTraceValidationOptions {
 }
 
 /**
+ * The shared atomic writer's own leftover shape (`<target>.<pid>.tmp`):
+ * a process killed between the write and the rename leaves it beside its
+ * target - the `rmSync` cleanup only runs on a thrown error - and T6
+ * must not turn that crash artifact into an unresumable run (finding 29):
+ * the resume exists precisely to recover a crashed one. Only this exact
+ * shape is exempt; every other leftover still refuses.
+ */
+function isAtomicWriteTemp(entry: string): boolean {
+  return /\.json\.\d+\.tmp$/.test(entry);
+}
+
+/**
  * Refuse every damaged trace state catchable BEFORE the report writes
  * (T1-T7). Called by the pipeline once before scoring (no report yet -
  * T1-T6) and once before the write (with the report - the full set), so
@@ -385,9 +397,13 @@ export function validateBenchTrace(opts: BenchTraceValidationOptions): void {
   const expectedFiles = new Set(expectedIds.map((id) => `${id}.json`));
   // T6: leftovers in a reused or tampered run dir silently skew nothing
   // today only because they are ignored - which is exactly the problem:
-  // they would hide a stale trace from every check below.
+  // they would hide a stale trace from every check below. The atomic
+  // writer's own crash-orphaned temp ({@link isAtomicWriteTemp}) is the
+  // one exempt shape.
   if (existsSync(resultsDir)) {
-    const extras = readdirSync(resultsDir).filter((entry) => !expectedFiles.has(entry));
+    const extras = readdirSync(resultsDir).filter(
+      (entry) => !expectedFiles.has(entry) && !isAtomicWriteTemp(entry),
+    );
     if (extras.length > 0) {
       refuse(
         BENCH_REFUSAL.traceExtraResults,
