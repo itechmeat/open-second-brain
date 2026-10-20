@@ -206,22 +206,24 @@ export function presetForResolvedWindow(
   return presetForWindowTokens(resolved.windowTokens);
 }
 
+/**
+ * The conservative fallback, defined once: tight-context, low
+ * confidence, the answer for every call nothing published places - a
+ * model-free call, or a model id with no window source, no suffix and no
+ * hint. Never claims a resolved window.
+ */
+function conservativeFallbackSuggestion(): ContextPresetSuggestion {
+  const fallback = PRESETS[0]!;
+  return {
+    preset_id: fallback.id,
+    confidence: "low",
+    reason: "no model or context-window hint matched; using conservative default",
+    preset: fallback,
+  };
+}
+
 export function suggestContextPreset(input: ContextPresetSuggestionInput): ContextPresetSuggestion {
   const model = input.model?.toLowerCase() ?? "";
-
-  // The conservative fallback, defined once: tight-context, low
-  // confidence, the answer for every call nothing published places - a
-  // model-free call, or a model id with no window source, no suffix and
-  // no hint. Never claims a resolved window.
-  const conservativeFallback = (): ContextPresetSuggestion => {
-    const fallback = PRESETS[0]!;
-    return {
-      preset_id: fallback.id,
-      confidence: "low",
-      reason: "no model or context-window hint matched; using conservative default",
-      preset: fallback,
-    };
-  };
 
   // Order (deliberate, changed by this branch from the hint-first order
   // it replaced): an explicit window wins over a matching `model_hints`
@@ -280,10 +282,10 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
     // call gets, and the exact condition the pack budget surfaces refuse
     // on ({@link unrecognisedModelBudgetRefusal}). An ASSUMED window is
     // never a basis for a suggestion: no `resolvedWindow` is claimed.
-    return conservativeFallback();
+    return conservativeFallbackSuggestion();
   }
 
-  return conservativeFallback();
+  return conservativeFallbackSuggestion();
 }
 
 export function diffContextPreset(
