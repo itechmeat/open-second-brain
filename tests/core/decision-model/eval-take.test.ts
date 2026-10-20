@@ -9,13 +9,16 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import {
   hashOrderSplit,
   parseDecisionEvalFixture,
   loadDecisionEvalFixture,
+  resolveEvalFixturePath,
   verifyEvalTake,
 } from "../../../src/core/decision-model/eval/take.ts";
 import {
@@ -217,6 +220,50 @@ describe("committed take fixtures", () => {
     expect(() =>
       loadDecisionEvalFixture("tests/fixtures/decision-model/rerank-take.json", "dedup"),
     ).toThrow(/use/);
+  });
+
+  test("resolution stays package-rooted: the take loads from a bare working directory", () => {
+    // The installed package has no caller working directory to lean on:
+    // the repo-relative reference must resolve against the package root,
+    // wherever the process happens to run - today it falls back to the
+    // working directory and cannot read the committed take at all.
+    const repoRoot = resolve(join(import.meta.dir, "..", "..", "..", ".."));
+    const previous = process.cwd();
+    const bare = mkdtempSync(join(tmpdir(), "osb-dm-take-bare-"));
+    process.chdir(bare);
+    try {
+      const ref = "tests/fixtures/decision-model/rerank-take.json";
+      expect(resolveEvalFixturePath(ref).startsWith(repoRoot)).toBe(true);
+      const loaded = loadDecisionEvalFixture(ref, "rerank");
+      expect(loaded.fixture.items).toHaveLength(43);
+    } finally {
+      process.chdir(previous);
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("a look-alike file in the working directory is never hashed", () => {
+    // The installed-package failure mode: a cwd-relative fallback would
+    // read whatever sits at ./tests/fixtures/... and hash it into a
+    // preregistration claim. A repo-relative reference resolves against
+    // the package root or nowhere; a look-alike only the working
+    // directory holds is a named read error, never content.
+    const repoRoot = resolve(join(import.meta.dir, "..", "..", ".."));
+    const previous = process.cwd();
+    const decoy = mkdtempSync(join(tmpdir(), "osb-dm-take-decoy-"));
+    mkdirSync(join(decoy, "tests", "fixtures", "decision-model"), { recursive: true });
+    const ref = "tests/fixtures/decision-model/lookalike-take.json";
+    writeFileSync(join(decoy, ref), JSON.stringify({ use: "rerank", items: [] }), "utf8");
+    process.chdir(decoy);
+    try {
+      const resolved = resolveEvalFixturePath(ref);
+      expect(resolved.startsWith(decoy)).toBe(false);
+      expect(resolved).toBe(join(repoRoot, ref));
+      expect(() => loadDecisionEvalFixture(ref, "rerank")).toThrow(/cannot read/);
+    } finally {
+      process.chdir(previous);
+      rmSync(decoy, { recursive: true, force: true });
+    }
   });
 });
 

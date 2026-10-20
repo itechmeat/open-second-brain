@@ -19,8 +19,8 @@
  * vocabulary (`relevant` / `useful` booleans), validated fail-fast.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
@@ -187,15 +187,16 @@ export function parseDecisionEvalFixture(
 }
 
 /**
- * Resolve the spec's fixture reference: absolute as is, then repo-root
- * relative (how the committed fixtures are spelled), then working
- * directory relative.
+ * Resolve the spec's fixture reference: absolute paths as is, everything
+ * else against the package root - the only relative spelling the
+ * registry uses, and the one the installed package ships. There is no
+ * working-directory fallback: a look-alike file at ./tests/fixtures/...
+ * must never be hashed into a preregistration claim, and a fixture the
+ * package does not carry is a named read error.
  */
 export function resolveEvalFixturePath(ref: string): string {
   if (isAbsolute(ref)) return ref;
-  const rooted = join(PACKAGE_ROOT, ref);
-  if (existsSync(rooted)) return rooted;
-  return resolve(ref);
+  return join(PACKAGE_ROOT, ref);
 }
 
 /** Load the spec's fixture file and hash its canonical document. */
