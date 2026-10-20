@@ -38,6 +38,8 @@
  * is the review evidence; the mark is the gate input.
  */
 
+import { randomUUID } from "node:crypto";
+
 import type { DecisionModelUse, DecisionProvider } from "../contract.ts";
 import type { ResolvedDecisionModelConfig } from "../config-types.ts";
 import {
@@ -226,6 +228,11 @@ export async function runDecisionModelEval(
   // Eval requests are real spend but not shadow data: the rerank eval
   // gate's own stance, kept here.
   const evalCfg: ResolvedDecisionModelConfig = { ...cfg, recordOrigin: "eval" };
+  // Run-scoped correlation token, stamped into every call record this
+  // run writes: a vault that has seen earlier eval runs holds eval-origin
+  // records with the same item ids, and the grade's call_ids must list
+  // only this grading run's requests.
+  const evalRunToken = randomUUID();
   const outcomes: ItemOutcome[] = [];
 
   for (const item of fixture.items) {
@@ -288,7 +295,7 @@ export async function runDecisionModelEval(
         // configured: a shadow arm would measure nothing.
         modeOverride: "enforce",
         ...(opts.now !== undefined ? { now: () => opts.now! } : {}),
-        recordDetails: () => ({ item_id: item.id }),
+        recordDetails: () => ({ item_id: item.id, eval_run: evalRunToken }),
       },
     );
     const scored =
@@ -335,8 +342,9 @@ export async function runDecisionModelEval(
   const verdictsById = Object.fromEntries(
     outcomes.filter((o) => o.split === "counted").map((o) => [o.id, o.verdict]),
   );
-  // Correlate the grade with the real recorded requests: one scan over
-  // this run's eval-origin calls, matched by the item ids they carry.
+  // Correlate the grade with the real recorded requests: only this run's
+  // eval-origin calls, matched by the run token they carry (item ids
+  // alone would also match every earlier run on the same vault).
   const callIds =
     cfg.vault === null
       ? []
@@ -344,6 +352,7 @@ export async function runDecisionModelEval(
           .filter(
             (r) =>
               r.payload["origin"] === "eval" &&
+              r.payload["eval_run"] === evalRunToken &&
               typeof r.payload["item_id"] === "string" &&
               outcomes.some((o) => o.id === r.payload["item_id"]),
           )

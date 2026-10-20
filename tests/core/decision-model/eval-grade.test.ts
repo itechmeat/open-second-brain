@@ -381,6 +381,25 @@ describe("runDecisionModelEval", () => {
     expect(grades[0]!.verdicts[floorFirst]).toBe(false);
   });
 
+  test("a grade record correlates only its own run's calls", async () => {
+    await runDecisionModelEval("recall_inject", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+    });
+    await runDecisionModelEval("recall_inject", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: INVERTED }),
+    });
+    const { grades } = listDecisionModelEvalGrades(vault);
+    expect(grades).toHaveLength(2);
+    // The take has 29 items: each record lists this run's one call per
+    // item, never the earlier runs' calls with the same item ids.
+    const [first, second] = grades;
+    expect(first!.callIds).toHaveLength(29);
+    expect(second!.callIds).toHaveLength(29);
+    expect(second!.callIds.filter((id) => first!.callIds.includes(id))).toEqual([]);
+  });
+
   test("refuses a use with no preregistered spec and an inactive config", async () => {
     await expect(
       runDecisionModelEval("dedup", {
