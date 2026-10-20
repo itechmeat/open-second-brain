@@ -255,7 +255,7 @@ test("brain context-pack derives from the vault context block without --model", 
   expect(json.max_tokens_source).toBe("operator-config");
 });
 
-test("brain context-pack clamps an out-of-band declared window", async () => {
+test("brain context-pack passes an out-of-band declared window through unclamped", async () => {
   writePref("core", "core principle", "tier: core");
   writeFileSync(
     join(vault, "Brain", "_brain.yaml"),
@@ -266,6 +266,9 @@ test("brain context-pack clamps an out-of-band declared window", async () => {
 
   expect(out.returncode).toBe(0);
   const json = JSON.parse(out.stdout);
+  // A first-hand declaration passes through exactly as given (never
+  // clamped into the band); 5M simply lands in the long-context bucket,
+  // whose 24k budget is what the answer discloses.
   expect(json.max_tokens).toBe(24_000);
   expect(json.max_tokens_source).toBe("operator-config");
 });

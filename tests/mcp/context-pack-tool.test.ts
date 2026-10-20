@@ -1170,11 +1170,13 @@ describe("brain_context_pack tool — derived budget", () => {
     expect(out["max_tokens_source"]).toBe("operator-config");
   });
 
-  test("an out-of-band operator value clamps into the band", async () => {
+  test("an out-of-band operator value passes through unclamped", async () => {
     writeOnePref();
     writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 5000000\n");
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
+    // A first-hand declaration passes through exactly as given (never
+    // clamped into the band); 5M simply lands in the long-context bucket.
     const out = await callPack(server, {});
     expect(out["max_tokens"]).toBe(24_000);
     expect(out["max_tokens_source"]).toBe("operator-config");
