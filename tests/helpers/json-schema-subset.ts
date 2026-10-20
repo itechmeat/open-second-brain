@@ -20,17 +20,26 @@ export type SchemaType = "object" | "array" | "string" | "integer" | "number" | 
 export interface SchemaNode {
   readonly $schema?: string;
   readonly $id?: string;
+  readonly $defs?: Readonly<Record<string, SchemaNode>>;
   readonly type?: SchemaType;
   readonly title?: string;
   readonly description?: string;
   readonly format?: "date-time";
   readonly minimum?: number;
   readonly maximum?: number;
+  readonly minLength?: number;
+  readonly maxLength?: number;
+  readonly maxItems?: number;
   readonly enum?: ReadonlyArray<unknown>;
   readonly required?: ReadonlyArray<string>;
   readonly properties?: Readonly<Record<string, SchemaNode>>;
   readonly items?: SchemaNode;
-  readonly additionalProperties?: boolean;
+  /**
+   * The boolean form excludes unknown keys; the SCHEMA form validates each
+   * unknown key against it (the search-query artifact's `properties` row
+   * types its filter map this way).
+   */
+  readonly additionalProperties?: boolean | SchemaNode;
 }
 
 export interface SchemaValidationResult {
@@ -41,12 +50,16 @@ export interface SchemaValidationResult {
 const SUPPORTED_KEYWORDS: ReadonlySet<string> = new Set([
   "$schema",
   "$id",
+  "$defs",
   "type",
   "title",
   "description",
   "format",
   "minimum",
   "maximum",
+  "minLength",
+  "maxLength",
+  "maxItems",
   "enum",
   "required",
   "properties",
@@ -85,7 +98,10 @@ export function assertSupportedSchema(schema: unknown, path = ""): void {
   }
   const additional = schema["additionalProperties"];
   if (additional !== undefined && typeof additional !== "boolean") {
-    throw new Error(`${formatPath(path)}: additionalProperties must be a boolean here`);
+    // The schema form is checked recursively below, like properties.
+    if (!isRecord(additional)) {
+      throw new Error(`${formatPath(path)}: additionalProperties must be a boolean or a schema`);
+    }
   }
   const properties = schema["properties"];
   if (properties !== undefined) {
@@ -94,7 +110,17 @@ export function assertSupportedSchema(schema: unknown, path = ""): void {
       assertSupportedSchema(child, appendPath(path, key));
     }
   }
+  if (schema["$defs"] !== undefined) {
+    const defs = schema["$defs"];
+    if (!isRecord(defs)) throw new Error(`${formatPath(path)}: $defs must be an object`);
+    for (const [name, child] of Object.entries(defs)) {
+      assertSupportedSchema(child, appendPath(path, name));
+    }
+  }
   if (schema["items"] !== undefined) assertSupportedSchema(schema["items"], `${path}[]`);
+  if (additional !== undefined && typeof additional !== "boolean") {
+    assertSupportedSchema(additional, appendPath(path, "(additionalProperties)"));
+  }
 }
 
 export function validateAgainstSchema(schema: SchemaNode, value: unknown): SchemaValidationResult {
@@ -117,6 +143,14 @@ function validateNode(schema: SchemaNode, value: unknown, path: string, errors: 
   if (schema.format === "date-time" && typeof value === "string") {
     if (!Number.isFinite(Date.parse(value))) errors.push(`${formatPath(path)} must be date-time`);
   }
+  if (typeof value === "string") {
+    if (schema.minLength !== undefined && value.length < schema.minLength) {
+      errors.push(`${formatPath(path)} must be at least ${schema.minLength} character(s)`);
+    }
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+      errors.push(`${formatPath(path)} must be at most ${schema.maxLength} character(s)`);
+    }
+  }
   if (typeof value === "number") {
     if (schema.minimum !== undefined && value < schema.minimum) {
       errors.push(`${formatPath(path)} must be >= ${schema.minimum}`);
@@ -124,6 +158,9 @@ function validateNode(schema: SchemaNode, value: unknown, path: string, errors: 
     if (schema.maximum !== undefined && value > schema.maximum) {
       errors.push(`${formatPath(path)} must be <= ${schema.maximum}`);
     }
+  }
+  if (Array.isArray(value) && schema.maxItems !== undefined && value.length > schema.maxItems) {
+    errors.push(`${formatPath(path)} must have at most ${schema.maxItems} item(s)`);
   }
   if (schema.type === "object" && isRecord(value)) {
     const properties = schema.properties ?? {};
@@ -135,6 +172,8 @@ function validateNode(schema: SchemaNode, value: unknown, path: string, errors: 
       if (childSchema === undefined) {
         if (schema.additionalProperties === false) {
           errors.push(`${formatPath(appendPath(path, key))} is not allowed`);
+        } else if (typeof schema.additionalProperties === "object") {
+          validateNode(schema.additionalProperties, child, appendPath(path, key), errors);
         }
         continue;
       }

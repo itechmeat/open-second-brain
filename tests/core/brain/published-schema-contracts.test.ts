@@ -43,6 +43,8 @@ import {
   complexityPathFactors,
 } from "../../../src/core/discipline/complexity.ts";
 import { BRAIN_TOOLS } from "../../../src/mcp/brain-tools.ts";
+import { SEARCH_INPUT_SCHEMA } from "../../../src/mcp/search-tools.ts";
+import { buildSearchQueryArtifact } from "../../../src/cli/search/verbs/schema-export.ts";
 import {
   assertSupportedSchema,
   type SchemaNode,
@@ -57,6 +59,7 @@ const SCHEMA_IDS: Readonly<Record<string, string>> = {
   "retention-review.schema.json": "brain.retention_review.v1",
   "monthly-review.schema.json": "brain.monthly_review.v1",
   "complexity-report.schema.json": "brain.complexity_report.v1",
+  "search-query.schema.json": "brain.search_query.v1",
 };
 
 function loadSchema(file: string): SchemaNode {
@@ -150,6 +153,67 @@ describe("the published schema set", () => {
     expect(() => assertSupportedSchema({ type: "string", format: "uri" })).toThrow(
       'unsupported format "uri"',
     );
+  });
+
+  test("the string and array length bounds the search schema uses are enforced", () => {
+    // t_50c81d5c E4: the brain_search language bounds its strings
+    // (minLength/maxLength) and arrays (maxItems); a validator that
+    // skipped them would claim a guarantee the published file makes.
+    const schema: SchemaNode = {
+      type: "object",
+      required: ["q"],
+      additionalProperties: false,
+      properties: {
+        q: { type: "string", minLength: 1, maxLength: 4 },
+        tags: { type: "array", maxItems: 2, items: { type: "string" } },
+      },
+    };
+    expect(validateAgainstSchema(schema, { q: "ok", tags: ["a"] }).ok).toBe(true);
+    expect(validateAgainstSchema(schema, { q: "", tags: [] }).errors).toContain(
+      "q must be at least 1 character(s)",
+    );
+    expect(validateAgainstSchema(schema, { q: "toolong", tags: [] }).errors).toContain(
+      "q must be at most 4 character(s)",
+    );
+    expect(validateAgainstSchema(schema, { q: "ok", tags: ["a", "b", "c"] }).errors).toContain(
+      "tags must have at most 2 item(s)",
+    );
+  });
+
+  test("additionalProperties as a SCHEMA validates unknown keys against it", () => {
+    // The properties row of the search schema types its extra keys; the
+    // boolean form keeps its exact previous meaning.
+    const typed: SchemaNode = {
+      type: "object",
+      properties: { known: { type: "string" } },
+      additionalProperties: { type: "array", items: { type: "string" } },
+    };
+    expect(
+      validateAgainstSchema(typed, { known: "x", filter: ["a", "b"] }).ok,
+      "unknown keys matching the schema pass",
+    ).toBe(true);
+    expect(validateAgainstSchema(typed, { known: "x", filter: "not-an-array" }).errors).toContain(
+      "filter must be array",
+    );
+    const closed: SchemaNode = {
+      type: "object",
+      properties: { known: { type: "string" } },
+      additionalProperties: false,
+    };
+    expect(validateAgainstSchema(closed, { known: "x", extra: 1 }).errors).toContain(
+      "extra is not allowed",
+    );
+  });
+
+  test("a $defs block is walked like any schema node, and its children are checked", () => {
+    // The search-query artifact carries its query-document grammar as a
+    // $defs sibling; an unsupported keyword hiding inside $defs must
+    // still be refused.
+    expect(() =>
+      assertSupportedSchema({
+        $defs: { doc: { type: "string", pattern: "^x$" } },
+      }),
+    ).toThrow('unsupported schema keyword "pattern"');
   });
 });
 
@@ -318,5 +382,60 @@ describe("brain.complexity_report.v1", () => {
     );
     expect(report.factors).toEqual([]);
     expectValid(loadSchema("complexity-report.schema.json"), report);
+  });
+});
+
+describe("brain.search_query.v1 (t_50c81d5c E4)", () => {
+  test("the committed file equals what the descriptor derives - the generator check", () => {
+    // JSON equality, not byte equality: the file is hand-formatted like
+    // its siblings and the generator owns the content, not the layout.
+    const onDisk: unknown = JSON.parse(
+      readFileSync(join(SCHEMA_DIR, "search-query.schema.json"), "utf8"),
+    );
+    expect(onDisk).toEqual(asJson(buildSearchQueryArtifact()));
+  });
+
+  test("the artifact is the mcp projection plus the query-document grammar", () => {
+    const artifact = loadSchema("search-query.schema.json");
+    expect(artifact.$id).toBe("brain.search_query.v1");
+    const served = SEARCH_INPUT_SCHEMA as unknown as Record<string, unknown>;
+    const properties = artifact.properties as Record<string, SchemaNode>;
+    // Every served brain_search argument is a property of the artifact,
+    // spelled identically.
+    for (const [name, fragment] of Object.entries(served.properties as Record<string, unknown>)) {
+      expect(properties[name] as unknown).toEqual(fragment);
+    }
+    expect(Object.keys(properties).toSorted()).toEqual(
+      Object.keys(served.properties as Record<string, unknown>).toSorted(),
+    );
+    expect(artifact.required).toEqual(["query"]);
+    expect(artifact.additionalProperties).toBe(false);
+    // The sibling grammar block declares its own versioned id.
+    const docGrammar = (
+      (artifact as unknown as Record<string, unknown>)["$defs"] as Record<string, SchemaNode>
+    )["search_query_document"];
+    expect(docGrammar).toBeDefined();
+    expect(docGrammar!.$id).toBe("brain.search_query_document.v1");
+  });
+
+  test("a documented brain_search argument object validates against the artifact", () => {
+    const artifact = loadSchema("search-query.schema.json");
+    const args = {
+      query: "project alpha",
+      query_document: 'intent: entity\nlex: "project alpha" -archived\nvec: active context',
+      kind: "section",
+      since: "last week",
+      limit: 10,
+      disclosure: "cards",
+      match_mode: "any",
+    };
+    expectValid(artifact, args);
+    // And the drift the contract exists to catch is refused by name.
+    const unknown = { ...args, definitely_not_an_argument: true };
+    expect(validateAgainstSchema(artifact, unknown).errors).toContain(
+      "definitely_not_an_argument is not allowed",
+    );
+    const badEnum = { ...args, disclosure: "essays" };
+    expect(validateAgainstSchema(artifact, badEnum).errors[0]).toContain("disclosure");
   });
 });
