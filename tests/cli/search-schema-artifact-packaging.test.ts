@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SEARCH_QUERY_SCHEMA_PATH } from "../../src/cli/search/verbs/schema-export.ts";
@@ -38,7 +38,9 @@ describe("the search-query schema artifact ships in the package", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
       files?: string[];
     };
-    const rel = relative(ROOT, SEARCH_QUERY_SCHEMA_PATH);
+    // Normalise to forward slashes: `relative` yields separators native to
+    // the host (backslashes on Windows), while the `files` entries are posix.
+    const rel = relative(ROOT, SEARCH_QUERY_SCHEMA_PATH).split(sep).join("/");
     const missing = ships(pkg.files ?? [], rel) ? [] : [rel];
     expect(missing).toEqual([]);
   });

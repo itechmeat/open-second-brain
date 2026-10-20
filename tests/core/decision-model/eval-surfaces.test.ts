@@ -172,7 +172,7 @@ describe("the check's measured tuning state", () => {
       },
       vault,
       markSource: stateEnv,
-      env: { AI_GATEWAY_API_KEY: "unused-test-value" } as unknown as NodeJS.ProcessEnv,
+      env: { AI_GATEWAY_API_KEY: "unused" } as unknown as NodeJS.ProcessEnv,
     });
     expect(baseline.tuning).toMatchObject({ profile: "jev-1.13", state: "baseline" });
     expect(renderDecisionModelCheck(baseline)).toContain("is the baseline");
