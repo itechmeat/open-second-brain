@@ -28,6 +28,7 @@
     "skills/",
     "scripts/",
     "plugins/",
+    "schemas/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE",
