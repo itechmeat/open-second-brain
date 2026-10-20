@@ -6,9 +6,10 @@
  * rebuild: write to `brain.sqlite.new`, then a same-file rename swap
  * with `.bak` retention.
  *
- * `indexStatus`, `indexCheck` and `indexRootCoverage` are the read-side
- * diagnostics that power `o2b search status|check`, the MCP status
- * enrichment and the recall gate's coverage receipt.
+ * `indexStatus`, `indexCheck`, `indexRootCoverage` and
+ * `indexBehindCount` are the read-side diagnostics that power
+ * `o2b search status|check`, the MCP status enrichment and the recall
+ * gate's coverage receipt.
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §6, §8,
  * §13, §15.
@@ -1809,6 +1810,100 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     });
   } finally {
     await store.close();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// indexBehindCount
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What the next incremental run would do, measured live (t_e4438152).
+ */
+export interface IndexBehind {
+  /** `unindexed + changed + deleted`: the run's whole to-do list. */
+  readonly behind: number;
+  /** Walked files with no stored row: the run would add them. */
+  readonly unindexed: number;
+  /** Stored mtime or size differs: the run would re-read and hash them. */
+  readonly changed: number;
+  /** Stored paths the walk never saw: the run would delete them. */
+  readonly deleted: number;
+}
+
+/**
+ * The live index-behind census: how many documents the next incremental
+ * run would add, update or delete, measured now rather than read back
+ * from the last completed run's count.
+ *
+ * Exactly the incremental fastpath's comparison, without the reads:
+ * `walkVault` yields the in-scope `.md` tree stat-only (no content read,
+ * no hash - the cost is one `readdir` plus one `stat` per entry), and
+ * every walked file is classified against the stored row:
+ *
+ *   - `unindexed`: walked, no stored row;
+ *   - `changed`: stored mtime (seconds) or size differs - the fastpath
+ *     miss the next run must read and hash;
+ *   - `deleted`: a stored path the walk never saw.
+ *
+ * Two deliberate semantics, shared with the fastpath this replicates:
+ *
+ *   1. Upper bound. A touch-only file (identical bytes, bumped mtime)
+ *      counts as changed: the walk never hashes, so "behind" means
+ *      "what the next run would re-read", not "notes missing from
+ *      answers".
+ *   2. Second granularity. Stored mtimes are seconds, so an edit that
+ *      lands twice within its indexed second at the same size reads as
+ *      unchanged. The run after it catches it; do not "fix" that here.
+ *
+ * Read-only and self-contained: one read-mode store open, no writes, no
+ * freshen claim, no state file - nothing registers anywhere. On ANY
+ * failure - a missing or unreadable index, a walk that throws - the
+ * answer is `null`: a failed measurement is not a measurement, and
+ * `null` is never a zero.
+ */
+export async function indexBehindCount(config: ResolvedSearchConfig): Promise<IndexBehind | null> {
+  let store: Store;
+  try {
+    store = await Store.open(config, { mode: "read" });
+  } catch {
+    return null; // No index, or one that would not open: not measured.
+  }
+  try {
+    const existing = store.listDocuments();
+    const seen = new Set<string>();
+    let unindexed = 0;
+    let changed = 0;
+    for (const file of walkVault(config)) {
+      seen.add(file.relPath);
+      const prev = existing.get(file.relPath);
+      if (prev === undefined) {
+        unindexed++;
+      } else if (
+        prev.mtime !== Math.floor(file.stat.mtimeMs / 1000) ||
+        prev.size !== file.stat.size
+      ) {
+        changed++;
+      }
+    }
+    let deleted = 0;
+    for (const path of existing.keys()) {
+      if (!seen.has(path)) deleted++;
+    }
+    return Object.freeze({
+      behind: unindexed + changed + deleted,
+      unindexed,
+      changed,
+      deleted,
+    });
+  } catch {
+    return null;
+  } finally {
+    try {
+      await store.close();
+    } catch {
+      // A close failure must not unseat the measurement (or the null).
+    }
   }
 }
 

@@ -192,6 +192,8 @@ export {
   indexStatus,
   indexCheck,
   indexRootCoverage,
+  indexBehindCount,
+  type IndexBehind,
   type IndexRootCoverage,
   type IndexVaultOptions,
   type IndexProgressEvent,
