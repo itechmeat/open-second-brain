@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import { nestedCommand } from "../../src/cli/command-manifest.ts";
 import { VAULT_FLAGS } from "../../src/cli/search/helpers.ts";
+import { SEARCH_QUERY_FLAGS } from "../../src/cli/search/verbs/query.ts";
 import { parsedFlagSchema } from "../helpers/parsed-flag-schema.ts";
 
 const VERBS_DIR = join(import.meta.dir, "..", "..", "src", "cli", "search", "verbs");
@@ -106,8 +107,20 @@ const COVERED: ReadonlyArray<CoveredVerb> = Object.freeze([
  */
 const INHERITED_FLAG_NAME = "json";
 
-/** The `parseFlags(argv, { ... })` schema the verb declares, as `name -> type`. */
+/**
+ * The `parseFlags(argv, { ... })` schema the verb declares, as `name -> type`.
+ *
+ * The query verb's schema is no longer an inline literal: it is the
+ * descriptor-derived {@link SEARCH_QUERY_FLAGS} export (t_50c81d5c E3),
+ * read directly - same object the verb passes to its parser, so the
+ * ratchet's direction is unchanged (what the verb parses must be
+ * modelled) and the static source read stays only for the verbs whose
+ * schemas are still literals.
+ */
 function verbFlagSchema(entry: CoveredVerb): ReadonlyMap<string, string> {
+  if (entry.source === "query.ts") {
+    return new Map(Object.entries(SEARCH_QUERY_FLAGS).map(([name, spec]) => [name, spec.type]));
+  }
   return parsedFlagSchema({
     file: join(VERBS_DIR, entry.source),
     marker: entry.marker,

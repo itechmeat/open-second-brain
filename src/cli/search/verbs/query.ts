@@ -14,6 +14,7 @@ import {
 } from "../../../core/search/index.ts";
 import { searchAcrossVaults } from "../../../core/search/cross-vault.ts";
 import type { SearchLaneTiming } from "../../../core/search/index.ts";
+import { SEARCH_OPTION_ROWS } from "../../../core/search/search-options-descriptor.ts";
 import {
   parseDegreePredicate,
   type DegreePredicate,
@@ -43,36 +44,54 @@ function propertyFormatError(entry: string): CliError {
   return new CliError(`--property must be KEY=VALUE, got: ${entry}`);
 }
 
+/** The flags that belong to this verb's output and refresh behavior, not to the search language. */
+const VERB_LOCAL_FLAGS: Readonly<Record<string, QueryFlagSpec>> = Object.freeze({
+  "auto-refresh": { type: "boolean" },
+  json: { type: "boolean" },
+  verbose: { type: "boolean" },
+});
+
+/** The parser spec one flag carries - the verb's local spell of `FlagSpec`. */
+interface QueryFlagSpec {
+  readonly type: "string" | "boolean" | "string-array";
+  readonly default?: string;
+}
+
+/**
+ * The query verb's flag table, DERIVED from the search-options descriptor
+ * (t_50c81d5c): one entry per cli-visible row, keyed by the row's declared
+ * CLI spelling (`path_prefix` spells `--path`, `query_document` spells
+ * `--query-doc`, `properties` the repeatable `--property`,
+ * `record_access` its `cliNegates` inverse `--no-record-access`), with the
+ * row's CLI parse kind. The served schema and this table are now two
+ * projections of one table, so a flag cannot appear on one surface and
+ * silently vanish from the other.
+ *
+ * Per-surface bounds stay where they are: the CLI limit keeps its
+ * `SEARCH_LIMIT_MIN..SEARCH_LIMIT_MAX` bind at the read site (the MCP
+ * schema's `MCP_LIMIT_MAX` is a different, deliberate edge), the query
+ * stays uncapped here, and `semantic` stays the documented tri-state
+ * asymmetry (the verb body passes `undefined` when no lane flag is given).
+ * A row whose documented default is a bare integer carries it as the
+ * parser default (`limit` -> "10"); prose defaults mean absent.
+ */
+export const SEARCH_QUERY_FLAGS: Readonly<Record<string, QueryFlagSpec>> = Object.freeze(
+  (() => {
+    const derived: Record<string, QueryFlagSpec> = {};
+    for (const row of SEARCH_OPTION_ROWS) {
+      if (!row.surfaces.includes("cli") || row.cliFlag === null) continue;
+      // A pure-integer documented default is a parse default; prose ("absent:
+      // ...", "false", "all") stays absent, exactly as the literal table did.
+      derived[row.cliFlag] = /^\d+$/.test(row.default)
+        ? { type: row.cliKind, default: row.default }
+        : { type: row.cliKind };
+    }
+    return { ...VAULT_FLAGS, ...derived, ...VERB_LOCAL_FLAGS };
+  })(),
+);
+
 export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
-  const { flags, positional } = parseFlags(argv, {
-    ...VAULT_FLAGS,
-    limit: { type: "string", default: "10" },
-    semantic: { type: "boolean" },
-    "keyword-only": { type: "boolean" },
-    "match-mode": { type: "string" },
-    kind: { type: "string" },
-    path: { type: "string" },
-    "keyword-weight": { type: "string" },
-    "semantic-weight": { type: "string" },
-    "auto-refresh": { type: "boolean" },
-    property: { type: "string-array" },
-    degree: { type: "string-array" },
-    visibility: { type: "string-array" },
-    "agent-scope": { type: "string" },
-    "query-doc": { type: "string" },
-    expand: { type: "boolean" },
-    disclosure: { type: "string" },
-    profile: { type: "string" },
-    "evidence-pack": { type: "boolean" },
-    "include-superseded": { type: "boolean" },
-    since: { type: "string" },
-    until: { type: "string" },
-    global: { type: "boolean" },
-    "no-record-access": { type: "boolean" },
-    json: { type: "boolean" },
-    verbose: { type: "boolean" },
-    explain: { type: "boolean" },
-  });
+  const { flags, positional } = parseFlags(argv, SEARCH_QUERY_FLAGS);
 
   const rawQueryDocument = flagString(flags, "query-doc");
   const structuredQuery =
