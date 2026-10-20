@@ -538,13 +538,18 @@ export function resolveDecisionModelConfig(
     thresholdProfile,
     thresholdProfile === null
       ? null
-      : (use) =>
+      : (use) => {
           // Disabled reader (null): the table alone decides. Default
           // (undefined): the machine-side marks, TTL-cached inside the
-          // mark module.
-          opts.measuredTunedMark !== null
-            ? (opts.measuredTunedMark ?? machineTunedMarkReader())(thresholdProfile, use)
-            : false,
+          // mark module, bound to THIS resolution's endpoint - a mark
+          // earned by another provider, model or base URL never arms
+          // enforce here.
+          if (opts.measuredTunedMark === null) return false;
+          const reader =
+            opts.measuredTunedMark ??
+            machineTunedMarkReader({ provider: providerRaw, model, baseUrl });
+          return reader(thresholdProfile, use);
+        },
   );
   const uses = held.uses;
 

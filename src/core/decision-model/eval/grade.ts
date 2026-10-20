@@ -59,7 +59,12 @@ import { emitDecisionModelEvalGrade, listDecisionModelCalls, todaySpendUsd } fro
 import { runDecision } from "../run.ts";
 import { clip } from "../state.ts";
 import type { PlatformDirsEnv } from "../../platform-dirs.ts";
-import { decisionModelTuningMarkPath, writeTuningMark, type DecisionTuningMark } from "./mark.ts";
+import {
+  decisionModelBaseUrlHash,
+  decisionModelTuningMarkPath,
+  writeTuningMark,
+  type DecisionTuningMark,
+} from "./mark.ts";
 import { loadDecisionEvalFixture, verifyEvalTake, type DecisionEvalItem } from "./take.ts";
 
 type ItemAnswers = Readonly<
@@ -455,6 +460,13 @@ export async function runDecisionModelEval(
       baseline_error: baselineError,
       verdict: "promote",
       created_at: now.toISOString(),
+      // The endpoint binding: this config - and only this config, until
+      // the operator changes it - may arm enforce off the mark. A null
+      // provider or model cannot occur on an active config, but an empty
+      // string recorded here would simply never match a later resolution.
+      provider: cfg.provider ?? "",
+      model: cfg.model ?? "",
+      base_url_hash: decisionModelBaseUrlHash(cfg.baseUrl),
     };
     try {
       writeTuningMark(decisionModelTuningMarkPath(opts.markSource, profile, use), mark);

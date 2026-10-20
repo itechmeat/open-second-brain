@@ -17,12 +17,22 @@
  * the installed spec - a spec edited after the mark was written, a
  * fixture that moved, or thresholds that drifted each put the use back
  * in shadow. No mark file is exactly today's behavior.
+ *
+ * The mark is also bound to the endpoint that earned it. It records the
+ * decision provider id, the pinned model id and a hash of the base URL
+ * of the config whose measurement promoted, and the gate reader
+ * (`machineTunedMarkReader`) refuses a mark whose recorded endpoint
+ * differs from the config being resolved - a promote measured on one
+ * model never arms enforce for another, at another URL, or under
+ * another provider. Marks written before the binding existed carry no
+ * endpoint fields and parse as no mark: fail closed, shadow.
  */
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { sha256Hex } from "../../integrity/digest.ts";
 import {
   decisionModelStateDir,
   processDirsEnv,
@@ -33,6 +43,9 @@ import { decisionEvalSpecFor, decisionEvalSpecHash, type DecisionEvalSpec } from
 
 /** The only verdict a mark may carry, by construction of the writer. */
 const PROMOTE = "promote";
+
+/** sha-256 hex digest length, for the recorded base-URL hash. */
+const HASH_HEX_RE = /^[0-9a-f]{64}$/;
 
 export interface DecisionTuningMark {
   readonly profile: string;
@@ -47,6 +60,32 @@ export interface DecisionTuningMark {
   readonly baseline_error: number | null;
   readonly verdict: typeof PROMOTE;
   readonly created_at: string;
+  /** The decision provider id whose measurement earned the mark. */
+  readonly provider: string;
+  /** The pinned model id that was measured. */
+  readonly model: string;
+  /**
+   * sha-256 of the measured base URL - a hash, never the URL itself.
+   * Marks written before these three fields existed are refused at
+   * parse time: an endpoint no one can prove is a mark no one arms.
+   */
+  readonly base_url_hash: string;
+}
+
+/**
+ * The decision endpoint a mark is checked against: the resolved
+ * config's provider id, pinned model id and base URL. A `null` field
+ * never matches a recorded one.
+ */
+export interface DecisionMarkEndpoint {
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly baseUrl: string | null;
+}
+
+/** The base-URL binding recorded in a mark: a digest, never the URL. */
+export function decisionModelBaseUrlHash(baseUrl: string | null | undefined): string {
+  return sha256Hex(baseUrl ?? "");
 }
 
 /** The mark file for one (profile, use) pair. */
@@ -84,6 +123,15 @@ function parseTuningMark(text: string): DecisionTuningMark | null {
     typeof m["created_at"] !== "string" ||
     m["verdict"] !== PROMOTE ||
     typeof m["counted_n"] !== "number" ||
+    // The endpoint binding: a mark that cannot name the provider, the
+    // pinned model and the base-URL hash it was measured on is refused
+    // here, so pre-binding marks fail closed to shadow.
+    typeof m["provider"] !== "string" ||
+    m["provider"].trim() === "" ||
+    typeof m["model"] !== "string" ||
+    m["model"].trim() === "" ||
+    typeof m["base_url_hash"] !== "string" ||
+    !HASH_HEX_RE.test(m["base_url_hash"]) ||
     m["thresholds"] === null ||
     typeof m["thresholds"] !== "object" ||
     Array.isArray(m["thresholds"]) ||
@@ -107,6 +155,9 @@ function parseTuningMark(text: string): DecisionTuningMark | null {
     baseline_error: m["baseline_error"] as number | null,
     verdict: PROMOTE,
     created_at: m["created_at"],
+    provider: m["provider"],
+    model: m["model"],
+    base_url_hash: m["base_url_hash"],
   };
 }
 
@@ -150,8 +201,10 @@ export function resetTuningMarkCache(): void {
 /**
  * The validated mark for (profile, use), or null. Every axis must match
  * the installed spec - spec hash, fixture hash, pinned threshold values,
- * the pair itself - and the verdict must be promote; anything else is no
- * mark, and the use stays in shadow.
+ * the pair itself - and the verdict must be promote; when an `endpoint`
+ * is supplied, its provider, model and base-URL hash must match the ones
+ * recorded in the mark too. Anything else is no mark, and the use stays
+ * in shadow.
  */
 export function validatedTuningMark(
   profile: string | null,
@@ -159,6 +212,7 @@ export function validatedTuningMark(
   source: PlatformDirsEnv = processDirsEnv(),
   spec: DecisionEvalSpec | null = decisionEvalSpecFor(use),
   nowMs: number = Date.now(),
+  endpoint?: DecisionMarkEndpoint,
 ): DecisionTuningMark | null {
   if (profile === null || spec === null) return null;
   const mark = readTuningMark(decisionModelTuningMarkPath(source, profile, use), nowMs);
@@ -168,17 +222,30 @@ export function validatedTuningMark(
   if (mark.fixture_hash !== spec.fixture_hash) return null;
   if (JSON.stringify(mark.thresholds) !== JSON.stringify(spec.thresholds)) return null;
   if (mark.verdict !== PROMOTE) return null;
+  if (
+    endpoint !== undefined &&
+    (mark.provider !== endpoint.provider ||
+      mark.model !== endpoint.model ||
+      mark.base_url_hash !== decisionModelBaseUrlHash(endpoint.baseUrl))
+  ) {
+    return null;
+  }
   return mark;
 }
 
 /**
  * The reader shape `resolveDecisionModelConfig` threads to
  * `thresholdsTunedFor`: true only when a mark that matches the installed
- * spec exists for the pair. Consulted only when the source table says
- * untuned, so a hand-registered tune never pays the read.
+ * spec AND the `endpoint` being resolved exists for the pair. Consulted
+ * only when the source table says untuned, so a hand-registered tune
+ * never pays the read. The endpoint binding is what keeps a promote
+ * earned by one provider/model/base URL from arming enforce for
+ * another.
  */
 export function machineTunedMarkReader(
+  endpoint: DecisionMarkEndpoint,
   source: PlatformDirsEnv = processDirsEnv(),
 ): (profile: string | null, use: DecisionModelUse) => boolean {
-  return (profile, use) => validatedTuningMark(profile, use, source) !== null;
+  return (profile, use) =>
+    validatedTuningMark(profile, use, source, undefined, undefined, endpoint) !== null;
 }
