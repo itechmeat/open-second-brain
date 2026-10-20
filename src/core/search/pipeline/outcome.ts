@@ -26,6 +26,7 @@ import {
   RETRIEVAL_DEGRADATION,
   RETRIEVAL_RELATIONAL_PATH_CODE,
   type RelationalPathTrailEntry,
+  type RetrievalDegradationDetail,
 } from "../retrieval-trail.ts";
 import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
 import { fnv1aHex } from "../feedback.ts";
@@ -334,13 +335,16 @@ export function withIndexStale(
   behindCount?: number | null,
 ): SearchOutcome {
   if (ageSeconds === null || ageSeconds <= INDEX_STALE_SECONDS) return outcome;
+  // Spread, not a ternary of literals: a ternary union synthesizes a
+  // `behindCount?: undefined` arm, and undefined is not a detail value.
+  // Absent stays absent, exactly like the null-measured case.
+  const detail: RetrievalDegradationDetail = Object.freeze({
+    ageSeconds,
+    ...(behindCount === null || behindCount === undefined ? {} : { behindCount }),
+  });
   const stale = Object.freeze({
     code: RETRIEVAL_DEGRADATION.indexStale,
-    detail: Object.freeze(
-      behindCount === null || behindCount === undefined
-        ? { ageSeconds }
-        : { ageSeconds, behindCount },
-    ),
+    detail,
   });
   const trail = outcome.retrievalTrail;
   const retrievalTrail = Object.freeze({
