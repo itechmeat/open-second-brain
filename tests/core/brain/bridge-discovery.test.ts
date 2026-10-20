@@ -200,6 +200,52 @@ describe("acceptBridge", () => {
     expect(acceptBridge(vault, "src.md", "a-dir/topic.md").changed).toBe(false);
   });
 
+  /** One in-scope target, one twin under `dir`, and the link they earn. */
+  function seedTwinUnder(dir: string): void {
+    mkdirSync(join(vault, "a-dir"), { recursive: true });
+    mkdirSync(join(vault, dir), { recursive: true });
+    writeFileSync(join(vault, "a-dir", "topic.md"), "# Topic A\n\nBody.\n");
+    writeFileSync(join(vault, dir, "topic.md"), "# Topic Twin\n\nBody.\n");
+    writeFileSync(join(vault, "src.md"), "# Src\n\nBody.\n");
+  }
+
+  test.each(["node_modules", join("Brain", ".snapshots"), ".open-second-brain"])(
+    "a twin under the default-ignored %s does not make the target ambiguous",
+    (dir) => {
+      seedTwinUnder(dir);
+      const result = acceptBridge(vault, "src.md", "a-dir/topic.md");
+      expect(result.changed).toBe(true);
+      const [fm] = parseFrontmatter(join(vault, "src.md"));
+      expect(fm["related"]).toEqual("[[topic]]");
+    },
+  );
+
+  test("a twin under an operator-ignored directory does not make the target ambiguous", () => {
+    seedTwinUnder("Archive");
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  ignore_paths:\n    - Archive\n",
+    );
+    const result = acceptBridge(vault, "src.md", "a-dir/topic.md");
+    expect(result.changed).toBe(true);
+    const [fm] = parseFrontmatter(join(vault, "src.md"));
+    expect(fm["related"]).toEqual("[[topic]]");
+  });
+
+  test("a twin outside the include_paths allowlist does not make the target ambiguous", () => {
+    seedTwinUnder("b-dir");
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  include_paths:\n    - a-dir\n",
+    );
+    const result = acceptBridge(vault, "src.md", "a-dir/topic.md");
+    expect(result.changed).toBe(true);
+    const [fm] = parseFrontmatter(join(vault, "src.md"));
+    expect(fm["related"]).toEqual("[[topic]]");
+  });
+
   test("refuses paths outside the vault and missing notes", () => {
     expect(() => acceptBridge(vault, "../escape.md", "x.md")).toThrow(/outside the vault/);
     expect(() => acceptBridge(vault, "ghost.md", "also-ghost.md")).toThrow(/does not exist/);
