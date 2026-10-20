@@ -1,0 +1,760 @@
+{
+  "use": "recall_inject",
+  "description": "Preregistered recall_inject take: 29 items, one useful note each (useful = the note whose body answers the prompted subject), useful position cycling 0-3. The counted metric is the regret rate: a useful note whose helps probability falls below the enforce drop floor.",
+  "items": [
+    {
+      "id": "ri-001",
+      "prompt": "What should I know about the kubernetes?",
+      "notes": [
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-002",
+      "prompt": "What should I know about the sourdough?",
+      "notes": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-003",
+      "prompt": "What should I know about the jellyfish?",
+      "notes": [
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-004",
+      "prompt": "What should I know about the telescope?",
+      "notes": [
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-005",
+      "prompt": "What should I know about the glacier?",
+      "notes": [
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-006",
+      "prompt": "What should I know about the bonsai?",
+      "notes": [
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-007",
+      "prompt": "What should I know about the subway?",
+      "notes": [
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-008",
+      "prompt": "What should I know about the beehive?",
+      "notes": [
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-009",
+      "prompt": "What should I know about the lighthouse?",
+      "notes": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-010",
+      "prompt": "What should I know about the typewriter?",
+      "notes": [
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-011",
+      "prompt": "What should I know about the aqueduct?",
+      "notes": [
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-012",
+      "prompt": "What should I know about the windmill?",
+      "notes": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-013",
+      "prompt": "What should I know about the monsoon?",
+      "notes": [
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-014",
+      "prompt": "What should I know about the hammock?",
+      "notes": [
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-015",
+      "prompt": "What should I know about the planetarium?",
+      "notes": [
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-016",
+      "prompt": "What should I know about the kubernetes?",
+      "notes": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-017",
+      "prompt": "What should I know about the sourdough?",
+      "notes": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-018",
+      "prompt": "What should I know about the jellyfish?",
+      "notes": [
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-019",
+      "prompt": "What should I know about the telescope?",
+      "notes": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-020",
+      "prompt": "What should I know about the glacier?",
+      "notes": [
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-021",
+      "prompt": "What should I know about the bonsai?",
+      "notes": [
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-022",
+      "prompt": "What should I know about the subway?",
+      "notes": [
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-023",
+      "prompt": "What should I know about the beehive?",
+      "notes": [
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-024",
+      "prompt": "What should I know about the lighthouse?",
+      "notes": [
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-025",
+      "prompt": "What should I know about the typewriter?",
+      "notes": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-026",
+      "prompt": "What should I know about the aqueduct?",
+      "notes": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "useful": true
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. This note is the working reference for it.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-027",
+      "prompt": "What should I know about the windmill?",
+      "notes": [
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. Photos from the visit are filed separately.",
+          "useful": false
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. The appendix lists the tools involved.",
+          "useful": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "useful": false
+        }
+      ]
+    },
+    {
+      "id": "ri-028",
+      "prompt": "What should I know about the monsoon?",
+      "notes": [
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. This note is the working reference for it.",
+          "useful": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. Photos from the visit are filed separately.",
+          "useful": true
+        }
+      ]
+    },
+    {
+      "id": "ri-029",
+      "prompt": "What should I know about the hammock?",
+      "notes": [
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. This note is the working reference for it.",
+          "useful": true
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "useful": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. The appendix lists the tools involved.",
+          "useful": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. Photos from the visit are filed separately.",
+          "useful": false
+        }
+      ]
+    }
+  ]
+}

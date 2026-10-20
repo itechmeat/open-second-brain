@@ -1,0 +1,1124 @@
+{
+  "use": "rerank",
+  "description": "Preregistered rerank take: 43 items, one relevant candidate each (relevance = the note whose body is about the queried subject), relevant position cycling 0-3 so the input order is wrong on three of every four items.",
+  "items": [
+    {
+      "id": "rk-001",
+      "query": "How do I look after the kubernetes?",
+      "candidates": [
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-002",
+      "query": "How do I look after the sourdough?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-003",
+      "query": "How do I look after the jellyfish?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-004",
+      "query": "How do I look after the telescope?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-005",
+      "query": "How do I look after the glacier?",
+      "candidates": [
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-006",
+      "query": "How do I look after the bonsai?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-007",
+      "query": "How do I look after the subway?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-008",
+      "query": "How do I look after the beehive?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-009",
+      "query": "How do I look after the lighthouse?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-010",
+      "query": "How do I look after the typewriter?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-011",
+      "query": "How do I look after the aqueduct?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-012",
+      "query": "How do I look after the windmill?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-013",
+      "query": "How do I look after the monsoon?",
+      "candidates": [
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-014",
+      "query": "How do I look after the hammock?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-015",
+      "query": "How do I look after the planetarium?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-016",
+      "query": "How do I look after the kubernetes?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-017",
+      "query": "How do I look after the sourdough?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-018",
+      "query": "How do I look after the jellyfish?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-019",
+      "query": "How do I look after the telescope?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-020",
+      "query": "How do I look after the glacier?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-021",
+      "query": "How do I look after the bonsai?",
+      "candidates": [
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-022",
+      "query": "How do I look after the subway?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-023",
+      "query": "How do I look after the beehive?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-024",
+      "query": "How do I look after the lighthouse?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-025",
+      "query": "How do I look after the typewriter?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-026",
+      "query": "How do I look after the aqueduct?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-027",
+      "query": "How do I look after the windmill?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-028",
+      "query": "How do I look after the monsoon?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-029",
+      "query": "How do I look after the hammock?",
+      "candidates": [
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-030",
+      "query": "How do I look after the planetarium?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Show schedule",
+          "text": "The planetarium dome show narrates the ecliptic twice nightly through winter. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-031",
+      "query": "How do I look after the kubernetes?",
+      "candidates": [
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Cluster notes",
+          "text": "The kubernetes cluster autoscaler adds nodes when pending pods wait longer than thirty seconds. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-032",
+      "query": "How do I look after the sourdough?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-033",
+      "query": "How do I look after the jellyfish?",
+      "candidates": [
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-034",
+      "query": "How do I look after the telescope?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Observatory setup",
+          "text": "The telescope needs forty minutes to reach thermal equilibrium before Saturn resolves. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-035",
+      "query": "How do I look after the glacier?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Field survey",
+          "text": "The glacier terminus retreated twelve meters since the spring survey markers were placed. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-036",
+      "query": "How do I look after the bonsai?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-037",
+      "query": "How do I look after the subway?",
+      "candidates": [
+        {
+          "title": "Transit memo",
+          "text": "The subway signal upgrade cuts headways to ninety seconds on the eastern line. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-038",
+      "query": "How do I look after the beehive?",
+      "candidates": [
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Apiary record",
+          "text": "The beehive entrance reducer stays on until the colony draws out the second deep box. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-039",
+      "query": "How do I look after the lighthouse?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-040",
+      "query": "How do I look after the typewriter?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "relevant": true
+        }
+      ]
+    },
+    {
+      "id": "rk-041",
+      "query": "How do I look after the aqueduct?",
+      "candidates": [
+        {
+          "title": "History notes",
+          "text": "The aqueduct gradient falls one meter per four hundred, which kept the water flowing. This note is the working reference for it.",
+          "relevant": true
+        },
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. A later section records what changed last season.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. Photos from the visit are filed separately.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-042",
+      "query": "How do I look after the windmill?",
+      "candidates": [
+        {
+          "title": "Coastal walk",
+          "text": "The lighthouse keeper's cottage opens to visitors on the first Saturday of each month. The appendix lists the tools involved.",
+          "relevant": false
+        },
+        {
+          "title": "Restoration log",
+          "text": "The windmill sails need tarring before the autumn storms, never in direct sun. A later section records what changed last season.",
+          "relevant": true
+        },
+        {
+          "title": "Camp gear",
+          "text": "The hammock ridgeline sag means the suspension needs shortening by one hand width. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Aquarium guide",
+          "text": "Moon jellyfish drift through the tank current and pulse when they meet the light. This note is the working reference for it.",
+          "relevant": false
+        }
+      ]
+    },
+    {
+      "id": "rk-043",
+      "query": "How do I look after the monsoon?",
+      "candidates": [
+        {
+          "title": "Baking log",
+          "text": "The sourdough starter doubles in four hours when the kitchen stays above twenty degrees. Photos from the visit are filed separately.",
+          "relevant": false
+        },
+        {
+          "title": "Potting diary",
+          "text": "The bonsai fig drops leaves when moved, so repot only at the start of spring. This note is the working reference for it.",
+          "relevant": false
+        },
+        {
+          "title": "Climate primer",
+          "text": "The monsoon arrives at the coast in June and reaches the plateau three weeks later. The appendix lists the tools involved.",
+          "relevant": true
+        },
+        {
+          "title": "Repair bench",
+          "text": "The typewriter carriage sticks when the draw band loses tension, a ten minute fix. A later section records what changed last season.",
+          "relevant": false
+        }
+      ]
+    }
+  ]
+}
