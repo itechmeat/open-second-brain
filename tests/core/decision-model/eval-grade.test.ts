@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,11 +20,17 @@ import type { DecisionRequest } from "../../../src/core/decision-model/contract.
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
 import type { ResolvedDecisionModelConfig } from "../../../src/core/decision-model/config.ts";
 import {
+  DECISION_EVAL_DEV_FRACTION,
+  DECISION_EVAL_METRIC,
+  DECISION_EVAL_SPEC_VERSION,
+  DECISION_EVAL_SPLIT_RULE,
   decisionEvalSpecFor,
   decisionEvalSpecHash,
   type DecisionEvalSpec,
 } from "../../../src/core/decision-model/eval-spec.ts";
 import { runDecisionModelEval } from "../../../src/core/decision-model/eval/grade.ts";
+import { hashOrderSplit } from "../../../src/core/decision-model/eval/take.ts";
+import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { buildDecisionModelReport } from "../../../src/core/decision-model/diagnostics.ts";
 import {
   listDecisionModelCalls,
@@ -226,6 +232,121 @@ describe("runDecisionModelEval", () => {
     });
     expect(regretful.verdict).toBe("hold");
     expect(regretful.counted.error).toBe(1);
+  });
+
+  test("an ok reply whose every answer is invalid degrades instead of matching the baseline", async () => {
+    // Every relevance answer unusable: the enforced reorder has no usable
+    // answer either, so the item shrinks n - it must never count as a
+    // full-n sample whose verdict equals the input-order baseline.
+    const result = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: () => ({ invalid: true }) }),
+    });
+    expect(result.degraded_n).toBe(43);
+    expect(result.counted.n).toBe(0);
+    expect(result.verdict).toBe("not_enough_evidence");
+  });
+
+  test("an invalid first answer still pins the top slot like the enforced reorder", async () => {
+    // One unusable answer with the rest usable is not degradation: the
+    // enforced reorder pins the unanswered candidate at index 0.
+    const result = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({
+        answer: (id) => (id === "rel_0" ? { invalid: true } : 0.5),
+      }),
+    });
+    expect(result.degraded_n).toBe(0);
+    expect(result.counted.n).toBe(30);
+    expect(result.counted.error).toBeCloseTo(22 / 30, 10);
+  });
+
+  test("scoring is canonical: an early invalid answer does not mask a later below-floor note", async () => {
+    // Two counted items carry the same answers in opposite slot order:
+    // one useful note with no usable answer and one valid answer below
+    // the pinned note_min. The below-floor note is dropped in enforce on
+    // both, so both are counted failures - the first slot's invalid
+    // answer must not turn the item into a shrunk-n degrade.
+    const seed = "order-scoring";
+    const ids = ["ord-1", "ord-2", "ord-3", "ord-4", "ord-5", "ord-6", "ord-7"];
+    const { dev, counted } = hashOrderSplit(seed, ids);
+    const [invalidFirst, floorFirst] = counted.slice(0, 2);
+    const fillerSubjects = new Map(
+      ids
+        .filter((id) => id !== invalidFirst && id !== floorFirst)
+        .map((id, i) => [id, ["marmalade", "ballast", "kestrel", "vellum", "tundra"][i]!]),
+    );
+    const note = (
+      subject: string,
+      useful: boolean,
+    ): { title: string; text: string; useful: boolean } => ({
+      title: `${subject} note`,
+      text: useful ? `all about ${subject}` : "nothing about anything",
+      useful,
+    });
+    const raw = {
+      use: "recall_inject",
+      items: ids.map((id) => {
+        if (id === invalidFirst || id === floorFirst) {
+          const subject = id === invalidFirst ? "arduino" : "beadwork";
+          return {
+            id,
+            kind: "recall_inject",
+            prompt: `What should I know about the ${subject}?`,
+            notes: [note(subject, true), note(`${subject} second`, true)],
+          };
+        }
+        const subject = fillerSubjects.get(id)!;
+        return {
+          id,
+          kind: "recall_inject",
+          prompt: `What should I know about the ${subject}?`,
+          notes: [note(subject, true), note("unrelated", false)],
+        };
+      }),
+    };
+    const fixturePath = join(tmp, "order-take.json");
+    writeFileSync(fixturePath, JSON.stringify(raw), "utf8");
+    const spec: DecisionEvalSpec = {
+      version: DECISION_EVAL_SPEC_VERSION,
+      use: "recall_inject",
+      fixture: fixturePath,
+      seed,
+      split: { rule: DECISION_EVAL_SPLIT_RULE, dev_fraction: DECISION_EVAL_DEV_FRACTION },
+      receipt: { dev, counted },
+      fixture_hash: sha256Hex(canonicalJson(raw)),
+      metric: DECISION_EVAL_METRIC,
+      ceiling: 0,
+      min_counted: counted.length,
+      thresholds: { any_min: 0.2, note_min: 0.2 },
+    };
+    const provider = new FakeDecisionProvider({
+      answer: (id, req) => {
+        const prompt = (req.state as { prompt?: string }).prompt ?? "";
+        if (prompt.includes("arduino")) {
+          if (id === "helps_0") return { invalid: true };
+          if (id === "helps_1") return 0.01;
+        }
+        if (prompt.includes("beadwork")) {
+          if (id === "helps_0") return 0.01;
+          if (id === "helps_1") return { invalid: true };
+        }
+        return byLabelRule(id, req);
+      },
+    });
+    const result = await runDecisionModelEval("recall_inject", {
+      config: evalConfig(),
+      provider,
+      spec,
+    });
+    expect(result.degraded_n).toBe(0);
+    expect(result.counted.n).toBe(4);
+    expect(result.counted.error).toBe(0.5);
+    expect(result.baseline_error).toBe(0);
+    expect(result.verdict).toBe("hold");
+    const { grades } = listDecisionModelEvalGrades(vault);
+    expect(grades[0]!.verdicts[invalidFirst]).toBe(false);
+    expect(grades[0]!.verdicts[floorFirst]).toBe(false);
   });
 
   test("refuses a use with no preregistered spec and an inactive config", async () => {

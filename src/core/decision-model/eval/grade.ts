@@ -120,9 +120,12 @@ function errorRate(fails: number, n: number): number | null {
 /**
  * The enforced rerank order's top index - `decisionRerankOrder` at floor
  * 0: movable slots fill from the score-sorted candidates (ties by
- * index), an unanswered candidate at index 0 is pinned there.
+ * index), an unanswered candidate at index 0 is pinned there. Null only
+ * when no usable answer arrived at all, so the item degrades instead of
+ * silently matching the input-order baseline.
  */
 function rerankTopIndex(probs: ReadonlyArray<number | null>): number | null {
+  if (probs.every((p) => p === null)) return null;
   if (probs[0] === null) return 0;
   let best = -1;
   let bestP = -1;
@@ -162,16 +165,23 @@ function scoreRecall(
 ): { verdict: boolean; baseline: boolean; degraded: boolean } {
   // The deterministic baseline drops nothing: its regret is zero by
   // construction, which is exactly the bar the decision arm must meet.
+  // Canonical scoring: every useful note is examined before anything is
+  // decided, so an early slot without a usable answer cannot mask a
+  // later slot's valid below-floor answer - the note enforce really
+  // would drop.
+  let degraded = false;
   for (const [k, note] of item.notes.entries()) {
     if (!note.useful) continue;
     const a = answers[RECALL_INJECT_QUESTIONS.helpsId(k)];
     if (a?.valid !== true || typeof a.value !== "number") {
-      return { verdict: false, baseline: true, degraded: true };
+      degraded = true;
+      continue;
     }
     if (a.value < RECALL_INJECT_QUESTIONS.noteMin) {
       return { verdict: false, baseline: true, degraded: false };
     }
   }
+  if (degraded) return { verdict: false, baseline: true, degraded: true };
   return { verdict: true, baseline: true, degraded: false };
 }
 
