@@ -19,6 +19,9 @@
  * against a key-for-key enumeration of `SearchOptions` - the runtime
  * anchor for the compile-time assertion the row type itself makes
  * (`option: keyof SearchOptions | null` refuses a phantom key to tsc).
+ * The walk runs BOTH ways: every `SearchOptions` field must be served by
+ * a row or named in the documented non-surface list, so the
+ * descriptor's claim - no caller-facing field missing a row - cannot rot.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -307,6 +310,37 @@ const SEARCH_OPTIONS_KEY_PROBE: Record<keyof SearchOptions, true> = {
   skipDecisionModelRerank: true,
 };
 
+/**
+ * The `SearchOptions` fields that deliberately carry NO descriptor row:
+ * they are not part of the caller-facing query language, so no mcp
+ * argument and no CLI flag exists for them. This list is the ONLY way a
+ * `SearchOptions` key skips the reverse-direction walk below, which is
+ * what makes the walk able to fail: a NEW caller-facing field without a
+ * row fails it, and demoting a field to non-surface is a documented,
+ * reviewable edit here - never a silent gap. Compile-time anchored like
+ * the probe above: a misspelled name is a `tsc` error.
+ */
+const NON_SURFACE_SEARCH_OPTIONS: ReadonlyArray<keyof SearchOptions> = [
+  // Self-tuning knobs: resolved from config per query by the grid, no
+  // surface argument reaches them.
+  "mmrLambda",
+  "maxHops",
+  "poolMaxPerSession",
+  "relationalArm",
+  // Minted by the surface that accepted the call (the CLI's local reach,
+  // the MCP server's transport), never spelled by a caller argument.
+  "transportReach",
+  // Routing policy: cross-vault traversal pins this false on non-active
+  // origins so a read-only vault is never written to.
+  "selfHeal",
+  // Callback seams: the background-freshen spawn (tests), the per-call
+  // lane-timing sink (the CLI and the bench project the timing
+  // themselves), and the hook surfaces' decision-rerank skip.
+  "freshenSpawn",
+  "laneTiming",
+  "skipDecisionModelRerank",
+];
+
 describe("search input schema derivation (t_50c81d5c substrate)", () => {
   test("the derived SEARCH_INPUT_SCHEMA deep-equals the pre-derivation literal", () => {
     expect(SEARCH_INPUT_SCHEMA).toEqual(LEGACY_SEARCH_INPUT_SCHEMA);
@@ -344,5 +378,20 @@ describe("search input schema derivation (t_50c81d5c substrate)", () => {
       }
     }
     expect(phantom).toEqual([]);
+  });
+
+  test("every SearchOptions field has a descriptor row - the reverse direction", () => {
+    const rows = new Set(
+      SEARCH_OPTION_ROWS.filter((row) => row.option !== null).map((row) => String(row.option)),
+    );
+    const exempt = new Set(NON_SURFACE_SEARCH_OPTIONS.map(String));
+    const drifted: string[] = [];
+    for (const key of Object.keys(SEARCH_OPTIONS_KEY_PROBE)) {
+      const hasRow = rows.has(key);
+      const isExempt = exempt.has(key);
+      if (hasRow && isExempt) drifted.push(`${key}: exempted from the walk but a row serves it`);
+      if (!hasRow && !isExempt) drifted.push(`${key}: no descriptor row and not exempted`);
+    }
+    expect(drifted).toEqual([]);
   });
 });
