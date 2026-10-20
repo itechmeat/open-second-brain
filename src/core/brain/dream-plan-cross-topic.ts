@@ -45,7 +45,7 @@
  *     it; stretching recall into that key is deliberately out of scope.
  */
 
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
 import { strictestVisibilityOf } from "../graph/visibility.ts";
@@ -434,8 +434,18 @@ function electClusters(
  * write would throw on either, blocking every later pass. The slug is
  * read off the filename, which is the only identity such a file still
  * carries.
+ *
+ * The corrupted check is directory-scoped (review round 2): `scan.corrupted`
+ * also holds unparseable signal files (`inbox/`, `processed/`, `archived/`)
+ * and retired files, none of which apply ever writes to. Only a file under
+ * `Brain/preferences/` can occupy the exact path the `overwrite: false`
+ * promotion targets, so the comparison considers that directory alone -
+ * the scan's own preference records name it, every one of them having been
+ * read from it. With no preference records nothing can fire anyway (no
+ * sources, no clusters), so a null directory simply never matches.
  */
 function slugTaken(slug: string, scan: ScanResult): boolean {
+  const preferencesDir = scan.preferences.length > 0 ? dirname(scan.preferences[0]!.path) : null;
   for (const p of scan.preferences) {
     if (preferenceSlug(p.pref.id) === slug) return true;
   }
@@ -449,6 +459,7 @@ function slugTaken(slug: string, scan: ScanResult): boolean {
     if (unparsedSlug(t.path) === slug) return true;
   }
   for (const c of scan.corrupted) {
+    if (preferencesDir === null || dirname(c.path) !== preferencesDir) continue;
     if (unparsedSlug(c.path) === slug) return true;
   }
   return false;

@@ -428,6 +428,10 @@ describe("planCrossTopicRules", () => {
   });
 
   // ----- Tombstoned / corrupted slugs are still taken (review finding 64) --
+  // Precision (review round 2): `scan.corrupted` holds unparseable files
+  // from the signal directories and `retired/` too, but only a file under
+  // `Brain/preferences/` can collide with apply's `overwrite: false`
+  // write - the slug match must consider that directory alone.
 
   test("a tombstoned pref-cross file takes its slug (finding 64)", () => {
     const slug = expectedSlug("pref-a", "pref-b");
@@ -439,7 +443,7 @@ describe("planCrossTopicRules", () => {
     expect(planState.crossTopicRules).toHaveLength(0);
   });
 
-  test("a corrupted pref-cross file takes its slug too", () => {
+  test("a corrupted pref-cross file under preferences/ takes its slug too", () => {
     const slug = expectedSlug("pref-a", "pref-b");
     const { result, plan: planState } = plan(
       [rec("pref-a", "Alpha", P_ALPHA), rec("pref-b", "Beta", P_BETA)],
@@ -447,6 +451,21 @@ describe("planCrossTopicRules", () => {
     );
     expect(result.fired).toBe(false);
     expect(planState.crossTopicRules).toHaveLength(0);
+  });
+
+  test("a corrupted pref-cross file outside preferences/ never blocks (round 2)", () => {
+    const slug = expectedSlug("pref-a", "pref-b");
+    const { result, plan: planState } = plan(
+      [rec("pref-a", "Alpha", P_ALPHA), rec("pref-b", "Beta", P_BETA)],
+      {
+        corruptedPaths: [
+          `/vault/Brain/retired/pref-${slug}.md`,
+          `/vault/Brain/inbox/pref-${slug}.md`,
+        ],
+      },
+    );
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules).toHaveLength(1);
   });
 
   test("an unrelated tombstoned file takes nothing", () => {
