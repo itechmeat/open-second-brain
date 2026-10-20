@@ -2000,8 +2000,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   zero-result answer no degradation accounts for. Every `degraded[].detail`
   carries identifiers and integers only, never a provider message, a
   filesystem path, or the query text. The `index-stale` entry's detail
-  carries `behindCount` when the index-behind census was measured live as
-  the answer was served - the documents the next incremental run would add,
+  carries `behindCount` when the index-behind census was measured for this
+  answer - cached for at most 60 seconds and invalidated by this process's
+  own note writes, so a write from another process can leave the count up
+  to a minute old - the documents the next incremental run would add,
   update or delete, counted under the same staleness gate that fires the
   code; a measured zero rides too, and absent means not measured, never a
   zero. The response schema declares the code

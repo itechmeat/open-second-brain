@@ -1186,11 +1186,17 @@ const BEHIND_MEMO_SWEEP_AT = 32;
  * (t_e4438152), or `null` when it could not be measured. Memoized per
  * vault for {@link INDEX_BEHIND_MEMO_TTL_MS} and per index generation (a
  * re-stamped index - a freshen run completed - invalidates the entry
- * immediately), so repeated searches inside the window reuse the
- * measurement instead of re-walking the vault. Only a real measurement
- * is memoized: `null` - a failed measurement is not a measurement - is
- * retried by the next search. Status (`o2b search status`) measures live
- * through `indexBehindCount` and never consults this memo. Deferred
+ * immediately), and dropped by the in-process write path itself:
+ * {@link invalidateIndexBehindMemo}, called where an applied note write
+ * claims its detached refresh, so a served count never outlives a write
+ * this process made. Only a write from ANOTHER process waits out the
+ * TTL - the memo is per-process state, and that residual is disclosed in
+ * the docs rather than pretended away. Repeated searches inside the
+ * window reuse the measurement instead of re-walking the vault. Only a
+ * real measurement is memoized: `null` - a failed measurement is not a
+ * measurement - is retried by the next search. Status (`o2b search
+ * status`) measures live through `indexBehindCount` and never consults
+ * this memo. Deferred
  * import: `indexer.ts` sits above this module in the graph, and the
  * sanctioned cure for that in this tree is an import evaluated at call
  * time - reached only under the stale gate, so a fresh index never pays
@@ -1225,4 +1231,18 @@ export async function measureIndexBehind(
   } catch {
     return null;
   }
+}
+
+/**
+ * Drop the vault's memoized behind-count measurement. The in-process
+ * note-write path calls this once an applied write has landed: the
+ * measurement described the vault as it was, and serving a memoized 0
+ * across notes this very process just wrote is the one lie a diagnostic
+ * must not tell (M9). The next stale search re-measures - one extra
+ * stat walk per write window, never a wrong number. Never throws, and
+ * deleting an absent key is fine: invalidation is always safe, the
+ * worst case is a re-walk the TTL would have saved.
+ */
+export function invalidateIndexBehindMemo(config: ResolvedSearchConfig): void {
+  behindMemo.delete(sha256Hex(config.dbPath));
 }

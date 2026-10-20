@@ -13,7 +13,9 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { indexVault } from "../../../src/core/search/indexer.ts";
+import { createNote } from "../../../src/core/brain/notes/create-note.ts";
+import { claimNoteWriteRefresh } from "../../../src/core/brain/notes/index-refresh.ts";
+import { indexBehindCount, indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 import {
   INDEX_BEHIND_MEMO_TTL_MS,
@@ -245,6 +247,64 @@ test("a re-stamped index invalidates the behind-count memo inside the window", a
   // index generation it measured, even inside the TTL.
   expect(await measureIndexBehind(cfg, "2026-06-03T12:00:05.000Z", 1_000_001)).toBe(0);
   expect(walks).toBe(before + 2);
+});
+
+test("an in-process note write invalidates the served behind count inside the window", async () => {
+  // M9: the memo was keyed by the TTL and the index stamp alone, so on an
+  // origin where nothing freshens (freshening off here; read-only
+  // cross-vault recall is the other case) a search memoized 0 and every
+  // later search inside the window served it - including over notes this
+  // process had just written. The applied write path must drop the
+  // entry, so the next search re-measures instead of serving a
+  // confident 0 across an edit. A write from a DIFFERENT process still
+  // reaches nothing here - the memo is per-process state - and the TTL
+  // alone bounds that residual: past the window the entry expires and
+  // the next search re-measures, which the window test above pins.
+  setIndexAge(11 * 60);
+  const before = walks;
+  const cfg = config(0);
+  // Prime the memo: the first stale search measures 0 behind, one walk.
+  const primed = await search(cfg, { query: "heron", freshenSpawn: spawn });
+  expect(staleCodes(primed)[0]!.detail?.["behindCount"]).toBe(0);
+  expect(walks).toBe(before + 1);
+  // Three notes land through the in-process write seam - the same
+  // create-then-claim sequence the MCP note tools drive after an
+  // applied create, one claim per write. The spawn seam stays a no-op:
+  // the claim's detached child is not what retires the memo, the write
+  // is.
+  const memoOne = createNote(vault, {
+    path: "notes/memo-one.md",
+    content: "# Memo one\n\nwritten after the measurement.\n",
+  });
+  expect(memoOne.outcome).toBe("created");
+  await claimNoteWriteRefresh(vault, () => {});
+  const memoTwo = createNote(vault, {
+    path: "notes/memo-two.md",
+    content: "# Memo two\n\nwritten after the measurement.\n",
+  });
+  expect(memoTwo.outcome).toBe("created");
+  await claimNoteWriteRefresh(vault, () => {});
+  const memoThree = createNote(vault, {
+    path: "notes/memo-three.md",
+    content: "# Memo three\n\nwritten after the measurement.\n",
+  });
+  expect(memoThree.outcome).toBe("created");
+  await claimNoteWriteRefresh(vault, () => {});
+  // Still inside the TTL: the count is re-measured, not served. The
+  // three notes ride with the write path's own audit log (createNote
+  // appends Brain/log), so the exact number is whatever a live census
+  // measures at this instant - the pin is that the served count EQUALS
+  // that fresh measurement and is not the memoized 0, which only the
+  // invalidation can produce.
+  const served = await search(cfg, { query: "heron", freshenSpawn: spawn });
+  const live = await indexBehindCount(cfg);
+  expect(live).not.toBeNull();
+  expect(live!.behind).toBeGreaterThanOrEqual(3);
+  expect(staleCodes(served)[0]!.detail?.["behindCount"]).toBe(live!.behind);
+  // One walk each: the priming search, the re-measure after the writes
+  // (the invalidation fired; the memo served nothing), and the live
+  // census above through the same mocked walker.
+  expect(walks).toBe(before + 3);
 });
 
 test("a failed behind-count measurement is not memoized", async () => {

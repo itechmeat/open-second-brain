@@ -243,6 +243,15 @@ const NO_INDEX_CLAIM: PostWriteRefreshClaim = Object.freeze({
  * one refresh the write needs. Back-to-back applied writes spawn one run
  * each; the claim machinery itself - exclusivity, backoff, the
  * writer-lock probe - caps them.
+ *
+ * The claim is also the one seam every applied in-process write crosses,
+ * which makes it the one place the search side's 60 s behind-count memo
+ * can be retired from: the invalidation below fires before the stale
+ * gate, because it is a fact about the WRITE (the vault changed; a
+ * memoized count describes a vault that no longer exists), not a
+ * decision about the index the way the refresh claim is. Without it, an
+ * origin where nothing freshens serves a confident 0 across notes this
+ * process just wrote (M9).
  */
 export async function claimPostWriteRefresh(
   vault: string,
@@ -251,19 +260,21 @@ export async function claimPostWriteRefresh(
   now?: Date,
   configPath?: string,
 ): Promise<PostWriteRefreshClaim> {
-  // Stale is the only state that describes an index this call aged. An
-  // absent index holds nothing to refresh, an unreadable one has no
-  // stamp to force past, and both are already on the report with the
-  // command that rebuilds or reconciles them.
-  if (index.state !== INDEX_EVIDENCE.stale) return NO_INDEX_CLAIM;
   try {
     const { resolveSearchConfig } = await import("../../search/index.ts");
-    const { FRESHEN_SKIP, markFreshenPending, maybeFreshenIndex } =
-      await import("../../search/freshen.ts");
     const config = resolveSearchConfig({
       vault,
       ...(configPath !== undefined ? { configPath } : {}),
     });
+    const { invalidateIndexBehindMemo } = await import("../../search/search.ts");
+    invalidateIndexBehindMemo(config);
+    // Stale is the only state that describes an index this call aged. An
+    // absent index holds nothing to refresh, an unreadable one has no
+    // stamp to force past, and both are already on the report with the
+    // command that rebuilds or reconciles them.
+    if (index.state !== INDEX_EVIDENCE.stale) return NO_INDEX_CLAIM;
+    const { FRESHEN_SKIP, markFreshenPending, maybeFreshenIndex } =
+      await import("../../search/freshen.ts");
     const decision = maybeFreshenIndex(config, {
       lastIndexedAt: index.lastIndexedAt,
       force: true,
