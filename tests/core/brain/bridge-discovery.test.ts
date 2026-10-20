@@ -233,6 +233,21 @@ describe("acceptBridge", () => {
     expect(fm["related"]).toEqual("[[topic]]");
   });
 
+  test("an out-of-scope target is counted itself, so an in-scope twin cannot take the bare basename", () => {
+    seedTwinUnder("Archive");
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  ignore_paths:\n    - Archive\n",
+    );
+    const result = acceptBridge(vault, "src.md", "Archive/topic.md");
+    expect(result.changed).toBe(true);
+    const [fm] = parseFrontmatter(join(vault, "src.md"));
+    expect(fm["related"]).toEqual("[[Archive/topic]]");
+    // Re-accept of the same pair stays idempotent on the full form.
+    expect(acceptBridge(vault, "src.md", "Archive/topic.md").changed).toBe(false);
+  });
+
   test("a twin outside the include_paths allowlist does not make the target ambiguous", () => {
     seedTwinUnder("b-dir");
     mkdirSync(join(vault, "Brain"), { recursive: true });
