@@ -31,7 +31,6 @@ import { parseDegreePredicate, type DegreePredicate } from "../core/search/prope
 import { SEARCH_KINDS, isSearchKind } from "../core/search/property-pushdown.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibility.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
-import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
 import {
@@ -95,6 +94,11 @@ import { projectScoreBreakdown } from "../core/search/enrich.ts";
 import { recordReinforce } from "../core/search/reinforce.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
 import {
+  deriveSearchInputSchema,
+  MCP_LIMIT_MAX,
+  MCP_QUERY_MAX_CHARS,
+} from "../core/search/search-options-descriptor.ts";
+import {
   deriveRecallSignals,
   emitRecallTelemetry,
   RECALL_CHANNEL,
@@ -107,10 +111,13 @@ import { emitGateTelemetry, emitNegativeRecallTelemetry } from "../core/brain/ga
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
 import { recordQueryDemand, recordRecallAdequacyDemand } from "../core/brain/query-demand.ts";
 
-const MCP_LIMIT_MAX = 50;
-
-/** The longest `query` a recall tool accepts, advertised and enforced from here. */
-export const MCP_QUERY_MAX_CHARS = 2000;
+/**
+ * The longest `query` a recall tool accepts, advertised and enforced from
+ * here. DECLARED in the search-options descriptor beside the schema that
+ * advertises it (t_50c81d5c substrate); re-exported for the sibling tools
+ * that cap the same way.
+ */
+export { MCP_QUERY_MAX_CHARS };
 
 /** The refusal text of a query over {@link MCP_QUERY_MAX_CHARS}, shared by every capped tool. */
 export const MCP_QUERY_CAP_MESSAGE = `argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`;
@@ -134,223 +141,16 @@ const SEARCH_TIMEOUT_MS = 10_000;
 /** Surfaced rows named as source refs on one recall-telemetry record. */
 const TELEMETRY_TOP_ARTIFACTS_MAX = 10;
 
-const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    query: {
-      type: "string",
-      minLength: 1,
-      maxLength: MCP_QUERY_MAX_CHARS,
-      description:
-        "What to recall from the vault. Matched against the index by keyword, semantics, or both.",
-    },
-    query_document: {
-      type: "string",
-      minLength: 1,
-      maxLength: 4000,
-      description:
-        "Line-oriented query program with intent:, lex:, vec: and hyde: lanes, steering each retrieval layer separately. Absent means 'query' drives every lane.",
-    },
-    focus_query: {
-      type: "string",
-      minLength: 1,
-      maxLength: 1000,
-      description:
-        "Steer this one call towards a working-set topic without persisting a session focus.",
-    },
-    focus_path_prefix: {
-      type: "string",
-      minLength: 1,
-      maxLength: 256,
-      description:
-        "Steer this one call towards a vault subtree, paired with focus_query as a transient focus.",
-    },
-    focus_session: {
-      type: "string",
-      minLength: 1,
-      maxLength: 128,
-      description: "Session id whose bound focus applies (falls back to the global focus).",
-    },
-    evidence_pack: {
-      type: "boolean",
-      description:
-        "Return the evidence pack: matched/missing terms, coverage, abstention text and the false-absence guard. Default false.",
-    },
-    include_superseded: {
-      type: "boolean",
-      description:
-        "History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.",
-    },
-    since: {
-      type: "string",
-      maxLength: 64,
-      description:
-        "Hard filter on event time (validity, body anchor, mtime last): at/after this point. ISO date/datetime, today, yesterday, last week, last month, <n>h/<n>d/<n>w.",
-    },
-    until: {
-      type: "string",
-      maxLength: 64,
-      description:
-        "Hard filter on event time (validity, body anchor, mtime last): at/before this point. Same forms as 'since'.",
-    },
-    limit: {
-      type: "integer",
-      minimum: 1,
-      maximum: MCP_LIMIT_MAX,
-      description: "How many ranked results to return. Default 10.",
-    },
-    semantic: {
-      type: "boolean",
-      description:
-        "Force the semantic lane on or off. Absent lets the configured hybrid strategy decide.",
-    },
-    keyword_only: {
-      type: "boolean",
-      description: "Skip the semantic lane entirely, so no embedding is needed. Default false.",
-    },
-    match_mode: {
-      type: "string",
-      enum: [...FTS_MATCH_MODES],
-      description:
-        "FTS match breadth: 'all' (default) requires every term; 'any' matches a document carrying any one term. Absent leaves the implicit AND.",
-    },
-    disclosure: {
-      type: "string",
-      enum: [...DISCLOSURE_MODES],
-      description:
-        "Result depth: 'full' (default) returns full chunk content; 'cards' returns token-cheap layer-1 cards — drill a hit with brain_search_expand.",
-    },
-    profile: {
-      type: "string",
-      enum: [...RECALL_PROFILE_NAMES],
-      description:
-        "Named recall profile (fast|balanced|thorough): a fixed knob preset, preferred over persisted self-tuning. Absent leaves ranking unchanged.",
-    },
-    explain: {
-      type: "boolean",
-      description:
-        "Add a per-result score_breakdown plus the retrieval_decision_trace and memory_trust_assessment receipts. Default false.",
-    },
-    trust: {
-      type: "boolean",
-      description:
-        "Stamp each result with inline trust metadata (age_days, superseded, conflict), computed at read time. Default false.",
-    },
-    threshold: {
-      type: "number",
-      minimum: 0,
-      maximum: 1,
-      description:
-        "Relevance floor in [0,1] on the final score; drops weaker hits so an irrelevant query returns no match. Default 0 (disabled).",
-    },
-    rerank: {
-      type: "boolean",
-      description:
-        "Re-order the threshold-qualified results by core textual relevance (keyword + semantic). Default false.",
-    },
-    reinforce: {
-      type: "array",
-      maxItems: 50,
-      items: { type: "string", minLength: 1, maxLength: 512 },
-      description:
-        "Paths proven useful: recorded to the reinforce ledger and lifted (bounded) before the top_k cut. Default absent.",
-    },
-    record_access: {
-      type: "boolean",
-      description:
-        "Record the surfaced paths as one activation access event (feeds the usage-aware ranking layer). Default true; never recorded for global searches.",
-    },
-    global: {
-      type: "boolean",
-      description:
-        "Cross-vault union: search profile vaults and read-only recall sources too, merging results with origin labels. Default false (active vault only).",
-    },
-    path_prefix: {
-      type: "string",
-      maxLength: 256,
-      description: "Restrict results to this vault subtree. Absent searches the whole vault.",
-    },
-    telemetry: {
-      type: "boolean",
-      description: "Emit one recall-telemetry continuity record for this call. Default false.",
-    },
-    telemetry_host: {
-      type: "string",
-      maxLength: 200,
-      description: "Optional host/client label recorded on the telemetry record.",
-    },
-    session_id: {
-      type: "string",
-      maxLength: 512,
-      description: "Optional session correlation id recorded on the telemetry record.",
-    },
-    turn_id: {
-      type: "string",
-      maxLength: 512,
-      description: "Optional turn correlation id recorded on the telemetry record.",
-    },
-    properties: {
-      type: "object",
-      description:
-        "Optional frontmatter filter; values within a key OR, keys AND. type, pinned, visibility as indexed; other keys narrow on the attribute snapshot, judged live.",
-      additionalProperties: {
-        type: "array",
-        items: { type: "string" },
-      },
-    },
-    kind: {
-      type: "string",
-      enum: [...SEARCH_KINDS],
-      description:
-        "Restrict candidates by chunk kind: 'page' matches each document's frontmatter/head chunk (chunk 0), 'section' everything after it. Absent searches all chunks.",
-    },
-    degree: {
-      type: "array",
-      description:
-        "Graph-degree predicates over backlink/outlink counts, e.g. 'backlinks=0' (orphans) or 'outlinks>=5' (hubs); ANDed. Absent = no filter.",
-      items: { type: "string" },
-    },
-    visibility: {
-      type: "array",
-      description:
-        "Optional content-visibility scope; untagged pages always match, tagged pages only when this scope includes one of their values.",
-      items: { type: "string" },
-    },
-    agent_scope: {
-      type: "string",
-      description:
-        "Optional agent-ownership scope; shared (ownerless) pages always match, owner-tagged pages only their owner. Absent = no ownership filtering.",
-    },
-    session_scope: {
-      type: "string",
-      description:
-        "Optional session-scope filter; pages with no session always match, session-tagged pages only this session. Absent = no session filtering.",
-    },
-    project_scope: {
-      type: "string",
-      description:
-        "Optional project-scope filter; pages with no project always match, project-tagged pages only this project. Absent = no project filtering.",
-    },
-    iterative: {
-      type: "boolean",
-      description:
-        "Opt in to the bounded iterative recall loop (default off). Surviving gaps pause with a plan; resume via iterative_payload. Inert unless the knob is on.",
-    },
-    iterative_token: {
-      type: "string",
-      maxLength: 128,
-      description:
-        "The round token from a plan-phase response, submitted beside iterative_payload. Requires iterative: true; single use - a replayed token is refused by name.",
-    },
-    iterative_payload: {
-      type: "object",
-      description:
-        "Decider payload answering a plan-phase envelope: { evidence: [chunkId, ...], subQueries: [...] }, validated before any pull runs. Requires iterative_token.",
-    },
-  },
-  required: ["query"],
-  additionalProperties: false,
-};
+/**
+ * The served `brain_search` input schema: the search-options descriptor's
+ * mcp-visible projection, one derivation instead of a second
+ * hand-maintained copy (t_50c81d5c substrate). Pinned byte-identical to
+ * the pre-derivation literal by
+ * tests/core/search/search-query-schema-artifact.test.ts - the day-one
+ * contract is that tools/list and the vendored Hermes projection see the
+ * same bytes.
+ */
+export const SEARCH_INPUT_SCHEMA: Record<string, unknown> = deriveSearchInputSchema();
 
 /**
  * The negative-recall states a zero-result `brain_search` can report.
