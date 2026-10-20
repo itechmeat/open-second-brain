@@ -120,7 +120,12 @@ export const MAX_MODEL_CONTEXT_WINDOW_TOKENS = 1_000_000;
 
 /** The `_brain.yaml` key the operator's `context:` block spells the window with. */
 export const MODEL_CONTEXT_WINDOW_CONFIG_KEY = "window_tokens";
-/** The environment variable that overrides the vault declaration. */
+/**
+ * The environment channel for the operator's window. The vault
+ * declaration WINS over it - the resolver's precedence is operator
+ * config > operator env > declared table > `1m` suffix > default - so a
+ * value here answers only where no `context.window_tokens` is set.
+ */
 export const MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW";
 
 /** What decided the resolved window; surfaces disclose this verbatim. */
