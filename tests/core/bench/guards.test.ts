@@ -153,6 +153,38 @@ describe("the BENCH_REFUSAL vocabulary", () => {
 });
 
 describe("preflightBenchRun", () => {
+  test("a traversal resume id is refused by name before any checkpoint read", () => {
+    // Findings 30: the preflight used to join and READ
+    // `<runsDir>/<resume>/checkpoint.json` before any run-id guard ran, so
+    // `--resume ..` answered with whatever parse error the PARENT
+    // directory's checkpoint.json carries. The bait sits exactly at the
+    // path the unguarded join used to read.
+    const root = join(runsDir, "root");
+    const runs = join(root, "runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(join(root, "checkpoint.json"), "{not json");
+    try {
+      preflightBenchRun({ runsDir: runs, fixture: FIXTURE, resume: ".." });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      const message = (e as Error).message;
+      // Refused BY NAME - the id - never by the parent file's parse error.
+      expect(message).toContain("..");
+      expect(message).toMatch(/all dots|unsafe characters|escapes the runs dir/);
+      expect(message).not.toContain("checkpoint_unparseable");
+    }
+    // The charset arm: a path-escaping id is refused by name too.
+    try {
+      preflightBenchRun({ runsDir: runs, fixture: FIXTURE, resume: "../escape" });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      const message = (e as Error).message;
+      expect(message).toContain("../escape");
+      expect(message).toContain("unsafe characters");
+      expect(message).not.toContain("checkpoint_unparseable");
+    }
+  });
+
   test("a healthy fresh run and a healthy resume pass silently", () => {
     const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
     writeVault(run.runDir);

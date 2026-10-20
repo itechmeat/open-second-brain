@@ -402,6 +402,17 @@ describe("runMemoryBench", () => {
  * contract `refused (<kind>): <detail>` on stderr with a nonzero exit.
  */
 describe("the integrity guards wired in", () => {
+  test("a traversal --resume id is refused before any run state exists", async () => {
+    // Findings 30 + 31 end to end: the raw `--resume ..` value must be
+    // refused by name by the preflight's run-id guard, never answered by
+    // whatever the parent directory happens to hold, and no run state may
+    // exist when it is.
+    await expect(runMemoryBench({ fixture: FIXTURE, runsDir, resume: ".." })).rejects.toThrow(
+      /all dots/,
+    );
+    expect(readdirSync(runsDir)).toEqual([]);
+  });
+
   test("an env-garbage provider refusal leaves no run dir behind", async () => {
     const envKey = "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER";
     process.env[envKey] = "no-such-provider";

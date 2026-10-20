@@ -33,7 +33,7 @@ import { accessSync, existsSync, mkdirSync, readFileSync, readdirSync } from "no
 import { join } from "node:path";
 import { constants as fsConstants } from "node:fs";
 
-import { benchResultsDir, benchVaultDir } from "./run-store.ts";
+import { benchResultsDir, benchVaultDir, guardedRunDir } from "./run-store.ts";
 import {
   BENCH_PHASES,
   type BenchFixture,
@@ -181,7 +181,13 @@ function describeCause(cause: unknown): string {
 
 /** P3, P4, P5: the resume target's checkpoint and its promised artifacts. */
 function preflightResume(runsDir: string, runId: string, fixture: BenchFixture): void {
-  const path = join(runsDir, runId, "checkpoint.json");
+  // The run-id guard runs BEFORE any read (finding 30): a raw `--resume`
+  // value the guard would refuse is refused here, by name - never
+  // answered by whatever exists at the path it resolves to (`--resume ..`
+  // used to read the parent directory's checkpoint.json and surface that
+  // file's parse error as the refusal).
+  const runDir = guardedRunDir(runsDir, runId);
+  const path = join(runDir, "checkpoint.json");
   // A missing checkpoint keeps the store's own "bench run not found"
   // message: nothing here to add.
   if (!existsSync(path)) return;
@@ -247,7 +253,7 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
   // again), so the vault is required exactly when retrieval still has to
   // run against it.
   if (done("ingest") && !done("retrieve")) {
-    const vault = benchVaultDir(join(runsDir, runId));
+    const vault = benchVaultDir(runDir);
     if (!existsSync(vault)) {
       refuse(
         BENCH_REFUSAL.runArtifactMissing,
@@ -265,7 +271,7 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
     }
   }
   if (done("retrieve")) {
-    const results = benchResultsDir(join(runsDir, runId));
+    const results = benchResultsDir(runDir);
     if (!existsSync(results)) {
       refuse(
         BENCH_REFUSAL.runArtifactMissing,
@@ -285,7 +291,7 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
     }
   }
   if (done("report")) {
-    const report = join(runsDir, runId, REPORT_FILENAME);
+    const report = join(runDir, REPORT_FILENAME);
     if (!existsSync(report)) {
       refuse(
         BENCH_REFUSAL.runArtifactMissing,

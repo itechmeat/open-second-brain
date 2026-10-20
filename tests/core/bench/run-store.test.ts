@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import {
+  benchRunDirPath,
   benchRunIdentityHash,
   benchVaultDir,
   completeBenchPhase,
@@ -88,6 +89,20 @@ describe("bench run store", () => {
   test("unknown run ids and path-escaping ids are rejected", () => {
     expect(() => loadBenchRun(runsDir, "run-nope")).toThrow();
     expect(() => loadBenchRun(runsDir, "../escape")).toThrow();
+  });
+
+  test("benchRunDirPath refuses traversal ids instead of resolving them", () => {
+    // Finding 31: the preflight and the pipeline derive the run dir (and
+    // the vault path for config resolution) through this helper BEFORE
+    // loadBenchRun's guard runs, so the resolve must carry the same guard
+    // the checkpoint reader applies - `--resume ..` used to stat and read
+    // under the runs dir's parent before any refusal.
+    expect(() => benchRunDirPath(runsDir, "..")).toThrow(/all dots/);
+    expect(() => benchRunDirPath(runsDir, "../escape")).toThrow(/unsafe characters/);
+    // A safe id resolves exactly as before.
+    expect(benchRunDirPath(runsDir, "run-20260603120000-abc123")).toBe(
+      join(runsDir, "run-20260603120000-abc123"),
+    );
   });
 
   test("two runs with different knob pins get different run ids", () => {

@@ -81,12 +81,14 @@ export function benchResultsDir(runDir: string): string {
 
 /**
  * The run directory for a run id, resolved exactly the way the store
- * resolves it. The pipeline needs the path BEFORE the run exists (the
- * search config is resolved against the run's future vault so a refusal
- * there can leave no run dir behind) - this is that path, as one fact.
+ * resolves it - through the {@link guardedRunDir} checks (finding 31):
+ * the preflight and the pipeline consume this path BEFORE the store's
+ * own guard runs (the search config is resolved against the run's future
+ * vault so a refusal there can leave no run dir behind), so a run id the
+ * guard would refuse is refused HERE, before any path is built or read.
  */
 export function benchRunDirPath(runsDir: string, runId: string): string {
-  return resolve(runsDir, runId);
+  return guardedRunDir(runsDir, runId);
 }
 
 /**
@@ -339,8 +341,16 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   });
 }
 
-/** Resolve a run directory and refuse anything outside the runs dir. */
-function guardedRunDir(runsDir: string, runId: string): string {
+/**
+ * Resolve a run directory and refuse anything outside the runs dir: the
+ * charset rule (a run id is `[A-Za-z0-9._-]+`), the all-dots rule (`.` and
+ * `..` pass the charset and resolve inside the root) and the containment
+ * rule (the resolved dir must stay under the runs dir). Exported so every
+ * site that derives a run-dir path from a CLI-typed id - the preflight's
+ * probe reads, the pipeline's pre-creation path resolution - applies the
+ * SAME guard BEFORE any read, not only the store's own checkpoint read.
+ */
+export function guardedRunDir(runsDir: string, runId: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) {
     throw new Error(`bench run id contains unsafe characters: ${runId}`);
   }
