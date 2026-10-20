@@ -1244,12 +1244,12 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "Strict upper bound on the returned slice's tokens. Omitted: derives from the resolved model window, channel named in `max_tokens_source`; a `default`-sourced window defers to the model's preset hint. Nothing resolvable is refused.",
+            "Token cap for the slice. Omitted: derives from the resolved window (channel in `max_tokens_source`; `default` defers to the preset hint). Nothing resolvable is refused.",
         },
         model: {
           type: "string",
           description:
-            "Optional model id hint. With `max_tokens` omitted, the context window resolves from this id (declared table, `-1m` suffix, or default) after operator and env overrides; an id nothing published resolves budgets from its preset hint, the same mapping `brain_context_presets` suggest names.",
+            "Model id. With `max_tokens` omitted the context window resolves from it (operator/env overrides, table, `-1m` suffix, default); an unknown id budgets from its hint.",
         },
         query: {
           type: "string",
