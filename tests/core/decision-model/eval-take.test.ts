@@ -225,9 +225,10 @@ describe("committed take fixtures", () => {
   test("resolution stays package-rooted: the take loads from a bare working directory", () => {
     // The installed package has no caller working directory to lean on:
     // the repo-relative reference must resolve against the package root,
-    // wherever the process happens to run - today it falls back to the
-    // working directory and cannot read the committed take at all.
-    const repoRoot = resolve(join(import.meta.dir, "..", "..", "..", ".."));
+    // wherever the process happens to run - there is no working-directory
+    // fallback, so a bare reference resolves there or raises a named
+    // read error, never content from cwd.
+    const repoRoot = resolve(join(import.meta.dir, "..", "..", ".."));
     const previous = process.cwd();
     const bare = mkdtempSync(join(tmpdir(), "osb-dm-take-bare-"));
     process.chdir(bare);

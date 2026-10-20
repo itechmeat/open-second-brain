@@ -51,7 +51,7 @@ The lane sets are pairwise disjoint; every intersection above is resolved to a s
 
 ### Task 0a: config quartet and env helper (substrate, commit 1)
 - **Files**: `src/core/brain/types.ts` (`cross_topic` block on `BrainDreamConfig` near `:1450`; new `context` window block near `:2030`), `src/core/brain/policy/blocks/context.ts` (new block parser), `src/core/brain/policy.ts` (`cross_topic` parse plus block re-exports), `src/core/brain/policy/validate.ts` (register both blocks; `brainConfigKnownKeys()` follows), `src/core/brain/config-template.ts` (commented-default entries for both), `tests/core/brain/config-template-ratchet.test.ts`, `tests/core/brain/policy/context-block.test.ts` (new), `src/core/config.ts` (`OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW` parse helper beside the recall-adequacy trio, config-over-env per the resolver precedence).
-- **Acceptance**: `tests/core/brain/policy/context-block.test.ts` pins block acceptance and rejection (garbage raises, out-of-range numeric accepted and clamped downstream) on the `recall-inject-block` pattern; `tests/core/brain/config-template-ratchet.test.ts` passes with both new keys present in the generated template; absent blocks leave default behavior byte-identical.
+- **Acceptance**: `tests/core/brain/policy/context-block.test.ts` pins block acceptance and rejection (garbage raises, out-of-range numeric accepted and passed through unclamped) on the `recall-inject-block` pattern; `tests/core/brain/config-template-ratchet.test.ts` passes with both new keys present in the generated template; absent blocks leave default behavior byte-identical.
 - **Depends on**: none. Lands first.
 
 ### Task 0b: cross-topic ledger identity and state surface (substrate, commit 2)
