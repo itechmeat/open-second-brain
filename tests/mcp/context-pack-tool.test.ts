@@ -1346,6 +1346,37 @@ describe("brain_pre_compress_pack tool — derived caps", () => {
     }
   });
 
+  test("a malformed window env degrades to the unbounded addendum with a warning", async () => {
+    seedTwoLongConfirmedPreferences();
+    const key = MODEL_CONTEXT_WINDOW_ENV_KEY;
+    const previous = process.env[key];
+    process.env[key] = "200k";
+    try {
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      // The call SUCCEEDS: on this path an unparseable env value is
+      // nothing resolvable, so the historical unbounded caps stand - it
+      // used to rethrow as INVALID_PARAMS blaming the caller's
+      // parameters, losing the addendum over an operator typo the caller
+      // cannot see.
+      const out = await callPreCompress(server, {});
+      const items = out["items"] as Array<{ principle: string; trimmed: boolean }>;
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        expect(item.trimmed).toBe(false);
+        expect(item.principle).toBe(LONG_PRINCIPLE);
+      }
+      // A named warning says which channel misread - never the value.
+      const warning = out["window_warning"] as string | undefined;
+      expect(typeof warning).toBe("string");
+      expect(warning).toContain("OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW");
+      expect(warning).not.toContain("200k");
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
   test("explicit caps stay first-class beside a resolvable window", async () => {
     seedTwoLongConfirmedPreferences();
     const server = new MCPServer({ vault, configPath });

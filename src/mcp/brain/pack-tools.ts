@@ -1082,11 +1082,21 @@ async function toolBrainPreCompressPack(
   // its own 10 default - the presets' top-k values are suggestion
   // diagnostics, not this tool's default.
   let resolvedCaps: ResolvedModelWindow | null = null;
+  // A malformed OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW used to rethrow
+  // here as INVALID_PARAMS - blaming the caller's parameters and losing
+  // the addendum over an operator typo the caller cannot see and this
+  // result never disclosed. On THIS path an unparseable env value means
+  // nothing resolvable: the historical unbounded caps stand and a named
+  // warning says which channel misread, never echoing the value itself.
+  let windowWarning: string | undefined;
   if (maxCharsPerMemory === undefined || maxTotalChars === undefined) {
     try {
       resolvedCaps = resolveSurfaceModelWindow(ctx.vault, model ?? undefined);
-    } catch (e) {
-      throw new MCPError(INVALID_PARAMS, `brain_pre_compress_pack: ${(e as Error).message}`);
+    } catch {
+      resolvedCaps = null;
+      windowWarning =
+        `${MODEL_CONTEXT_WINDOW_ENV_KEY} is not a well-formed positive integer; ` +
+        "pre-compress caps stay unbounded and nothing was derived from it";
     }
   }
   // The hint fallback rides along here exactly as it does in the
@@ -1128,6 +1138,10 @@ async function toolBrainPreCompressPack(
     // builder has, so a warning dropped here is a broken `_brain.yaml`
     // nothing tells the caller about.
     ...(pack.warnings ? { warnings: pack.warnings } : {}),
+    // The window channel's own warning: present only when the derivation
+    // was skipped over an unparseable operator env value (M4), so a
+    // normal answer stays byte-identical.
+    ...(windowWarning !== undefined ? { window_warning: windowWarning } : {}),
     ...(pack.receiptId ? { receipt_id: pack.receiptId } : {}),
     ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
     items: pack.items.map((i) => ({
