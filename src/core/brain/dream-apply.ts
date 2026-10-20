@@ -270,6 +270,14 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         ...(update.freshness_trend !== undefined
           ? { freshness_trend: update.freshness_trend }
           : {}),
+        // Derived-fact fields (finding 77): the update carries a promoted
+        // rule's provenance and lineage through its counter changes, in
+        // the same render position the writer uses, so the bytes match
+        // the no-op pre-flight and the fields survive every rewrite.
+        ...(update.provenance !== undefined ? { provenance: update.provenance } : {}),
+        ...(update.related !== undefined && update.related.length > 0
+          ? { related: update.related }
+          : {}),
         ...(update.scope ? { scope: update.scope } : {}),
         lenientScopeTags: true,
       },

@@ -905,6 +905,48 @@ describe("dream pass wiring (end to end)", () => {
     expect(crossFiles).toEqual([`pref-${slug}.md`]);
   });
 
+  test("the rule's provenance and lineage survive its first counter change (finding 77)", () => {
+    const vault = makeVault("lineage", ENABLED);
+    seedPair(vault);
+    const slug = expectedSlug("pref-alpha", "pref-beta");
+    const rulePath = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+
+    dream(vault, { now: NOW_E2E });
+    const written = parsePreference(rulePath);
+    expect(written.provenance).toBe("inferred");
+    expect([...(written.related ?? [])]).toEqual(["pref-alpha", "pref-beta"]);
+
+    // The first applied event: applied_count changes, so the refresh
+    // update loop rewrites the file.
+    const DAY2 = new Date("2026-07-20T10:00:00Z");
+    appendApplyEvidence(
+      vault,
+      {
+        pref_id: `pref-${slug}`,
+        artifact: "[[Daily/2026.07.20]]",
+        result: "applied",
+        agent: "test",
+      },
+      { now: DAY2 },
+    );
+    dream(vault, { now: DAY2 });
+
+    // The rewrite must carry both fields forward, not wipe them.
+    const after = parsePreference(rulePath);
+    expect(after.applied_count).toBe(1);
+    expect(after.provenance).toBe("inferred");
+    expect([...(after.related ?? [])]).toEqual(["pref-alpha", "pref-beta"]);
+
+    // And with both fields carried through the update itself - not merely
+    // preserved as file extras the input-driven render can never match -
+    // the no-op pre-flight agrees again: a rerun at the same injected now
+    // renders the same bytes and changes nothing. (Before the fix the
+    // pre-flight render, built without provenance/related, could never
+    // match the written file, so every later pass rewrote the rule.)
+    const rerun = dream(vault, { now: DAY2 });
+    expect(rerun.changed).toBe(false);
+  });
+
   test("min_topics: 1 cannot promote a singleton and the clamp is disclosed (finding 62)", () => {
     const vault = makeVault(
       "floored",

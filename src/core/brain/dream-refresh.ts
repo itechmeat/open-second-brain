@@ -23,6 +23,7 @@ import {
   BRAIN_RETIRED_REASON,
   type BrainConfidence,
   type BrainConfig,
+  type BrainPreference,
 } from "./types.ts";
 
 export interface RefreshUpdate {
@@ -51,6 +52,18 @@ export interface RefreshUpdate {
    * legacy vaults keep their no-op dream guarantees.
    */
   readonly freshness_trend?: string;
+  /**
+   * Derived-fact fields (finding 77), carried for the same reason the
+   * pre-flight carries them: the renderer emits a non-default
+   * `provenance` and a non-empty `related` only when the write input
+   * supplies them, so an update loop that omitted them would strip both
+   * from a promoted rule on its first counter change - and, because the
+   * no-op pre-flight renders from the input too, leave the file looking
+   * "needs rewrite" on every pass after that. Absent stays absent: a
+   * pref without these fields is written exactly as before.
+   */
+  readonly provenance?: BrainPreference["provenance"];
+  readonly related?: ReadonlyArray<string>;
 }
 
 /**
