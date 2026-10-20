@@ -167,17 +167,29 @@ export interface MeasuredTuning {
    * `none`: no profile. `baseline`: the profile ships tuned for every
    * use. `hand`: the source table carries hand-registered uses.
    * `measured`: at least one pair carries a valid machine-side mark.
-   * `untuned`: nothing tuned, so enforce holds as shadow.
+   * `measured_elsewhere`: a mark exists but is bound to another endpoint,
+   * so enforce holds as shadow here. `untuned`: nothing tuned, so
+   * enforce holds as shadow.
    */
-  readonly state: "none" | "baseline" | "hand" | "measured" | "untuned";
+  readonly state: "none" | "baseline" | "hand" | "measured" | "measured_elsewhere" | "untuned";
   readonly marked_uses: ReadonlyArray<MarkedUse>;
+  /**
+   * Pairs whose mark passes every acceptance axis but is bound to a
+   * different endpoint (provider, model or base URL): the gate holds
+   * them shadow on this one. Never armed, and never counted in
+   * {@link marked_uses}.
+   */
+  readonly elsewhere_uses: ReadonlyArray<MarkedUse>;
 }
 
 /**
  * The measured tuning state of the resolved profile: the source table
  * decides first (baseline, or a hand-registered list), and only the
  * pairs the table leaves untuned can be carried by a valid machine-side
- * mark. The same vocabulary and the same short spec hash render into
+ * mark. Marks are checked against THIS config's endpoint - the same
+ * provider, model and base URL the resolver's gate reader binds - so a
+ * promote measured on one model never reads as measured for another.
+ * The same vocabulary and the same short spec hash render into
  * `check`, the report and the doctor probe, so the surfaces cannot
  * disagree about what "tuned" means here.
  */
@@ -187,23 +199,38 @@ export function measuredTuning(
 ): MeasuredTuning {
   const profile = cfg.thresholdProfile ?? null;
   if (profile === null || !isDecisionThresholdProfile(profile)) {
-    return { profile, state: "none", marked_uses: [] };
+    return { profile, state: "none", marked_uses: [], elsewhere_uses: [] };
   }
   const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned ?? [];
-  if (tuned === "baseline") return { profile, state: "baseline", marked_uses: [] };
+  if (tuned === "baseline") {
+    return { profile, state: "baseline", marked_uses: [], elsewhere_uses: [] };
+  }
+  // The same endpoint shape the resolver's gate reader binds
+  // (config.ts): a mark measured elsewhere never arms enforce here, so
+  // it must never read as measured here either.
+  const endpoint = { provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl };
   const marked: MarkedUse[] = [];
+  const elsewhere: MarkedUse[] = [];
   for (const use of DECISION_MODEL_USES) {
     const spec: DecisionEvalSpec | null = decisionEvalSpecFor(use);
     if (spec === null) continue;
-    if (validatedTuningMark(profile, use, source, spec) !== null) {
+    if (validatedTuningMark(profile, use, source, spec, Date.now(), endpoint) !== null) {
       marked.push({ use, spec_hash: decisionEvalSpecHash(spec) });
+    } else if (validatedTuningMark(profile, use, source, spec) !== null) {
+      // Passes every axis but the endpoint: measured, but not here.
+      elsewhere.push({ use, spec_hash: decisionEvalSpecHash(spec) });
     }
   }
-  if (marked.length > 0) return { profile, state: "measured", marked_uses: marked };
-  if (Array.isArray(tuned) && tuned.length > 0) {
-    return { profile, state: "hand", marked_uses: [] };
+  if (marked.length > 0) {
+    return { profile, state: "measured", marked_uses: marked, elsewhere_uses: elsewhere };
   }
-  return { profile, state: "untuned", marked_uses: [] };
+  if (elsewhere.length > 0) {
+    return { profile, state: "measured_elsewhere", marked_uses: [], elsewhere_uses: elsewhere };
+  }
+  if (Array.isArray(tuned) && tuned.length > 0) {
+    return { profile, state: "hand", marked_uses: [], elsewhere_uses: [] };
+  }
+  return { profile, state: "untuned", marked_uses: [], elsewhere_uses: [] };
 }
 
 /** The short form the prose surfaces print: first twelve hex characters. */
@@ -224,7 +251,25 @@ export function measuredTuningSummary(measured: MeasuredTuning): string {
       const parts = measured.marked_uses
         .map((m) => `${shortSpecHash(m.spec_hash)} (${m.use})`)
         .join(", ");
-      return `profile '${measured.profile}' measured under spec hash ${parts}`;
+      const sentence = `profile '${measured.profile}' measured under spec hash ${parts}`;
+      if (measured.elsewhere_uses.length === 0) return sentence;
+      const other = measured.elsewhere_uses
+        .map((m) => `${shortSpecHash(m.spec_hash)} (${m.use})`)
+        .join(", ");
+      return (
+        sentence +
+        `; a mark for ${other} was measured on another endpoint ` +
+        "(provider, model or base-url mismatch) and holds shadow here"
+      );
+    }
+    case "measured_elsewhere": {
+      const parts = measured.elsewhere_uses
+        .map((m) => `${shortSpecHash(m.spec_hash)} (${m.use})`)
+        .join(", ");
+      return (
+        `profile '${measured.profile}' measured under spec hash ${parts} on another ` +
+        "endpoint (provider, model or base-url mismatch); enforce holds as shadow"
+      );
     }
     case "untuned":
       return (
@@ -360,7 +405,12 @@ export async function buildDecisionModelCheck(
         cfg,
         opts.markSource === null ? processDirsEnv() : (opts.markSource ?? processDirsEnv()),
       )
-    : { profile: cfg.thresholdProfile ?? null, state: "none" as const, marked_uses: [] };
+    : {
+        profile: cfg.thresholdProfile ?? null,
+        state: "none" as const,
+        marked_uses: [],
+        elsewhere_uses: [],
+      };
 
   // The cached eval verdicts are review evidence for the mark; a check
   // that named the measured state without them would be unauditable.

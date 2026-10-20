@@ -269,11 +269,14 @@ would have run `shadow`.
 
 The mark is honored only while the installed spec still matches the one it
 was measured under: the spec hash, the fixture hash and the pinned
-threshold values are all re-checked on every read. Edit the spec, move the
-fixture or change a threshold, and the pair falls back to shadow - the
+threshold values are all re-checked on every read, along with the endpoint
+that earned it (the provider, model and base-url hash recorded in the
+mark). Edit the spec, move the fixture, change a threshold, or point the
+config at another endpoint, and the pair falls back to shadow - the
 fail-closed direction. Deleting the mark does the same; nothing breaks.
-`o2b decision-model check` names the measured state (untuned, baseline, or
-measured under a spec hash) and lists the cached grades, and the doctor
-readiness line carries the same summary. Tuning a profile by hand-editing
-the source table stays possible and still wins over a mark; the mark only
-ever carries pairs the table leaves untuned.
+`o2b decision-model check` names the measured state (untuned, baseline,
+measured under a spec hash, or measured under a spec hash on another
+endpoint - provider, model or base-url mismatch) and lists the cached
+grades, and the doctor readiness line carries the same summary. Tuning a
+profile by hand-editing the source table stays possible and still wins
+over a mark; the mark only ever carries pairs the table leaves untuned.

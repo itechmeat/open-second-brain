@@ -148,6 +148,40 @@ describe("the check's measured tuning state", () => {
     );
   });
 
+  test("a mark measured on model A reads as measured elsewhere, not measured, on model B", async () => {
+    // The mark is bound to the endpoint that earned it (provider, model,
+    // base-url hash). The gate reader refuses it for another endpoint and
+    // holds the use shadow - so the check must not claim measured-enforce
+    // here either: it names the mark and why it does not arm.
+    await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    const spec = decisionEvalSpecFor("rerank")!;
+    const elsewhere = await buildDecisionModelCheck({
+      config: { ...CHECK_CONFIG, decision_model_id: "fake-model-2" },
+      vault,
+      markSource: stateEnv,
+    });
+    expect(elsewhere.tuning.state).toBe("measured_elsewhere");
+    expect(elsewhere.tuning.marked_uses).toEqual([]);
+    expect(elsewhere.tuning.elsewhere_uses).toEqual([
+      { use: "rerank", spec_hash: decisionEvalSpecHash(spec) },
+    ]);
+    const text = renderDecisionModelCheck(elsewhere);
+    expect(text).toContain("on another endpoint (provider, model or base-url mismatch)");
+    expect(text).toContain("enforce holds as shadow");
+    // The same holds when only the base URL moved and the model stayed.
+    const movedUrl = await buildDecisionModelCheck({
+      config: { ...CHECK_CONFIG, decision_model_base_url: "http://127.0.0.1:10" },
+      vault,
+      markSource: stateEnv,
+    });
+    expect(movedUrl.tuning.state).toBe("measured_elsewhere");
+    expect(renderDecisionModelCheck(movedUrl)).toContain("on another endpoint");
+  });
+
   test("a tampered mark fails closed to untuned on the surface", async () => {
     await runDecisionModelEval("rerank", {
       config: evalConfig(),
