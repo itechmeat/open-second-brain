@@ -366,3 +366,110 @@ describe("owner scope in the cache key", () => {
     }
   });
 });
+
+/**
+ * Window-derived default budget (t_a567cc12, B4): when the operator
+ * declares a context window - the vault's `context:` block or the
+ * environment override - the default budget becomes a window fraction,
+ * floored at the historical 2_000, so it only ever scales UP. With
+ * nothing resolvable the 2_000 default stands byte-identically, and a
+ * budget the derivation decided is disclosed on the results that used it
+ * (`derivedMaxTokens` / `derived_max_tokens`); an explicit `maxTokens`
+ * input stays first-class and is never disclosed as derived.
+ */
+describe("window-derived default budget", () => {
+  const ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW";
+  let savedEnv: string | undefined;
+
+  function writeContextWindow(contents: string): void {
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), contents);
+  }
+
+  function restoreEnv(): void {
+    if (savedEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedEnv;
+    savedEnv = undefined;
+  }
+
+  test("a declared window scales the default budget above the floor", () => {
+    writeContextWindow("schema_version: 1\ncontext:\n  window_tokens: 1000000\n");
+    const result = refreshAnticipatoryCache(vault, { sessionId: "s-win", now: T0 });
+    expect(result.refreshed).toBe(true);
+    expect(result.derivedMaxTokens).toBe(10_000);
+    const raw = JSON.parse(
+      readFileSync(anticipatoryCachePath(vault, result.rootSessionId), "utf8"),
+    ) as { max_tokens: number };
+    expect(raw.max_tokens).toBe(10_000);
+  });
+
+  test("the floor keeps a small declared window at today's default", () => {
+    writeContextWindow("schema_version: 1\ncontext:\n  window_tokens: 100000\n");
+    const result = refreshAnticipatoryCache(vault, { sessionId: "s-floor", now: T0 });
+    // At the floor the derivation answered with the historical constant,
+    // so there is nothing derived to disclose and nothing observable
+    // changed.
+    expect(result.derivedMaxTokens).toBeUndefined();
+    const raw = JSON.parse(
+      readFileSync(anticipatoryCachePath(vault, result.rootSessionId), "utf8"),
+    ) as { max_tokens: number };
+    expect(raw.max_tokens).toBe(2_000);
+  });
+
+  test("the environment override scales the budget", () => {
+    savedEnv = process.env[ENV_KEY];
+    process.env[ENV_KEY] = "500000";
+    try {
+      const result = refreshAnticipatoryCache(vault, { sessionId: "s-env", now: T0 });
+      expect(result.derivedMaxTokens).toBe(5_000);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test("an explicit maxTokens wins and is not disclosed as derived", () => {
+    writeContextWindow("schema_version: 1\ncontext:\n  window_tokens: 1000000\n");
+    const result = refreshAnticipatoryCache(vault, {
+      sessionId: "s-explicit",
+      now: T0,
+      maxTokens: 500,
+    });
+    expect(result.derivedMaxTokens).toBeUndefined();
+    const raw = JSON.parse(
+      readFileSync(anticipatoryCachePath(vault, result.rootSessionId), "utf8"),
+    ) as { max_tokens: number };
+    expect(raw.max_tokens).toBe(500);
+  });
+
+  test("nothing resolvable keeps the 2_000 default byte-identically", () => {
+    const result = refreshAnticipatoryCache(vault, { sessionId: "s-default", now: T0 });
+    expect(result.derivedMaxTokens).toBeUndefined();
+    const raw = JSON.parse(
+      readFileSync(anticipatoryCachePath(vault, result.rootSessionId), "utf8"),
+    ) as { max_tokens: number };
+    expect(raw.max_tokens).toBe(2_000);
+  });
+
+  test("a broken _brain.yaml fails the derivation soft, and the refresh as always", () => {
+    writeContextWindow("schema_version: 1\ncontext:\n  window_tokens: not-a-number\n");
+    const result = refreshAnticipatoryCache(vault, { sessionId: "s-broken", now: T0 });
+    // The derivation channel never answers for an unreadable config - no
+    // budget is disclosed - and the pack build raises on it exactly as it
+    // always has, so the fail-soft refresh reports a miss and writes
+    // nothing rather than caching a bundle under defaults the operator
+    // did not choose.
+    expect(result.refreshed).toBe(false);
+    expect(result.derivedMaxTokens).toBeUndefined();
+  });
+
+  test("the read path discloses the derived budget it answered under", () => {
+    writeContextWindow("schema_version: 1\ncontext:\n  window_tokens: 1000000\n");
+    refreshAnticipatoryCache(vault, { sessionId: "s-read", now: T0 });
+    const read = readAnticipatoryContext(vault, {
+      sessionId: "s-read",
+      now: new Date(T0.getTime() + 10_000),
+      ttlSeconds: 120,
+    });
+    expect(read.cache_state).toBe("warm");
+    expect(read.derived_max_tokens).toBe(10_000);
+  });
+});

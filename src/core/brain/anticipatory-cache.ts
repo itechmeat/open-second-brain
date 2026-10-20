@@ -21,9 +21,11 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
+import { resolveModelContextWindowEnvTokens } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import type { StampTokens } from "../integrity/stamp.ts";
 import { packContext, type ContextPackItem } from "./context-pack.ts";
+import { resolveModelContextWindowTokens } from "./model-window.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import { packStampRefusal, packStampTokens, type ContextPackStamp } from "./pack-stamp.ts";
 import { resolveOwnerScopeDelivery } from "./preferences-collect.ts";
@@ -31,6 +33,7 @@ import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { searchSessionRecall, type SessionRecallHit } from "./session-recall.ts";
+import { loadBrainConfig } from "./policy.ts";
 
 /**
  * Cache-file schema token. Bumped to `v2` by context-integrity-gates
@@ -47,6 +50,14 @@ export const ANTICIPATORY_SCHEMA_VERSION = "o2b.anticipatory.v2";
 export const DEFAULT_ANTICIPATORY_TTL_SECONDS = 120;
 /** Default token budget for the cached context pack. */
 export const DEFAULT_ANTICIPATORY_MAX_TOKENS = 2_000;
+/**
+ * The share of a resolved context window the default budget becomes when
+ * the window-fraction derivation fires (t_a567cc12, B4): 1/100th, so a
+ * declared 1M window budgets 10_000 and a 500k one 5_000. A divisor, not
+ * a float fraction, so the division is exact at every value the resolver
+ * can hand over (integers in [100_000, 1_000_000]).
+ */
+const ANTICIPATORY_WINDOW_BUDGET_DIVISOR = 100;
 const DEFAULT_SESSION_HITS = 5;
 
 const CACHE_DIR_REL = posix.join(BRAIN_ROOT_REL, ".state", "anticipatory");
@@ -78,6 +89,15 @@ export interface RefreshAnticipatoryCacheResult {
   readonly refreshed: boolean;
   readonly rootSessionId: string;
   readonly path: string;
+  /**
+   * The window-derived budget the refresh answered under (t_a567cc12,
+   * B4), present only when a resolved context window - the operator's
+   * `context:` block or the environment override - lifted the default
+   * above its historical 2_000 floor. Absent on an explicit-budget call
+   * and whenever nothing resolvable left the constant standing, so the
+   * default-vault result is byte-identical.
+   */
+  readonly derivedMaxTokens?: number;
 }
 
 export type AnticipatoryCacheState = "warm" | "stale" | "miss";
@@ -112,6 +132,15 @@ export interface ReadAnticipatoryContextResult {
    */
   readonly cache_refusal?: string;
   readonly context: AnticipatoryContext;
+  /**
+   * The window-derived budget this read answered under (t_a567cc12, B4),
+   * present only when a resolved context window lifted the default above
+   * its historical 2_000 floor - the read-side twin of
+   * `derivedMaxTokens`, so a consumer can tell a derived warm cache from
+   * a constant-budget one. Absent on an explicit-budget read and on the
+   * default-vault path.
+   */
+  readonly derived_max_tokens?: number;
 }
 
 /** On-disk form of {@link ContextPackStamp} (snake_case, like its siblings). */
@@ -288,6 +317,64 @@ function cacheRefusal(vault: string, cached: CacheFile, now: Date): string | nul
 }
 
 /**
+ * The window-derived default budget (t_a567cc12, B4), or `undefined` when
+ * the historical constant stands.
+ *
+ * Fires only on the derivation path - an explicit `maxTokens` input never
+ * reads the vault or the environment, so the explicit path behaves
+ * byte-identically to before the resolver existed. When it fires, the
+ * operator's `context:` block and the environment override are resolved
+ * through the shared model-window resolver (config > env; no model id
+ * reaches this module, so the declared/suffix tiers have no channel
+ * here), and the budget becomes the window's {@link
+ * ANTICIPATORY_WINDOW_BUDGET_DIVISOR}th part, floored at
+ * {@link DEFAULT_ANTICIPATORY_MAX_TOKENS} so it only ever scales UP.
+ *
+ * `disclosed` is the derived budget only when it lifted above the
+ * historical constant: at the floor the derivation answered with exactly
+ * the value the constant would have, so there is nothing derived to
+ * disclose and nothing observable changed.
+ *
+ * Fail-soft on both channels, matching this module's contract: a broken
+ * `_brain.yaml` or a malformed env value leaves the derivation empty -
+ * the config raise happens later, where the pack builds, exactly as it
+ * always has, and this channel must not answer for the operator's config
+ * before the real reader does.
+ */
+interface DerivedWindowBudget {
+  readonly budget: number;
+  readonly disclosed: number | undefined;
+}
+
+function deriveWindowBudget(vault: string): DerivedWindowBudget | undefined {
+  let operatorWindow: number | undefined;
+  try {
+    operatorWindow = loadBrainConfig(vault).context?.window_tokens;
+  } catch {
+    operatorWindow = undefined;
+  }
+  let envWindow: number | undefined;
+  try {
+    envWindow = resolveModelContextWindowEnvTokens();
+  } catch {
+    envWindow = undefined;
+  }
+  if (operatorWindow === undefined && envWindow === undefined) return undefined;
+  const resolved = resolveModelContextWindowTokens({
+    ...(operatorWindow !== undefined ? { operatorWindowTokens: operatorWindow } : {}),
+    ...(envWindow !== undefined ? { envWindowTokens: envWindow } : {}),
+  });
+  const budget = Math.max(
+    DEFAULT_ANTICIPATORY_MAX_TOKENS,
+    Math.floor(resolved.windowTokens / ANTICIPATORY_WINDOW_BUDGET_DIVISOR),
+  );
+  return {
+    budget,
+    disclosed: budget === DEFAULT_ANTICIPATORY_MAX_TOKENS ? undefined : budget,
+  };
+}
+
+/**
  * Refresh the cache for the session's lineage root unless a fresh copy
  * already exists (TTL debounce).
  *
@@ -307,7 +394,10 @@ export function refreshAnticipatoryCache(
   const rootId = resolveRootId(vault, input.sessionId);
   const path = anticipatoryCachePath(vault, rootId, input.agentScope);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
-  const maxTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
+  const derived = input.maxTokens === undefined ? deriveWindowBudget(vault) : undefined;
+  const maxTokens = input.maxTokens ?? derived?.budget ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
+  const disclosure =
+    derived?.disclosed !== undefined ? { derivedMaxTokens: derived.disclosed } : {};
   try {
     const existing = readCacheFile(path);
     // TTL debounce applies only to a cache built under the same token
@@ -329,7 +419,12 @@ export function refreshAnticipatoryCache(
         age < ttlMs &&
         cacheRefusal(vault, existing, input.now) === null
       ) {
-        return Object.freeze({ refreshed: false, rootSessionId: rootId, path });
+        return Object.freeze({
+          refreshed: false,
+          rootSessionId: rootId,
+          path,
+          ...disclosure,
+        });
       }
     }
     const bundle = buildBundle(vault, {
@@ -352,9 +447,19 @@ export function refreshAnticipatoryCache(
     };
     mkdirSync(join(vault, CACHE_DIR_REL), { recursive: true });
     atomicWriteFileSync(path, `${JSON.stringify(cache, null, 2)}\n`);
-    return Object.freeze({ refreshed: true, rootSessionId: rootId, path });
+    return Object.freeze({
+      refreshed: true,
+      rootSessionId: rootId,
+      path,
+      ...disclosure,
+    });
   } catch {
-    return Object.freeze({ refreshed: false, rootSessionId: rootId, path });
+    return Object.freeze({
+      refreshed: false,
+      rootSessionId: rootId,
+      path,
+      ...disclosure,
+    });
   }
 }
 
@@ -378,7 +483,10 @@ export function readAnticipatoryContext(
   const rootId = resolveRootId(vault, input.sessionId);
   const path = anticipatoryCachePath(vault, rootId, input.agentScope);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
-  const requestedTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
+  const derived = input.maxTokens === undefined ? deriveWindowBudget(vault) : undefined;
+  const requestedTokens = input.maxTokens ?? derived?.budget ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
+  const disclosure =
+    derived?.disclosed !== undefined ? { derived_max_tokens: derived.disclosed } : {};
   const cached = readCacheFile(path);
   if (cached !== null) {
     const age = input.now.getTime() - Date.parse(cached.generated_at);
@@ -394,6 +502,7 @@ export function readAnticipatoryContext(
           root_session_id: rootId,
           generated_at: cached.generated_at,
           context: cached.context,
+          ...disclosure,
         });
       }
       return Object.freeze({
@@ -407,6 +516,7 @@ export function readAnticipatoryContext(
           agentScope: input.agentScope,
           now: input.now,
         }).context,
+        ...disclosure,
       });
     }
     return Object.freeze({
@@ -419,6 +529,7 @@ export function readAnticipatoryContext(
         agentScope: input.agentScope,
         now: input.now,
       }).context,
+      ...disclosure,
     });
   }
   return Object.freeze({
@@ -431,6 +542,7 @@ export function readAnticipatoryContext(
       agentScope: input.agentScope,
       now: input.now,
     }).context,
+    ...disclosure,
   });
 }
 
@@ -458,16 +570,18 @@ export function buildReaderAnticipatoryContext(
 ): ReadAnticipatoryContextResult {
   const rootId = resolveRootId(vault, input.sessionId);
   const signal = input.signalText?.trim();
+  const derived = input.maxTokens === undefined ? deriveWindowBudget(vault) : undefined;
   return Object.freeze({
     cache_state: "miss" as const,
     root_session_id: rootId,
     context: buildBundle(vault, {
       sessionId: input.sessionId,
       signalText: signal !== undefined && signal.length > 0 ? signal : undefined,
-      maxTokens: input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
+      maxTokens: input.maxTokens ?? derived?.budget ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
       agentScope: input.agentScope,
       now: input.now,
       visible: input.visible,
     }).context,
+    ...(derived?.disclosed !== undefined ? { derived_max_tokens: derived.disclosed } : {}),
   });
 }
