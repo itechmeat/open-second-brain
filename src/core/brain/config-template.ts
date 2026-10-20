@@ -74,6 +74,7 @@ import {
   DEFAULT_ROLLUP_IDENTITY_THRESHOLD,
 } from "./rollup-ladder.ts";
 import { SCHEMA_VOCAB_CATEGORIES } from "./schema-vocab.ts";
+import { CONTEXT_WINDOW_TOKENS_DEFAULT } from "./policy.ts";
 
 /**
  * How one key is emitted.
@@ -322,6 +323,40 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
     keys: [
       def("ttl_seconds", DEFAULT_ANTICIPATORY_TTL_SECONDS),
       def("max_tokens", DEFAULT_ANTICIPATORY_MAX_TOKENS),
+    ],
+  },
+  {
+    key: "context",
+    doc: [
+      "The host model's context window, in tokens. Sizes context packs,",
+      "preset suggestions and compact guidance. The environment variable",
+      "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW wins over this key, and an",
+      "out-of-range value here is clamped into the supported range, not",
+      "refused.",
+    ],
+    emit: "commented-default",
+    keys: [def("window_tokens", CONTEXT_WINDOW_TOKENS_DEFAULT)],
+  },
+  {
+    key: "cross_topic",
+    doc: [
+      "Opt-in dream-pass promotion of a recurring cross-topic rule:",
+      "confirmed preferences in at least min_topics distinct topics whose",
+      "principles reach jaccard similarity, promoted once per owner per",
+      "calendar day. The whole block absent means off - the default",
+      "install never fires it.",
+    ],
+    emit: "commented-default",
+    keys: [
+      def("enabled", false),
+      example("min_topics", 2, [
+        "The value below is an illustration, not a default: the planner",
+        "ships its own floors. Set it to tune when a cluster may fire.",
+      ]),
+      example("jaccard", 0.6, [
+        "The similarity floor, in [0, 1]. Also an illustration, not a",
+        "default.",
+      ]),
     ],
   },
   {

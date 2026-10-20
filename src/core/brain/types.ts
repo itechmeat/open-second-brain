@@ -1482,6 +1482,26 @@ export interface BrainDreamConfig {
   readonly salience_threshold?: number;
 }
 
+/**
+ * Optional `cross_topic:` block (t_642bc2b8). Opts the dream pass into
+ * promoting one recurring cross-topic rule per owner per calendar day:
+ * confirmed preferences in at least `min_topics` distinct topic buckets
+ * whose principles reach `jaccard` similarity, deduplicated through the
+ * `Brain/cross-topic-rules.json` ledger. The whole block absent (the
+ * default) keeps the pass off, so a vault that has never heard of it
+ * behaves byte-identically. Declared beside {@link BrainDreamConfig}
+ * because it feeds the same pass; it is a top-level block because the
+ * `_brain.yaml` grammar is two levels deep.
+ */
+export interface BrainCrossTopicConfig {
+  /** Master switch. Absent is treated as `false`. */
+  readonly enabled?: boolean;
+  /** Minimum distinct topic buckets before a cluster may fire. */
+  readonly min_topics?: number;
+  /** Principle-similarity floor, in `[0, 1]`, for a cross-bucket pair. */
+  readonly jaccard?: number;
+}
+
 export interface BrainRetireConfig {
   /** Days without evidence after which a confirmed pref retires. */
   readonly stale_evidence_days: number;
@@ -1903,6 +1923,12 @@ export interface BrainConfig {
    */
   readonly rollup?: BrainRollupConfig;
   /**
+   * Optional `cross_topic:` block (t_642bc2b8). Opts the dream pass
+   * into promoting recurring cross-topic rules. Absent: the pass never
+   * fires, byte-identical to a vault that predates the block.
+   */
+  readonly cross_topic?: BrainCrossTopicConfig;
+  /**
    * Vault-wide exclusion policy (v0.10.9). Absent when the user
    * has not declared `vault.ignore_paths` in `_brain.yaml`; the
    * resolver falls back to `DEFAULT_VAULT_IGNORE_PATHS` in that
@@ -2040,6 +2066,12 @@ export interface BrainConfig {
    */
   readonly recall?: BrainRecallConfig;
   /**
+   * Optional `context:` block (t_a567cc12). The operator's declared
+   * model context window. Absent: consumers resolve their default,
+   * byte-identical to a vault that predates the block.
+   */
+  readonly context?: BrainContextConfig;
+  /**
    * Optional `recall_inject:` block. Declares the named slices the
    * recall-inject hook retrieves and renders as headed groups. Absent:
    * the single implicit relevance slice.
@@ -2075,6 +2107,19 @@ export interface BrainAnticipatoryConfig {
 export interface BrainRecallConfig {
   /** Per-entry trim strategy: historical hard cut or the staged ladder. */
   readonly degradation?: "hard-cut" | "staged";
+}
+
+/**
+ * Optional `context:` block (t_a567cc12). The operator's declaration of
+ * the host model's real context window, in tokens, sizing context packs,
+ * preset suggestions and compact guidance. Absent: consumers resolve
+ * their declared default. A stored value may lie outside the range a
+ * consumer supports - this block records what the operator declared,
+ * and the resolving consumer clamps it and discloses the clamp.
+ */
+export interface BrainContextConfig {
+  /** The model context window, in tokens. */
+  readonly window_tokens?: number;
 }
 
 /** One operator-declared recall slice from the `recall_inject:` block. */

@@ -41,6 +41,7 @@ import {
   resolveSessions,
   resolveTemporal,
   validateBrainConfigDetailed,
+  CONTEXT_WINDOW_TOKENS_DEFAULT,
   INJECT_BUDGET_CHARS_DEFAULT,
   LESSONS_CORROBORATION_MIN_DEFAULT,
   LESSONS_HALF_LIFE_DAYS_DEFAULT,
@@ -185,6 +186,17 @@ function resolvedView(cfg: BrainConfig): Record<string, unknown> {
       ttl_seconds: cfg.anticipatory?.ttl_seconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS,
       max_tokens: cfg.anticipatory?.max_tokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
     },
+    // The declared window falls back to the same default the absent key
+    // resolves to downstream, so writing the commented default is a no-op
+    // until the operator edits the number.
+    context_window_tokens: cfg.context?.window_tokens ?? CONTEXT_WINDOW_TOKENS_DEFAULT,
+    // The cross-topic block is opt-in: the enabled switch's documented
+    // default (`false`) is exactly what an absent block means. The two
+    // illustration keys are `commented-example`, so both sides stay
+    // absent - writing them WOULD change behaviour.
+    cross_topic_enabled: cfg.cross_topic?.enabled ?? false,
+    cross_topic_min_topics: cfg.cross_topic?.min_topics,
+    cross_topic_jaccard: cfg.cross_topic?.jaccard,
     recall_degradation: cfg.recall?.degradation ?? "hard-cut",
     hygiene_resolver_cmd: cfg.hygiene?.resolver_cmd,
     feedback_default_scope: cfg.feedback?.default_scope,

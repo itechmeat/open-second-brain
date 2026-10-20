@@ -46,6 +46,7 @@ import {
   parseHygieneBlock,
   parseRecallBlock,
 } from "./blocks/continuity-hygiene.ts";
+import { parseContextBlock, parseCrossTopicBlock } from "./blocks/context.ts";
 import { parseFeedbackBlock } from "./blocks/feedback.ts";
 import { parseDecisionModelBlock } from "./blocks/decision-model.ts";
 import { parseStorageBlock } from "./blocks/storage.ts";
@@ -128,6 +129,8 @@ export function validateBrainConfigDetailed(
   const feedback = parseFeedbackBlock(ctx);
   const decisionModel = parseDecisionModelBlock(ctx);
   const storage = parseStorageBlock(ctx);
+  const crossTopic = parseCrossTopicBlock(ctx);
+  const context = parseContextBlock(ctx);
 
   warnUnknownTopLevelKeys(ctx);
 
@@ -162,6 +165,8 @@ export function validateBrainConfigDetailed(
     ...(feedback !== undefined ? { feedback } : {}),
     ...(decisionModel !== undefined ? { decision_model: decisionModel } : {}),
     ...(storage !== undefined ? { storage } : {}),
+    ...(crossTopic !== undefined ? { cross_topic: crossTopic } : {}),
+    ...(context !== undefined ? { context } : {}),
   };
 
   return { config, warnings: ctx.warnings, knownKeys: ctx.keys };

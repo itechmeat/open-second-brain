@@ -157,3 +157,17 @@ export {
 } from "./policy/blocks/sessions.ts";
 export { resolveEmbeddingSunsetDeclaration } from "./policy/blocks/embeddings.ts";
 export { decisionModelDisabledByVault } from "./policy/blocks/decision-model.ts";
+/**
+ * The cross-topic and context-window blocks (cycle 20261020 substrate).
+ * The parsers are re-exported beside their default the way the other
+ * blocks' resolvers are, so a consumer reaches every `cross_topic:` /
+ * `context:` knob from the one policy surface its neighbours already use.
+ * The `context` window's resolution and clamping live with the resolver
+ * that consumes the stored value, not here: this surface only stores
+ * what the operator declared.
+ */
+export {
+  CONTEXT_WINDOW_TOKENS_DEFAULT,
+  parseContextBlock,
+  parseCrossTopicBlock,
+} from "./policy/blocks/context.ts";
