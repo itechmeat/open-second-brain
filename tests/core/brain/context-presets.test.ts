@@ -45,7 +45,7 @@ describe("context budget presets", () => {
       preset_id: "long-context",
       confidence: "high",
       reason: "context window 128000 tokens resolved from declared matched long-context",
-      preset: getContextPreset("long-context"),
+      preset: getContextPreset("long-context")!,
       resolvedWindow: { windowTokens: 128_000, source: "declared", clamped: false },
     });
     // Structural 1m suffix, hint-free id.
@@ -57,7 +57,7 @@ describe("context budget presets", () => {
       preset_id: "long-context",
       confidence: "medium",
       reason: "context window 200000 tokens resolved from default matched long-context",
-      preset: getContextPreset("long-context"),
+      preset: getContextPreset("long-context")!,
       resolvedWindow: { windowTokens: 200_000, source: "default", clamped: false },
     });
   });
