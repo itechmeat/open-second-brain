@@ -536,6 +536,11 @@ import {
   RECEIPT_MODE,
   RECEIPT_MODES,
 } from "../../../src/core/brain/receipts/types.ts";
+import {
+  BENCH_REFUSAL,
+  BENCH_REFUSAL_KINDS,
+  isBenchRefusalKind,
+} from "../../../src/core/bench/guards.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1685,6 +1690,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: RECEIPT_MODES,
     guard: isReceiptMode,
   },
+  {
+    // Cycle 20261020, Lane E. The bench guards' refusal vocabulary: one
+    // closed kind per catchable pre-run (P1-P7) and pre-report (T1-T7)
+    // damaged state, rendered verbatim in `refused (<kind>): <detail>` -
+    // a name an operator's script can branch on is the whole contract,
+    // so it is audited like every other verdict a surface prints.
+    name: "BENCH_REFUSAL",
+    values: BENCH_REFUSAL,
+    members: BENCH_REFUSAL_KINDS,
+    guard: isBenchRefusalKind,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1958,7 +1974,9 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 103: INDEX_REFRESH (note lifecycle) gains its isIndexRefresh guard,
 // completing the four-piece shape its sibling vocabularies already
 // carry and so entering the scanned population.
-const VOCABULARY_POPULATION = 103;
+// 104: BENCH_REFUSAL (cycle 20261020, Lane E) - the bench guards'
+// closed refusal vocabulary, rendered by name in every bench refusal.
+const VOCABULARY_POPULATION = 104;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

@@ -363,6 +363,15 @@ const KIND_WRITERS: ReadonlyArray<{
   { kind: "negative_recall", sessionScoped: false, writers: ["core/brain/gate-telemetry.ts"] },
   { kind: "decision_model_call", sessionScoped: false, writers: ["core/decision-model/record.ts"] },
   {
+    // Cycle 20261020: the preregistered eval's grade cache. Machine-side
+    // evidence keyed by spec hash, fixture hash and item ids - no session
+    // correlation anywhere in the payload, exactly like the call record
+    // beside it.
+    kind: "decision_model_eval_grade",
+    sessionScoped: false,
+    writers: ["core/decision-model/record.ts"],
+  },
+  {
     kind: "decision_model_extract_commit",
     sessionScoped: true,
     writers: ["core/brain/extract-signals-prefilter.ts"],
