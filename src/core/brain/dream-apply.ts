@@ -278,6 +278,14 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         ...(update.related !== undefined && update.related.length > 0
           ? { related: update.related }
           : {}),
+        // The record's `visibility:` tokens (review round 2), threaded like
+        // provenance and related: the update write is the only thing that
+        // keeps the line on a restricted rule through its counter changes,
+        // and the no-op pre-flight needs the input to carry it to match the
+        // bytes on disk. Written only when non-empty, like every stamp.
+        ...(update.visibility !== undefined && update.visibility.length > 0
+          ? { visibility: update.visibility }
+          : {}),
         ...(update.scope ? { scope: update.scope } : {}),
         lenientScopeTags: true,
       },

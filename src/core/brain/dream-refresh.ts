@@ -64,6 +64,18 @@ export interface RefreshUpdate {
    */
   readonly provenance?: BrainPreference["provenance"];
   readonly related?: ReadonlyArray<string>;
+  /**
+   * The record's `visibility:` tokens, carried for the same reason the
+   * derived-fact fields are (finding 77; review round 2): the renderer
+   * emits a `visibility:` line only when the write input supplies it,
+   * and `wouldRewritePreference` builds its output from the input alone
+   * - it does not run the tiered merge that keeps the file's existing
+   * line - so an update that omitted the tokens would leave every pref
+   * carrying `visibility:` on disk looking "needs rewrite" on every
+   * pass, each rewrite a real `_revision` bump. Absent stays absent: a
+   * pref without the field is written exactly as before.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 /**
@@ -400,6 +412,14 @@ export function planRefresh(
         : {}),
       ...(rec.pref.related !== undefined && rec.pref.related.length > 0
         ? { related: rec.pref.related }
+        : {}),
+      // The record's `visibility:` tokens ride along like provenance and
+      // related above: the scan reads them off the raw frontmatter (the
+      // typed parser drops the field), and only a render that includes
+      // them can match a file that carries the line. Empty is default
+      // visibility and stays absent, exactly like the writer's own rule.
+      ...(rec.visibility !== undefined && rec.visibility.length > 0
+        ? { visibility: rec.visibility }
         : {}),
     };
 

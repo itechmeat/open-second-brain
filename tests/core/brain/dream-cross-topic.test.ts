@@ -809,6 +809,37 @@ describe("dream pass wiring (end to end)", () => {
     const rule = parsePreference(rulePath);
     expect(rule.provenance).toBe("inferred");
     expect(pageVisibility(parseFrontmatter(rulePath)[0])).toEqual(["private"]);
+
+    // First counter change (review round 2): one applied event confirms the
+    // rule, and the refresh update loop rewrites it. The rule - and the
+    // restricted source alpha - carry a `visibility:` line on disk, so the
+    // update must carry the tokens through the rewrite AND the no-op
+    // pre-flight must be able to render them; a render that omits the line
+    // can never match the file, and every later pass rewrites both files
+    // with a `_revision` bump.
+    const DAY2 = new Date("2026-07-20T10:00:00Z");
+    appendApplyEvidence(
+      vault,
+      {
+        pref_id: `pref-${slug}`,
+        artifact: "[[Daily/2026.07.20]]",
+        result: "applied",
+        agent: "test",
+      },
+      { now: DAY2 },
+    );
+    dream(vault, { now: DAY2 });
+    const changed = parsePreference(rulePath);
+    expect(changed.applied_count).toBe(1);
+    // The restriction survives the counter-change rewrite.
+    expect(pageVisibility(parseFrontmatter(rulePath)[0])).toEqual(["private"]);
+
+    // And the pass after it is a true no-op: same injected now, byte-
+    // identical file, nothing counted as changed.
+    const before = readFileSync(rulePath);
+    const rerun = dream(vault, { now: DAY2 });
+    expect(rerun.changed).toBe(false);
+    expect(readFileSync(rulePath)).toEqual(before);
   });
 
   test("a tombstoned promotion never re-fires the slug collision (finding 64)", () => {
