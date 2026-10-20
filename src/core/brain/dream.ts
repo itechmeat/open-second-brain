@@ -320,8 +320,12 @@ function dreamRun(
   //     rollup ladder is the structural precedent (plan before the
   //     gate, persist the ledger only when fired). The ledger read is
   //     skipped entirely when the feature is off: an un-opted-in vault
-  //     pays no I/O here.
-  const crossTopicConfig = resolveCrossTopicConfig(cfg);
+  //     pays no I/O here. The disclosure sink is the run's warning list:
+  //     a declared knob the resolver floored (finding 62) is named on
+  //     the summary, never applied silently.
+  const crossTopicConfig = resolveCrossTopicConfig(cfg, (code, message) =>
+    warnings.push({ code, message }),
+  );
   const crossTopic = planCrossTopicRules({
     scan,
     refresh,

@@ -103,6 +103,12 @@ describe("cross_topic block", () => {
     expectFieldError("cross_topic:\n  min_topics: two\n", "cross_topic.min_topics");
   });
 
+  test("min_topics: 1 is stored as declared - the resolver floors it, not the parser (finding 82)", () => {
+    expect(load("cross_topic:\n  min_topics: 1\n").config.cross_topic).toEqual({
+      min_topics: 1,
+    });
+  });
+
   test("jaccard outside [0, 1] is a hard error, and the endpoints are accepted", () => {
     expectFieldError("cross_topic:\n  jaccard: 1.5\n", "cross_topic.jaccard");
     expectFieldError("cross_topic:\n  jaccard: -0.1\n", "cross_topic.jaccard");

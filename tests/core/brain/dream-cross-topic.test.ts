@@ -26,6 +26,7 @@ import {
   CROSS_TOPIC_LEDGER_VERSION,
   DEFAULT_CROSS_TOPIC_JACCARD,
   DEFAULT_CROSS_TOPIC_MIN_TOPICS,
+  MIN_CROSS_TOPIC_JACCARD,
   planCrossTopicRules,
   readCrossTopicLedger,
   resolveCrossTopicConfig,
@@ -40,6 +41,7 @@ import {
   type ScanResult,
 } from "../../../src/core/brain/dream-plan.ts";
 import type { RefreshResult } from "../../../src/core/brain/dream-refresh.ts";
+import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath, crossTopicLedgerPath } from "../../../src/core/brain/paths.ts";
@@ -109,6 +111,19 @@ function rec(
 
 function retiredRec(id: string, topic: string, principle: string): RetiredRecord {
   return { path: `/vault/Brain/retired/${id}.md`, id, topic, principle };
+}
+
+/**
+ * The on-disk shape of a promoted rule after dream-refresh confirmed it
+ * (one applied event auto-confirms it): an ordinary preference carrying
+ * the `cross-` slug, `inferred` provenance and its evidence lineage.
+ */
+function promotedRec(id: string, topic: string, principle: string): PreferenceRecord {
+  return {
+    path: `/vault/Brain/preferences/${id}.md`,
+    pref: pref({ id, topic, principle, provenance: "inferred", evidenced_by: [`[[${id}]]`] }),
+    supersededBy: null,
+  };
 }
 
 const NO_REFRESH: RefreshResult = {
@@ -181,6 +196,71 @@ describe("resolveCrossTopicConfig", () => {
       cross_topic: { enabled: true, min_topics: 3, jaccard: 0.8 },
     };
     expect(resolveCrossTopicConfig(cfg)).toEqual({ minTopics: 3, jaccard: 0.8 });
+  });
+
+  // ----- Config floors (review findings 62 and 82) -------------------------
+  // The parser contract promises out-of-range but well-formed values are
+  // "clamped (and the clamp disclosed) by the consumer that resolves it".
+  // `min_topics: 1` elects singletons and `jaccard: 0` unions every
+  // same-owner cross-bucket pair into one arbitrary cluster, so the
+  // resolver owns the floors and names every clamp.
+
+  test("min_topics below two is floored to two with a disclosure", () => {
+    const cfg: BrainConfig = {
+      ...DEFAULT_BRAIN_CONFIG,
+      cross_topic: { enabled: true, min_topics: 1 },
+    };
+    const disclosures: string[] = [];
+    const resolved = resolveCrossTopicConfig(cfg, (code, message) =>
+      disclosures.push(`${code}: ${message}`),
+    );
+    expect(resolved).toEqual({
+      minTopics: DEFAULT_CROSS_TOPIC_MIN_TOPICS,
+      jaccard: DEFAULT_CROSS_TOPIC_JACCARD,
+    });
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]).toContain("cross_topic.min_topics");
+    expect(disclosures[0]).toContain("2");
+  });
+
+  test("jaccard below the merge-suggestion floor is floored with a disclosure", () => {
+    const cfg: BrainConfig = {
+      ...DEFAULT_BRAIN_CONFIG,
+      cross_topic: { enabled: true, jaccard: 0 },
+    };
+    const disclosures: string[] = [];
+    const resolved = resolveCrossTopicConfig(cfg, (code, message) =>
+      disclosures.push(`${code}: ${message}`),
+    );
+    expect(resolved).toEqual({
+      minTopics: DEFAULT_CROSS_TOPIC_MIN_TOPICS,
+      jaccard: MIN_CROSS_TOPIC_JACCARD,
+    });
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]).toContain("cross_topic.jaccard");
+  });
+
+  test("in-range knobs pass through untouched with no disclosure", () => {
+    const cfg: BrainConfig = {
+      ...DEFAULT_BRAIN_CONFIG,
+      cross_topic: { enabled: true, min_topics: 3, jaccard: 0.8 },
+    };
+    const disclosures: string[] = [];
+    expect(
+      resolveCrossTopicConfig(cfg, (code, message) => disclosures.push(`${code}: ${message}`)),
+    ).toEqual({ minTopics: 3, jaccard: 0.8 });
+    expect(disclosures).toEqual([]);
+  });
+
+  test("the floors apply only when the feature is on", () => {
+    const disclosures: string[] = [];
+    // Off: null, and the sink never fires.
+    expect(
+      resolveCrossTopicConfig(DEFAULT_BRAIN_CONFIG, (code, message) =>
+        disclosures.push(`${code}: ${message}`),
+      ),
+    ).toBeNull();
+    expect(disclosures).toEqual([]);
   });
 });
 
@@ -377,6 +457,57 @@ describe("planCrossTopicRules", () => {
     expect(planState.crossTopicRules[0]!.owner).toBe("sam");
     expect(result.ledger?.last_promoted["kate"]).toBe(TODAY);
     expect(result.ledger?.last_promoted["sam"]).toBe(TODAY);
+  });
+
+  // ----- Self-cluster re-promotion (review finding 61) ---------------------
+  // The promoted rule restates its representative source verbatim (jaccard
+  // 1.0) and folds to its own topic key, so once refresh confirms it, the
+  // rule itself qualifies as a source and every later pass "discovers" a
+  // new cross-topic cluster containing it - one promotion per owner per
+  // day, forever. A promoted rule is therefore never a source.
+
+  test("a confirmed promoted rule never re-enters the source pool on a later day", () => {
+    const slug = expectedSlug("pref-a", "pref-b");
+    const day2 = new Date("2026-07-20T10:00:00Z");
+    const spent: CrossTopicLedger = {
+      version: CROSS_TOPIC_LEDGER_VERSION,
+      last_promoted: { "": TODAY },
+    };
+    // Day 2: the rule was confirmed overnight; the two stated sources and
+    // the promoted rule are all live.
+    const { result, plan: planState } = plan(
+      [
+        rec("pref-a", "Alpha", P_ALPHA),
+        rec("pref-b", "Beta", P_BETA),
+        promotedRec(`pref-${slug}`, "Alpha + Beta", P_ALPHA),
+      ],
+      { ledger: spent, now: day2 },
+    );
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+  });
+
+  test("an inferred preference renamed away from the cross- prefix is still excluded", () => {
+    // The provenance identifier catches a promoted rule whose file a hand
+    // renamed: it still restates its source verbatim and folds to its own
+    // key, so it must not become a source either.
+    const { result, plan: planState } = plan([
+      rec("pref-a", "Alpha", P_ALPHA),
+      promotedRec("pref-handrenamed", "Beta", P_ALPHA),
+    ]);
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+  });
+
+  test("a stated preference carrying a cross-prefixed id is also excluded", () => {
+    // The slug prefix is the reserved content shape; a hand-authored file
+    // that kept it gets the same treatment.
+    const { result, plan: planState } = plan([
+      rec("pref-a", "Alpha", P_ALPHA),
+      rec("pref-cross-handmade", "Beta", P_ALPHA),
+    ]);
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
   });
 });
 
@@ -579,5 +710,70 @@ describe("dream pass wiring (end to end)", () => {
     expect(
       readdirSync(join(vault, "Brain", "preferences")).some((f) => f.startsWith("pref-cross-")),
     ).toBe(false);
+  });
+
+  test("day 2 after the rule confirms plans no second promotion (finding 61)", () => {
+    const vault = makeVault("day2", ENABLED);
+    seedPair(vault);
+    const slug = expectedSlug("pref-alpha", "pref-beta");
+
+    const day1 = dream(vault, { now: NOW_E2E });
+    expect(day1.cross_topic_rules).toEqual([`pref-${slug}`]);
+
+    // One applied event auto-confirms the promoted rule overnight.
+    const DAY2 = new Date("2026-07-20T10:00:00Z");
+    appendApplyEvidence(
+      vault,
+      {
+        pref_id: `pref-${slug}`,
+        artifact: "[[Daily/2026.07.20]]",
+        result: "applied",
+        agent: "test",
+      },
+      { now: DAY2 },
+    );
+
+    const day2 = dream(vault, { now: DAY2 });
+
+    // The rule's own confirmation is the run's change; no second
+    // promotion fires on top of it.
+    expect(day2.confirmed).toEqual([`pref-${slug}`]);
+    expect(day2.cross_topic_rules).toBeUndefined();
+    const crossFiles = readdirSync(join(vault, "Brain", "preferences")).filter(
+      (f) => f.startsWith("pref-cross-") && f.endsWith(".md"),
+    );
+    expect(crossFiles).toEqual([`pref-${slug}.md`]);
+  });
+
+  test("min_topics: 1 cannot promote a singleton and the clamp is disclosed (finding 62)", () => {
+    const vault = makeVault(
+      "floored",
+      "schema_version: 1\ncross_topic:\n  enabled: true\n  min_topics: 1\n",
+    );
+    // A single confirmed preference: under the declared knob this elects
+    // as a one-bucket "cross-topic" cluster citing one source.
+    writePreference(vault, {
+      slug: "alpha",
+      topic: "Alpha",
+      principle: P_ALPHA,
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-07-17T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence_value: 0,
+    });
+
+    const summary = dream(vault, { now: NOW_E2E });
+
+    expect(summary.changed).toBe(false);
+    expect(summary.cross_topic_rules).toBeUndefined();
+    expect(existsSync(crossTopicLedgerPath(vault))).toBe(false);
+    const clamp = summary.warnings.find((w) => w.code === "cross-topic-config-clamped");
+    expect(clamp?.message).toContain("cross_topic.min_topics");
+    expect(clamp?.message).toContain("2");
   });
 });

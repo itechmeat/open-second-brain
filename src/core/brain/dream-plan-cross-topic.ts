@@ -57,6 +57,7 @@ import {
   type ScanResult,
 } from "./dream-plan.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
+import { JACCARD_MERGE_SUGGEST_THRESHOLD } from "./merge-candidates.ts";
 import { preferenceOwner } from "./owner-scoped-facts.ts";
 import { crossTopicLedgerPath } from "./paths.ts";
 import { jaccard, tokenise } from "./similarity.ts";
@@ -79,6 +80,26 @@ export const DEFAULT_CROSS_TOPIC_MIN_TOPICS = 2;
  */
 export const DEFAULT_CROSS_TOPIC_JACCARD = 0.6;
 
+/**
+ * The resolver's floor for `min_topics`, the figure the block contract
+ * clamps to. Same number as the default, for the reason the default
+ * gives: two is the smallest honest "across topics", and a declared 1
+ * would elect singletons - each pass copying an arbitrary confirmed
+ * preference under a `cross-` slug, the same-topic duplication the
+ * floor exists to prevent.
+ */
+export const MIN_CROSS_TOPIC_MIN_TOPICS = DEFAULT_CROSS_TOPIC_MIN_TOPICS;
+
+/**
+ * The resolver's floor for `jaccard`: the merge-suggestion detector's
+ * level, the calibration both detectors share. Below it a fired cluster
+ * no longer reads as "the same rule stated twice"; at 0 every
+ * same-owner cross-bucket pair edges and the whole pool unions into one
+ * giant cluster whose representative principle is whatever the sort
+ * order put first.
+ */
+export const MIN_CROSS_TOPIC_JACCARD = JACCARD_MERGE_SUGGEST_THRESHOLD;
+
 /** On-disk ledger schema version. */
 export const CROSS_TOPIC_LEDGER_VERSION = 1;
 
@@ -98,17 +119,53 @@ export interface ResolvedCrossTopicConfig {
 }
 
 /**
+ * One clamp the resolver applied to a declared knob, delivered as a
+ * (code, message) pair so the caller files it on whatever warning
+ * surface it owns (the dream pass: `DreamRunSummary.warnings`).
+ */
+export type CrossTopicClampDisclosure = (code: string, message: string) => void;
+
+/**
  * Resolve the planner knobs from the `cross_topic:` block. The block
  * absent, or present with `enabled: false`, is OFF: `null` tells the
  * caller to skip the planner (and the ledger read) entirely, which is
  * what keeps an un-opted-in vault byte-identical.
+ *
+ * Declared-but-underfloor values resolve to the floors, per the block
+ * parser's contract ("an out-of-range but well-formed number is stored
+ * by the parser and clamped - and the clamp disclosed - by the consumer
+ * that resolves it"): every clamp is delivered through `disclose` when
+ * the caller provides one. The parser still refuses wrong-SHAPE values,
+ * so what reaches here is always a number; only the range is corrected.
  */
-export function resolveCrossTopicConfig(cfg: BrainConfig): ResolvedCrossTopicConfig | null {
+export function resolveCrossTopicConfig(
+  cfg: BrainConfig,
+  disclose?: CrossTopicClampDisclosure,
+): ResolvedCrossTopicConfig | null {
   const block = cfg.cross_topic;
   if (!block?.enabled) return null;
+  const declaredMinTopics = block.min_topics ?? DEFAULT_CROSS_TOPIC_MIN_TOPICS;
+  const minTopics = Math.max(declaredMinTopics, MIN_CROSS_TOPIC_MIN_TOPICS);
+  if (minTopics !== declaredMinTopics) {
+    disclose?.(
+      "cross-topic-config-clamped",
+      `cross_topic.min_topics: ${declaredMinTopics} is below the floor ` +
+        `${MIN_CROSS_TOPIC_MIN_TOPICS}; using ${minTopics} (a cluster spans ` +
+        `distinct topic buckets)`,
+    );
+  }
+  const declaredJaccard = block.jaccard ?? DEFAULT_CROSS_TOPIC_JACCARD;
+  const jaccard = Math.max(declaredJaccard, MIN_CROSS_TOPIC_JACCARD);
+  if (jaccard !== declaredJaccard) {
+    disclose?.(
+      "cross-topic-config-clamped",
+      `cross_topic.jaccard: ${declaredJaccard} is below the floor ` +
+        `${MIN_CROSS_TOPIC_JACCARD}; using ${jaccard}`,
+    );
+  }
   return Object.freeze({
-    minTopics: block.min_topics ?? DEFAULT_CROSS_TOPIC_MIN_TOPICS,
-    jaccard: block.jaccard ?? DEFAULT_CROSS_TOPIC_JACCARD,
+    minTopics,
+    jaccard,
   });
 }
 
@@ -251,6 +308,18 @@ export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPl
  * this run's refresh) that the pass is not retiring, projected and
  * sorted by raw id in code-unit order so every downstream choice is a
  * property of the corpus alone.
+ *
+ * A promoted cross-topic rule is NEVER a source. It restates its
+ * representative source's principle verbatim (jaccard 1.0) and folds to
+ * its own synthetic topic key, so once the refresh machinery confirms it
+ * - one applied event does - an admitted rule would put every later pass
+ * one `cross-` slug away from "discovering" a new cross-topic cluster
+ * containing it and minting another promotion, one per owner per day
+ * until the daily budget was the only thing left stopping it. Two
+ * identifiers, because the artifact is user-editable: the reserved slug
+ * prefix, and the `inferred` provenance every promoted rule carries
+ * (which also keeps one inferred fact from citing another inferred fact
+ * as its cross-topic evidence).
  */
 function collectSources(scan: ScanResult, refresh: RefreshResult, plan: PlanState): Source[] {
   const retiring = new Set(plan.retires.map((r) => r.slug));
@@ -260,6 +329,7 @@ function collectSources(scan: ScanResult, refresh: RefreshResult, plan: PlanStat
     const confirmed =
       record.pref.status === BRAIN_PREFERENCE_STATUS.confirmed || refresh.confirmed.has(slug);
     if (!confirmed || retiring.has(slug)) continue;
+    if (slug.startsWith(CROSS_SLUG_PREFIX) || record.pref.provenance === "inferred") continue;
     const owner = preferenceOwner(record.pref);
     sources.push({
       id: record.pref.id,
