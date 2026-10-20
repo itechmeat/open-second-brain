@@ -115,6 +115,15 @@ function sampleFor(prop: Schema): unknown {
 /**
  * The smallest payload a tool accepts, so the refusal under test is the
  * pairing's and not a missing unrelated argument's.
+ *
+ * Required properties are sampled from their own schema. Optional
+ * integer/number properties join too, at their documented minimum: a
+ * tool may refuse to invent a value for a budget knob while still
+ * declaring it optional (`brain_context_pack.max_tokens` derives from
+ * the model window or refuses), and the derivation refusal must not be
+ * mistaken for the pairing's. Strings, booleans and arrays stay out -
+ * those switch modes, and a sampled mode can demand companions of its
+ * own.
  */
 function minimalArgs(schema: Schema): Record<string, unknown> {
   const props = properties(schema);
@@ -124,6 +133,18 @@ function minimalArgs(schema: Schema): Record<string, unknown> {
     const prop = props[key];
     if (prop === undefined) throw new Error(`required arg ${key} has no property schema`);
     args[key] = sampleFor(prop);
+  }
+  const scoresKey = scoresKeyOf(schema);
+  for (const [key, prop] of Object.entries(props)) {
+    if (key in args) continue;
+    // The pairing's own halves are the subject of the test, never part of
+    // the base payload - and `match_quality` is a number, so without this
+    // exclusion the numeric sweep below would complete every "incomplete"
+    // pair before the cases under test even ran.
+    if (key === MATCH_QUALITY_ARG_NAME || key === scoresKey) continue;
+    if (prop["type"] === "integer" || prop["type"] === "number") {
+      args[key] = sampleFor(prop);
+    }
   }
   return args;
 }

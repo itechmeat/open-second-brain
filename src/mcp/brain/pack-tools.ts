@@ -242,6 +242,23 @@ async function toolBrainContextPack(
     "max_tokens",
     args["max_tokens"],
   );
+  // The adequacy pairing is an input-SHAPE contract, declared in the
+  // schema's `dependentRequired`, so it refuses an incomplete pair by
+  // name before any semantic refusal can preempt it: `max_tokens` is now
+  // optional behind the derivation below (t_a567cc12), and a payload
+  // carrying one half of the pair must learn about the pairing, not about
+  // a budget it never sent.
+  const recallAttempt = coerceRecallAdequacyInput(
+    "brain_context_pack",
+    args,
+    RECALL_SCORES_ARG_NAME,
+  );
+  const answerableArg = coerceDecisionAnswerable(
+    "brain_context_pack",
+    args,
+    RECALL_SCORES_ARG_NAME,
+    recallAttempt !== undefined,
+  );
   // Derived budget (t_a567cc12): an explicit `max_tokens` is first-class
   // and untouched. When it is omitted, the budget derives from the model
   // context window the resolver resolves, through the matching preset's
@@ -336,20 +353,9 @@ async function toolBrainContextPack(
   );
   const receipt = receiptOptionsFromArgs("brain_context_pack", args, "context_pack", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_context_pack", args, "mcp");
-  // Adequacy verdict (t_b8f66fec): when the caller passes the recall
-  // scores that produced this material, classify grounding fitness and
-  // name the action; also persist it in the receipt for the audit trail.
-  const recallAttempt = coerceRecallAdequacyInput(
-    "brain_context_pack",
-    args,
-    RECALL_SCORES_ARG_NAME,
-  );
-  const answerableArg = coerceDecisionAnswerable(
-    "brain_context_pack",
-    args,
-    RECALL_SCORES_ARG_NAME,
-    recallAttempt !== undefined,
-  );
+  // The pairing coercions themselves ran above the budget derivation, so
+  // an incomplete pair is refused by name; only the ASSESSMENT waits for
+  // this point, beside the receipt and telemetry options it rides with.
   const adequacy =
     recallAttempt !== undefined
       ? assessRecallAdequacy(
@@ -1218,7 +1224,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_context_pack",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Return the highest-tier, most recent vault slice that fits under `max_tokens` - derived from the model context window (operator `context:` block, env override, or `model`) when omitted, refused when nothing resolves. Ordered core → supporting → peripheral, newest first; stops adding pages when the next page would exceed the budget. Read-only.",
+      "Return the highest-tier, most recent vault slice under `max_tokens` - derived from the model context window when omitted, refused when nothing resolves. Ordered core → supporting → peripheral, newest first; stops when the next page would exceed the budget. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1226,12 +1232,12 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "Strict upper bound on the returned slice's token count. Optional: when omitted, the budget derives from the resolved model context window through the matching preset's `context_pack.max_tokens`, and the response names the deciding channel in `max_tokens_source`; with nothing resolvable the call is refused.",
+            "Strict upper bound on the returned slice's tokens. Omitted: derives from the resolved model window, channel named in `max_tokens_source`; nothing resolvable is refused.",
         },
         model: {
           type: "string",
           description:
-            "Optional host model id hint. With `max_tokens` omitted, the context window resolves from this id (declared table, a trailing `-1m` suffix, or the 200,000-token default) after the operator's `context:` block and the environment override.",
+            "Optional model id hint. With `max_tokens` omitted, the context window resolves from this id (declared table, `-1m` suffix, or default) after operator and env overrides.",
         },
         query: {
           type: "string",
@@ -1463,7 +1469,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         model: {
           type: "string",
           description:
-            "Optional model name hint for suggest. When `context_window_tokens` is absent and no preset hint matches, the window resolves from this id (declared table, `-1m` suffix, or the 200,000-token default) and the reason names the source.",
+            "Optional model name hint for suggest. With `context_window_tokens` absent and no preset hint matched, the window resolves from this id and the reason names the source.",
         },
         context_window_tokens: {
           type: "integer",
@@ -1501,19 +1507,19 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         model: {
           type: "string",
           description:
-            "Optional host model id hint. When a character cap is absent, the context window resolves from this id (declared table, a trailing `-1m` suffix, or the 200,000-token default) after the operator's `context:` block and the environment override, and the missing caps derive from the matching preset's `pre_compress` block.",
+            "Model id hint. When a char cap is absent, the context window resolves from this id (table, `-1m` suffix, or default) and missing caps derive from the matching preset.",
         },
         max_chars_per_memory: {
           type: "integer",
           minimum: 1,
           description:
-            "Optional per-entry character cap (code points); trimmed entries carry `trimmed: true`. When absent and a context window resolves, the matching preset's per-entry cap applies; with nothing resolvable the addendum stays unbounded per entry.",
+            "Optional per-entry character cap; trimmed entries carry `trimmed: true`. Absent: the preset cap applies when a window resolves; nothing resolvable stays unbounded.",
         },
         max_total_chars: {
           type: "integer",
           minimum: 1,
           description:
-            "Optional total character cap (code points) across the addendum; lowest-priority overflow is dropped. When absent and a context window resolves, the matching preset's total cap applies; with nothing resolvable the addendum stays unbounded overall.",
+            "Optional total character cap; lowest-priority overflow drops first. Absent: the preset cap applies when a window resolves; nothing resolvable stays unbounded.",
         },
         receipt: {
           type: "boolean",
