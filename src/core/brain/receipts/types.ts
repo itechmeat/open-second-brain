@@ -175,6 +175,11 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
  *     on stays auditable after the answer has been given, which is
  *     per-record identity past any correlation window; a fold would
  *     destroy exactly that auditability;
+ *   - `decision_model_eval_grade` - the cached verdict sets of the
+ *     preregistered decision-model eval (t_4e1681b3), read back as data
+ *     by `o2b decision-model eval list` and by the check's measured-state
+ *     line so a tuning mark can be audited against what the run actually
+ *     recorded; a fold would erase exactly the evidence a reviewer needs;
  *   - `receipt_compaction` - the compaction audit trail itself; a fold
  *     that removed the record of the run before it would erase the only
  *     account of what the fold has already destroyed;
@@ -196,6 +201,7 @@ export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object
   "generation_report",
   "host_memory_write",
   "session_entity_mention",
+  "decision_model_eval_grade",
   "recall_observed_use",
   "negative_recall",
   "receipt_compaction",

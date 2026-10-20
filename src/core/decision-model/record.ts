@@ -32,6 +32,8 @@ import type {
   DecisionModelUse,
   DecisionUsage,
 } from "./contract.ts";
+import { isDecisionModelUse } from "./contract.ts";
+import { DECISION_EVAL_VERDICTS, type DecisionEvalVerdict } from "./eval-spec.ts";
 
 export const DECISION_MODEL_CALL_KIND = "decision_model_call";
 
@@ -150,6 +152,241 @@ export function listDecisionModelExtractCommits(
     kind: DECISION_MODEL_EXTRACT_COMMIT_KIND,
     ...(since !== undefined ? { since } : {}),
   });
+}
+
+// ----- eval grade records (preregistered eval, cycle 20261020) ---------------
+
+/**
+ * One cached verdict set of the preregistered eval (`eval/grade.ts`):
+ * what the graded run measured, under which spec, for which profile and
+ * use. These records are REVIEW EVIDENCE only - the authoritative
+ * machine-consumed tuning mark lives outside the vault
+ * (`eval/mark.ts`), and a hand-written grade record can never promote a
+ * use on its own. Identifiers, numbers and booleans only.
+ */
+export const DECISION_MODEL_EVAL_GRADE_KIND = "decision_model_eval_grade";
+
+/** Input for one grade record, as the eval runner produced it. */
+export interface DecisionEvalGradeRecordInput {
+  readonly profile: string | null;
+  readonly use: DecisionModelUse;
+  readonly specHash: string;
+  readonly fixtureHash: string;
+  readonly seed: string;
+  readonly metric: string;
+  readonly ceiling: number;
+  readonly minCounted: number;
+  readonly countedN: number;
+  readonly countedError: number | null;
+  readonly baselineError: number | null;
+  readonly devError: number | null;
+  readonly verdict: DecisionEvalVerdict;
+  readonly devIds: ReadonlyArray<string>;
+  readonly countedIds: ReadonlyArray<string>;
+  /** Boolean scorer verdict per counted item id. */
+  readonly verdicts: Readonly<Record<string, boolean>>;
+  /** The correlated `decision_model_call` record ids, in run order. */
+  readonly callIds: ReadonlyArray<string>;
+  readonly createdAt?: string;
+}
+
+/** Emit one grade record; returns null when there is no vault or the write failed. */
+export function emitDecisionModelEvalGrade(
+  vault: string | null,
+  input: DecisionEvalGradeRecordInput,
+): ContinuityRecord | null {
+  return emitGatedTelemetry(vault, (v) =>
+    appendContinuityRecord(v, {
+      kind: DECISION_MODEL_EVAL_GRADE_KIND,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      sourceRefs: [],
+      payload: {
+        use: input.use,
+        ...(input.profile !== null ? { profile: input.profile } : {}),
+        spec_hash: input.specHash,
+        fixture_hash: input.fixtureHash,
+        seed: input.seed,
+        metric: input.metric,
+        ceiling: input.ceiling,
+        min_counted: input.minCounted,
+        counted_n: input.countedN,
+        counted_error: input.countedError,
+        baseline_error: input.baselineError,
+        dev_error: input.devError,
+        verdict: input.verdict,
+        dev_ids: [...input.devIds],
+        counted_ids: [...input.countedIds],
+        verdicts: { ...input.verdicts },
+        call_ids: [...input.callIds],
+      },
+    }),
+  );
+}
+
+/** The typed grade a well-formed record parses into. */
+export interface DecisionEvalGrade {
+  readonly recordId: string;
+  readonly createdAt: string;
+  readonly use: DecisionModelUse;
+  readonly profile: string | null;
+  readonly specHash: string;
+  readonly fixtureHash: string;
+  readonly seed: string;
+  readonly metric: string;
+  readonly ceiling: number;
+  readonly minCounted: number;
+  readonly countedN: number;
+  readonly countedError: number | null;
+  readonly baselineError: number | null;
+  readonly devError: number | null;
+  readonly verdict: DecisionEvalVerdict;
+  readonly devIds: ReadonlyArray<string>;
+  readonly countedIds: ReadonlyArray<string>;
+  readonly verdicts: Readonly<Record<string, boolean>>;
+  readonly callIds: ReadonlyArray<string>;
+}
+
+export type DecisionEvalGradeParse =
+  | { readonly ok: true; readonly grade: DecisionEvalGrade }
+  | { readonly ok: false; readonly note: string };
+
+function stringAt(payload: Readonly<Record<string, unknown>>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function numberAt(payload: Readonly<Record<string, unknown>>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringListAt(payload: Readonly<Record<string, unknown>>, key: string): string[] | null {
+  const value = payload[key];
+  return Array.isArray(value) && value.every((v) => typeof v === "string")
+    ? (value as string[])
+    : null;
+}
+
+/**
+ * Parse one continuity record into a typed grade, or return a note that
+ * names why it is malformed. A hand-written record missing any required
+ * field never masquerades as a measurement.
+ */
+export function parseDecisionModelEvalGrade(record: ContinuityRecord): DecisionEvalGradeParse {
+  const skip = (why: string): DecisionEvalGradeParse => ({
+    ok: false,
+    note: `${DECISION_MODEL_EVAL_GRADE_KIND} record ${record.id} skipped: ${why}`,
+  });
+  if (record.kind !== DECISION_MODEL_EVAL_GRADE_KIND) {
+    return skip(`kind is '${record.kind}'`);
+  }
+  const p = record.payload;
+  const use = p["use"];
+  if (!isDecisionModelUse(use))
+    return skip(`use ${JSON.stringify(use)} is not a decision-model use`);
+  const specHash = stringAt(p, "spec_hash");
+  if (specHash === null) return skip("spec_hash is missing or not a string");
+  const fixtureHash = stringAt(p, "fixture_hash");
+  if (fixtureHash === null) return skip("fixture_hash is missing or not a string");
+  const seed = stringAt(p, "seed");
+  if (seed === null) return skip("seed is missing or not a string");
+  const metric = stringAt(p, "metric");
+  if (metric === null) return skip("metric is missing or not a string");
+  const ceiling = numberAt(p, "ceiling");
+  if (ceiling === null) return skip("ceiling is missing or not a number");
+  const minCounted = numberAt(p, "min_counted");
+  if (minCounted === null) return skip("min_counted is missing or not a number");
+  const countedN = numberAt(p, "counted_n");
+  if (countedN === null) return skip("counted_n is missing or not a number");
+  const countedError = p["counted_error"];
+  if (countedError !== null && typeof countedError !== "number") {
+    return skip("counted_error must be a number or null");
+  }
+  const baselineError = p["baseline_error"];
+  if (baselineError !== null && typeof baselineError !== "number") {
+    return skip("baseline_error must be a number or null");
+  }
+  const devError = p["dev_error"];
+  if (devError !== null && typeof devError !== "number") {
+    return skip("dev_error must be a number or null");
+  }
+  const verdictRaw = stringAt(p, "verdict");
+  if (
+    verdictRaw === null ||
+    !(DECISION_EVAL_VERDICTS as ReadonlyArray<string>).includes(verdictRaw)
+  ) {
+    return skip(`verdict must be one of ${DECISION_EVAL_VERDICTS.join(", ")}`);
+  }
+  const devIds = stringListAt(p, "dev_ids");
+  if (devIds === null) return skip("dev_ids is missing or not a string array");
+  const countedIds = stringListAt(p, "counted_ids");
+  if (countedIds === null) return skip("counted_ids is missing or not a string array");
+  const verdictsRaw = p["verdicts"];
+  if (
+    verdictsRaw === null ||
+    typeof verdictsRaw !== "object" ||
+    Array.isArray(verdictsRaw) ||
+    !Object.values(verdictsRaw).every((v) => typeof v === "boolean")
+  ) {
+    return skip("verdicts must be an object of booleans");
+  }
+  const callIds = stringListAt(p, "call_ids");
+  if (callIds === null) return skip("call_ids is missing or not a string array");
+  const profileRaw = p["profile"];
+  const profile =
+    profileRaw === undefined || profileRaw === null
+      ? null
+      : typeof profileRaw === "string"
+        ? profileRaw
+        : null;
+  if (profileRaw !== undefined && profileRaw !== null && profile === null) {
+    return skip("profile must be a string or null");
+  }
+  return {
+    ok: true,
+    grade: {
+      recordId: record.id,
+      createdAt: record.createdAt,
+      use,
+      profile,
+      specHash,
+      fixtureHash,
+      seed,
+      metric,
+      ceiling,
+      minCounted,
+      countedN,
+      countedError,
+      baselineError,
+      devError,
+      verdict: verdictRaw as DecisionEvalVerdict,
+      devIds,
+      countedIds,
+      verdicts: verdictsRaw as Readonly<Record<string, boolean>>,
+      callIds,
+    },
+  };
+}
+
+/**
+ * Cached grade records, oldest first, each parsed; a malformed record is
+ * skipped with a named note instead of poisoning the list.
+ */
+export function listDecisionModelEvalGrades(
+  vault: string,
+  since?: string,
+): { readonly grades: ReadonlyArray<DecisionEvalGrade>; readonly skipped: ReadonlyArray<string> } {
+  const grades: DecisionEvalGrade[] = [];
+  const skipped: string[] = [];
+  for (const record of listContinuityRecords(vault, {
+    kind: DECISION_MODEL_EVAL_GRADE_KIND,
+    ...(since !== undefined ? { since } : {}),
+  })) {
+    const parsed = parseDecisionModelEvalGrade(record);
+    if (parsed.ok) grades.push(parsed.grade);
+    else skipped.push(parsed.note);
+  }
+  return { grades, skipped };
 }
 
 /** Start of the current UTC day, canonical ISO form. */

@@ -86,6 +86,16 @@ export type ContinuityRecordKind =
    */
   | "decision_model_extract_commit"
   /**
+   * One cached verdict set of the preregistered decision-model eval
+   * (cycle 20261020, t_4e1681b3). Spec hash, fixture hash, profile, use,
+   * take item ids, boolean verdicts and the counted metric -
+   * identifiers, numbers and booleans, never item text. Review evidence
+   * only: the machine-consumed tuning mark lives outside the vault, and
+   * this kind is kept (never folded) so `o2b decision-model eval list`
+   * can audit what any mark claimed.
+   */
+  | "decision_model_eval_grade"
+  /**
    * One mined entity mention from a session turn (recall-quality wave,
    * Lane B): one record per (family, key, sessionRef), where family is a
    * precision detector family (`symbol` | `url` | `path` |
@@ -147,6 +157,7 @@ export const CONTINUITY_RECORD_KINDS: ReadonlyArray<ContinuityRecordKind> = Obje
   "negative_recall",
   "decision_model_call",
   "decision_model_extract_commit",
+  "decision_model_eval_grade",
   "session_entity_mention",
   "receipt_compaction",
 ]);

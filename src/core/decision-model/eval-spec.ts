@@ -46,6 +46,21 @@ export const DECISION_EVAL_DEV_FRACTION = 0.3;
 /** The only promotion metric this build writes marks for. */
 export const DECISION_EVAL_METRIC = "counted_error_rate";
 
+/**
+ * The preregistered three-arm verdict, the same shape the
+ * extract_prefilter report keeps: a use promotes only when the counted
+ * error meets the ceiling, does not regress against the deterministic
+ * baseline, and the counted n is met; too few counted items is its own
+ * arm, not a failure.
+ */
+export type DecisionEvalVerdict = "promote" | "hold" | "not_enough_evidence";
+
+export const DECISION_EVAL_VERDICTS: ReadonlyArray<DecisionEvalVerdict> = Object.freeze([
+  "promote",
+  "hold",
+  "not_enough_evidence",
+]);
+
 /** sha-256 hex digest length. */
 const HASH_HEX_LENGTH = 64;
 
