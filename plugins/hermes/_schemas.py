@@ -302,16 +302,16 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                                                                               'resolvable is '
                                                                               'refused.'},
                                              'model': {   'type': 'string',
-                                                          'description': 'Model id. With '
-                                                                         '`max_tokens` omitted '
-                                                                         'the context window '
-                                                                         'resolves from it '
-                                                                         '(operator/env '
-                                                                         'overrides, table, '
-                                                                         '`-1m` suffix, '
-                                                                         'default); an unknown '
-                                                                         'id budgets from its '
-                                                                         'hint.'},
+                                                          'description': 'Model id. '
+                                                                         '`max_tokens` '
+                                                                         'omitted: the context '
+                                                                         'window resolves '
+                                                                         '(config, env, table, '
+                                                                         '`1m` suffix); an '
+                                                                         'unplaced id is '
+                                                                         'refused (pass '
+                                                                         'max_tokens or set '
+                                                                         'context.window_tokens).'},
                                              'query': {   'type': 'string',
                                                           'maxLength': 2000,
                                                           'description': 'Optional query. Read '
