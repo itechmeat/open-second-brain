@@ -5,21 +5,43 @@
  * named on the trail as `index-stale` whatever the freshen setting. The
  * query cache stores answers without that code and the trail gains it at
  * read time, so a cache hit names the index age it is served at.
+ *
+ * The stale note also carries the measured behind count (t_e4438152):
+ * computed only when the note fires, so a fresh index performs no walk;
+ * a failed measurement leaves the age alone on the note.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "../../../src/core/search/store/state.ts";
-import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import type { SearchOutcome, ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import * as walkerModule from "../../../src/core/search/walker.ts";
+import { withIndexStale } from "../../../src/core/search/pipeline/outcome.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
 let calls: string[][];
+let walks = 0;
+let failWalk = false;
+const realWalkVault = walkerModule.walkVault;
+
+// Count the vault walks every consumer of the shared walker performs,
+// and allow a test to fail one, so "no walk" and "null measurement" are
+// observed rather than inferred.
+mock.module("../../../src/core/search/walker.ts", () => ({
+  ...walkerModule,
+  walkVault: (config: ResolvedSearchConfig) => {
+    if (failWalk) throw new Error("walk refused");
+    walks++;
+    return realWalkVault(config);
+  },
+}));
+
 const spawn = (argv: string[]): void => {
   calls.push(argv);
 };
@@ -34,7 +56,10 @@ beforeEach(async () => {
   await indexVault(config(60));
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  failWalk = false;
+  cleanup();
+});
 
 function config(intervalSeconds: number, cacheEnabled = false): ResolvedSearchConfig {
   return Object.freeze({
@@ -150,4 +175,54 @@ test("a cache hit over a fresh index carries no stale code", async () => {
   expect(outcome.total).toBe(4242);
   expect(staleCodes(outcome)).toEqual([]);
   expect(outcome.retrievalTrail).toBeUndefined();
+});
+
+test("a stale index names the measured behind count beside its age", async () => {
+  writeMd(vault, "notes/kestrel.md", "# Kestrel\n\nThe kestrel hovers over the verge.\n");
+  setIndexAge(11 * 60);
+  const outcome = await search(config(0), { query: "heron", freshenSpawn: spawn });
+  const stale = staleCodes(outcome);
+  expect(stale).toHaveLength(1);
+  expect(stale[0]!.detail?.["behindCount"]).toBe(1);
+  expect(stale[0]!.detail?.["ageSeconds"]).toBeGreaterThanOrEqual(660);
+});
+
+test("a fresh index emits no stale code and performs no walk", async () => {
+  writeMd(vault, "notes/kestrel.md", "# Kestrel\n\nThe kestrel hovers over the verge.\n");
+  const before = walks;
+  const outcome = await search(config(0), { query: "heron", freshenSpawn: spawn });
+  expect(staleCodes(outcome)).toEqual([]);
+  expect(walks).toBe(before);
+});
+
+test("a stale search performs exactly one walk", async () => {
+  setIndexAge(11 * 60);
+  const before = walks;
+  await search(config(0), { query: "heron", freshenSpawn: spawn });
+  expect(walks).toBe(before + 1);
+});
+
+test("a failed measurement leaves the age alone on the stale note", async () => {
+  failWalk = true;
+  setIndexAge(11 * 60);
+  const outcome = await search(config(0), { query: "heron", freshenSpawn: spawn });
+  const stale = staleCodes(outcome);
+  expect(stale).toHaveLength(1);
+  expect(Object.keys(stale[0]!.detail ?? {})).toEqual(["ageSeconds"]);
+});
+
+test("the stale detail carries behindCount only when one was measured", () => {
+  const base = {
+    results: [],
+    warnings: [],
+    total: 0,
+    idfWeightedCoverage: 0,
+  } as unknown as SearchOutcome;
+  const measured = withIndexStale(base, 100_000, 4);
+  expect(measured.retrievalTrail?.degraded[0]?.detail).toEqual({
+    ageSeconds: 100_000,
+    behindCount: 4,
+  });
+  const unmeasured = withIndexStale(base, 100_000, null);
+  expect(unmeasured.retrievalTrail?.degraded[0]?.detail).toEqual({ ageSeconds: 100_000 });
 });

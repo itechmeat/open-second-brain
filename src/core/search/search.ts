@@ -61,7 +61,7 @@ import { detectHybridDegrade } from "./enrich.ts";
 import { isAbortError } from "./embeddings/http-util.ts";
 import type { CacheProbe } from "./pipeline/cache-slot.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
-import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation, INDEX_STALE_SECONDS } from "./retrieval-trail.ts";
 import { indexAgeSeconds, maybeFreshenIndex } from "./freshen.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "./result-filters.ts";
@@ -445,7 +445,17 @@ export async function search(
       ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
     });
     const indexAge = indexAgeSeconds(lastIndexedAt, nowMs);
-    const served = (outcome: SearchOutcome): SearchOutcome => withIndexStale(outcome, indexAge);
+    // The measured behind count rides the index-stale note (t_e4438152):
+    // computed once per search, only when the note will fire, here above
+    // the cache branch so a cache hit serves the same measurement. A
+    // fresh index performs no walk at all; a failed measurement is null
+    // and the note then names the age alone.
+    const behindCount =
+      indexAge !== null && indexAge > INDEX_STALE_SECONDS
+        ? await measureIndexBehind(effectiveConfig)
+        : null;
+    const served = (outcome: SearchOutcome): SearchOutcome =>
+      withIndexStale(outcome, indexAge, behindCount);
     // Shared across every frontmatter-reading stage below (Plan 1, 1.3)
     // so a candidate path already read by one stage is not re-read
     // and re-parsed by the next.
@@ -1132,5 +1142,22 @@ export async function search(
     return served(emit(built));
   } finally {
     await store.close();
+  }
+}
+
+/**
+ * The measured index-behind count for the index-stale detail
+ * (t_e4438152), or `null` when it could not be measured. Deferred
+ * import: `indexer.ts` sits above this module in the graph, and the
+ * sanctioned cure for that in this tree is an import evaluated at call
+ * time - reached only under the stale gate, so a fresh index never pays
+ * it. Never throws: a diagnostic must not fail the answer it annotates.
+ */
+async function measureIndexBehind(config: ResolvedSearchConfig): Promise<number | null> {
+  try {
+    const { indexBehindCount } = await import("./indexer.ts");
+    return (await indexBehindCount(config))?.behind ?? null;
+  } catch {
+    return null;
   }
 }
