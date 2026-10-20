@@ -12,6 +12,7 @@ import {
 } from "../../../core/search/freshen.ts";
 import {
   eventTimeStatus,
+  indexBehindCount,
   indexStatus,
   renderEventTimeStatus,
   serializeEventTimeStatus,
@@ -37,7 +38,13 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   const status = await indexStatus(cfg);
   // The event-time summary reads the index, so it exists only with one.
   const eventTime = status.exists ? await eventTimeStatus(cfg) : null;
-  const freshen = status.exists ? freshenStatus(cfg, status.lastIndexedAt) : null;
+  // The live behind walk (t_e4438152): only with an index to diff
+  // against, best-effort null on failure - the freshen block then reads
+  // "(not measured)", never a fabricated zero.
+  const behind = status.exists ? await indexBehindCount(cfg) : null;
+  const freshen = status.exists
+    ? freshenStatus(cfg, status.lastIndexedAt, undefined, behind?.behind ?? null)
+    : null;
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({

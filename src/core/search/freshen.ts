@@ -727,12 +727,22 @@ export interface FreshenStatus {
   readonly state: FreshenState;
   /** The backoff end, only while it is still in the future. */
   readonly activeBackoffUntil: string | null;
+  /**
+   * The live measured index-behind total (t_e4438152): documents the
+   * next incremental run would add, update or delete, measured NOW.
+   * Passed in by the caller that chose to pay the walk - this stays a
+   * pure state-file reader, so the doctor's freshen check (which reads
+   * the state file on its own) picks up no walk cost. Null means not
+   * measured - a failed measurement is not a measurement, never zero.
+   */
+  readonly indexBehind: number | null;
 }
 
 export function freshenStatus(
   config: ResolvedSearchConfig,
   lastIndexedAt: string | null,
   nowMs: number = Date.now(),
+  indexBehind: number | null = null,
 ): FreshenStatus {
   const state = readFreshenState(dirname(config.dbPath));
   const backoffMs = state.backoffUntil === null ? Number.NaN : Date.parse(state.backoffUntil);
@@ -741,6 +751,7 @@ export function freshenStatus(
     indexAgeSeconds: indexAgeSeconds(lastIndexedAt, nowMs),
     state,
     activeBackoffUntil: Number.isFinite(backoffMs) && backoffMs > nowMs ? state.backoffUntil : null,
+    indexBehind,
   });
 }
 
@@ -749,6 +760,12 @@ export function renderFreshenStatus(s: FreshenStatus): string[] {
   const lines = [
     `freshen:             ${s.intervalSeconds > 0 ? `every ${s.intervalSeconds}s` : "off"}`,
     `index_age:           ${s.indexAgeSeconds === null ? "(unknown)" : `${s.indexAgeSeconds}s`}`,
+    // The label stays within the 19 columns every status label fits in.
+    `index_behind:        ${
+      s.indexBehind === null
+        ? "(not measured)"
+        : `${s.indexBehind} doc${s.indexBehind === 1 ? "" : "s"}`
+    }`,
   ];
   const st = s.state;
   if (st.lastOutcome === "completed") {
@@ -772,6 +789,7 @@ export function serializeFreshenStatus(s: FreshenStatus): Record<string, unknown
   return {
     interval_s: s.intervalSeconds,
     index_age_s: s.indexAgeSeconds,
+    index_behind: s.indexBehind,
     last_outcome: s.state.lastOutcome,
     last_run_at: s.state.lastRunAt,
     last_changed: s.state.lastChanged,
