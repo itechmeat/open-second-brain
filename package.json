@@ -32,7 +32,8 @@
     "openclaw.plugin.json",
     "README.md",
     "LICENSE",
-    "pyproject.toml"
+    "pyproject.toml",
+    "tests/fixtures/decision-model"
   ],
   "type": "module",
   "scripts": {
