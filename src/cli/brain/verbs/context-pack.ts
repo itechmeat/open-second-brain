@@ -8,14 +8,19 @@
  * `--max-tokens` is optional (t_a567cc12): when it is omitted, the
  * budget derives from the model context window the shared resolver
  * resolves - the vault's `context:` block, the environment override, or
- * `--model`, in that precedence - through the matching preset. An id
- * nothing published resolves (no table row, no `1m` suffix) budgets from
- * its preset hint, the same mapping `brain context-presets suggest`
- * answers. With nothing resolvable the verb refuses exactly as it always
- * has: never a silent default budget.
+ * `--model`, in that precedence - through the matching preset. A
+ * hint-matching id budgets from its preset hint, the same mapping
+ * `brain context-presets suggest` answers. An id nothing published
+ * places - no table row, no `1m` suffix, no hint - is refused: pass
+ * `--max-tokens` or set `context.window_tokens`. With nothing resolvable
+ * the verb refuses exactly as it always has: never a silent default
+ * budget.
  */
 
-import { presetForResolvedWindow } from "../../../core/brain/context-presets.ts";
+import {
+  presetForResolvedWindow,
+  unrecognisedModelBudgetRefusal,
+} from "../../../core/brain/context-presets.ts";
 import {
   resolveModelContextWindowTokens,
   type ModelWindowSource,
@@ -82,7 +87,12 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     // The hint fallback rides along exactly when the resolver's answer is
     // the default-sourced assumption, so a hint-only model budgets the
     // preset `brain context-presets suggest` names for it; the source
-    // printed below stays the window's.
+    // printed below stays the window's. An id NOTHING places - no table
+    // row, no suffix, no hint - refuses instead: the conservative posture
+    // this verb held before derivation existed, never the default
+    // window's long-context budget an 8k local model cannot hold.
+    const refusal = unrecognisedModelBudgetRefusal(model, resolved);
+    if (refusal !== null) return fail(`brain context-pack: ${refusal}`);
     maxTokens = presetForResolvedWindow(model, resolved).context_pack.max_tokens;
     maxTokensSource = resolved.source;
   }

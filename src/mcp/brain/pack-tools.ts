@@ -70,10 +70,12 @@ import {
   listContextPresets,
   presetForResolvedWindow,
   suggestContextPreset,
+  unrecognisedModelBudgetRefusal,
   type ContextPresetCurrentConfig,
 } from "../../core/brain/context-presets.ts";
 import {
   resolveModelContextWindowTokens,
+  MODEL_CONTEXT_WINDOW_ENV_KEY,
   type ModelWindowSource,
   type ResolvedModelWindow,
 } from "../../core/brain/model-window.ts";
@@ -199,6 +201,24 @@ function resolveSurfaceModelWindow(
 }
 
 /**
+ * The caller's optional `model` id. A whitespace-only or empty value is
+ * ABSENT - a blank name is no name - so the derivation answers
+ * nothing-resolvable and refuses with the budget message, exactly as a
+ * call without `model` does, instead of a model-argument complaint and
+ * never a derived default budget. A non-string value stays a caller
+ * error.
+ */
+function optionalModelArg(tool: string, args: Record<string, unknown>): string | undefined {
+  const raw = args["model"];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") {
+    throw new MCPError(INVALID_PARAMS, `${tool}: model must be a non-empty string`);
+  }
+  const trimmed = raw.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
  * A pack refusal raised after the query embed still names that spend. The
  * loader's pre-embed check reads every belief in view, while the pack keeps
  * fewer (no tombstones, chain tips only, and a dimension the query vector
@@ -236,7 +256,7 @@ async function toolBrainContextPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const model = optionalStringArg("brain_context_pack", args, "model");
+  const model = optionalModelArg("brain_context_pack", args);
   const maxTokensArg = coercePositiveInteger(
     "brain_context_pack",
     "max_tokens",
@@ -265,9 +285,12 @@ async function toolBrainContextPack(
   // `context_pack.max_tokens` - the curated mapping. A `default`-sourced
   // window defers to the model's hint preset, the same mapping
   // `brain_context_presets` suggest answers, so one model gets one budget
-  // and one suggestion on every surface. With nothing resolvable the call
-  // refuses exactly as before: the pinned decision is never a silent
-  // default budget.
+  // and one suggestion on every surface - and an id NOTHING places (no
+  // table row, no suffix, no hint) refuses: the conservative posture this
+  // tool held before derivation existed, never the default window's
+  // long-context budget an 8k local model cannot hold. With nothing
+  // resolvable the call refuses exactly as before: the pinned decision is
+  // never a silent default budget.
   let maxTokens: number;
   let maxTokensSource: ModelWindowSource | undefined;
   if (maxTokensArg !== undefined) {
@@ -284,6 +307,10 @@ async function toolBrainContextPack(
         INVALID_PARAMS,
         "brain_context_pack: max_tokens must be a positive integer",
       );
+    }
+    const refusal = unrecognisedModelBudgetRefusal(model, resolved);
+    if (refusal !== null) {
+      throw new MCPError(INVALID_PARAMS, `brain_context_pack: ${refusal}`);
     }
     // The hint fallback rides along exactly when the resolver's answer is
     // the default-sourced assumption, so a hint-only model budgets the
@@ -1035,7 +1062,7 @@ async function toolBrainPreCompressPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const model = optionalStringArg("brain_pre_compress_pack", args, "model");
+  const model = optionalModelArg("brain_pre_compress_pack", args);
   const topK = coercePositiveInteger("brain_pre_compress_pack", "top_k", args["top_k"]) ?? 10;
   const maxCharsPerMemory = coercePositiveInteger(
     "brain_pre_compress_pack",

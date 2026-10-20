@@ -1122,6 +1122,44 @@ describe("brain_context_pack tool — derived budget", () => {
     expect(out["max_tokens_source"]).toBe("declared");
   });
 
+  test("an unrecognised model refuses the derived budget by name", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // "llama3:8b" has no table row, no `-1m` suffix and no hint: the
+    // derived budget used to answer the default window's long-context
+    // 24k - about three times the model's whole 8k window. The refusal
+    // is the conservative pre-derivation posture, naming the id and the
+    // two remedies (an explicit `max_tokens` stays first-class).
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 15,
+      method: "tools/call",
+      params: { name: "brain_context_pack", arguments: { model: "llama3:8b" } },
+    })) as { error?: { code: number; message: string } };
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toBe(
+      "brain_context_pack: model 'llama3:8b' not recognised; pass max_tokens or set context.window_tokens",
+    );
+  });
+
+  test("a whitespace-only model is absent: refused as nothing-resolvable", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // A blank name is no name: the call refuses exactly as a call
+    // without `model` does - the nothing-resolvable budget message, not
+    // a model-argument complaint and never a derived default budget.
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 16,
+      method: "tools/call",
+      params: { name: "brain_context_pack", arguments: { model: "   " } },
+    })) as { error?: { code: number; message: string } };
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toBe("brain_context_pack: max_tokens must be a positive integer");
+  });
+
   test("the operator context block resolves without a model", async () => {
     writeOnePref();
     writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 150000\n");

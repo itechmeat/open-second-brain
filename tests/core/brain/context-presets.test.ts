@@ -7,6 +7,7 @@ import {
   presetForResolvedWindow,
   presetForWindowTokens,
   suggestContextPreset,
+  unrecognisedModelBudgetRefusal,
 } from "../../../src/core/brain/context-presets.ts";
 import { resolveModelContextWindowTokens } from "../../../src/core/brain/model-window.ts";
 
@@ -55,13 +56,15 @@ describe("context budget presets", () => {
     expect(suggestContextPreset({ model: "qwen3-235b-1m" }).reason).toBe(
       "context window 1000000 tokens resolved from suffix matched long-context",
     );
-    // Unknown model: the default window, an assumption - medium confidence.
+    // Unknown model, no hint: nothing published places the id, so the
+    // conservative fallback answers - the same tight-context/low answer a
+    // model-free call gets - and no window resolution is claimed for the
+    // id. The default window is an assumption, never a suggestion basis.
     expect(suggestContextPreset({ model: "kimi-k2" })).toEqual({
-      preset_id: "long-context",
-      confidence: "medium",
-      reason: "context window 200000 tokens resolved from default matched long-context",
-      preset: getContextPreset("long-context")!,
-      resolvedWindow: { windowTokens: 200_000, source: "default", clamped: false },
+      preset_id: "tight-context",
+      confidence: "low",
+      reason: "no model or context-window hint matched; using conservative default",
+      preset: getContextPreset("tight-context")!,
     });
   });
 
@@ -179,13 +182,50 @@ describe("context budget presets", () => {
     ).toBe("tight-context");
 
     // A fragment inside a larger token is not a hit: "ministral" is one
-    // token, so the id falls through to the default window's mapping,
-    // answered with medium confidence and a claimed resolution.
+    // token, so nothing places the id and the conservative fallback
+    // answers - never the default window's long-context mapping, which
+    // would budget a small local model three times its real window.
     expect(suggestContextPreset({ model: "ministral-8b" })).toMatchObject({
-      preset_id: "long-context",
-      confidence: "medium",
-      reason: "context window 200000 tokens resolved from default matched long-context",
+      preset_id: "tight-context",
+      confidence: "low",
+      reason: "no model or context-window hint matched; using conservative default",
     });
+  });
+
+  test("an unrecognised id refuses the derived budget; table and hint ids do not", () => {
+    // M1: an id with no table row, no suffix and no hint used to budget
+    // the default window's long-context 24k - about three times an 8k
+    // local model's whole window. The pack surfaces refuse instead, and
+    // this shared predicate is the exact condition they refuse on (and
+    // the condition suggest's conservative fallback answers on).
+    const unknown = resolveModelContextWindowTokens({ model: "llama3:8b" });
+    expect(unknown.source).toBe("default");
+    expect(unrecognisedModelBudgetRefusal("llama3:8b", unknown)).toBe(
+      "model 'llama3:8b' not recognised; pass max_tokens or set context.window_tokens",
+    );
+    // A table-declared id budgets long-context from its row, never refuses.
+    expect(
+      unrecognisedModelBudgetRefusal(
+        "gpt-4.1-mini",
+        resolveModelContextWindowTokens({ model: "gpt-4.1-mini" }),
+      ),
+    ).toBeNull();
+    // A hint-matching id budgets from its hint, never refuses.
+    expect(
+      unrecognisedModelBudgetRefusal(
+        "gemini-2.5-flash",
+        resolveModelContextWindowTokens({ model: "gemini-2.5-flash" }),
+      ),
+    ).toBeNull();
+    // A blank model is ABSENT, not a name to match: with the default
+    // window the only answer left, the refusal carries no id.
+    expect(
+      unrecognisedModelBudgetRefusal("   ", {
+        windowTokens: 200_000,
+        source: "default",
+        clamped: false,
+      }),
+    ).toBe("model not recognised; pass max_tokens or set context.window_tokens");
   });
 
   test("an explicit window keeps today's exact answer with nothing resolved", () => {

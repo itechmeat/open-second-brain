@@ -154,6 +154,31 @@ function hintPresetForModel(model: string | null | undefined): ContextBudgetPres
 }
 
 /**
+ * The pack-budget refusal for a model id nothing published places: no
+ * declared table row, no `1m`/`[1m]` suffix, no matching hint. The
+ * derived budget used to answer such an id with the default window's
+ * long-context `max_tokens` - about three times an 8k local model's
+ * whole window - so the pack surfaces refuse instead, the conservative
+ * posture they held before derivation existed. `null` means the id IS
+ * placed and budgets from its resolved window (table, suffix) or its
+ * hint. A blank or absent model is ABSENT - the same condition the
+ * surfaces' nothing-resolvable refusal already answers - so the two
+ * refusals agree, and {@link suggestContextPreset} answers its
+ * conservative fallback on exactly this predicate.
+ */
+export function unrecognisedModelBudgetRefusal(
+  model: string | null | undefined,
+  resolved: ResolvedModelWindow,
+): string | null {
+  if (resolved.source !== "default") return null;
+  const id = model?.trim() ?? "";
+  if (id !== "" && hintPresetForModel(id) !== null) return null;
+  return id === ""
+    ? "model not recognised; pass max_tokens or set context.window_tokens"
+    : `model '${id}' not recognised; pass max_tokens or set context.window_tokens`;
+}
+
+/**
  * The preset a DERIVED budget sizes from for one model id: the mapping
  * the resolved window names - except when that answer is the resolver's
  * `default`-sourced assumption about the host, where the same
@@ -164,6 +189,10 @@ function hintPresetForModel(model: string | null | undefined): ContextBudgetPres
  * An id the table knows resolves from the table on both surfaces and
  * never from its hint; a model-free call (an operator channel resolved
  * the window) has no hint to apply and sizes from the resolved window.
+ * An id NOTHING places (default source, no hint) never reaches a pack
+ * budget from here - the pack surfaces refuse it first through
+ * {@link unrecognisedModelBudgetRefusal} - and the pre-compress caps
+ * path, which must always answer, keeps this mapping for it.
  * The window's `source` stays what the surface discloses either way.
  */
 export function presetForResolvedWindow(
@@ -179,6 +208,20 @@ export function presetForResolvedWindow(
 
 export function suggestContextPreset(input: ContextPresetSuggestionInput): ContextPresetSuggestion {
   const model = input.model?.toLowerCase() ?? "";
+
+  // The conservative fallback, defined once: tight-context, low
+  // confidence, the answer for every call nothing published places - a
+  // model-free call, or a model id with no window source, no suffix and
+  // no hint. Never claims a resolved window.
+  const conservativeFallback = (): ContextPresetSuggestion => {
+    const fallback = PRESETS[0]!;
+    return {
+      preset_id: fallback.id,
+      confidence: "low",
+      reason: "no model or context-window hint matched; using conservative default",
+      preset: fallback,
+    };
+  };
 
   // Order (deliberate, changed by this branch from the hint-first order
   // it replaced): an explicit window wins over a matching `model_hints`
@@ -231,27 +274,16 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
         preset: byModel,
       };
     }
-    // The default-sourced window is an assumption about the host, not a
-    // published fact, so it answers with `medium` confidence; the
-    // resolution source is disclosed in the reason and carried
-    // structurally.
-    const byWindow = presetForWindowTokens(resolved.windowTokens);
-    return {
-      preset_id: byWindow.id,
-      confidence: "medium",
-      reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source} matched ${byWindow.id}`,
-      preset: byWindow,
-      resolvedWindow: resolved,
-    };
+    // Nothing published places the id: the resolver's answer is the
+    // default-sourced assumption and no hint matched, so the conservative
+    // fallback answers - the same tight-context/low answer a model-free
+    // call gets, and the exact condition the pack budget surfaces refuse
+    // on ({@link unrecognisedModelBudgetRefusal}). An ASSUMED window is
+    // never a basis for a suggestion: no `resolvedWindow` is claimed.
+    return conservativeFallback();
   }
 
-  const fallback = PRESETS[0]!;
-  return {
-    preset_id: fallback.id,
-    confidence: "low",
-    reason: "no model or context-window hint matched; using conservative default",
-    preset: fallback,
-  };
+  return conservativeFallback();
 }
 
 export function diffContextPreset(

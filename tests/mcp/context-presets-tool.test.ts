@@ -79,11 +79,14 @@ describe("brain_context_presets tool", () => {
       confidence: "high",
       reason: "context window 128000 tokens resolved from declared matched long-context",
     });
-    // Unknown model: the default window answers, marked as an assumption.
+    // Unknown model, no hint: nothing published places the id, so the
+    // conservative fallback answers - the same tight-context/low answer a
+    // model-free call gets. The pack budget surfaces refuse the same id
+    // instead of budgeting the default window's long-context.
     await expect(callPresets({ operation: "suggest", model: "kimi-k2" })).resolves.toMatchObject({
-      preset_id: "long-context",
-      confidence: "medium",
-      reason: "context window 200000 tokens resolved from default matched long-context",
+      preset_id: "tight-context",
+      confidence: "low",
+      reason: "no model or context-window hint matched; using conservative default",
     });
     // The disagreeing-model case: "gpt-4.1-mini" matches the "mini" hint
     // AND the declared table. The suggestion must name the long-context

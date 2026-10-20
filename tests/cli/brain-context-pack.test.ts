@@ -209,6 +209,37 @@ test("brain context-pack keeps the declared mapping for a table-known hinted mod
   expect(json.max_tokens_source).toBe("declared");
 });
 
+test("brain context-pack refuses an unrecognised model by name", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "llama3:8b", "--json"],
+    {},
+  );
+
+  // No table row, no `-1m` suffix, no hint: the verb refuses instead of
+  // budgeting the default window's long-context 24k - the model's whole
+  // 8k window is a third of that. The refusal names the id and remedies.
+  expect(out.returncode).toBe(1);
+  expect(out.stderr).toContain("llama3:8b");
+  expect(out.stderr).toContain("not recognised");
+  expect(out.stderr).toContain("context.window_tokens");
+});
+
+test("brain context-pack treats a blank --model as absent", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "   ", "--json"],
+    {},
+  );
+
+  // A blank name is no name: the same nothing-resolvable refusal a call
+  // without --model gets, never a derived default budget.
+  expect(out.returncode).toBe(1);
+  expect(out.stderr).toContain("--max-tokens <n> is required");
+});
+
 test("brain context-pack derives from the vault context block without --model", async () => {
   writePref("core", "core principle", "tier: core");
   writeFileSync(
