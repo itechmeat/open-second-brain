@@ -41,6 +41,12 @@
  * (`eval/mark.ts`) under the caller-supplied state root, making it the
  * one code path that can mark a profile tuned. The vault's grade record
  * is the review evidence; the mark is the gate input.
+ *
+ * The gate also lets go: a COMPLETED run whose verdict is not `promote`
+ * (a `hold`, or `not_enough_evidence`) retracts the mark that the same
+ * profile, use and spec earned earlier, so a later failing measurement
+ * never leaves an older promote armed. A refused or errored run - the
+ * throws above - retracts nothing: it measured nothing.
  */
 
 import { randomUUID } from "node:crypto";
@@ -62,6 +68,7 @@ import type { PlatformDirsEnv } from "../../platform-dirs.ts";
 import {
   decisionModelBaseUrlHash,
   decisionModelTuningMarkPath,
+  retractTuningMark,
   writeTuningMark,
   type DecisionTuningMark,
 } from "./mark.ts";
@@ -103,6 +110,12 @@ export interface DecisionEvalRunResult {
   readonly grade_record_id: string | null;
   /** True exactly when a `promote` verdict wrote the machine-side mark. */
   readonly mark_written: boolean;
+  /**
+   * True exactly when a completed non-promote verdict deleted the
+   * matching earlier mark for this (profile, use, spec) - the gate has
+   * gone back to shadow.
+   */
+  readonly mark_retracted: boolean;
   /** Why no mark was written, when one was not; null on a written mark. */
   readonly mark_note: string | null;
 }
@@ -120,10 +133,12 @@ export interface DecisionEvalRunOptions {
    */
   readonly spec?: DecisionEvalSpec;
   /**
-   * Where a `promote` verdict writes the machine-side tuning mark: the
-   * eval CLI passes the running process's platform dirs. Absent or null
-   * (every test, and any caller measuring without deciding) disables mark
-   * writing - a run that only measures leaves no gate input behind.
+   * Where a `promote` verdict writes the machine-side tuning mark - and
+   * a completed non-promote verdict retracts one: the eval CLI passes
+   * the running process's platform dirs. Absent or null (every test, and
+   * any caller measuring without deciding) disables mark writing and
+   * retraction alike - a run that only measures leaves no gate input
+   * behind and changes none.
    */
   readonly markSource?: PlatformDirsEnv | null;
 }
@@ -420,13 +435,33 @@ export async function runDecisionModelEval(
   // record to review it against, and a day's recorded spend that stayed
   // under the daily cost gate. A failed write - or a day total that
   // cannot be read - is reported, never thrown: the measurement already
-  // happened and the spend is already counted.
+  // happened and the spend is already counted. The gate also lets go: a
+  // completed non-promote measurement retracts the matching earlier
+  // mark, so a use that missed its bar never keeps an older promote
+  // armed while the CLI text suggests the gate is off.
   const profile = cfg.thresholdProfile ?? null;
   let markWritten = false;
+  let markRetracted = false;
   let markNote: string | null = null;
   const now = opts.now ?? new Date();
   if (verdict !== "promote") {
-    markNote = `verdict is '${verdict}'; only a promote writes a tuning mark`;
+    // A completed run - the refusals above throw, so reaching this line
+    // is completing - whose verdict is not promote withdraws the mark
+    // this (profile, use, spec) earned earlier. The same guard rails as
+    // the write apply as far as they can: without a profile or a state
+    // root there is nothing to retract, and a mark earned by another
+    // spec is not this run's to delete.
+    try {
+      markRetracted = retractTuningMark(opts.markSource, profile, use, decisionEvalSpecHash(spec));
+    } catch (err) {
+      markNote = `the previous tuning mark could not be retracted: ${(err as Error).message}`;
+    }
+    if (markNote === null) {
+      markNote = markRetracted
+        ? `verdict is '${verdict}'; the earlier tuning mark was retracted, ` +
+          "so the use runs shadow until a promote measures it again"
+        : `verdict is '${verdict}'; only a promote writes a tuning mark`;
+    }
   } else if (profile === null) {
     markNote =
       "the config carries no threshold profile, so there is no (profile, use) pair to mark";
@@ -495,6 +530,7 @@ export async function runDecisionModelEval(
     call_ids: callIds,
     grade_record_id: record?.id ?? null,
     mark_written: markWritten,
+    mark_retracted: markRetracted,
     mark_note: markNote,
   };
 }

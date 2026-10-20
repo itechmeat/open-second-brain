@@ -40,6 +40,7 @@ import {
   machineTunedMarkReader,
   readTuningMark,
   resetTuningMarkCache,
+  retractTuningMark,
   validatedTuningMark,
   writeTuningMark,
 } from "../../../src/core/decision-model/eval/mark.ts";
@@ -196,6 +197,51 @@ describe("the machine-side mark file", () => {
     expect(readTuningMark(path)?.created_at).toBe("2026-10-20T00:00:00.000Z");
     resetTuningMarkCache();
     expect(readTuningMark(path)?.created_at).toBe("2026-10-21T00:00:00.000Z");
+  });
+});
+
+describe("retractTuningMark", () => {
+  const registry = decisionEvalSpecFor("rerank")!;
+
+  function markOnDisk(specHash: string): void {
+    writeTuningMark(decisionModelTuningMarkPath(stateEnv, "laya", "rerank"), {
+      profile: "laya",
+      use: "rerank",
+      spec_hash: specHash,
+      fixture_hash: registry.fixture_hash,
+      thresholds: {},
+      metric: "counted_error_rate",
+      counted_n: 30,
+      counted_error: 0,
+      baseline_error: 0.5,
+      verdict: "promote",
+      created_at: "2026-10-20T00:00:00.000Z",
+      provider: "compatible",
+      model: "fake-model-1",
+      base_url_hash: sha256Hex("http://127.0.0.1:9"),
+    });
+  }
+
+  test("deletes a spec-matched mark, and the deletion is visible immediately", () => {
+    const specHash = decisionEvalSpecHash(registry);
+    markOnDisk(specHash);
+    expect(readTuningMark(decisionModelTuningMarkPath(stateEnv, "laya", "rerank"))).not.toBeNull();
+    expect(retractTuningMark(stateEnv, "laya", "rerank", specHash)).toBe(true);
+    // No cache reset: a retraction must be seen by the very next read.
+    expect(readTuningMark(decisionModelTuningMarkPath(stateEnv, "laya", "rerank"))).toBeNull();
+  });
+
+  test("keeps a foreign-spec mark, and reports false when there is nothing to retract", () => {
+    markOnDisk("a".repeat(64));
+    // A hold under another spec does not speak for this mark.
+    expect(retractTuningMark(stateEnv, "laya", "rerank", "b".repeat(64))).toBe(false);
+    expect(readTuningMark(decisionModelTuningMarkPath(stateEnv, "laya", "rerank"))).not.toBeNull();
+    // Retracting the matching mark twice: the second is a no-op.
+    expect(retractTuningMark(stateEnv, "laya", "rerank", "a".repeat(64))).toBe(true);
+    expect(retractTuningMark(stateEnv, "laya", "rerank", "a".repeat(64))).toBe(false);
+    // No state root, or no profile: there is no (profile, use) pair.
+    expect(retractTuningMark(null, "laya", "rerank", "a".repeat(64))).toBe(false);
+    expect(retractTuningMark(stateEnv, null, "rerank", "a".repeat(64))).toBe(false);
   });
 });
 
@@ -486,6 +532,48 @@ describe("the measured gate", () => {
       measuredTunedMark: machineTunedMarkReader(ENDPOINT, stateEnv),
     });
     expect(cfg.uses["rerank"]).toBe("shadow");
+  });
+
+  test("a completed hold retracts the mark; a refused run keeps it", async () => {
+    const run = (provider: FakeDecisionProvider, spec?: DecisionEvalSpec) =>
+      runDecisionModelEval("rerank", {
+        config: evalConfig(),
+        provider,
+        markSource: stateEnv,
+        ...(spec !== undefined ? { spec } : {}),
+      });
+    const reader = machineTunedMarkReader(ENDPOINT, stateEnv);
+    const gated = () =>
+      resolveDecisionModelConfig({ env: ENV, config: CONFIG, vault, measuredTunedMark: reader });
+
+    // Run 1 promotes: the gate arms enforce.
+    const first = await run(new FakeDecisionProvider({ answer: byLabelRule }));
+    expect(first.mark_written).toBe(true);
+    expect(gated().uses["rerank"]).toBe("enforce");
+
+    // Run 2 holds: the mark is gone and the gate falls back to shadow -
+    // the run says so, instead of printing that no mark was written.
+    const second = await run(new FakeDecisionProvider({ answer: INVERTED }));
+    expect(second.verdict).toBe("hold");
+    expect(second.mark_retracted).toBe(true);
+    expect(second.mark_note).toMatch(/retracted/);
+    expect(gated().uses["rerank"]).toBe("shadow");
+
+    // Run 3 promotes again: re-arming after a retraction works.
+    const third = await run(new FakeDecisionProvider({ answer: byLabelRule }));
+    expect(third.mark_written).toBe(true);
+    expect(gated().uses["rerank"]).toBe("enforce");
+
+    // Run 4 is refused before any measurement: the mark survives.
+    const registry = decisionEvalSpecFor("rerank")!;
+    const tampered: DecisionEvalSpec = {
+      ...registry,
+      receipt: { dev: registry.receipt.dev, counted: registry.receipt.counted.slice(1) },
+    };
+    await expect(run(new FakeDecisionProvider({ answer: byLabelRule }), tampered)).rejects.toThrow(
+      /preregistration/,
+    );
+    expect(gated().uses["rerank"]).toBe("enforce");
   });
 
   test("a tampered mark fails closed to shadow", async () => {

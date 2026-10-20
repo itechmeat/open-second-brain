@@ -11,8 +11,10 @@
  *
  * The mark is the GATE INPUT; the vault's `decision_model_eval_grade`
  * records are the review evidence a reviewer audits it against. The
- * runner (`eval/grade.ts`) is the only writer, and it writes only on a
- * `promote` verdict. Acceptance is fail-closed: the mark is honored only
+ * runner (`eval/grade.ts`) is the only writer: a `promote` verdict
+ * writes the mark, and a completed non-promote measurement retracts a
+ * matching one - a use that missed its bar must not keep an earlier
+ * mark armed. Acceptance is fail-closed: the mark is honored only
  * when its spec hash, fixture hash and pinned threshold values all match
  * the installed spec - a spec edited after the mark was written, a
  * fixture that moved, or thresholds that drifted each put the use back
@@ -31,7 +33,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { atomicWriteFileSync, unlinkWithRetry } from "../../fs-atomic.ts";
 import { sha256Hex } from "../../integrity/digest.ts";
 import {
   decisionModelStateDir,
@@ -102,6 +104,30 @@ export function writeTuningMark(path: string, mark: DecisionTuningMark): void {
   mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, `${JSON.stringify(mark, null, 2)}\n`);
   MARK_CACHE.delete(path);
+}
+
+/**
+ * Delete the tuning mark for (profile, use) - but only one whose spec
+ * hash matches `specHash`, i.e. a mark this exact spec earned; a
+ * measurement under another spec does not speak for it. Reports whether
+ * a matching mark was deleted: false when there is no state root, no
+ * profile (no pair to retract), no mark, or a foreign-spec mark. The
+ * deletion is immediately visible to the next read, cached or not.
+ */
+export function retractTuningMark(
+  source: PlatformDirsEnv | null | undefined,
+  profile: string | null,
+  use: DecisionModelUse,
+  specHash: string,
+  nowMs: number = Date.now(),
+): boolean {
+  if (source === null || source === undefined || profile === null) return false;
+  const path = decisionModelTuningMarkPath(source, profile, use);
+  const mark = readTuningMark(path, nowMs);
+  if (mark === null || mark.spec_hash !== specHash) return false;
+  unlinkWithRetry(path);
+  MARK_CACHE.delete(path);
+  return true;
 }
 
 /** Parse one mark document. Anything malformed parses as no mark (fail closed). */

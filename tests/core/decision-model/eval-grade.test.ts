@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,6 +30,7 @@ import {
 } from "../../../src/core/decision-model/eval-spec.ts";
 import { runDecisionModelEval, scoreRecall } from "../../../src/core/decision-model/eval/grade.ts";
 import {
+  decisionModelTuningMarkPath,
   resetTuningMarkCache,
   validatedTuningMark,
 } from "../../../src/core/decision-model/eval/mark.ts";
@@ -46,10 +47,11 @@ import {
   todaySpendUsd,
 } from "../../../src/core/decision-model/record.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
+import type { PlatformDirsEnv } from "../../../src/core/platform-dirs.ts";
 
 let tmp: string;
 let vault: string;
-let stateEnv: Parameters<typeof validatedTuningMark>[2];
+let stateEnv: PlatformDirsEnv;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "osb-dm-eval-grade-"));
@@ -539,6 +541,139 @@ describe("runDecisionModelEval", () => {
     expect(result.mark_written).toBe(false);
     const { grades } = listDecisionModelEvalGrades(vault);
     expect(grades[0]!.verdict).toBe("hold");
+  });
+
+  test("a completed hold retracts the earlier promote's mark", async () => {
+    const promoted = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    expect(promoted.mark_written).toBe(true);
+    expect(promoted.mark_retracted).toBe(false);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).not.toBeNull();
+    // The later hold is a completed measurement that missed its own bar:
+    // the earlier mark is withdrawn, not left armed beside it.
+    const held = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: INVERTED }),
+      markSource: stateEnv,
+    });
+    expect(held.verdict).toBe("hold");
+    expect(held.mark_written).toBe(false);
+    expect(held.mark_retracted).toBe(true);
+    expect(held.mark_note).toMatch(/retracted/);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+  });
+
+  test("not enough evidence retracts too, a degraded run included", async () => {
+    const promote = () =>
+      runDecisionModelEval("rerank", {
+        config: evalConfig(),
+        provider: new FakeDecisionProvider({ answer: byLabelRule }),
+        markSource: stateEnv,
+      });
+    await promote();
+    // A run under the same spec whose usable answers shrink the counted
+    // n below the minimum is still a completed measurement: its verdict
+    // is no verdict, and the mark it would have refreshed is withdrawn.
+    const starved = new FakeDecisionProvider({
+      answer: (id, req) => {
+        const query = (req.state as { query?: string }).query ?? "";
+        // rk-001, rk-016 and rk-031 share this query - three counted
+        // items whose every answer is unusable (27 counted remain).
+        return query === "How do I look after the kubernetes?" && id.startsWith("rel_")
+          ? { invalid: true }
+          : byLabelRule(id, req);
+      },
+    });
+    const shortRun = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: starved,
+      markSource: stateEnv,
+    });
+    expect(shortRun.verdict).toBe("not_enough_evidence");
+    expect(shortRun.counted.n).toBe(27);
+    expect(shortRun.mark_retracted).toBe(true);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+
+    // A run where nothing usable came back measures nothing about
+    // quality either: the verdict still completes, and the mark goes.
+    await promote();
+    const degraded = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ fail: "timeout" }),
+      markSource: stateEnv,
+    });
+    expect(degraded.verdict).toBe("not_enough_evidence");
+    expect(degraded.degraded_n).toBe(43);
+    expect(degraded.mark_retracted).toBe(true);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+  });
+
+  test("a refused run retracts nothing", async () => {
+    await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    const registry = decisionEvalSpecFor("rerank")!;
+    const tampered: DecisionEvalSpec = {
+      ...registry,
+      receipt: { dev: registry.receipt.dev, counted: registry.receipt.counted.slice(1) },
+    };
+    await expect(
+      runDecisionModelEval("rerank", {
+        config: evalConfig(),
+        provider: new FakeDecisionProvider({ answer: byLabelRule }),
+        spec: tampered,
+        markSource: stateEnv,
+      }),
+    ).rejects.toThrow(/preregistration/);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).not.toBeNull();
+  });
+
+  test("a non-promote run retracts only a mark its own spec earned", async () => {
+    // The on-disk mark was earned by the registry spec. A hold measured
+    // under a drifted spec speaks for the drifted spec, not for that
+    // mark - which is already shadow anyway (its spec hash no longer
+    // matches the drifted spec), so deleting it is neither owed nor done.
+    await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    const registry = decisionEvalSpecFor("rerank")!;
+    const drifted: DecisionEvalSpec = { ...registry, thresholds: { min_score: 0.5 } };
+    const held = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: INVERTED }),
+      spec: drifted,
+      markSource: stateEnv,
+    });
+    expect(held.verdict).toBe("hold");
+    expect(held.mark_retracted).toBe(false);
+    const markPath = decisionModelTuningMarkPath(stateEnv, "laya", "rerank");
+    expect(JSON.parse(readFileSync(markPath, "utf8"))).toMatchObject({
+      spec_hash: decisionEvalSpecHash(registry),
+      verdict: "promote",
+    });
+  });
+
+  test("a hold with no state root retracts nothing", async () => {
+    await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    const held = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({ answer: INVERTED }),
+      markSource: null,
+    });
+    expect(held.verdict).toBe("hold");
+    expect(held.mark_retracted).toBe(false);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).not.toBeNull();
   });
 
   test("refuses a use with no preregistered spec and an inactive config", async () => {
