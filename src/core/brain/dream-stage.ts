@@ -72,6 +72,15 @@ export interface DreamStagePlan {
    * grows with the clock alone (see `HOUSEKEEPING_PLAN_KEYS`).
    */
   readonly archived_signals?: ReadonlyArray<string>;
+  /**
+   * Cross-topic rule promotions (t_642bc2b8) the pass would create - the
+   * `pref-*` ids, like `new_unconfirmed` but for the planner's own
+   * separate list. Absent when empty (finding 65), so every projection
+   * before the feature - and every pass that promotes nothing - keeps
+   * its exact shape, and the drift comparison sees a changed promotion
+   * as the ordinary key drift it is.
+   */
+  readonly cross_topic_rules?: ReadonlyArray<string>;
   readonly suppressed: ReadonlyArray<string>;
   readonly quarantined: ReadonlyArray<{ topic: string; failed_gates: ReadonlyArray<string> }>;
   readonly gated_retires: ReadonlyArray<{ pref_id: string; attempted_reason: string }>;
@@ -182,6 +191,9 @@ export function projectDreamPlan(summary: DreamRunSummary): DreamStagePlan {
     ...(summary.archived_signals !== undefined && summary.archived_signals.length > 0
       ? { archived_signals: Object.freeze([...summary.archived_signals].toSorted()) }
       : {}),
+    ...(summary.cross_topic_rules !== undefined && summary.cross_topic_rules.length > 0
+      ? { cross_topic_rules: Object.freeze([...summary.cross_topic_rules].toSorted()) }
+      : {}),
     suppressed: Object.freeze([...summary.suppressed].toSorted()),
     quarantined: Object.freeze(
       sorted(
@@ -245,6 +257,10 @@ function scanSources(vault: string): DreamStageSource[] {
 function planToProposals(plan: DreamStagePlan): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = [];
   for (const id of plan.new_unconfirmed) rows.push({ type: "create_preference", id });
+  // A cross-topic promotion is a new unconfirmed preference file like any
+  // other; apply writes it through the same transactional writer, so its
+  // proposal row is the same shape (finding 65).
+  for (const id of plan.cross_topic_rules ?? []) rows.push({ type: "create_preference", id });
   for (const id of plan.confirmed) rows.push({ type: "confirm_preference", id });
   for (const r of plan.retired)
     rows.push({ type: "retire_preference", id: r.id, reason: r.reason });
@@ -288,6 +304,7 @@ function renderReport(
         ]),
     "",
     ...section("Would create (unconfirmed)", plan.new_unconfirmed),
+    ...section("Would create (cross-topic rules)", plan.cross_topic_rules ?? []),
     ...section("Would confirm", plan.confirmed),
     ...section(
       "Would retire",

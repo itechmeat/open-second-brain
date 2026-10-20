@@ -47,6 +47,8 @@ import { pageVisibility } from "../../../src/core/graph/visibility.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { tombstone } from "../../../src/core/brain/lifecycle/tombstone.ts";
+import { buildReviewCandidates } from "../../../src/core/brain/review-candidates.ts";
+import { stageDream, validateDreamBundle } from "../../../src/core/brain/dream-stage.ts";
 import { brainConfigPath, crossTopicLedgerPath } from "../../../src/core/brain/paths.ts";
 import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
 import { isoSecond } from "../../../src/core/brain/time.ts";
@@ -933,5 +935,151 @@ describe("dream pass wiring (end to end)", () => {
     const clamp = summary.warnings.find((w) => w.code === "cross-topic-config-clamped");
     expect(clamp?.message).toContain("cross_topic.min_topics");
     expect(clamp?.message).toContain("2");
+  });
+});
+
+// ----- Staging surfaces (review finding 65) ---------------------------------
+// The summary carried `cross_topic_rules`, but nothing downstream consumed
+// it: the stage projection omitted the field, proposals.jsonl had no row,
+// the report had no section, and the review preview built would_create from
+// new_unconfirmed only - so a cross-topic-only pass read as "Planned
+// changes: yes" with nothing created, and stage-vs-apply drift could not
+// see WHICH rule the pass would promote.
+
+describe("the staging surfaces see a cross-topic promotion (finding 65)", () => {
+  const NOW_STAGED = new Date("2026-07-19T10:00:00Z");
+  const ENABLED = "schema_version: 1\ncross_topic:\n  enabled: true\n";
+
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-cross-topic-stage-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function makeVault(name: string): string {
+    const vault = join(tmp, name);
+    bootstrapBrain(vault, {});
+    atomicWriteFileSync(brainConfigPath(vault), ENABLED);
+    return vault;
+  }
+
+  function seedThird(vault: string): void {
+    writePreference(vault, {
+      slug: "gamma",
+      topic: "Gamma",
+      principle: P_ALPHA,
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-07-17T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence_value: 0,
+    });
+  }
+
+  test("the projection, proposals and report all name the promoted rule", () => {
+    const vault = makeVault("projected");
+    for (const [slug, topic, principle] of [
+      ["alpha", "Alpha", P_ALPHA],
+      ["beta", "Beta", P_BETA],
+    ] as const) {
+      writePreference(vault, {
+        slug,
+        topic,
+        principle,
+        created_at: "2026-01-01T00:00:00Z",
+        unconfirmed_until: "2026-01-08T00:00:00Z",
+        confirmed_at: "2026-07-17T00:00:00Z",
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        evidenced_by: [],
+        applied_count: 0,
+        violated_count: 0,
+        last_evidence_at: null,
+        confidence_value: 0,
+      });
+    }
+    const id = `pref-${expectedSlug("pref-alpha", "pref-beta")}`;
+
+    const bundle = stageDream(vault, { now: NOW_STAGED });
+
+    expect(bundle.plan.changed).toBe(true);
+    expect(bundle.plan.cross_topic_rules).toEqual([id]);
+    expect(bundle.plan.new_unconfirmed).toEqual([]);
+    const proposals = readFileSync(join(bundle.dir, "proposals.jsonl"), "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(proposals).toContainEqual({ type: "create_preference", id });
+    const report = readFileSync(join(bundle.dir, "REPORT.md"), "utf8");
+    expect(report).toContain(id);
+  });
+
+  test("validate sees a changed promotion between stage and apply", () => {
+    const vault = makeVault("drift");
+    for (const [slug, topic, principle] of [
+      ["alpha", "Alpha", P_ALPHA],
+      ["beta", "Beta", P_BETA],
+    ] as const) {
+      writePreference(vault, {
+        slug,
+        topic,
+        principle,
+        created_at: "2026-01-01T00:00:00Z",
+        unconfirmed_until: "2026-01-08T00:00:00Z",
+        confirmed_at: "2026-07-17T00:00:00Z",
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        evidenced_by: [],
+        applied_count: 0,
+        violated_count: 0,
+        last_evidence_at: null,
+        confidence_value: 0,
+      });
+    }
+    const bundle = stageDream(vault, { now: NOW_STAGED });
+    expect(bundle.plan.cross_topic_rules).toEqual(
+      [expectedSlug("pref-alpha", "pref-beta")].map((s) => `pref-${s}`),
+    );
+
+    // A third source lands after staging: the elected cluster grows, so
+    // the pass would promote a DIFFERENT rule than the bundle recorded.
+    seedThird(vault);
+
+    const validation = validateDreamBundle(vault, bundle.runId, { now: NOW_STAGED });
+    expect(validation.valid).toBe(false);
+    expect(validation.drift.some((d) => d.startsWith("cross_topic_rules:"))).toBe(true);
+  });
+
+  test("the review preview's would_create includes the promoted rule", async () => {
+    const vault = makeVault("preview");
+    for (const [slug, topic, principle] of [
+      ["alpha", "Alpha", P_ALPHA],
+      ["beta", "Beta", P_BETA],
+    ] as const) {
+      writePreference(vault, {
+        slug,
+        topic,
+        principle,
+        created_at: "2026-01-01T00:00:00Z",
+        unconfirmed_until: "2026-01-08T00:00:00Z",
+        confirmed_at: "2026-07-17T00:00:00Z",
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        evidenced_by: [],
+        applied_count: 0,
+        violated_count: 0,
+        last_evidence_at: null,
+        confidence_value: 0,
+      });
+    }
+
+    const report = await buildReviewCandidates(vault, { now: NOW_STAGED });
+
+    expect(report.would_create).toEqual([`pref-${expectedSlug("pref-alpha", "pref-beta")}`]);
+    expect(report.would_promote).toEqual([]);
   });
 });

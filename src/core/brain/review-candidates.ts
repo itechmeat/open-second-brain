@@ -222,7 +222,11 @@ export async function buildReviewCandidates(
       : {}),
     ...(siblings.semantic !== undefined ? { retire_siblings_semantic: siblings.semantic } : {}),
     ...(siblings.detail !== undefined ? { retire_siblings_semantic_detail: siblings.detail } : {}),
-    would_create: Object.freeze([...summary.new_unconfirmed]),
+    // Both creation lists: the topic plan's drafts and the cross-topic
+    // planner's promotions are new unconfirmed preference files either
+    // way, so an operator previews them as one decision surface
+    // (finding 65) instead of a cross-topic-only pass reading as empty.
+    would_create: Object.freeze([...summary.new_unconfirmed, ...(summary.cross_topic_rules ?? [])]),
     would_promote: Object.freeze([...summary.confirmed]),
     would_retire: Object.freeze(
       summary.retired.map((r) => Object.freeze({ id: r.id, reason: r.reason })),
