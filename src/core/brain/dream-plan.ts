@@ -285,6 +285,12 @@ export interface SignalSuppressedPlan {
  *   - `owner` carries the sources' shared owner token when they have
  *     one, so owner-scoped recall keeps the rule as private as its
  *     sources; ownerless sources produce an ownerless rule.
+ *   - `visibility` is the strictest of the sources' `visibility:` token
+ *     sets (`strictestVisibilityOf`, the topic plan's own rule): the
+ *     rule restates a source's principle verbatim, so it may never be
+ *     more public than the most restricted member. An intersection that
+ *     misses falls closed on the reserved token. Empty means default
+ *     visibility, and the writer omits the field then.
  */
 export interface CrossTopicRulePlan {
   /** `cross-<sha256-12>`; the file basename without the `pref-` prefix. */
@@ -297,6 +303,12 @@ export interface CrossTopicRulePlan {
   readonly evidencedBy: ReadonlyArray<string>;
   /** The source preference ids (`pref-<slug>`), in code-unit order. */
   readonly related: ReadonlyArray<string>;
+  /**
+   * The strictest `visibility:` tokens of the cluster members. Written
+   * to the promoted rule's frontmatter when non-empty; empty is default
+   * visibility.
+   */
+  readonly visibility: ReadonlyArray<string>;
   /** The sources' shared owner token; absent for ownerless sources. */
   readonly owner?: string;
 }

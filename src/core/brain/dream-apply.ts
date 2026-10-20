@@ -223,6 +223,11 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         recentViolated: [],
         provenance: "inferred",
         related: ct.related,
+        // The strictest visibility of the sources (review finding 63):
+        // the rule restates a source's principle verbatim, so it may
+        // never land at default visibility behind a restricted source.
+        // Written only when non-empty, like the topic plan's stamp.
+        ...(ct.visibility.length > 0 ? { visibility: ct.visibility } : {}),
         // The sources' shared owner token, so owner-scoped recall keeps
         // the rule as private as its sources; ownerless rules omit it.
         ...(ct.owner ? { owner: ct.owner } : {}),

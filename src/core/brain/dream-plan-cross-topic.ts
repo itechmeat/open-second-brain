@@ -47,6 +47,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
+import { strictestVisibilityOf } from "../graph/visibility.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import {
@@ -220,6 +221,11 @@ interface Source {
   readonly tokens: ReadonlySet<string>;
   /** Budget token: the owner's normalized token, or "" when ownerless. */
   readonly ownerKey: string;
+  /**
+   * The record's normalised `visibility:` tokens; empty (the default)
+   * for an untagged source.
+   */
+  readonly visibility: ReadonlyArray<string>;
 }
 
 export interface CrossTopicPlannerInput {
@@ -287,6 +293,12 @@ export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPl
         principle: representative.principle,
         evidencedBy: Object.freeze(normalizedIds.map((id) => `[[${id}]]`)),
         related: Object.freeze(normalizedIds),
+        // The strictest visibility of the sources: the rule restates a
+        // source's principle verbatim, so it may never be more public
+        // than the most restricted member (the topic plan's own
+        // strictestVisibilityOf rule; an intersection that misses falls
+        // closed on the reserved token). Empty is default visibility.
+        visibility: strictestVisibilityOf(cluster.members.map((m) => m.visibility)),
         ...(ownerKey ? { owner: ownerKey } : {}),
       }),
     );
@@ -340,6 +352,7 @@ function collectSources(scan: ScanResult, refresh: RefreshResult, plan: PlanStat
       principle: record.pref.principle,
       tokens: tokenise(record.pref.principle),
       ownerKey: owner ?? "",
+      visibility: record.visibility ?? [],
     });
   }
   sources.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

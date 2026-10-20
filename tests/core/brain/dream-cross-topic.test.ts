@@ -42,6 +42,8 @@ import {
 } from "../../../src/core/brain/dream-plan.ts";
 import type { RefreshResult } from "../../../src/core/brain/dream-refresh.ts";
 import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
+import { parseFrontmatter } from "../../../src/core/vault.ts";
+import { pageVisibility } from "../../../src/core/graph/visibility.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath, crossTopicLedgerPath } from "../../../src/core/brain/paths.ts";
@@ -111,6 +113,11 @@ function rec(
 
 function retiredRec(id: string, topic: string, principle: string): RetiredRecord {
   return { path: `/vault/Brain/retired/${id}.md`, id, topic, principle };
+}
+
+/** A record re-scanned with `visibility:` tokens on its page. */
+function withVisibility(record: PreferenceRecord, tokens: string[]): PreferenceRecord {
+  return { ...record, visibility: Object.freeze(tokens) };
 }
 
 /**
@@ -281,6 +288,8 @@ describe("planCrossTopicRules", () => {
     expect([...entry.evidencedBy]).toEqual(["[[pref-alpha]]", "[[pref-beta]]"]);
     expect([...entry.related]).toEqual(["pref-alpha", "pref-beta"]);
     expect(entry.owner).toBeUndefined();
+    // Default-visibility sources promote a default-visibility rule.
+    expect(entry.visibility).toEqual([]);
     // The returned ledger stamps the shared (ownerless) token with today.
     expect(result.ledger?.version).toBe(CROSS_TOPIC_LEDGER_VERSION);
     expect(result.ledger?.last_promoted[""]).toBe(TODAY);
@@ -368,6 +377,37 @@ describe("planCrossTopicRules", () => {
     const retired = plan(sources, { retired: [retiredRec(`ret-${slug}`, "gone", P_FAR)] });
     expect(retired.result.fired).toBe(false);
     expect(retired.plan.crossTopicRules).toHaveLength(0);
+  });
+
+  // ----- Visibility of the promoted rule (review finding 63) --------------
+  // The rule restates its representative source's principle VERBATIM, so
+  // it may never be more public than the most restricted member. The
+  // topic plan's strictest-visibility rule, over the cluster members.
+
+  test("a restricted source's rule carries that restriction (finding 63)", () => {
+    const { plan: planState } = plan([
+      withVisibility(rec("pref-a", "Alpha", P_ALPHA), ["private"]),
+      rec("pref-b", "Beta", P_BETA),
+    ]);
+    expect(planState.crossTopicRules).toHaveLength(1);
+    expect(planState.crossTopicRules[0]!.visibility).toEqual(["private"]);
+  });
+
+  test("a visibility intersection that misses falls closed on the reserved token", () => {
+    const { plan: planState } = plan([
+      withVisibility(rec("pref-a", "Alpha", P_ALPHA), ["team"]),
+      withVisibility(rec("pref-b", "Beta", P_BETA), ["agent:x"]),
+    ]);
+    expect(planState.crossTopicRules).toHaveLength(1);
+    expect(planState.crossTopicRules[0]!.visibility).toEqual(["private"]);
+  });
+
+  test("the strictest of several restricted sources wins", () => {
+    const { plan: planState } = plan([
+      withVisibility(rec("pref-a", "Alpha", P_ALPHA), ["team", "agent:x"]),
+      withVisibility(rec("pref-b", "Beta", P_BETA), ["team"]),
+    ]);
+    expect(planState.crossTopicRules[0]!.visibility).toEqual(["team"]);
   });
 
   test("one promotion per owner token per calendar day, dated from the injected now", () => {
@@ -656,6 +696,52 @@ describe("dream pass wiring (end to end)", () => {
     expect(
       existsSync(retiredDir) ? readdirSync(retiredDir).filter((f) => f.endsWith(".md")) : [],
     ).toEqual([]);
+  });
+
+  test("a restricted source's promoted rule is not public (finding 63)", () => {
+    const vault = makeVault("restricted", ENABLED);
+    // One source carries `visibility: [private]`; the rule restates its
+    // principle verbatim and must land at that visibility, not the
+    // default. The copied `owner` token does not substitute.
+    writePreference(vault, {
+      slug: "alpha",
+      topic: "Alpha",
+      principle: P_ALPHA,
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-07-17T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence_value: 0,
+      visibility: ["private"],
+    });
+    writePreference(vault, {
+      slug: "beta",
+      topic: "Beta",
+      principle: P_BETA,
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-07-17T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence_value: 0,
+    });
+
+    const summary = dream(vault, { now: NOW_E2E });
+    expect(summary.changed).toBe(true);
+
+    const slug = expectedSlug("pref-alpha", "pref-beta");
+    const rulePath = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    // The typed parser drops the field; the frontmatter is the contract.
+    const rule = parsePreference(rulePath);
+    expect(rule.provenance).toBe("inferred");
+    expect(pageVisibility(parseFrontmatter(rulePath)[0])).toEqual(["private"]);
   });
 
   test("a same-day rerun is a no-op: slug dedup below the changed gate", () => {
