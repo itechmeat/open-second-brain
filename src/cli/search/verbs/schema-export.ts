@@ -161,7 +161,10 @@ function propertySetOf(schema: unknown): string {
  * `o2b search schema export [--stdout]` - write the derived artifact to
  * the committed path (default) or print it; `o2b search schema check` -
  * re-derive and compare with the committed file: exit 0 clean, exit 2 on
- * drift, so CI and operators share one named verdict.
+ * drift, so CI and operators share one named verdict. The comparison is
+ * JSON equality, not byte equality: the committed file carries the repo
+ * formatter's layout, so `export` writing raw builder bytes must never
+ * read as drift - only content can drift.
  */
 export async function cmdSearchSchema(argv: ReadonlyArray<string>): Promise<number> {
   const sub = argv[0];
