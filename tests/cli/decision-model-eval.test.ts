@@ -144,6 +144,31 @@ describe("o2b decision-model eval", () => {
     expect(noKey.stderr).toContain("o2b decision-model check");
   });
 
+  test("eval run refuses a use that is off before sending or caching anything", async () => {
+    // decision_model_uses lists only rerank: recall_inject defaults to
+    // off, and the runner's mode override would send nothing, score
+    // every item degraded, cache that junk grade and exit 0 - a named
+    // refusal is owed instead, before any of that happens.
+    writeEnabledConfig();
+    server.setReply(answerByLabel);
+    const res = await runCli(
+      ["decision-model", "eval", "run", "--use", "recall_inject", "--config", configPath],
+      { env: childEnv() },
+    );
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain("recall_inject");
+    expect(res.stderr).toContain("decision_model_uses");
+    expect(server.requests).toHaveLength(0);
+    const listJson = await runCli(
+      ["decision-model", "eval", "list", "--config", configPath, "--json"],
+      { env: childEnv() },
+    );
+    expect(listJson.returncode).toBe(0);
+    const listed = JSON.parse(listJson.stdout) as { grades: unknown[]; skipped: unknown[] };
+    expect(listed.grades).toHaveLength(0);
+    expect(listed.skipped).toHaveLength(0);
+  }, 30000);
+
   test("a promote run writes the mark, caches the grade and the doctor names it", async () => {
     writeEnabledConfig();
     server.setReply(answerByLabel);

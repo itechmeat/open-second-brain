@@ -16,9 +16,12 @@
  *                    `decision_model_eval_grade` records.
  *   eval run         the preregistered eval for one use (`--use`), over
  *                    the configured adapter: real spend, counted toward
- *                    the daily gate. A promote verdict writes the
- *                    machine-side tuning mark; anything else leaves the
- *                    gate exactly as it was.
+ *                    the daily gate. A use that is off is refused by
+ *                    name before anything is sent. A promote verdict
+ *                    writes the machine-side tuning mark only when the
+ *                    grade record exists and the counted spend stayed
+ *                    under the gate; anything else leaves the gate
+ *                    exactly as it was.
  *   eval list        the cached grade records, oldest first, in prose or
  *                    `--json`; malformed records are skipped with a named
  *                    note, never silently.
@@ -41,6 +44,7 @@ import {
 } from "../core/decision-model/diagnostics.ts";
 import { isDecisionModelUse, type DecisionModelUse } from "../core/decision-model/contract.ts";
 import { resolveDecisionModelConfig } from "../core/decision-model/config.ts";
+import { decisionEvalSpecFor } from "../core/decision-model/eval-spec.ts";
 import { runDecisionModelEval } from "../core/decision-model/eval/grade.ts";
 import { listDecisionModelEvalGrades } from "../core/decision-model/record.ts";
 import { processDirsEnv } from "../core/platform-dirs.ts";
@@ -192,6 +196,18 @@ async function evalRunVerb(argv: ReadonlyArray<string>): Promise<number> {
     throw new CliError(
       `decision-model eval run needs an active config (status ${cfg.status}); ` +
         "run `o2b decision-model check` for what is missing",
+    );
+  }
+  // A use that is off measures nothing: the runner's mode override would
+  // send no request, score every item degraded, cache that junk grade
+  // record and exit 0. Refuse by name before grading - but keep the
+  // specless use's own preregistration error, which already says the
+  // same thing from the registry side.
+  if (decisionEvalSpecFor(use) !== null && cfg.uses[use] === "off") {
+    throw new CliError(
+      `decision-model eval run: use '${use}' is off in decision_model_uses, so grading it ` +
+        `would send nothing and measure nothing; enable it first (for example ` +
+        `'${use}:shadow') and re-run`,
     );
   }
   // Every throw from the runner is a named refusal - no spec for the
