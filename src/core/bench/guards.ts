@@ -34,6 +34,7 @@ import { join } from "node:path";
 import { constants as fsConstants } from "node:fs";
 
 import { benchResultsDir, benchVaultDir, guardedRunDir } from "./run-store.ts";
+import { fixtureHash } from "./fixture.ts";
 import {
   BENCH_PHASES,
   type BenchFixture,
@@ -58,6 +59,14 @@ export const BENCH_REFUSAL = Object.freeze({
   checkpointPhaseUnknown: "checkpoint_phase_unknown",
   /** P4b: the checkpoint's phases are out of order or duplicated. */
   checkpointPhaseOrder: "checkpoint_phase_order",
+  /**
+   * P4c: the resume was handed a fixture the run did not start with -
+   * another `--fixture`, an edited copy, or (on a sampled suite) a
+   * different `--sample-seed`/`--sample-cap`, which samples a different
+   * fixture. Refused BEFORE the artifact check, which would read the new
+   * fixture's absent artifacts as a tampered run.
+   */
+  checkpointFixtureMismatch: "checkpoint_fixture_mismatch",
   /** P5: a phase is marked done whose artifacts are gone or truncated. */
   runArtifactMissing: "run_artifact_missing",
   /** P7: the fixture cross-references notes or sessions it never defines. */
@@ -179,7 +188,7 @@ function describeCause(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/** P3, P4, P5: the resume target's checkpoint and its promised artifacts. */
+/** P3, P4, the fixture-hash match, P5: the resume target's checkpoint and its promised artifacts. */
 function preflightResume(runsDir: string, runId: string, fixture: BenchFixture): void {
   // The run-id guard runs BEFORE any read (finding 30): a raw `--resume`
   // value the guard would refuse is refused here, by name - never
@@ -243,6 +252,22 @@ function preflightResume(runsDir: string, runId: string, fixture: BenchFixture):
       );
     }
     lastIndex = index;
+  }
+  // P4c: the fixture the resume was given is hashed the way loadBenchRun
+  // hashes it and compared BEFORE P5. A different `--fixture`, an edited
+  // fixture copy, or a different --sample-seed/--sample-cap (which sample
+  // a different fixture) changes this hash - and P5, comparing the run
+  // directory against the NEW fixture, would read its absent artifacts as
+  // `run_artifact_missing` and advise discarding a run that is healthy
+  // under its own fixture.
+  const expectedHash = fixtureHash(fixture);
+  if (record["fixture_hash"] !== expectedHash) {
+    refuse(
+      BENCH_REFUSAL.checkpointFixtureMismatch,
+      `${path} records fixture hash '${String(record["fixture_hash"])}' but this resume was given ` +
+        `a fixture hashing to '${expectedHash}' - ` +
+        "resume with the same fixture, seed and cap, or start a fresh run",
+    );
   }
   const completed = new Set<string>(phases as ReadonlyArray<string>);
   const done = (phase: BenchPhase): boolean => completed.has(phase);

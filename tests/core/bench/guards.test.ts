@@ -32,7 +32,7 @@ import {
   preflightBenchRun,
   validateBenchTrace,
 } from "../../../src/core/bench/guards.ts";
-import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
+import { fixtureHash, parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { completeBenchPhase, createBenchRun } from "../../../src/core/bench/run-store.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import type {
@@ -84,7 +84,7 @@ function writeCheckpoint(runId: string, phases: string[], fixture: BenchFixture 
   const checkpoint = {
     run_id: runId,
     fixture_name: fixture.name,
-    fixture_hash: "0123456789abcdef",
+    fixture_hash: fixtureHash(fixture),
     pinned_knobs: { semantic: { enabled: false } },
     knobs_hash: "0123456789abcdef0123456789abcdef",
     created_at: "2026-06-03T12:00:00.000Z",
@@ -129,6 +129,7 @@ describe("the BENCH_REFUSAL vocabulary", () => {
     expect(Object.isFrozen(BENCH_REFUSAL_KINDS)).toBe(true);
     // One member per P1-P7 / T1-T7 state the recon names.
     expect([...BENCH_REFUSAL_KINDS].toSorted()).toEqual([
+      "checkpoint_fixture_mismatch",
       "checkpoint_phase_order",
       "checkpoint_phase_unknown",
       "checkpoint_unparseable",
@@ -303,6 +304,52 @@ describe("preflightBenchRun", () => {
       throw new Error("expected the preflight to refuse");
     } catch (e) {
       expect((e as BenchRefusalError).kind).toBe("checkpoint_phase_order");
+    }
+  });
+
+  test("resuming with a different fixture is refused as a fixture mismatch naming the repair", () => {
+    // The run directory matches its own checkpoint; only the fixture given
+    // to THIS resume differs - an edited copy of the same fixture. The
+    // preflight refuses by name with the seed-aware repair, and the run
+    // directory is never condemned as tampered.
+    const runDir = writeCheckpoint("run-fixture", ["ingest"]);
+    writeVault(runDir);
+    const raw = JSON.parse(JSON.stringify(FIXTURE)) as {
+      notes: Array<{ path: string; body: string }>;
+    };
+    raw.notes[0]!.body = "an edited body under the same path";
+    const edited = parseBenchFixture(raw);
+    try {
+      preflightBenchRun({ runsDir, fixture: edited, resume: "run-fixture" });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      const refusal = e as BenchRefusalError;
+      expect(refusal.kind).toBe("checkpoint_fixture_mismatch");
+      expect(refusal.detail).toContain(join(runDir, "checkpoint.json"));
+      expect(refusal.detail).toContain(fixtureHash(FIXTURE));
+      expect(refusal.detail).toContain(fixtureHash(edited));
+      expect(refusal.detail).toContain("same fixture, seed and cap");
+    }
+  });
+
+  test("a fixture mismatch is named before the artifact check on a damaged run", () => {
+    // The misreport the fix removes: an interrupted run resumed under a
+    // different fixture used to fail P5 first - `run_artifact_missing`
+    // ... "tampered with or truncated; start a fresh run" - repair advice
+    // that discards a run perfectly healthy under its own fixture.
+    writeCheckpoint("run-mismatch", ["ingest"]);
+    const raw = JSON.parse(JSON.stringify(FIXTURE)) as {
+      notes: Array<{ path: string; body: string }>;
+    };
+    raw.notes[0]!.body = "an edited body under the same path";
+    const edited = parseBenchFixture(raw);
+    try {
+      preflightBenchRun({ runsDir, fixture: edited, resume: "run-mismatch" });
+      throw new Error("expected the preflight to refuse");
+    } catch (e) {
+      const refusal = e as BenchRefusalError;
+      expect(refusal.kind).toBe("checkpoint_fixture_mismatch");
+      expect(refusal.kind).not.toBe("run_artifact_missing");
     }
   });
 

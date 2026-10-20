@@ -17,6 +17,7 @@ import {
 } from "../../../src/core/bench/embedding-cache.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { countQuestionResults } from "../../../src/core/bench/guards.ts";
+import { loadLongMemEvalFixture } from "../../../src/core/bench/longmemeval.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
 import { completeBenchPhase, createBenchRun } from "../../../src/core/bench/run-store.ts";
@@ -114,6 +115,22 @@ const FIXTURE = parseBenchFixture({
   ],
 });
 
+/**
+ * One minimal LongMemEval dataset entry: a single-hop question over one
+ * one-turn haystack session, shaped the way the suite parser reads it.
+ */
+function longMemEvalEntry(id: string) {
+  return {
+    q_id: id,
+    question_type: "single-hop",
+    question: `what does note ${id} say`,
+    haystack_session_id: [`s-${id}`],
+    haystack_session: [[{ role: "user", content: `note ${id} body` }]],
+    haystack_dates: ["2023-05-20"],
+    answer_session_ids: [`s-${id}`],
+  };
+}
+
 describe("runMemoryBench", () => {
   test("the default bench config pins the semantic lane off", () => {
     // The resolved config is where network-freedom is real: the pin must
@@ -196,11 +213,11 @@ describe("runMemoryBench", () => {
     expect(existsSync(join(runsDir, first.run_id, "vault"))).toBe(false);
   }, 30_000);
 
-  test("resume with a changed fixture fails fast on the hash guard", async () => {
+  test("resume with a changed fixture is refused as a named fixture mismatch", async () => {
     const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
     // Change the fixture CONTENT while keeping every referenced note path:
     // the preflight's cross-reference guard (P7) must stay out of the way
-    // so the hash guard is the refusal this pin is about.
+    // so the fixture mismatch is the refusal this pin is about.
     const raw = JSON.parse(JSON.stringify(FIXTURE)) as {
       notes: Array<{ path: string; body: string }>;
     };
@@ -208,7 +225,39 @@ describe("runMemoryBench", () => {
     const changed = parseBenchFixture(raw);
     await expect(
       runMemoryBench({ fixture: changed, runsDir, resume: first.run_id }),
-    ).rejects.toThrow("hash");
+    ).rejects.toThrow(/refused \(checkpoint_fixture_mismatch\).*same fixture, seed and cap/s);
+  }, 30_000);
+
+  test("a LongMemEval resume under a different sample seed is a named fixture mismatch", async () => {
+    // The seeded sampler selects a different subset per seed, so the
+    // fixture a different `--sample-seed` loads is a DIFFERENT fixture
+    // under the same dataset. The resume must be refused by name with the
+    // seed-aware repair - never misread as a tampered run directory and
+    // never as the raw load error the verb does not render.
+    const datasetPath = join(runsDir, "dataset.json");
+    writeFileSync(
+      datasetPath,
+      JSON.stringify({
+        name: "seeded",
+        questions: [
+          longMemEvalEntry("a"),
+          longMemEvalEntry("b"),
+          longMemEvalEntry("c"),
+          longMemEvalEntry("d"),
+        ],
+      }),
+    );
+    const seedA = loadLongMemEvalFixture(datasetPath, { sample: { seed: "seed-a", cap: 2 } });
+    const seedB = loadLongMemEvalFixture(datasetPath, { sample: { seed: "seed-b", cap: 2 } });
+    // The seeds select different questions, so the resumed fixture's
+    // CONTENT differs - not just the sampling options.
+    expect(seedA.fixture.questions.map((q) => q.id)).not.toEqual(
+      seedB.fixture.questions.map((q) => q.id),
+    );
+    const first = await runMemoryBench({ fixture: seedA.fixture, runsDir });
+    await expect(
+      runMemoryBench({ fixture: seedB.fixture, runsDir, resume: first.run_id }),
+    ).rejects.toThrow(/refused \(checkpoint_fixture_mismatch\)/);
   }, 30_000);
 
   test("the default knob pin equals today's hardcoded semantic-off override", () => {
