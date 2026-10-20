@@ -42,6 +42,7 @@ import {
   brainArtifactsDir,
   brainDirs,
   claimGraphPath,
+  crossTopicLedgerPath,
   dreamRunsDir,
   hookAuditDir,
   prefAuditDir,
@@ -305,6 +306,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["skill_accept_journal", (v) => dirname(skillAcceptJournalPath(v, "probe"))],
     ["claim_graph", (v) => claimGraphPath(v)],
     ["rollup_ledger", (v) => rollupLedgerPath(v)],
+    ["cross_topic_ledger", (v) => crossTopicLedgerPath(v)],
     ["decision_ledger", (v) => decisionLedgerDir(v)],
     ["source_archives", (v) => sourceArchivesDir(v)],
   ]);
@@ -464,6 +466,19 @@ describe("each row is bound to the resolver that owns it", () => {
       expect(row(id).derive(vault, null)).toBe(resolver(vault));
     });
   }
+
+  test("the cross-topic rule ledger names its Brain/ file exactly (t_642bc2b8)", () => {
+    const example = resolve("/srv/vaults/example");
+    expect(crossTopicLedgerPath(example)).toBe(join(example, "Brain", "cross-topic-rules.json"));
+    expect(row(STATE_SURFACE_ID.crossTopicLedger).derive(example, null)).toBe(
+      crossTopicLedgerPath(example),
+    );
+    // Nothing creates the ledger at init - it appears with the first
+    // fired promotion - so a fresh vault reports it absent, not unchecked.
+    expect(reportFor(tempVault(), STATE_SURFACE_ID.crossTopicLedger).reachability.state).toBe(
+      STATE_REACHABILITY.absent,
+    );
+  });
 
   test("the search index follows its override, and so does everything derived from it", () => {
     const elsewhere = "/elsewhere/brain.sqlite";

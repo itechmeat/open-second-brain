@@ -94,7 +94,9 @@ const SWEPT_POPULATION_SIZE = 27;
 // 50 -> 51: the session mining ledger joins the population with its row
 // (session-mining-economy), the same join the session import ledger made.
 // 51 -> 52: the pending mining surveys row (v1.86.1 review fixes).
-const DECLARED_SURFACE_COUNT = 52;
+// 52 -> 53: the cross-topic rule ledger row (t_642bc2b8 substrate), the
+// same join the rollup ladder ledger made.
+const DECLARED_SURFACE_COUNT = 53;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

@@ -76,6 +76,7 @@ import {
   BRAIN_ARTIFACTS_REL,
   BRAIN_CAPTURES_REL,
   BRAIN_CLAIM_GRAPH_FILE,
+  BRAIN_CROSS_TOPIC_LEDGER_FILE,
   BRAIN_LOG_REL,
   BRAIN_PROCEDURAL_MEMORY_REL,
   BRAIN_ROLLUP_LEDGER_FILE,
@@ -156,6 +157,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   claudeMemoryManifest: "claude_memory_manifest",
   claimGraph: "claim_graph",
   rollupLedger: "rollup_ledger",
+  crossTopicLedger: "cross_topic_ledger",
   proposalWatermark: "proposal_watermark",
   captureWatermark: "capture_watermark",
   decisionLedger: "decision_ledger",
@@ -1060,6 +1062,20 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "The counters deciding when accumulated material is consolidated one rung up the ladder. " +
       "They accrue with the work rather than from it, so a reset delays consolidation instead of " +
       "recomputing it.",
+    sources: ["src/core/brain/paths.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.crossTopicLedger,
+    label: "cross-topic rule ledger",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_CROSS_TOPIC_LEDGER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "The last date each owner token promoted a cross-topic rule, so a budgeted-out dream pass " +
+      "plans nothing rather than re-promoting. Like the rollup ladder ledger beside it, the state " +
+      "accrues with the work: a reset just reopens today's promotion budget.",
     sources: ["src/core/brain/paths.ts"],
   },
   {

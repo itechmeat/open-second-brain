@@ -41,6 +41,7 @@ import {
   BRAIN_CAPTURES_REL,
   BRAIN_CLAIM_GRAPH_FILE,
   BRAIN_CONFIG_FILE,
+  BRAIN_CROSS_TOPIC_LEDGER_FILE,
   BRAIN_DECISIONS_REL,
   BRAIN_DISTILLATIONS_REL,
   BRAIN_ENTITIES_REL,
@@ -118,6 +119,11 @@ export function claimGraphPath(vault: string): string {
 /** Path of the rollup-ladder ledger: `Brain/rollup-ladder.json`. */
 export function rollupLedgerPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ROLLUP_LEDGER_FILE), vault);
+}
+
+/** Path of the cross-topic rule ledger: `Brain/cross-topic-rules.json` (t_642bc2b8). */
+export function crossTopicLedgerPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CROSS_TOPIC_LEDGER_FILE), vault);
 }
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;

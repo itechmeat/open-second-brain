@@ -267,6 +267,12 @@ export const BRAIN_INDEX_FILE = "_INDEX.md";
 export const BRAIN_CLAIM_GRAPH_FILE = "claim-graph.json";
 /** Persisted rollup-ladder counter ledger (knowledge-intake-and-consolidation, S3). */
 export const BRAIN_ROLLUP_LEDGER_FILE = "rollup-ladder.json";
+/**
+ * Cross-topic rule promotion ledger (t_642bc2b8), beside the rollup
+ * ladder ledger: the last date each owner token promoted, so a
+ * budgeted-out dream pass plans nothing rather than re-promoting.
+ */
+export const BRAIN_CROSS_TOPIC_LEDGER_FILE = "cross-topic-rules.json";
 
 /** Vault-relative path of the `o2b index` output file. */
 export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
