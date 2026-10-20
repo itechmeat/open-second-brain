@@ -1290,7 +1290,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         model: {
           type: "string",
           description:
-            "Model id. With `max_tokens` omitted the context window resolves from it (operator/env overrides, table, `-1m` suffix, default); an unknown id budgets from its hint.",
+            "Model id. `max_tokens` omitted: the context window resolves (config, env, table, `1m` suffix); an unplaced id is refused (pass max_tokens or set context.window_tokens).",
         },
         query: {
           type: "string",
@@ -1522,7 +1522,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         model: {
           type: "string",
           description:
-            "Optional model name hint for suggest. With `context_window_tokens` absent and no preset hint matched, the window resolves from this id and the reason names the source.",
+            "Optional model for suggest. With `context_window_tokens` absent the window resolves first (table, `1m` suffix); a hint answers only when nothing places the id.",
         },
         context_window_tokens: {
           type: "integer",
@@ -1560,7 +1560,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         model: {
           type: "string",
           description:
-            "Model id hint. When a char cap is absent, the context window resolves from this id (table, `-1m` suffix, or default) and missing caps derive from the matching preset.",
+            "Model id. When a char cap is absent the context window resolves from this id (table, `1m` suffix, or default); a preset hint sizes caps only when nothing places it.",
         },
         max_chars_per_memory: {
           type: "integer",

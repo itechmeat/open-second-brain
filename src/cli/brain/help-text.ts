@@ -1091,8 +1091,8 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain context-presets diff <preset-id> [current-value flags] [--override <path>...] [--json]\n" +
     "Dry-run model-aware context budget preset diagnostics. Never writes config.\n" +
     "With --model alone (no --context-window), the window resolves from the model id\n" +
-    "(declared table, a trailing -1m suffix, or the 200k default) once no preset hint\n" +
-    "matched, and the reason names what decided.\n",
+    "first (declared table, then a trailing 1m suffix); a preset hint answers only\n" +
+    "when nothing places the id, and the reason names what decided.\n",
   "pre-compact-extract":
     "usage: o2b brain pre-compact-extract --vault <path> --session-id <id> --turn-start <id> --turn-end <id> --text <text> [--host <name>] [--max-chars <n>] [--dry-run] [--json]\n" +
     "Extract Decision/Commitment/Outcome/Rule/Open question lines into idempotent continuity records.\n" +
