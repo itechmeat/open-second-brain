@@ -13,6 +13,7 @@
  */
 
 import { preferenceSlug, type PlanState, type ScanResult } from "./dream-plan.ts";
+import { writeCrossTopicLedger, type CrossTopicLedger } from "./dream-plan-cross-topic.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
 import { WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { appendLogEvent } from "./log.ts";
@@ -38,6 +39,13 @@ export interface DreamReportInput {
   readonly refresh: RefreshResult;
   readonly reconcile: ReconcileOutcomes;
   readonly rollupPlan: RollupLadderPlan;
+  /**
+   * The updated cross-topic daily budget (t_642bc2b8) to persist when a
+   * promotion fired this run; null when none did, so a below-threshold
+   * or budgeted-out run never touches the ledger - the same
+   * byte-identical opt-out the rollup ledger uses.
+   */
+  readonly crossTopicLedger: CrossTopicLedger | null;
   /** Signal ids that actually reached `processed/`. */
   readonly moved: ReadonlyArray<string>;
   /** Signal ids moved into `inbox/archived/` by this run. */
@@ -159,6 +167,12 @@ export function writeDreamLog(input: DreamReportInput): void {
   // fired. A below-threshold run never touches the ledger, so its
   // absence is the byte-identical opt-out.
   if (input.rollupPlan.fired) writeRollupLedger(vault, input.rollupPlan.ledger);
+
+  // Cross-topic promotion (t_642bc2b8): persist the advanced per-owner
+  // daily budget beside the rollup ledger, under the same discipline -
+  // written only when a promotion actually fired, through the shared
+  // atomic writer.
+  if (input.crossTopicLedger) writeCrossTopicLedger(vault, input.crossTopicLedger);
 }
 
 /**
@@ -251,6 +265,16 @@ function buildSummaryBody(input: DreamReportInput): Record<string, string | Read
   if (rollupPlan.fired) {
     body["rollups"] = rollupPlan.entries.map(
       (e) => `${e.tier} -> ${e.produces} (${e.fromCount} -> ${e.toCount})`,
+    );
+  }
+  // Cross-topic promotion (t_642bc2b8): each promoted rule rendered
+  // like a new unconfirmed pref, with its source lineage after an arrow
+  // so the audit trail shows what the rule generalises without opening
+  // a single source file. Absent when nothing fired.
+  if (plan.crossTopicRules.length > 0) {
+    body["cross_topic_rules"] = plan.crossTopicRules.map(
+      (r) =>
+        `${renderPrefLink({ id: `pref-${r.slug}`, principle: r.principle })} ← ${r.related.join(", ")}`,
     );
   }
   return body;

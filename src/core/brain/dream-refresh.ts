@@ -373,6 +373,21 @@ export function planRefresh(
       confidence_value: confidence.value,
       pinned: rec.pref.pinned,
       ...(trendLabel !== undefined ? { freshness_trend: trendLabel } : {}),
+      // Carrying the derived-fact fields through the no-op pre-flight.
+      // The renderer emits a non-default `provenance` and a non-empty
+      // `related`, so a render that omitted them could never match a
+      // preference that carries them (`deriveFact` output, the dream
+      // pass's own cross-topic promotions): every pass would see the
+      // file as "needs rewrite", and the txn's `_revision` auto-stamp
+      // would then make each rewrite real, flipping every rerun into a
+      // changed run forever. Absent stays absent, so prefs without
+      // these fields render exactly the bytes they always did.
+      ...(rec.pref.provenance !== undefined && rec.pref.provenance !== "stated"
+        ? { provenance: rec.pref.provenance }
+        : {}),
+      ...(rec.pref.related !== undefined && rec.pref.related.length > 0
+        ? { related: rec.pref.related }
+        : {}),
     };
 
     if (!countersChanged) {

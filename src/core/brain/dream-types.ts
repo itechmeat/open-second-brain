@@ -88,6 +88,14 @@ export interface DreamRunSummary {
    */
   readonly archived_signals?: ReadonlyArray<string>;
   /**
+   * Cross-topic rule promotions (t_642bc2b8): the ids of the new
+   * unconfirmed rules this pass promoted over a recurring cross-bucket
+   * cluster of confirmed preferences. Absent when the pass promoted
+   * nothing - every pass of an un-opted-in vault among them - so the
+   * summary stays byte-identical there.
+   */
+  readonly cross_topic_rules?: ReadonlyArray<string>;
+  /**
    * Signal ids dropped by §6 signal-suppression — a user-rejected
    * retired pref with the same topic blocked them from re-promotion.
    * Each entry is just the signal id (the retired wikilink + reason

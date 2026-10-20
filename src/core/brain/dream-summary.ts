@@ -123,6 +123,13 @@ export function buildChangedSummary(input: DreamChangedSummaryInput): DreamRunSu
     // Absent rather than empty, so a run that archived nothing keeps the
     // summary shape it has always had.
     ...(input.archived.length > 0 ? { archived_signals: input.archived } : {}),
+    // Cross-topic rule promotions (t_642bc2b8). Absent rather than
+    // empty for the same reason: a pass that promoted nothing - every
+    // un-opted-in pass among them - keeps the summary bytes it always
+    // had.
+    ...(plan.crossTopicRules.length > 0
+      ? { cross_topic_rules: plan.crossTopicRules.map((r) => `pref-${r.slug}`) }
+      : {}),
     suppressed: plan.signalsSuppressed.map((s) =>
       s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
     ),
@@ -158,6 +165,7 @@ function buildPhaseSummaries(input: DreamChangedSummaryInput): ReadonlyArray<Dre
     phaseSummary(DREAM_PHASE.synthesize, {
       new_unconfirmed: plan.newUnconfirmed.length,
       confirmed: refresh.confirmed.size,
+      cross_topic_rules: plan.crossTopicRules.length,
     }),
     phaseSummary(DREAM_PHASE.heal, {
       retired: plan.retires.filter((r) => !gatedSlugs.has(r.slug)).length,

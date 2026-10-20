@@ -199,6 +199,40 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
     );
   }
 
+  // Cross-topic rule promotion (t_642bc2b8): the planned rule is an
+  // ordinary unconfirmed preference through the same txn chokepoint -
+  // `inferred` provenance plus the evidence wikilinks and `related`
+  // lineage are what make it a promotion rather than a new claim.
+  // `overwrite: false` like the topic plan: the planner's content-slug
+  // dedup already decided the file is new, and a surprise collision
+  // must fail loudly rather than clobber.
+  for (const ct of plan.crossTopicRules) {
+    writePreferenceTxn(
+      vault,
+      {
+        slug: ct.slug,
+        topic: ct.topic,
+        principle: ct.principle,
+        created_at: isoSecond(now),
+        unconfirmed_until: isoSecond(addDays(now, cfg.dream.unconfirmed_window_days)),
+        status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+        evidenced_by: ct.evidencedBy,
+        // No evidence yet, matching the topic plan's pre-seeding.
+        confidence_value: 0,
+        recentApplied: [],
+        recentViolated: [],
+        provenance: "inferred",
+        related: ct.related,
+        // The sources' shared owner token, so owner-scoped recall keeps
+        // the rule as private as its sources; ownerless rules omit it.
+        ...(ct.owner ? { owner: ct.owner } : {}),
+      },
+      [],
+      { overwrite: false },
+      historyOpts,
+    );
+  }
+
   for (const update of refresh.updated.values()) {
     // Rebuild the evidence slice from the log on every pass so the
     // pref body stays in sync with the counters even when the
