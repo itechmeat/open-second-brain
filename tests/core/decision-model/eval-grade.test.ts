@@ -33,7 +33,10 @@ import {
   resetTuningMarkCache,
   validatedTuningMark,
 } from "../../../src/core/decision-model/eval/mark.ts";
-import { hashOrderSplit } from "../../../src/core/decision-model/eval/take.ts";
+import {
+  hashOrderSplit,
+  loadDecisionEvalFixture,
+} from "../../../src/core/decision-model/eval/take.ts";
 import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { buildDecisionModelReport } from "../../../src/core/decision-model/diagnostics.ts";
 import {
@@ -443,6 +446,53 @@ describe("runDecisionModelEval", () => {
     expect(result.mark_written).toBe(false);
     expect(result.mark_note).toMatch(/cost gate/);
     expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+  });
+
+  test("a counted error past the baseline holds even under a permissive ceiling", async () => {
+    // The no-regression arm is a refusal in its own right, distinct from
+    // the ceiling: this provider answers the labeling rule on the dev
+    // split only, so the counted split regresses past the input-order
+    // baseline (error 1 against 22/30) while staying under this spec's
+    // permissive ceiling of 1. Only the baseline comparison refuses the
+    // promote - and with it, the tuning mark.
+    const registry = decisionEvalSpecFor("rerank")!;
+    // Queries repeat across the take, so the split is keyed by request
+    // order: the runner sends exactly one request per item, in fixture
+    // order.
+    const items = loadDecisionEvalFixture(registry.fixture, "rerank").fixture.items;
+    const countedIndexes = new Set(
+      items
+        .map((item, i) => (registry.receipt.counted.includes(item.id) ? i : -1))
+        .filter((i) => i >= 0),
+    );
+    const spec: DecisionEvalSpec = { ...registry, ceiling: 1 };
+    // One index per distinct request object (the fake answers per
+    // question, so a counter would run several times per item).
+    const indexOfRequest = new Map<DecisionRequest, number>();
+    const provider = new FakeDecisionProvider({
+      answer: (id, req) => {
+        let i = indexOfRequest.get(req);
+        if (i === undefined) {
+          i = indexOfRequest.size;
+          indexOfRequest.set(req, i);
+        }
+        return countedIndexes.has(i) ? INVERTED(id, req) : byLabelRule(id, req);
+      },
+    });
+    const result = await runDecisionModelEval("rerank", {
+      config: evalConfig(),
+      provider,
+      spec,
+      markSource: stateEnv,
+    });
+    expect(result.dev.error).toBe(0);
+    expect(result.counted.error).toBe(1);
+    expect(result.counted.error!).toBeLessThanOrEqual(spec.ceiling);
+    expect(result.baseline_error!).toBeLessThan(result.counted.error!);
+    expect(result.verdict).toBe("hold");
+    expect(result.mark_written).toBe(false);
+    const { grades } = listDecisionModelEvalGrades(vault);
+    expect(grades[0]!.verdict).toBe("hold");
   });
 
   test("refuses a use with no preregistered spec and an inactive config", async () => {
