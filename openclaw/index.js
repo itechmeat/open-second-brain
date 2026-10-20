@@ -2241,6 +2241,7 @@ __export(exports_config, {
   MAINTENANCE_CUSTOM_TASKS_ENV: () => MAINTENANCE_CUSTOM_TASKS_ENV,
   MAINTENANCE_EMBEDDINGS_CONFIG_KEY: () => MAINTENANCE_EMBEDDINGS_CONFIG_KEY,
   MAINTENANCE_EMBEDDINGS_ENV: () => MAINTENANCE_EMBEDDINGS_ENV,
+  MODEL_CONTEXT_WINDOW_ENV_KEY: () => MODEL_CONTEXT_WINDOW_ENV_KEY,
   PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY: () => PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY,
   PARTNER_CODEGRAPH_DISABLED_ENV: () => PARTNER_CODEGRAPH_DISABLED_ENV,
   REGROUND_PART_CHARS_DEFAULT: () => REGROUND_PART_CHARS_DEFAULT,
@@ -2282,6 +2283,7 @@ __export(exports_config, {
   resolveMaintenanceEmbeddings: () => resolveMaintenanceEmbeddings,
   resolveMcpRouteMetricsEnabled: () => resolveMcpRouteMetricsEnabled,
   resolveMcpToolProfile: () => resolveMcpToolProfile,
+  resolveModelContextWindowEnvTokens: () => resolveModelContextWindowEnvTokens,
   resolveNavTierCadenceMinutes: () => resolveNavTierCadenceMinutes,
   resolveNavTierEnabled: () => resolveNavTierEnabled,
   resolveNearDuplicateRetireSiblingsEnabled: () => resolveNearDuplicateRetireSiblingsEnabled,
@@ -2704,6 +2706,16 @@ function resolveAdequacyMinResults(env, fileValue) {
   }
   return value;
 }
+function resolveModelContextWindowEnvTokens() {
+  const raw = process.env[MODEL_CONTEXT_WINDOW_ENV_KEY]?.trim() ?? "";
+  if (raw === "")
+    return;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${MODEL_CONTEXT_WINDOW_ENV_KEY} must be a positive integer; got '${raw}'`);
+  }
+  return value;
+}
 function resolveGenerationTraceEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_GENERATION_TRACE_ENABLED", "generation_trace_enabled", configPath);
 }
@@ -2954,7 +2966,7 @@ function expandTilde(p, platform = process.platform, home = homedir2()) {
     return join5(home, p.slice(2));
   return p;
 }
-var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES;
+var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES;
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_ref();
