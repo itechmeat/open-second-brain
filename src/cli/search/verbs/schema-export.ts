@@ -159,20 +159,32 @@ function propertySetOf(schema: unknown): string {
 
 /**
  * `o2b search schema export [--stdout]` - write the derived artifact to
- * the committed path (default) or print it; `o2b search schema check` -
+ * the committed path (default) or, with `--stdout`, print exactly the
+ * rendered bytes and touch nothing (the dry-run/CI preview the usage
+ * string and cli-reference promise). `o2b search schema check` -
  * re-derive and compare with the committed file: exit 0 clean, exit 2 on
  * drift, so CI and operators share one named verdict. The comparison is
  * JSON equality, not byte equality: the committed file carries the repo
  * formatter's layout, so `export` writing raw builder bytes must never
- * read as drift - only content can drift.
+ * read as drift - only content can drift. `--json` is `check`'s output
+ * mode and is refused on export by name - `parseFlags` injects it into
+ * every schema, and a flag the verb parses and ignores is the defect
+ * `--stdout` once was.
  */
 export async function cmdSearchSchema(argv: ReadonlyArray<string>): Promise<number> {
   const sub = argv[0];
   if (sub === "export") {
-    parseFlags(argv.slice(1), {
+    const { flags } = parseFlags(argv.slice(1), {
       stdout: { type: "boolean" },
       json: { type: "boolean" },
     });
+    if (flags["json"] === true) {
+      throw usageError("--json is check's output mode; export takes only --stdout");
+    }
+    if (flags["stdout"] === true) {
+      process.stdout.write(renderSearchQueryArtifact());
+      return 0;
+    }
     writeFileSync(SEARCH_QUERY_SCHEMA_PATH, renderSearchQueryArtifact(), "utf8");
     info(`search schema: wrote ${SEARCH_QUERY_SCHEMA_PATH}`);
     return 0;
