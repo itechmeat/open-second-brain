@@ -21,7 +21,9 @@
  *     is top-1 relevance. Baseline: the input order's top-1.
  *   - `recall_inject`: regret - a gold-useful note whose `helps`
  *     probability falls below the pinned `note_min` floor would be
- *     dropped in `enforce`. The verdict per item is regret-freeness.
+ *     dropped in `enforce`, and an `inject_any` answer below the pinned
+ *     `any_min` would withhold the whole brief. The verdict per item is
+ *     the enforced filter's own outcome (`recallInjectFilterOutcome`).
  *     Baseline: the deterministic path drops nothing, so regret 0.
  *
  * The verdict is the preregistered three-arm rule: promote only when the
@@ -45,6 +47,7 @@ import {
   type DecisionEvalVerdict,
 } from "../eval-spec.ts";
 import { RECALL_INJECT_QUESTIONS, RERANK_QUESTIONS } from "../questions.ts";
+import { recallInjectFilterOutcome } from "../../brain/recall-inject.ts";
 import { emitDecisionModelEvalGrade, listDecisionModelCalls } from "../record.ts";
 import { runDecision } from "../run.ts";
 import { clip } from "../state.ts";
@@ -165,23 +168,29 @@ function scoreRecall(
 ): { verdict: boolean; baseline: boolean; degraded: boolean } {
   // The deterministic baseline drops nothing: its regret is zero by
   // construction, which is exactly the bar the decision arm must meet.
-  // Canonical scoring: every useful note is examined before anything is
+  // Canonical scoring: every answer is collected before anything is
   // decided, so an early slot without a usable answer cannot mask a
   // later slot's valid below-floor answer - the note enforce really
-  // would drop.
-  let degraded = false;
-  for (const [k, note] of item.notes.entries()) {
-    if (!note.useful) continue;
+  // would drop. The verdict itself is the enforced filter's own outcome
+  // (`recallInjectFilterOutcome`), including its inject_any abstain arm:
+  // the eval sends every note, the only situation where that arm fires.
+  const helps = item.notes.map((_, k) => {
     const a = answers[RECALL_INJECT_QUESTIONS.helpsId(k)];
-    if (a?.valid !== true || typeof a.value !== "number") {
-      degraded = true;
-      continue;
-    }
-    if (a.value < RECALL_INJECT_QUESTIONS.noteMin) {
-      return { verdict: false, baseline: true, degraded: false };
-    }
+    return a?.valid === true && typeof a.value === "number" ? a.value : null;
+  });
+  const any = answers[RECALL_INJECT_QUESTIONS.injectAnyId];
+  const injectAny = any?.valid === true && typeof any.value === "number" ? any.value : null;
+  const { abstain, keep } = recallInjectFilterOutcome(
+    helps,
+    item.notes.map(() => true),
+    injectAny,
+  );
+  const droppedUseful = item.notes.some((n, k) => n.useful && keep[k] === false);
+  if (droppedUseful || abstain) {
+    return { verdict: false, baseline: true, degraded: false };
   }
-  if (degraded) return { verdict: false, baseline: true, degraded: true };
+  const unansweredUseful = item.notes.some((n, k) => n.useful && helps[k] === null);
+  if (unansweredUseful) return { verdict: false, baseline: true, degraded: true };
   return { verdict: true, baseline: true, degraded: false };
 }
 
@@ -258,12 +267,15 @@ export async function runDecisionModelEval(
               RERANK_QUESTIONS.relevance(k),
             ]),
           )
-        : Object.fromEntries(
-            item.notes.map((_, k) => [
+        : Object.fromEntries([
+            ...item.notes.map((_, k) => [
               RECALL_INJECT_QUESTIONS.helpsId(k),
               RECALL_INJECT_QUESTIONS.helps(k),
             ]),
-          );
+            // The one question over all notes the enforce path asks too;
+            // its answer drives the abstain arm the metric grades.
+            [RECALL_INJECT_QUESTIONS.injectAnyId, RECALL_INJECT_QUESTIONS.injectAny()],
+          ]);
     const result = await runDecision<null>(
       use,
       () => built,

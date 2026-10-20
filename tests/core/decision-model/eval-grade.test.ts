@@ -217,6 +217,38 @@ describe("runDecisionModelEval", () => {
     expect(result.verdict).toBe("not_enough_evidence");
   });
 
+  test("the eval asks inject_any and grades its abstain arm like enforce does", async () => {
+    // High helps everywhere, but inject_any below the pinned any_min: the
+    // enforced filter abstains the whole brief (every note was sent), so
+    // every useful note is lost - real regret the metric must see.
+    const provider = new FakeDecisionProvider({
+      answer: (id, req) => (id === "inject_any" ? 0.01 : byLabelRule(id, req)),
+    });
+    const result = await runDecisionModelEval("recall_inject", {
+      config: evalConfig(),
+      provider,
+    });
+    expect(Object.keys(provider.requests[0]!.questions)).toContain("inject_any");
+    expect(result.verdict).toBe("hold");
+    expect(result.counted.n).toBe(20);
+    expect(result.counted.error).toBe(1);
+    const { grades } = listDecisionModelEvalGrades(vault);
+    expect(grades).toHaveLength(1);
+    expect(grades[0]!.verdict).toBe("hold");
+    for (const verdict of Object.values(grades[0]!.verdicts)) expect(verdict).toBe(false);
+  });
+
+  test("an inject_any answer above the abstain floor does not manufacture regret", async () => {
+    const result = await runDecisionModelEval("recall_inject", {
+      config: evalConfig(),
+      provider: new FakeDecisionProvider({
+        answer: (id, req) => (id === "inject_any" ? 0.99 : byLabelRule(id, req)),
+      }),
+    });
+    expect(result.verdict).toBe("promote");
+    expect(result.counted.error).toBe(0);
+  });
+
   test("the recall_inject use grades regret against the pinned drop floor", async () => {
     const promoted = await runDecisionModelEval("recall_inject", {
       config: evalConfig(),
