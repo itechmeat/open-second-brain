@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { presetForWindowTokens } from "../../../src/core/brain/context-presets.ts";
 import { CONTEXT_WINDOW_TOKENS_DEFAULT } from "../../../src/core/brain/policy.ts";
 import {
   DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
@@ -131,28 +132,31 @@ describe("resolveModelContextWindowTokens", () => {
     ).toEqual({ windowTokens: 400_000, source: "operator-config", clamped: false });
   });
 
-  test("operator values clamp into the band, both directions, and say so", () => {
-    expect(resolveModelContextWindowTokens({ operatorWindowTokens: 50 })).toEqual({
-      windowTokens: 100_000,
+  test("a declared window passes through unclamped at any size", () => {
+    // The declaration exists to keep budgets inside the true window: an
+    // 8k local model declared exactly must not be re-inflated.
+    expect(resolveModelContextWindowTokens({ operatorWindowTokens: 8_000 })).toEqual({
+      windowTokens: 8_000,
       source: "operator-config",
-      clamped: true,
+      clamped: false,
     });
-    expect(resolveModelContextWindowTokens({ operatorWindowTokens: 5_000_000 })).toEqual({
-      windowTokens: 1_000_000,
-      source: "operator-config",
-      clamped: true,
-    });
-    expect(resolveModelContextWindowTokens({ envWindowTokens: 50 })).toEqual({
-      windowTokens: 100_000,
+    expect(resolveModelContextWindowTokens({ envWindowTokens: 8_000 })).toEqual({
+      windowTokens: 8_000,
       source: "operator-env",
-      clamped: true,
+      clamped: false,
+    });
+    // Above the historical ceiling too - the operator knows the deployment.
+    expect(resolveModelContextWindowTokens({ operatorWindowTokens: 5_000_000 })).toEqual({
+      windowTokens: 5_000_000,
+      source: "operator-config",
+      clamped: false,
     });
     expect(resolveModelContextWindowTokens({ envWindowTokens: 5_000_000 })).toEqual({
-      windowTokens: 1_000_000,
+      windowTokens: 5_000_000,
       source: "operator-env",
-      clamped: true,
+      clamped: false,
     });
-    // Band edges are not clamps.
+    // Band edges were never clamps and still are not.
     expect(resolveModelContextWindowTokens({ operatorWindowTokens: 100_000 })).toEqual({
       windowTokens: 100_000,
       source: "operator-config",
@@ -165,13 +169,67 @@ describe("resolveModelContextWindowTokens", () => {
     });
   });
 
-  test("a clamped operator value still wins over a lower declared table entry", () => {
+  test("a declared 32k window sizes tight-context, not the 100k clamp", () => {
+    const resolved = resolveModelContextWindowTokens({ operatorWindowTokens: 32_000 });
+    expect(resolved).toEqual({
+      windowTokens: 32_000,
+      source: "operator-config",
+      clamped: false,
+    });
+    // The bucket mapping every derived budget is sized from agrees: the
+    // tight-context pack budget, never long-context.
+    expect(presetForWindowTokens(resolved.windowTokens).id).toBe("tight-context");
+    expect(presetForWindowTokens(resolved.windowTokens).context_pack.max_tokens).toBe(4_000);
+  });
+
+  test("a declared 32k base beats a -1m suffix and is never clamped to the 100k floor", () => {
+    // The reviewed bug: the old resolver clamped the declaration up to
+    // the band minimum (100_000, clamped: true) and every derived budget
+    // went long-context, overflowing the very model the declaration
+    // describes. The declaration is first-hand; the suffix is a guess.
+    expect(
+      resolveModelContextWindowTokens({ operatorWindowTokens: 32_000, model: "qwen3-32b-1m" }),
+    ).toEqual({ windowTokens: 32_000, source: "operator-config", clamped: false });
+    // The suffix alone stays a derived answer inside the band: one
+    // million, exactly the band's top edge, reported unclamped.
+    expect(resolveModelContextWindowTokens({ model: "qwen3-32b-1m" })).toEqual({
+      windowTokens: 1_000_000,
+      source: "suffix",
+      clamped: false,
+    });
+  });
+
+  test("the band governs the guessed answers, which sit inside it today", () => {
+    // The clamp's remaining charge: the `-1m` suffix expansion and the
+    // unknown-model default, where the true window is unknown and the
+    // band is the sanity bound. Both published figures sit inside the
+    // band, so `clamped` is false on every derivable answer - and a
+    // constant drifting out of band is a bug this pins.
+    expect(resolveModelContextWindowTokens({ model: "gemini-2.5-pro-1m" })).toEqual({
+      windowTokens: MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+      source: "suffix",
+      clamped: false,
+    });
+    expect(resolveModelContextWindowTokens({})).toEqual({
+      windowTokens: DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+      source: "default",
+      clamped: false,
+    });
+    expect(DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS).toBeGreaterThanOrEqual(
+      MIN_MODEL_CONTEXT_WINDOW_TOKENS,
+    );
+    expect(DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS).toBeLessThanOrEqual(
+      MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+    );
+  });
+
+  test("a declared value still wins over a lower declared table entry", () => {
     expect(
       resolveModelContextWindowTokens({
         model: "gpt-4o",
         operatorWindowTokens: 5_000_000,
       }),
-    ).toEqual({ windowTokens: 1_000_000, source: "operator-config", clamped: true });
+    ).toEqual({ windowTokens: 5_000_000, source: "operator-config", clamped: false });
   });
 
   test("zero, negative and non-finite operator values resolve nothing", () => {

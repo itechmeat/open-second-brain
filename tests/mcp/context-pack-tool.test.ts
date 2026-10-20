@@ -1132,10 +1132,12 @@ describe("brain_context_pack tool — derived budget", () => {
       writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 32000\n");
       const server2 = new MCPServer({ vault, configPath });
       await initialize(server2);
-      // The operator block wins over the env channel even where the clamp
-      // lands both in the same preset: the disclosed source flips.
+      // The operator block wins over the env channel: the disclosed
+      // source flips. The declared 32k window passes through unclamped
+      // now, so it sizes tight-context (4k) against the env channel's
+      // long-context (24k) instead of both clamping into one preset.
       const fromConfig = await callPack(server2, {});
-      expect(fromConfig["max_tokens"]).toBe(24_000);
+      expect(fromConfig["max_tokens"]).toBe(4_000);
       expect(fromConfig["max_tokens_source"]).toBe("operator-config");
     } finally {
       if (previous === undefined) delete process.env[key];

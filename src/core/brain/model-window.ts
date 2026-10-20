@@ -24,13 +24,18 @@
  * window - an unknown model is a default, never a guess from its name.
  *
  * Operator channels win over published facts (the operator knows the
- * deployment; the table knows the brochure), and a well-formed but
- * out-of-band operator value is clamped into
- * `[MIN_MODEL_CONTEXT_WINDOW_TOKENS, MAX_MODEL_CONTEXT_WINDOW_TOKENS]`
- * with `clamped: true` so the clamp can be disclosed, never silently
- * reverted. Table and suffix values are published facts and pass through
- * unclamped; a table row outside the band is a table bug the unit test
- * catches.
+ * deployment; the table knows the brochure), and a first-hand declaration
+ * - operator config, operator env, an exact table row - passes through
+ * EXACTLY as given. The declaration exists to keep budgets inside the
+ * true window; clamping it would re-inflate a declared 8k local model to
+ * a 100k window and long-context budgets that overflow the very model it
+ * describes. The `[MIN_MODEL_CONTEXT_WINDOW_TOKENS,
+ * MAX_MODEL_CONTEXT_WINDOW_TOKENS]` band governs the GUESSED answers
+ * only - the `-1m` suffix expansion and the unknown-model default, where
+ * the true window is unknown and the band is the sanity bound. Both
+ * published figures sit inside the band today, so `clamped` is false on
+ * every derivable answer; a table row outside the band is a table bug
+ * the unit test catches.
  *
  * PURE by contract: no fs, no environment reads, no network, no
  * `loadBrainConfig`. The caller parses its own channels (the
@@ -99,9 +104,12 @@ export const MODEL_CONTEXT_WINDOWS: ReadonlyArray<ModelContextWindowEntry> = Obj
 
 /** The window nothing better resolves to; see the module header. */
 export const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = CONTEXT_WINDOW_TOKENS_DEFAULT;
-/** Floor for the operator channels; below it a declaration clamps up. */
+/** Band floor for the GUESSED answers (suffix expansion, default); see the module header. */
 export const MIN_MODEL_CONTEXT_WINDOW_TOKENS = 100_000;
-/** Ceiling for the operator channels; above it a declaration clamps down. */
+/**
+ * Band ceiling for the GUESSED answers; the `1m` suffix resolves to
+ * exactly this edge. First-hand declarations are never held to it.
+ */
 export const MAX_MODEL_CONTEXT_WINDOW_TOKENS = 1_000_000;
 
 /** The `_brain.yaml` key the operator's `context:` block spells the window with. */
@@ -120,7 +128,7 @@ export type ModelWindowSource =
 export interface ResolvedModelWindow {
   readonly windowTokens: number;
   readonly source: ModelWindowSource;
-  /** True when an operator/env value was clamped into the band. */
+  /** True when a GUESSED answer was clamped into the band; see the module header. */
   readonly clamped: boolean;
 }
 
@@ -164,9 +172,12 @@ function usableChannelValue(value: number | null | undefined): value is number {
 }
 
 /**
- * Clamp an operator/env value into the band. Returns the clamped number
- * and whether anything was moved; a value already inside passes through
- * untouched.
+ * Clamp a GUESSED window into the band. First-hand declarations never
+ * pass through here - they are the operator's or the vendor's own
+ * number, and the declaration exists precisely to state the true window.
+ * Both derived figures (the `1m` suffix expansion, the unknown-model
+ * default) sit inside the band today, so this is a no-op invariant that
+ * keeps a future constant edit from answering out of band unnoticed.
  */
 function clampToBand(value: number): { windowTokens: number; clamped: boolean } {
   if (value < MIN_MODEL_CONTEXT_WINDOW_TOKENS) {
@@ -181,22 +192,25 @@ function clampToBand(value: number): { windowTokens: number; clamped: boolean } 
 /**
  * Resolve the model context window. Precedence: operator config >
  * operator env > declared table > `1m` suffix > default; see the module
- * header for the clamping and purity contracts.
+ * header for the pass-through and clamping contracts.
  */
 export function resolveModelContextWindowTokens(
   input: ResolveModelContextWindowInput,
 ): ResolvedModelWindow {
+  // A first-hand declaration is the true window by definition: it passes
+  // through exactly, so a declared 8k/32k model is budgeted inside its
+  // real window instead of being re-inflated to the band floor.
   if (usableChannelValue(input.operatorWindowTokens)) {
-    const clamped = clampToBand(input.operatorWindowTokens);
-    return { ...clamped, source: "operator-config" };
+    return { windowTokens: input.operatorWindowTokens, source: "operator-config", clamped: false };
   }
   if (usableChannelValue(input.envWindowTokens)) {
-    const clamped = clampToBand(input.envWindowTokens);
-    return { ...clamped, source: "operator-env" };
+    return { windowTokens: input.envWindowTokens, source: "operator-env", clamped: false };
   }
   const declared = declaredModelContextWindowTokens(input.model);
   if (declared !== null) return { windowTokens: declared, source: "declared", clamped: false };
+  // The guessed tiers: the band bounds both, where the true window is
+  // unknown and the answer is an expansion or an assumption.
   const structural = structuralModelContextWindowTokens(input.model);
-  if (structural !== null) return { windowTokens: structural, source: "suffix", clamped: false };
-  return { windowTokens: DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS, source: "default", clamped: false };
+  if (structural !== null) return { ...clampToBand(structural), source: "suffix" };
+  return { ...clampToBand(DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS), source: "default" };
 }
