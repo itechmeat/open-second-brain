@@ -912,6 +912,28 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("use", "string"),
           ],
         ),
+        command(
+          "eval",
+          "Run or list the preregistered per-use evals (real spend; a promote writes the machine-side tuning mark)",
+          [],
+          [
+            command(
+              "run",
+              "Grade the preregistered take for --use over the configured adapter; a promote verdict marks the profile-use pair tuned",
+              [flag("use", "string"), flag("vault", "string"), flag("config", "string")],
+            ),
+            command(
+              "list",
+              "List cached decision_model_eval_grade records, oldest first; malformed records are skipped with a named note",
+              [
+                flag("use", "string"),
+                flag("since", "string"),
+                flag("vault", "string"),
+                flag("config", "string"),
+              ],
+            ),
+          ],
+        ),
       ],
     ),
     command(

@@ -11,18 +11,18 @@ for you, and no route is ever a fallback for another one.
 
 ## Presets
 
-| Preset | Adapter | Base URL | Model id | Context (state tokens: default / ceiling) | Licence | Data handling |
-|---|---|---|---|---|---|---|
-| `typesafe` | `systemone` | `https://api.typesafe.ai` | `jev-1.13.0` | 32000 / 32000 | hosted | TypeSafe, directly |
-| `openrouter` | `systemone` | `https://openrouter.ai/api` | `typesafe/jev-1.13` | 32000 / 32000 | hosted | OpenRouter, then TypeSafe |
-| `vercel` | `systemone` | `https://ai-gateway.vercel.sh/typesafe` | `typesafe-ai/jev` | 32000 / 32000 | hosted | Vercel AI Gateway, then TypeSafe |
-| `vercel-evaluate` | `vercel-evaluate` | `https://ai-gateway.vercel.sh` | `typesafe-ai/jev` | 32000 / 32000 | hosted | Vercel AI Gateway, then TypeSafe |
-| `opencode-zen` | `systemone` | `https://opencode.ai/zen` | `jev-1.13` | 32000 / 32000 | hosted | OpenCode Zen, then TypeSafe |
-| `laya` | `systemone` | `http://127.0.0.1:8000` | `english` | 2000 / 8192 | Apache-2.0 | your own server; on loopback nothing leaves the machine |
-| `openjev` | `systemone` | `http://127.0.0.1:3000` | `openjev` | 4000 / 16384 | CC-BY-NC-4.0 | your own server; on loopback nothing leaves the machine |
-| `compatible` | `systemone` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the server |
-| `llm-emulation` | `llm-emulation` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the chat endpoint |
-| `converse` | `converse` | must be set | must be set | 32000 / 32000 | depends on the model | whoever runs the gateway |
+| Preset            | Adapter           | Base URL                                | Model id            | Context (state tokens: default / ceiling) | Licence              | Data handling                                           |
+| ----------------- | ----------------- | --------------------------------------- | ------------------- | ----------------------------------------- | -------------------- | ------------------------------------------------------- |
+| `typesafe`        | `systemone`       | `https://api.typesafe.ai`               | `jev-1.13.0`        | 32000 / 32000                             | hosted               | TypeSafe, directly                                      |
+| `openrouter`      | `systemone`       | `https://openrouter.ai/api`             | `typesafe/jev-1.13` | 32000 / 32000                             | hosted               | OpenRouter, then TypeSafe                               |
+| `vercel`          | `systemone`       | `https://ai-gateway.vercel.sh/typesafe` | `typesafe-ai/jev`   | 32000 / 32000                             | hosted               | Vercel AI Gateway, then TypeSafe                        |
+| `vercel-evaluate` | `vercel-evaluate` | `https://ai-gateway.vercel.sh`          | `typesafe-ai/jev`   | 32000 / 32000                             | hosted               | Vercel AI Gateway, then TypeSafe                        |
+| `opencode-zen`    | `systemone`       | `https://opencode.ai/zen`               | `jev-1.13`          | 32000 / 32000                             | hosted               | OpenCode Zen, then TypeSafe                             |
+| `laya`            | `systemone`       | `http://127.0.0.1:8000`                 | `english`           | 2000 / 8192                               | Apache-2.0           | your own server; on loopback nothing leaves the machine |
+| `openjev`         | `systemone`       | `http://127.0.0.1:3000`                 | `openjev`           | 4000 / 16384                              | CC-BY-NC-4.0         | your own server; on loopback nothing leaves the machine |
+| `compatible`      | `systemone`       | must be set                             | must be set         | 32000 / 32000                             | depends on the model | whoever runs the server                                 |
+| `llm-emulation`   | `llm-emulation`   | must be set                             | must be set         | 32000 / 32000                             | depends on the model | whoever runs the chat endpoint                          |
+| `converse`        | `converse`        | must be set                             | must be set         | 32000 / 32000                             | depends on the model | whoever runs the gateway                                |
 
 "State tokens" is Open Second Brain's own conservative estimate (about two
 characters per token), used to keep a request within the route's context:
@@ -31,14 +31,14 @@ to the second.
 
 Other per-route limits:
 
-| Preset | Key | Most `choice` options | Threshold profile | Input price (USD / M tokens) |
-|---|---|---|---|---|
-| `typesafe`, `openrouter`, `vercel`, `vercel-evaluate`, `opencode-zen` | required | 255 | `jev-1.13` | 0.042 |
-| `laya` | optional on loopback | 100 | `laya` | 0 |
-| `openjev` | optional on loopback | 52 | `openjev` | 0 |
-| `compatible` | required | 255 | none, unless `decision_model_threshold_profile` names one | unknown |
-| `llm-emulation` | required | 255 | `llm-emulation` | unknown unless both price keys are set |
-| `converse` | required | 255 | `converse` | unknown unless both price keys are set |
+| Preset                                                                | Key                  | Most `choice` options | Threshold profile                                         | Input price (USD / M tokens)           |
+| --------------------------------------------------------------------- | -------------------- | --------------------- | --------------------------------------------------------- | -------------------------------------- |
+| `typesafe`, `openrouter`, `vercel`, `vercel-evaluate`, `opencode-zen` | required             | 255                   | `jev-1.13`                                                | 0.042                                  |
+| `laya`                                                                | optional on loopback | 100                   | `laya`                                                    | 0                                      |
+| `openjev`                                                             | optional on loopback | 52                    | `openjev`                                                 | 0                                      |
+| `compatible`                                                          | required             | 255                   | none, unless `decision_model_threshold_profile` names one | unknown                                |
+| `llm-emulation`                                                       | required             | 255                   | `llm-emulation`                                           | unknown unless both price keys are set |
+| `converse`                                                            | required             | 255                   | `converse`                                                | unknown unless both price keys are set |
 
 A `choice` question above the route's option limit is never sent: a use that
 can split it does, and otherwise that request degrades with `budget`, like an
@@ -75,7 +75,7 @@ uncalibrated without saying so, so Open Second Brain never configures them.
 ```yaml
 decision_model_enabled: "true"
 decision_model_provider: vercel-evaluate
-decision_model_env_key: AI_GATEWAY_API_KEY   # the variable's name, not the key
+decision_model_env_key: AI_GATEWAY_API_KEY # the variable's name, not the key
 decision_model_uses: "rerank:shadow"
 ```
 
@@ -169,7 +169,7 @@ compare routes in `shadow` when only a chat endpoint is available.
 
 ```yaml
 decision_model_enabled: "true"
-decision_model_provider: llm-emulation        # uncalibrated, shadow only
+decision_model_provider: llm-emulation # uncalibrated, shadow only
 decision_model_base_url: https://api.example.com/v1
 decision_model_id: some-small-chat-model
 decision_model_env_key: EXAMPLE_API_KEY
@@ -220,7 +220,7 @@ decision_model_enabled: "true"
 decision_model_provider: converse
 decision_model_base_url: https://gateway.example.com
 decision_model_id: gateway-jev-1
-decision_model_env_key: GATEWAY_DECISION_KEY   # the variable's name, not the key
+decision_model_env_key: GATEWAY_DECISION_KEY # the variable's name, not the key
 decision_model_uses: "rerank:shadow"
 ```
 
@@ -238,6 +238,42 @@ preset names a threshold profile:
 A use set to `enforce` on a profile without tuned thresholds for it runs as
 `shadow`: the request is sent and recorded, and the deterministic result is
 returned. Nothing on a hot path warns about it; `o2b decision-model check`
-prints one warning naming the uses concerned. Tuning a profile means
-measuring it in shadow and with the eval gate, the same way as for the
-hosted route.
+prints one warning naming the uses concerned.
+
+## Measuring a profile: the preregistered eval
+
+The shadow hold is not a dead end. Each use with a committed, labeled take
+ships a preregistered eval spec: the fixture and its content hash, a seed
+with a frozen dev/counted split, the promotion metric with its ceiling and
+minimum n, and the exact threshold values the use reads - all frozen and
+content-hashed before anything is graded, so a spec edited after the fact
+invalidates what came before instead of quietly re-scoping the claim.
+
+`o2b decision-model eval run --use <use>` grades that take over your own
+configured adapter. The requests are real spend counted toward the daily
+cost gate (the deterministic scorer is canonical; an external judge would
+be advisory only). The verdict is a three-arm rule, the same shape the
+extract-prefilter report keeps: `promote` only when the counted error meets
+the ceiling, does not regress against the deterministic baseline, and the
+counted n is met; a short n is `not_enough_evidence`, never a pass.
+
+Every run caches a `decision_model_eval_grade` record in the vault's
+continuity log - `o2b decision-model eval list` prints them (or
+`o2b decision-model report`), and malformed records are skipped by name,
+never silently. These records are review evidence. The gate input is a
+separate machine-side tuning mark under the state root
+(`${XDG_STATE_HOME:-~/.local/state}/open-second-brain/decision-model/`),
+written only by `eval run`, and only on a `promote` verdict for a named
+profile. With a valid mark, that profile-use pair runs `enforce` where it
+would have run `shadow`.
+
+The mark is honored only while the installed spec still matches the one it
+was measured under: the spec hash, the fixture hash and the pinned
+threshold values are all re-checked on every read. Edit the spec, move the
+fixture or change a threshold, and the pair falls back to shadow - the
+fail-closed direction. Deleting the mark does the same; nothing breaks.
+`o2b decision-model check` names the measured state (untuned, baseline, or
+measured under a spec hash) and lists the cached grades, and the doctor
+readiness line carries the same summary. Tuning a profile by hand-editing
+the source table stays possible and still wins over a mark; the mark only
+ever carries pairs the table leaves untuned.

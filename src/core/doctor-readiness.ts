@@ -77,8 +77,14 @@
 import { readFileSync } from "node:fs";
 
 import { discoverConfig } from "./config.ts";
+import { homedir } from "node:os";
 import { resolveDecisionModelConfig } from "./decision-model/config.ts";
-import { vaultDecisionModelWarnings } from "./decision-model/diagnostics.ts";
+import {
+  measuredTuning,
+  measuredTuningSummary,
+  vaultDecisionModelWarnings,
+} from "./decision-model/diagnostics.ts";
+import { processDirsEnv } from "./platform-dirs.ts";
 import {
   resolveSemanticCapability,
   SEMANTIC_CAPABILITY_CODE,
@@ -435,14 +441,28 @@ async function decisionModelVerdict(opts: ReadinessOptions): Promise<ReadinessVe
       return { status: READINESS_STATUS.skipped, detail: "opted out by this vault's _brain.yaml" };
     case "invalid":
       return { status: READINESS_STATUS.fail, detail: cfg.errors.join("; ") };
-    case "active":
+    case "active": {
+      // The tuning marks live under the state root the OPTIONS env
+      // resolves to, not the probe process's ambient one - the same env
+      // the config above was resolved from.
+      const dirsEnv =
+        opts.env === undefined
+          ? processDirsEnv()
+          : {
+              platform: process.platform,
+              home: opts.env["HOME"] ?? homedir(),
+              env: opts.env as Readonly<Record<string, string | undefined>>,
+            };
+      const tuning = measuredTuningSummary(measuredTuning(cfg, dirsEnv));
       return {
         status: READINESS_STATUS.pass,
         detail:
-          cfg.keyPresent || cfg.keyRequired !== false
+          (cfg.keyPresent || cfg.keyRequired !== false
             ? `key present in ${cfg.envKey ?? "?"}, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`
-            : `no key needed for this loopback server, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`,
+            : `no key needed for this loopback server, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`) +
+          `; tuning: ${tuning}`,
       };
+    }
   }
 }
 

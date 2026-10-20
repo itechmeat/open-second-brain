@@ -24,9 +24,15 @@ import {
   DECISION_MODEL_CALL_KIND,
   emitDecisionModelCall,
   listDecisionModelCalls,
+  listDecisionModelEvalGrades,
   todaySpendUsd,
+  type DecisionEvalGrade,
 } from "./record.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
+import { DECISION_THRESHOLD_PROFILES, isDecisionThresholdProfile } from "./questions.ts";
+import { decisionEvalSpecFor, decisionEvalSpecHash, type DecisionEvalSpec } from "./eval-spec.ts";
+import { validatedTuningMark } from "./eval/mark.ts";
+import { processDirsEnv, type PlatformDirsEnv } from "../platform-dirs.ts";
 import { USE_REPORTS } from "./reports/index.ts";
 
 /**
@@ -71,6 +77,24 @@ export interface DecisionModelCheckReport {
   readonly threshold_profile: string | null;
   /** Uses configured `enforce` that run as `shadow` for want of tuned thresholds. */
   readonly shadow_only_uses: ReadonlyArray<DecisionModelUse>;
+  /**
+   * The measured tuning state of the resolved threshold profile: what the
+   * source table claims, and which (profile, use) pairs a valid
+   * machine-side mark covers (`eval/mark.ts`).
+   */
+  readonly tuning: MeasuredTuning;
+  /** Cached preregistered-eval verdicts, per use, with the skip notes. */
+  readonly eval_grades: {
+    readonly total: number;
+    readonly skipped: ReadonlyArray<string>;
+    readonly uses: ReadonlyArray<{
+      readonly use: string;
+      readonly runs: number;
+      readonly last_verdict: string | null;
+      readonly last_at: string | null;
+      readonly last_spec_hash: string | null;
+    }>;
+  };
   /** Most options one `choice` question may carry on this route. */
   readonly max_choice_options: number;
   readonly output_price_usd_per_mtok: number | null;
@@ -115,6 +139,11 @@ export interface DecisionModelCheckOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly ping?: boolean;
   readonly now?: Date;
+  /**
+   * Where the machine-side tuning marks are read from. Defaults to the
+   * running process's platform dirs; tests inject a state root.
+   */
+  readonly markSource?: PlatformDirsEnv | null;
 }
 
 const RERANK_ENDPOINT_KEYS = [
@@ -122,6 +151,88 @@ const RERANK_ENDPOINT_KEYS = [
   "search_rerank_model",
   "search_rerank_env_key",
 ] as const;
+
+// ----- the measured tuning state ----------------------------------------------
+
+/** One (use, spec hash) pair a valid tuning mark covers. */
+export interface MarkedUse {
+  readonly use: DecisionModelUse;
+  readonly spec_hash: string;
+}
+
+export interface MeasuredTuning {
+  /** The resolved threshold profile; null when none resolves. */
+  readonly profile: string | null;
+  /**
+   * `none`: no profile. `baseline`: the profile ships tuned for every
+   * use. `hand`: the source table carries hand-registered uses.
+   * `measured`: at least one pair carries a valid machine-side mark.
+   * `untuned`: nothing tuned, so enforce holds as shadow.
+   */
+  readonly state: "none" | "baseline" | "hand" | "measured" | "untuned";
+  readonly marked_uses: ReadonlyArray<MarkedUse>;
+}
+
+/**
+ * The measured tuning state of the resolved profile: the source table
+ * decides first (baseline, or a hand-registered list), and only the
+ * pairs the table leaves untuned can be carried by a valid machine-side
+ * mark. The same vocabulary and the same short spec hash render into
+ * `check`, the report and the doctor probe, so the surfaces cannot
+ * disagree about what "tuned" means here.
+ */
+export function measuredTuning(
+  cfg: ResolvedDecisionModelConfig,
+  source: PlatformDirsEnv = processDirsEnv(),
+): MeasuredTuning {
+  const profile = cfg.thresholdProfile ?? null;
+  if (profile === null || !isDecisionThresholdProfile(profile)) {
+    return { profile, state: "none", marked_uses: [] };
+  }
+  const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned ?? [];
+  if (tuned === "baseline") return { profile, state: "baseline", marked_uses: [] };
+  const marked: MarkedUse[] = [];
+  for (const use of DECISION_MODEL_USES) {
+    const spec: DecisionEvalSpec | null = decisionEvalSpecFor(use);
+    if (spec === null) continue;
+    if (validatedTuningMark(profile, use, source, spec) !== null) {
+      marked.push({ use, spec_hash: decisionEvalSpecHash(spec) });
+    }
+  }
+  if (marked.length > 0) return { profile, state: "measured", marked_uses: marked };
+  if (Array.isArray(tuned) && tuned.length > 0) {
+    return { profile, state: "hand", marked_uses: [] };
+  }
+  return { profile, state: "untuned", marked_uses: [] };
+}
+
+/** The short form the prose surfaces print: first twelve hex characters. */
+export function shortSpecHash(hash: string): string {
+  return `${hash.slice(0, 12)}…`;
+}
+
+/** The one tuning sentence `check`, `report` and the doctor probe share. */
+export function measuredTuningSummary(measured: MeasuredTuning): string {
+  switch (measured.state) {
+    case "none":
+      return "no threshold profile resolves, so the source table alone gates enforce";
+    case "baseline":
+      return `profile '${measured.profile}' is the baseline`;
+    case "hand":
+      return `profile '${measured.profile}' carries hand-registered tuned uses`;
+    case "measured": {
+      const parts = measured.marked_uses
+        .map((m) => `${shortSpecHash(m.spec_hash)} (${m.use})`)
+        .join(", ");
+      return `profile '${measured.profile}' measured under spec hash ${parts}`;
+    }
+    case "untuned":
+      return (
+        `profile '${measured.profile}' is untuned; enforce holds as shadow ` +
+        "(o2b decision-model eval run can measure a use)"
+      );
+  }
+}
 
 function hintFor(cfg: ResolvedDecisionModelConfig): string | null {
   switch (cfg.status) {
@@ -241,6 +352,54 @@ export async function buildDecisionModelCheck(
     );
   }
 
+  // The measured tuning state: read only when the feature is enabled and
+  // a profile resolves - the same condition under which the resolver
+  // consulted the marks - so a disabled install pays no file reads.
+  const tuning = cfg.enabled
+    ? measuredTuning(
+        cfg,
+        opts.markSource === null ? processDirsEnv() : (opts.markSource ?? processDirsEnv()),
+      )
+    : { profile: cfg.thresholdProfile ?? null, state: "none" as const, marked_uses: [] };
+
+  // The cached eval verdicts are review evidence for the mark; a check
+  // that named the measured state without them would be unauditable.
+  const gradeUses: {
+    use: string;
+    runs: number;
+    last_verdict: string | null;
+    last_at: string | null;
+    last_spec_hash: string | null;
+  }[] = [];
+  let gradeTotal = 0;
+  const gradeSkipped: string[] = [];
+  if (cfg.enabled && opts.vault !== null) {
+    try {
+      const { grades, skipped } = listDecisionModelEvalGrades(opts.vault);
+      gradeTotal = grades.length;
+      gradeSkipped.push(...skipped);
+      const byUse = new Map<string, DecisionEvalGrade[]>();
+      for (const grade of grades) {
+        const list = byUse.get(grade.use) ?? [];
+        list.push(grade);
+        byUse.set(grade.use, list);
+      }
+      for (const [use, list] of [...byUse].toSorted((a, b) => a[0].localeCompare(b[0]))) {
+        const last = list[list.length - 1]!;
+        gradeUses.push({
+          use,
+          runs: list.length,
+          last_verdict: last.verdict,
+          last_at: last.createdAt,
+          last_spec_hash: last.specHash,
+        });
+      }
+    } catch {
+      // An unreadable log is reported as no cached grades, the same
+      // fail-soft direction the spend probe above takes.
+    }
+  }
+
   const kindRaw = env["OPEN_SECOND_BRAIN_SEARCH_RERANK_KIND"] || opts.config["search_rerank_kind"];
   const kindConfigured = kindRaw === "decision-model";
   const ignored = kindConfigured
@@ -263,6 +422,8 @@ export async function buildDecisionModelCheck(
     calibrated: cfg.calibrated,
     threshold_profile: cfg.thresholdProfile ?? null,
     shadow_only_uses: shadowOnly,
+    tuning,
+    eval_grades: { total: gradeTotal, skipped: gradeSkipped, uses: gradeUses },
     max_choice_options: cfg.maxChoiceOptions ?? CHOICE_MAX_OPTIONS,
     output_price_usd_per_mtok: cfg.outputPriceUsdPerMtok ?? null,
     licence_note: cfg.licenceNote ?? null,
@@ -369,6 +530,22 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
     `  threshold profile: ${report.threshold_profile ?? "(unknown: no use enforces)"}; ` +
       `max choice options: ${report.max_choice_options}`,
   );
+  lines.push(`  tuning: ${measuredTuningSummary(report.tuning)}`);
+  const gradeUse = report.eval_grades.uses
+    .map((u) => {
+      const at = u.last_at === null ? "" : ` at ${u.last_at}`;
+      const spec = u.last_spec_hash === null ? "" : ` under ${shortSpecHash(u.last_spec_hash)}`;
+      return `${u.use}: ${u.runs} run(s), last ${u.last_verdict ?? "?"}${spec}${at}`;
+    })
+    .join("; ");
+  lines.push(
+    report.eval_grades.total === 0
+      ? "  eval grades: none cached"
+      : `  eval grades: ${report.eval_grades.total} record(s) (${gradeUse})` +
+          (report.eval_grades.skipped.length > 0
+            ? `, ${report.eval_grades.skipped.length} skipped`
+            : ""),
+  );
   const spend =
     report.today_spend_usd === null ? "unknown" : `$${report.today_spend_usd.toFixed(6)}`;
   const gate = report.cost_gate_usd > 0 ? `$${report.cost_gate_usd}` : "off";
@@ -429,6 +606,41 @@ export interface DecisionModelReport {
    * absent for `rerank`, whose metric is the summary's shadow agreement.
    */
   readonly use_report?: { readonly use: DecisionModelUse; readonly report: unknown };
+  /**
+   * The cached verdict sets of the preregistered eval (`eval/grade.ts`),
+   * oldest first, with the named skip notes. Present whenever the vault
+   * holds at least one, so a vault with none renders no eval section at
+   * all rather than an empty one.
+   */
+  readonly eval?: {
+    readonly grades: ReadonlyArray<DecisionEvalGradeLine>;
+    readonly skipped: ReadonlyArray<string>;
+  };
+}
+
+/** One cached eval grade, as the prose and JSON surfaces print it. */
+export interface DecisionEvalGradeLine {
+  readonly record_id: string;
+  readonly created_at: string;
+  readonly use: string;
+  readonly profile: string | null;
+  readonly verdict: string;
+  readonly spec_hash: string;
+  readonly counted_n: number;
+  readonly counted_error: number | null;
+  readonly baseline_error: number | null;
+  readonly dev_error: number | null;
+}
+
+/** The one-line prose form of a cached eval grade, shared by the surfaces. */
+export function renderEvalGradeLine(grade: DecisionEvalGradeLine): string {
+  const num = (v: number | null): string => (v === null ? "-" : v.toFixed(3));
+  return (
+    `${grade.created_at} ${grade.use} (${grade.profile ?? "no profile"}) ${grade.verdict}: ` +
+    `counted error ${num(grade.counted_error)} over n=${grade.counted_n}, ` +
+    `baseline ${num(grade.baseline_error)}, dev ${num(grade.dev_error)}, ` +
+    `spec ${shortSpecHash(grade.spec_hash)}`
+  );
 }
 
 function percentile(sorted: ReadonlyArray<number>, p: number): number | null {
@@ -521,13 +733,40 @@ export function buildDecisionModelReport(
     });
   }
   const summary: DecisionModelReport = { since: opts.since ?? null, total: records.length, uses };
+  // The eval section is built for every report: `o2b decision-model
+  // report` is the audit surface for the grades a mark was written from.
+  const { grades, skipped } = listDecisionModelEvalGrades(vault, opts.since);
+  const evalSection =
+    grades.length > 0 || skipped.length > 0
+      ? {
+          grades: grades.map((g): DecisionEvalGradeLine => ({
+            record_id: g.recordId,
+            created_at: g.createdAt,
+            use: g.use,
+            profile: g.profile,
+            verdict: g.verdict,
+            spec_hash: g.specHash,
+            counted_n: g.countedN,
+            counted_error: g.countedError,
+            baseline_error: g.baselineError,
+            dev_error: g.devError,
+          })),
+          skipped,
+        }
+      : undefined;
   if (opts.use === undefined || opts.useReport === false || !isDecisionModelUse(opts.use)) {
-    return summary;
+    return evalSection === undefined ? summary : { ...summary, eval: evalSection };
   }
   const entry = USE_REPORTS[opts.use];
-  if (entry === null) return summary;
+  if (entry === null) {
+    return evalSection === undefined ? summary : { ...summary, eval: evalSection };
+  }
   const since = opts.since !== undefined ? { since: opts.since } : {};
-  return { ...summary, use_report: { use: opts.use, report: entry.build(vault, since) } };
+  return {
+    ...summary,
+    ...(evalSection !== undefined ? { eval: evalSection } : {}),
+    use_report: { use: opts.use, report: entry.build(vault, since) },
+  };
 }
 
 export function renderDecisionModelReport(report: DecisionModelReport): string {
@@ -552,6 +791,14 @@ export function renderDecisionModelReport(report: DecisionModelReport): string {
           `${(u.agreement.top5_overlap * 100).toFixed(1)}%`,
       );
     }
+  }
+  if (report.eval !== undefined) {
+    lines.push(
+      `decision model eval grades: ${report.eval.grades.length} record(s)` +
+        (report.eval.skipped.length > 0 ? `, ${report.eval.skipped.length} skipped` : ""),
+    );
+    for (const grade of report.eval.grades) lines.push(`  ${renderEvalGradeLine(grade)}`);
+    for (const note of report.eval.skipped) lines.push(`  skipped: ${note}`);
   }
   if (report.use_report !== undefined) {
     const entry = USE_REPORTS[report.use_report.use];
