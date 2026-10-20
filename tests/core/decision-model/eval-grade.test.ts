@@ -388,8 +388,8 @@ describe("runDecisionModelEval", () => {
     expect(result.baseline_error).toBe(0);
     expect(result.verdict).toBe("hold");
     const { grades } = listDecisionModelEvalGrades(vault);
-    expect(grades[0]!.verdicts[invalidFirst]).toBe(false);
-    expect(grades[0]!.verdicts[floorFirst]).toBe(false);
+    expect(grades[0]!.verdicts[invalidFirst!]).toBe(false);
+    expect(grades[0]!.verdicts[floorFirst!]).toBe(false);
   });
 
   test("a grade record correlates only its own run's calls", async () => {
