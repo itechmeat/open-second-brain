@@ -33,8 +33,40 @@ describe("model context window table", () => {
     // A declared id's family name does not carry its window.
     expect(declaredModelContextWindowTokens("claude-sonnet-4")).toBeNull();
     // A longer id that merely contains a declared id resolves nothing.
-    expect(declaredModelContextWindowTokens("gpt-4o-2026-01-01")).toBeNull();
     expect(declaredModelContextWindowTokens("my-gpt-4o-custom")).toBeNull();
+  });
+
+  test("host-side decorations normalize onto the exact row (M3)", () => {
+    // Router prefix: the published model is what the table knows.
+    expect(declaredModelContextWindowTokens("openai/gpt-4.1")).toBe(1_000_000);
+    // A dated snapshot of a declared id is that declared id.
+    expect(declaredModelContextWindowTokens("gpt-4.1-2025-04-14")).toBe(1_000_000);
+    // Bedrock-style region prefix plus compact date plus `-vN:N` revision
+    // suffix: all plumbing; the row is claude-sonnet-4-5's 200k (NOT 1M -
+    // the row decides, the normalizer only reaches it).
+    expect(declaredModelContextWindowTokens("us.anthropic.claude-sonnet-4-5-20250929-v1:0")).toBe(
+      200_000,
+    );
+    expect(declaredModelContextWindowTokens("bedrock/us.anthropic.claude-opus-4-1-v1:0")).toBe(
+      200_000,
+    );
+    // Through the resolver: the normalized hit answers `declared`, not
+    // the default.
+    expect(resolveModelContextWindowTokens({ model: "openai/gpt-4.1" })).toEqual({
+      windowTokens: 1_000_000,
+      source: "declared",
+      clamped: false,
+    });
+  });
+
+  test("normalization never invents a row", () => {
+    // A dot-led minor version is not a prefix: `gpt-4.1` survives whole.
+    expect(declaredModelContextWindowTokens("gpt-4.1")).toBe(1_000_000);
+    // Unknown models stay unknown whatever plumbing they carry.
+    expect(declaredModelContextWindowTokens("openai/llama3:8b")).toBeNull();
+    expect(declaredModelContextWindowTokens("llama3:8b")).toBeNull();
+    // A non-date tail is not stripped.
+    expect(declaredModelContextWindowTokens("gpt-4o-preview")).toBeNull();
   });
 
   test("unknown and null models declare nothing", () => {
@@ -50,6 +82,22 @@ describe("structural 1m suffix rule", () => {
     expect(structuralModelContextWindowTokens("gemini-2.5-pro-1m")).toBe(1_000_000);
     expect(structuralModelContextWindowTokens("some-model_1m")).toBe(1_000_000);
     expect(structuralModelContextWindowTokens("GEMINI-2.5-PRO-1M")).toBe(1_000_000);
+  });
+
+  test("the bracket form hosts report is a structural 1m suffix too (M3)", () => {
+    expect(structuralModelContextWindowTokens("claude-sonnet-5-5[1m]")).toBe(1_000_000);
+    expect(structuralModelContextWindowTokens("opus[1m]")).toBe(1_000_000);
+    expect(structuralModelContextWindowTokens("MODEL[1M]")).toBe(1_000_000);
+    // Through the resolver: the bracket answers `suffix`.
+    expect(resolveModelContextWindowTokens({ model: "claude-sonnet-5-5[1m]" })).toEqual({
+      windowTokens: 1_000_000,
+      source: "suffix",
+      clamped: false,
+    });
+    // Only trailing: text after the bracket is not a window.
+    expect(structuralModelContextWindowTokens("model[1m]-preview")).toBeNull();
+    // A dot-led fragment is still a version, bracket or not.
+    expect(structuralModelContextWindowTokens("gpt-4.1[m]")).toBeNull();
   });
 
   test("1m inside a larger token never matches", () => {

@@ -11,9 +11,15 @@
  *
  *   - Declared: an exact-id table entry (provenance noted per row). No
  *     family substring ever resolves - "sonnet" matches nothing, and that
- *     is the defect this module exists to remove.
- *   - Structural: a trailing, delimited `1m` suffix (`-1m` / `_1m`). The
- *     suffix is itself a published declaration, so reading it is safe;
+ *     is the defect this module exists to remove. Host-side decorations
+ *     that still name exactly one row normalize away first (provider and
+ *     region prefixes like `openai/` and `us.anthropic.`, trailing date
+ *     snapshots, `-vN:N` revision suffixes), so `openai/gpt-4.1` and
+ *     `gpt-4.1-2025-04-14` reach the row; nothing else is ever widened
+ *     into a hit.
+ *   - Structural: a trailing, delimited `1m` suffix (`-1m` / `_1m`, or
+ *     the trailing `[1m]` bracket form hosts report). The suffix is
+ *     itself a published declaration, so reading it is safe;
  *     generalizing it to "the family is big" is not, and never happens
  *     here. Delimited means `-` or `_` (or the whole id): a dot-led
  *     version fragment like the `4.1m` in `gpt-4.1m` is a version, not a
@@ -142,12 +148,16 @@ export interface ResolveModelContextWindowInput {
 }
 
 /**
- * The declared-window lookup: exact id, case-insensitive, trimmed. `null`
- * means UNKNOWN and is never treated as any default's synonym - the
- * resolver applies the default one tier later, where `source` can say so.
+ * The declared-window lookup: the id is normalized first - host-side
+ * decorations that still name one published model (provider and region
+ * prefixes, trailing date snapshots, `-vN:N` revision suffixes; see
+ * {@link normalizeDeclaredModelId}) are stripped - then matched
+ * case-insensitively against the exact rows. `null` means UNKNOWN and is
+ * never treated as any default's synonym - the resolver applies the
+ * default one tier later, where `source` can say so.
  */
 export function declaredModelContextWindowTokens(model: string | null | undefined): number | null {
-  const id = model?.trim().toLowerCase() ?? "";
+  const id = normalizeDeclaredModelId(model?.trim().toLowerCase() ?? "");
   if (id === "") return null;
   const hit = MODEL_CONTEXT_WINDOWS.find((entry) => entry.model.toLowerCase() === id);
   return hit ? hit.windowTokens : null;
@@ -155,15 +165,62 @@ export function declaredModelContextWindowTokens(model: string | null | undefine
 
 /**
  * The structural tier: one million tokens, and only when the id carries a
- * trailing, delimited `1m` window suffix. See the module header for the
- * delimiter set and the near-misses it exists to refuse.
+ * trailing, delimited `1m` window suffix - `-1m` / `_1m` (or the whole
+ * id), or the trailing `[1m]` bracket form hosts report
+ * (`claude-sonnet-5-5[1m]`). See the module header for the delimiter set
+ * and the near-misses it exists to refuse.
  */
 export function structuralModelContextWindowTokens(
   model: string | null | undefined,
 ): number | null {
   const id = model?.trim().toLowerCase() ?? "";
-  if (/(^|[-_])1m$/.test(id)) return MAX_MODEL_CONTEXT_WINDOW_TOKENS;
+  if (/(^|[-_])1m$/.test(id) || id.endsWith("[1m]")) return MAX_MODEL_CONTEXT_WINDOW_TOKENS;
   return null;
+}
+
+/** The remainder of a prefix strip still has to look like a model id. */
+function looksLikeModelId(candidate: string): boolean {
+  return /^[a-z]/.test(candidate) && candidate.replace(/[^a-z]/g, "").length >= 3;
+}
+
+/**
+ * Strip the deployment plumbing an id can carry and still name exactly
+ * one published model, so host-side spellings reach the exact-id table:
+ * provider/router prefixes (`openai/gpt-4.1`), Bedrock-style region
+ * prefixes (`us.anthropic.claude-...`), trailing date snapshots
+ * (`gpt-4.1-2025-04-14`, the compact `-20250929`) and `-vN:N` revision
+ * suffixes. A prefix is stripped only up to the first `.` or `/` AND
+ * only while the remainder still looks like a model id, so the dot-led
+ * minor version in `gpt-4.1` survives whole. Normalization feeds the
+ * TABLE lookup only - it never invents a row, and unknown ids stay
+ * unknown through it.
+ */
+function normalizeDeclaredModelId(rawId: string): string {
+  let id = rawId;
+  // Prefixes: repeatedly cut at the first `/` or `.`, whichever comes
+  // first, while the remainder stays id-shaped -
+  // `bedrock/us.anthropic.claude-...` sheds all three.
+  for (;;) {
+    const slash = id.indexOf("/");
+    const dot = id.indexOf(".");
+    const cut = slash === -1 ? dot : dot === -1 ? slash : Math.min(slash, dot);
+    if (cut === -1) break;
+    const rest = id.slice(cut + 1);
+    if (!looksLikeModelId(rest)) break;
+    id = rest;
+  }
+  // The decorated tail: `-vN:N` revision suffixes and date snapshots,
+  // dotted and compact, each repeatedly so `...-20250929-v1:0` sheds
+  // its whole tail.
+  for (;;) {
+    const stripped = id
+      .replace(/-v\d+(:\d+)?$/, "")
+      .replace(/-\d{4}-\d{2}-\d{2}$/, "")
+      .replace(/-\d{8}$/, "");
+    if (stripped === id) break;
+    id = stripped;
+  }
+  return id;
 }
 
 /** A channel value is usable only when it is a positive finite number. */
