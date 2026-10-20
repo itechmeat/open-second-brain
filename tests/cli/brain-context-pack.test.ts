@@ -141,3 +141,100 @@ test("brain context-pack exposes opt-in transform annotations", async () => {
     reference_hint: "see pref-alpha",
   });
 });
+
+/**
+ * Derived budget (t_a567cc12): `--max-tokens` is optional. When it is
+ * omitted, the budget derives from the resolved model context window
+ * (vault `context:` block, env, or `--model`) through the matching
+ * preset; with nothing resolvable the verb refuses exactly as before.
+ */
+test("brain context-pack derives the budget from --model when --max-tokens is omitted", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "gpt-4o", "--json"],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.max_tokens).toBe(24_000);
+  expect(json.max_tokens_source).toBe("declared");
+});
+
+test("brain context-pack derives from a 1m-suffix model", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    ["brain", "context-pack", "--vault", vault, "--model", "qwen3-235b-1m", "--json"],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.max_tokens).toBe(24_000);
+  expect(json.max_tokens_source).toBe("suffix");
+});
+
+test("brain context-pack derives from the vault context block without --model", async () => {
+  writePref("core", "core principle", "tier: core");
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\ncontext:\n  window_tokens: 150000\n",
+  );
+
+  const out = await runCli(["brain", "context-pack", "--vault", vault, "--json"], {});
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.max_tokens).toBe(24_000);
+  expect(json.max_tokens_source).toBe("operator-config");
+});
+
+test("brain context-pack clamps an out-of-band declared window", async () => {
+  writePref("core", "core principle", "tier: core");
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\ncontext:\n  window_tokens: 5000000\n",
+  );
+
+  const out = await runCli(["brain", "context-pack", "--vault", vault, "--json"], {});
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.max_tokens).toBe(24_000);
+  expect(json.max_tokens_source).toBe("operator-config");
+});
+
+test("brain context-pack still refuses when nothing resolves", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(["brain", "context-pack", "--vault", vault, "--json"], {});
+
+  expect(out.returncode).toBe(1);
+  expect(out.stderr).toContain("--max-tokens <n> is required");
+});
+
+test("brain context-pack explicit --max-tokens wins over --model", async () => {
+  writePref("core", "core principle", "tier: core");
+
+  const out = await runCli(
+    [
+      "brain",
+      "context-pack",
+      "--vault",
+      vault,
+      "--model",
+      "gpt-4o",
+      "--max-tokens",
+      "1000",
+      "--json",
+    ],
+    {},
+  );
+
+  expect(out.returncode).toBe(0);
+  const json = JSON.parse(out.stdout);
+  expect(json.max_tokens).toBe(1_000);
+  expect(json.max_tokens_source).toBeUndefined();
+});

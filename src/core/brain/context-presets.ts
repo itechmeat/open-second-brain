@@ -114,6 +114,23 @@ export function getContextPreset(id: string): ContextBudgetPreset | null {
   return PRESETS.find((preset) => preset.id === id) ?? null;
 }
 
+/**
+ * The preset whose window bucket contains `window`. The one definition of
+ * the bucket mapping - suggest sizes from it, and so does every surface
+ * that derives a budget from a resolved window (t_a567cc12) - so a caller
+ * can never size from a different mapping than a suggestion named.
+ */
+export function presetForWindowTokens(window: number): ContextBudgetPreset {
+  const hit = PRESETS.find(
+    (preset) =>
+      window >= preset.context_window_tokens.min &&
+      (preset.context_window_tokens.max === null || window <= preset.context_window_tokens.max),
+  );
+  // The buckets tile [0, ∞), so the fallback is unreachable; it keeps the
+  // compiler honest without inventing a third preset.
+  return hit ?? PRESETS[0]!;
+}
+
 export function suggestContextPreset(input: ContextPresetSuggestionInput): ContextPresetSuggestion {
   const model = input.model?.toLowerCase() ?? "";
   const byModel = PRESETS.find((preset) => preset.model_hints.some((hint) => model.includes(hint)));
@@ -128,19 +145,13 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
 
   const window = input.contextWindowTokens;
   if (window !== undefined && Number.isFinite(window)) {
-    const byWindow = PRESETS.find(
-      (preset) =>
-        window >= preset.context_window_tokens.min &&
-        (preset.context_window_tokens.max === null || window <= preset.context_window_tokens.max),
-    );
-    if (byWindow) {
-      return {
-        preset_id: byWindow.id,
-        confidence: "high",
-        reason: `context window ${window} tokens matched ${byWindow.id}`,
-        preset: byWindow,
-      };
-    }
+    const byWindow = presetForWindowTokens(window);
+    return {
+      preset_id: byWindow.id,
+      confidence: "high",
+      reason: `context window ${window} tokens matched ${byWindow.id}`,
+      preset: byWindow,
+    };
   }
 
   // No hint and no explicit window: resolve the window from the model id
@@ -152,22 +163,15 @@ export function suggestContextPreset(input: ContextPresetSuggestionInput): Conte
   // and the conservative fallback below stands, byte-identical.
   if (model !== "") {
     const resolved = resolveModelContextWindowTokens({ model: input.model });
-    const byWindow = PRESETS.find(
-      (preset) =>
-        resolved.windowTokens >= preset.context_window_tokens.min &&
-        (preset.context_window_tokens.max === null ||
-          resolved.windowTokens <= preset.context_window_tokens.max),
-    );
-    if (byWindow) {
-      const clampedNote = resolved.clamped ? " (clamped)" : "";
-      return {
-        preset_id: byWindow.id,
-        confidence: resolved.source === "default" ? "medium" : "high",
-        reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source}${clampedNote} matched ${byWindow.id}`,
-        preset: byWindow,
-        resolvedWindow: resolved,
-      };
-    }
+    const byWindow = presetForWindowTokens(resolved.windowTokens);
+    const clampedNote = resolved.clamped ? " (clamped)" : "";
+    return {
+      preset_id: byWindow.id,
+      confidence: resolved.source === "default" ? "medium" : "high",
+      reason: `context window ${resolved.windowTokens} tokens resolved from ${resolved.source}${clampedNote} matched ${byWindow.id}`,
+      preset: byWindow,
+      resolvedWindow: resolved,
+    };
   }
 
   const fallback = PRESETS[0]!;

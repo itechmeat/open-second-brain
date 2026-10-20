@@ -12,10 +12,13 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { MODEL_CONTEXT_WINDOW_ENV_KEY } from "../../src/core/config.ts";
 import { CONTEXT_GUARD_PLACEHOLDER } from "../../src/core/brain/safety/context-guard.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { persistTension } from "../../src/core/brain/tensions.ts";
 import { BELIEF_VECTORS_BACKFILL_COMMAND } from "../../src/core/brain/context-pack.ts";
+import { writePreference } from "../../src/core/brain/preference.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../../src/core/search/embeddings/signature.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../src/core/search/embeddings/pricing.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
@@ -1052,4 +1055,228 @@ describe("brain_context_pack tool — semantic query mode", () => {
       expect(withheld).toBe(absent);
     },
   );
+});
+
+/**
+ * Derived budget (t_a567cc12): `max_tokens` is optional. When it is
+ * omitted, the budget derives from the model context window the resolver
+ * resolves - operator `context:` block, env override, or the caller's
+ * `model` hint, in that precedence - through the matching preset's
+ * `context_pack.max_tokens`. Explicit `max_tokens` stays first-class and
+ * untouched; omission with nothing resolvable refuses exactly as before
+ * (the pinned decision - never a silent default budget).
+ */
+describe("brain_context_pack tool — derived budget", () => {
+  function writeOnePref(): void {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-core.md"),
+      "---\nid: pref-core\ntopic: x\nprinciple: core principle\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n",
+    );
+  }
+
+  function writeBrainConfig(contents: string): void {
+    atomicWriteFileSync(brainConfigPath(vault), contents);
+  }
+
+  test("a model hint derives the preset budget for the declared window", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { model: "gpt-4o" });
+    expect(out["max_tokens"]).toBe(24_000);
+    expect(out["max_tokens_source"]).toBe("declared");
+    expect((out["items"] as Array<{ id: string }>).map((i) => i.id)).toEqual(["pref-core"]);
+  });
+
+  test("a 1m-suffix model derives from the one-million window", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { model: "qwen3-235b-1m" });
+    expect(out["max_tokens"]).toBe(24_000);
+    expect(out["max_tokens_source"]).toBe("suffix");
+  });
+
+  test("the operator context block resolves without a model", async () => {
+    writeOnePref();
+    writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 150000\n");
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {});
+    expect(out["max_tokens"]).toBe(24_000);
+    expect(out["max_tokens_source"]).toBe("operator-config");
+  });
+
+  test("an out-of-band operator value clamps into the band", async () => {
+    writeOnePref();
+    writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 5000000\n");
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {});
+    expect(out["max_tokens"]).toBe(24_000);
+    expect(out["max_tokens_source"]).toBe("operator-config");
+  });
+
+  test("the env channel resolves, and the operator block beats it", async () => {
+    writeOnePref();
+    const key = MODEL_CONTEXT_WINDOW_ENV_KEY;
+    const previous = process.env[key];
+    process.env[key] = "150000";
+    try {
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      const fromEnv = await callPack(server, {});
+      expect(fromEnv["max_tokens"]).toBe(24_000);
+      expect(fromEnv["max_tokens_source"]).toBe("operator-env");
+
+      writeBrainConfig("schema_version: 1\ncontext:\n  window_tokens: 32000\n");
+      const server2 = new MCPServer({ vault, configPath });
+      await initialize(server2);
+      // The operator block wins over the env channel even where the clamp
+      // lands both in the same preset: the disclosed source flips.
+      const fromConfig = await callPack(server2, {});
+      expect(fromConfig["max_tokens"]).toBe(24_000);
+      expect(fromConfig["max_tokens_source"]).toBe("operator-config");
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
+  test("omission with nothing resolvable refuses exactly as before", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 13,
+      method: "tools/call",
+      params: { name: "brain_context_pack", arguments: {} },
+    })) as { error?: { code: number; message: string } };
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toBe("brain_context_pack: max_tokens must be a positive integer");
+  });
+
+  test("explicit max_tokens stays first-class and discloses nothing", async () => {
+    writeOnePref();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { model: "gpt-4o", max_tokens: 1_000 });
+    expect(out["max_tokens"]).toBe(1_000);
+    expect(out["max_tokens_source"]).toBeUndefined();
+  });
+
+  test("the schema declares the optional budget and the derivation", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_context_pack")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { description?: string }>;
+      required?: ReadonlyArray<string>;
+    };
+    expect(schema.required ?? []).not.toContain("max_tokens");
+    expect(schema.properties["max_tokens"]!.description).toContain("derives");
+    expect(schema.properties["model"]!.description).toContain("context window");
+  });
+});
+
+/**
+ * Derived caps (t_a567cc12): the pre-compress addendum's character caps
+ * were unbounded when absent. With a resolvable window they now derive
+ * from the matching preset's `pre_compress` block; nothing resolvable
+ * keeps the historical unbounded addendum; explicit caps stay first-class.
+ */
+describe("brain_pre_compress_pack tool — derived caps", () => {
+  const LONG_PRINCIPLE = "never deploy on a friday afternoon".padEnd(2_400, " filler");
+
+  function seedTwoLongConfirmedPreferences(): void {
+    writePreference(vault, {
+      slug: "pref-long-a",
+      topic: "deploy",
+      principle: LONG_PRINCIPLE,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: ["[[sig-a]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: BRAIN_CONFIDENCE.high,
+      confidence_value: 0.9,
+    });
+    writePreference(vault, {
+      slug: "pref-long-b",
+      topic: "deploy",
+      principle: LONG_PRINCIPLE,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: ["[[sig-b]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: BRAIN_CONFIDENCE.high,
+      confidence_value: 0.8,
+    });
+  }
+
+  async function callPreCompress(
+    server: MCPServer,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const r = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 14,
+      method: "tools/call",
+      params: { name: "brain_pre_compress_pack", arguments: args },
+    })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
+    return JSON.parse(r.result.content[0]!.text);
+  }
+
+  test("a resolved window bounds the addendum with the preset caps", async () => {
+    seedTwoLongConfirmedPreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPreCompress(server, { model: "gpt-4o" });
+    const items = out["items"] as Array<{ principle: string; trimmed: boolean }>;
+    expect(items).toHaveLength(2);
+    // The long-context preset caps each entry at 2000 code points.
+    for (const item of items) {
+      expect(item.trimmed).toBe(true);
+      expect(item.principle.length).toBe(2_000);
+    }
+    expect(out["total_chars"]).toBeLessThanOrEqual(16_000);
+  });
+
+  test("nothing resolvable keeps the unbounded addendum", async () => {
+    seedTwoLongConfirmedPreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPreCompress(server, {});
+    const items = out["items"] as Array<{ principle: string; trimmed: boolean }>;
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(item.trimmed).toBe(false);
+      expect(item.principle).toBe(LONG_PRINCIPLE);
+    }
+  });
+
+  test("explicit caps stay first-class beside a resolvable window", async () => {
+    seedTwoLongConfirmedPreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPreCompress(server, { model: "gpt-4o", max_chars_per_memory: 50 });
+    const items = out["items"] as Array<{ principle: string; trimmed: boolean }>;
+    for (const item of items) {
+      expect(item.trimmed).toBe(true);
+      expect(item.principle.length).toBe(50);
+    }
+  });
+
+  test("the schema declares the optional model and the derivation", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_pre_compress_pack")!;
+    const schema = tool.inputSchema as { properties: Record<string, { description?: string }> };
+    expect(schema.properties["model"]!.description).toContain("context window");
+    expect(schema.properties["max_chars_per_memory"]!.description).toContain("resolves");
+  });
 });

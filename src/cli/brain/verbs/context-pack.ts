@@ -4,9 +4,23 @@
  * Intended for agents priming a context window without manual page
  * curation. `--query <q>` adds a case/Unicode-insensitive substring
  * filter on topic + principle.
+ *
+ * `--max-tokens` is optional (t_a567cc12): when it is omitted, the
+ * budget derives from the model context window the shared resolver
+ * resolves - the vault's `context:` block, the environment override, or
+ * `--model`, in that precedence - through the matching preset. With
+ * nothing resolvable the verb refuses exactly as it always has: never a
+ * silent default budget.
  */
 
+import { presetForWindowTokens } from "../../../core/brain/context-presets.ts";
+import {
+  resolveModelContextWindowTokens,
+  type ModelWindowSource,
+} from "../../../core/brain/model-window.ts";
+import { resolveModelContextWindowEnvTokens } from "../../../core/config.ts";
 import { packContext } from "../../../core/brain/context-pack.ts";
+import { loadBrainConfig } from "../../../core/brain/policy.ts";
 import { RECALL_CHANNEL } from "../../../core/brain/recall-telemetry.ts";
 import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
@@ -15,6 +29,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
     "max-tokens": { type: "string" },
+    model: { type: "string" },
     query: { type: "string" },
     lanes: { type: "boolean" },
     receipt: { type: "boolean" },
@@ -28,15 +43,42 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   });
   const { vault } = brainVerbContext(flags);
 
-  const maxTokensRaw = flags["max-tokens"] as string | undefined;
-  if (!maxTokensRaw) {
-    return fail("brain context-pack: --max-tokens <n> is required");
-  }
-  // Strict integer parsing - `Number()` rejects partial numeric
-  // strings like "12abc" that `parseInt` would silently accept.
-  const maxTokens = Number(maxTokensRaw);
-  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
-    return fail(`brain context-pack: --max-tokens must be a positive integer; got ${maxTokensRaw}`);
+  const model = trimOrUndefined(flags["model"]);
+  const maxTokensRaw = trimOrUndefined(flags["max-tokens"]);
+  let maxTokens: number;
+  let maxTokensSource: ModelWindowSource | undefined;
+  if (maxTokensRaw !== undefined) {
+    // Strict integer parsing - `Number()` rejects partial numeric
+    // strings like "12abc" that `parseInt` would silently accept.
+    maxTokens = Number(maxTokensRaw);
+    if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+      return fail(
+        `brain context-pack: --max-tokens must be a positive integer; got ${maxTokensRaw}`,
+      );
+    }
+  } else {
+    // Derivation path (t_a567cc12). The vault channel is fail-soft: a
+    // broken `_brain.yaml` raises later, inside `packContext`, exactly as
+    // it always has. A malformed env value refuses here under its own
+    // name - an operator typo must not silently shrink the budget to the
+    // default.
+    const operatorWindow = contextWindowConfigValue(vault);
+    let envWindow: number | undefined;
+    try {
+      envWindow = resolveModelContextWindowEnvTokens();
+    } catch (exc) {
+      return fail(`brain context-pack: ${(exc as Error).message}`);
+    }
+    if (model === undefined && operatorWindow === undefined && envWindow === undefined) {
+      return fail("brain context-pack: --max-tokens <n> is required");
+    }
+    const resolved = resolveModelContextWindowTokens({
+      ...(model !== undefined ? { model } : {}),
+      ...(operatorWindow !== undefined ? { operatorWindowTokens: operatorWindow } : {}),
+      ...(envWindow !== undefined ? { envWindowTokens: envWindow } : {}),
+    });
+    maxTokens = presetForWindowTokens(resolved.windowTokens).context_pack.max_tokens;
+    maxTokensSource = resolved.source;
   }
 
   // `packContext` reads the guardrail block and raises on a `_brain.yaml`
@@ -94,6 +136,7 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   if (flags["json"]) {
     okJson({
       max_tokens: report.maxTokens,
+      ...(maxTokensSource !== undefined ? { max_tokens_source: maxTokensSource } : {}),
       tokens_used: report.tokensUsed,
       items: report.items.map((i) => ({
         id: i.id,
@@ -116,6 +159,9 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
   }
 
   process.stdout.write(`tokens used: ${report.tokensUsed} / ${report.maxTokens}\n`);
+  if (maxTokensSource !== undefined) {
+    process.stdout.write(`budget source: ${maxTokensSource}\n`);
+  }
   process.stdout.write(`pages included: ${report.items.length}\n`);
   process.stdout.write(`pages skipped: ${report.skipped.length}\n\n`);
   if (report.receiptId) process.stdout.write(`receipt: ${report.receiptId}\n`);
@@ -123,6 +169,20 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     process.stdout.write(`[${i.tier}] ${i.epistemic} ${i.id} (${i.tokens} tokens)\n`);
   }
   return 0;
+}
+
+/**
+ * The vault's declared `context.window_tokens`; `undefined` when the
+ * block is absent or the file cannot be read. Fail-soft on purpose: a
+ * broken `_brain.yaml` raises later, inside `packContext`, exactly as it
+ * always has.
+ */
+function contextWindowConfigValue(vault: string): number | undefined {
+  try {
+    return loadBrainConfig(vault).context?.window_tokens;
+  } catch {
+    return undefined;
+  }
 }
 
 function trimOrDefault(value: string | boolean | string[] | undefined, fallback: string): string {
