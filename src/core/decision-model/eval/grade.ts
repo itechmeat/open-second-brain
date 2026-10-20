@@ -32,7 +32,9 @@
  * (`not_enough_evidence`), never a pass.
  *
  * On a `promote` verdict - and only then, and only for a named threshold
- * profile - the runner writes the machine-side tuning mark
+ * profile, only when a grade record exists to review the mark against,
+ * and only when the counted spend stayed under the daily cost gate - the
+ * runner writes the machine-side tuning mark
  * (`eval/mark.ts`) under the caller-supplied state root, making it the
  * one code path that can mark a profile tuned. The vault's grade record
  * is the review evidence; the mark is the gate input.
@@ -50,7 +52,7 @@ import {
 } from "../eval-spec.ts";
 import { RECALL_INJECT_QUESTIONS, RERANK_QUESTIONS } from "../questions.ts";
 import { recallInjectFilterOutcome } from "../../brain/recall-inject.ts";
-import { emitDecisionModelEvalGrade, listDecisionModelCalls } from "../record.ts";
+import { emitDecisionModelEvalGrade, listDecisionModelCalls, todaySpendUsd } from "../record.ts";
 import { runDecision } from "../run.ts";
 import { clip } from "../state.ts";
 import type { PlatformDirsEnv } from "../../platform-dirs.ts";
@@ -380,12 +382,14 @@ export async function runDecisionModelEval(
   });
 
   // The mark is the gate input and this is its only writer: a promote
-  // verdict, a named profile and a state root to write under. A failed
-  // write is reported, never thrown - the measurement already happened
-  // and the spend is already counted.
+  // verdict, a named profile, a state root to write under, a grade
+  // record to review it against, and a counted spend that stayed under
+  // the daily cost gate. A failed write is reported, never thrown - the
+  // measurement already happened and the spend is already counted.
   const profile = cfg.thresholdProfile ?? null;
   let markWritten = false;
   let markNote: string | null = null;
+  const now = opts.now ?? new Date();
   if (verdict !== "promote") {
     markNote = `verdict is '${verdict}'; only a promote writes a tuning mark`;
   } else if (profile === null) {
@@ -393,6 +397,21 @@ export async function runDecisionModelEval(
       "the config carries no threshold profile, so there is no (profile, use) pair to mark";
   } else if (opts.markSource === null || opts.markSource === undefined) {
     markNote = "no state root was provided, so the run measured without marking";
+  } else if (record === null) {
+    // The vault's grade records are the review evidence a reviewer
+    // audits the mark against; without one the promote is refused by
+    // name instead of arming enforce on nothing.
+    markNote =
+      "no grade record was written (no vault configured, or the record write failed), " +
+      "so the promote has no review evidence to mark";
+  } else if (
+    cfg.vault !== null &&
+    cfg.dailyCostGateUsd > 0 &&
+    todaySpendUsd(cfg.vault, now) >= cfg.dailyCostGateUsd
+  ) {
+    markNote =
+      `the run's counted spend passed the daily cost gate ` +
+      `(${cfg.dailyCostGateUsd} USD); the mark waits for a run whose counted spend stays under it`;
   } else {
     const mark: DecisionTuningMark = {
       profile,
@@ -405,7 +424,7 @@ export async function runDecisionModelEval(
       counted_error: countedError,
       baseline_error: baselineError,
       verdict: "promote",
-      created_at: (opts.now ?? new Date()).toISOString(),
+      created_at: now.toISOString(),
     };
     try {
       writeTuningMark(decisionModelTuningMarkPath(opts.markSource, profile, use), mark);

@@ -29,6 +29,10 @@ import {
   type DecisionEvalSpec,
 } from "../../../src/core/decision-model/eval-spec.ts";
 import { runDecisionModelEval } from "../../../src/core/decision-model/eval/grade.ts";
+import {
+  resetTuningMarkCache,
+  validatedTuningMark,
+} from "../../../src/core/decision-model/eval/mark.ts";
 import { hashOrderSplit } from "../../../src/core/decision-model/eval/take.ts";
 import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { buildDecisionModelReport } from "../../../src/core/decision-model/diagnostics.ts";
@@ -42,16 +46,20 @@ import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 
 let tmp: string;
 let vault: string;
+let stateEnv: Parameters<typeof validatedTuningMark>[2];
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "osb-dm-eval-grade-"));
   vault = join(tmp, "vault");
   mkdirSync(join(vault, "Brain"), { recursive: true });
+  stateEnv = { platform: "linux", home: tmp, env: { XDG_STATE_HOME: join(tmp, "state") } };
   resetDecisionSpendCache();
+  resetTuningMarkCache();
 });
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
   resetDecisionSpendCache();
+  resetTuningMarkCache();
 });
 
 /** The subject each fixture query prompts about, by the fixtures' own rule. */
@@ -398,6 +406,43 @@ describe("runDecisionModelEval", () => {
     expect(first!.callIds).toHaveLength(29);
     expect(second!.callIds).toHaveLength(29);
     expect(second!.callIds.filter((id) => first!.callIds.includes(id))).toEqual([]);
+  });
+
+  test("a promote with no grade evidence refuses the mark by name", async () => {
+    // No vault: nothing was recorded, so the promote has no review
+    // evidence a reviewer could audit the mark against - the run
+    // measures, but the gate input is never written.
+    const result = await runDecisionModelEval("rerank", {
+      config: evalConfig({ vault: null }),
+      provider: new FakeDecisionProvider({ answer: byLabelRule }),
+      markSource: stateEnv,
+    });
+    expect(result.verdict).toBe("promote");
+    expect(result.grade_record_id).toBeNull();
+    expect(result.mark_written).toBe(false);
+    expect(result.mark_note).toMatch(/grade record/);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
+  });
+
+  test("a promote whose counted spend passed the daily cost gate refuses the mark", async () => {
+    // Every request starts under the gate but the run's total lands past
+    // it: the verdict is promote and the spend is real, yet the mark
+    // waits for a run whose counted spend stayed under the gate.
+    const result = await runDecisionModelEval("rerank", {
+      config: evalConfig({ dailyCostGateUsd: 42.5, inputPriceUsdPerMtok: 1 }),
+      provider: new FakeDecisionProvider({
+        answer: byLabelRule,
+        usage: { inputTokens: 1_000_000, outputTokens: 0 },
+      }),
+      markSource: stateEnv,
+    });
+    expect(result.verdict).toBe("promote");
+    expect(result.counted.n).toBe(30);
+    expect(result.counted.error).toBe(0);
+    expect(todaySpendUsd(vault)).toBeGreaterThanOrEqual(42.5);
+    expect(result.mark_written).toBe(false);
+    expect(result.mark_note).toMatch(/cost gate/);
+    expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
   });
 
   test("refuses a use with no preregistered spec and an inactive config", async () => {
