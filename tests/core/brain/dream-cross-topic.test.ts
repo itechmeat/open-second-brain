@@ -8,9 +8,12 @@
  *   - `planCrossTopicRules`: cross-bucket detection at the configured
  *     `min_topics`/`jaccard`, same-bucket (and folded-same-key) clusters
  *     never firing, content-slug determinism and dedup against live or
- *     retired files, the per-owner-token daily budget read off the
- *     injected clock, owner-uniform source sets, and exclusion of
- *     sources the same pass plans to retire.
+ *     retired files, the duplicate-rule guard that keeps membership
+ *     churn from re-creating a live rule (M8: principle jaccard at the
+ *     same floor, or a superset of the rule's evidence, skips and
+ *     discloses without writing), the per-owner-token daily budget read
+ *     off the injected clock, owner-uniform source sets, and exclusion
+ *     of sources the same pass plans to retire.
  *   - ledger read/write round trip through the shared atomic writer.
  *
  * Modeled on `tests/core/brain/rollup-ladder.test.ts`: the planner is a
@@ -69,6 +72,9 @@ const TODAY = "2026-07-19";
 const P_ALPHA = "prefer bun over node for scripts";
 const P_BETA = "prefer bun over node for tooling";
 const P_FAR = "always write the failing test first";
+/** A third family: mutually near, far from both P_ALPHA and P_FAR. */
+const P_BASE_A = "docker builds must pin the base image digest";
+const P_BASE_B = "docker builds should pin the base image digest";
 
 const CONFIG: ResolvedCrossTopicConfig = { minTopics: 2, jaccard: 0.6 };
 
@@ -127,11 +133,26 @@ function withVisibility(record: PreferenceRecord, tokens: string[]): PreferenceR
  * The on-disk shape of a promoted rule after dream-refresh confirmed it
  * (one applied event auto-confirms it): an ordinary preference carrying
  * the `cross-` slug, `inferred` provenance and its evidence lineage.
+ * `evidencedBy` overrides the self-citing default; `owner` stamps the
+ * rule's owner token.
  */
-function promotedRec(id: string, topic: string, principle: string): PreferenceRecord {
+function promotedRec(
+  id: string,
+  topic: string,
+  principle: string,
+  evidencedBy?: string[],
+  owner?: string,
+): PreferenceRecord {
   return {
     path: `/vault/Brain/preferences/${id}.md`,
-    pref: pref({ id, topic, principle, provenance: "inferred", evidenced_by: [`[[${id}]]`] }),
+    pref: pref({
+      id,
+      topic,
+      principle,
+      provenance: "inferred",
+      evidenced_by: evidencedBy ?? [`[[${id}]]`],
+      ...(owner ? { owner } : {}),
+    }),
     supersededBy: null,
   };
 }
@@ -616,6 +637,126 @@ describe("planCrossTopicRules", () => {
     expect(result.fired).toBe(false);
     expect(planState.crossTopicRules).toHaveLength(0);
   });
+
+  // ----- Duplicate-rule guard (M8) -----------------------------------------
+  // The slug hashes the EXACT source set, so membership churn - one
+  // source joining or leaving a promoted cluster - mints a new slug and,
+  // before the guard, a second live rule stating the identical principle
+  // while the first stays live. Before promoting, the planner compares
+  // the candidate against the owner's existing inferred `cross-` rules
+  // (the very records it excludes from the source pool): a
+  // near-identical principle at the same jaccard floor the clusters
+  // elect at, or a source set that already superset-evidences the rule,
+  // skips the promotion - disclosed on the planner's result the same way
+  // the daily budget's skips are: nothing written, no budget spent.
+
+  test("membership churn mints no second rule: the guard skips and discloses (M8)", () => {
+    const day1Slug = expectedSlug("pref-a", "pref-b");
+    const day1Ledger: CrossTopicLedger = {
+      version: CROSS_TOPIC_LEDGER_VERSION,
+      last_promoted: { "": "2026-07-19" },
+    };
+    // Day 3: Gamma joined the promoted cluster before the day-1 rule
+    // ever confirmed (still unconfirmed - the guard does not wait for
+    // confirmation). The joined set elects under a NEW content slug, so
+    // the exact-set slug dedup cannot catch it; the principle guard must.
+    const { result, plan: planState } = plan(
+      [
+        rec("pref-a", "Alpha", P_ALPHA),
+        rec("pref-b", "Beta", P_BETA),
+        rec("pref-c", "Gamma", P_ALPHA),
+        promotedRec(`pref-${day1Slug}`, "Alpha + Beta", P_ALPHA),
+      ],
+      { now: new Date("2026-07-21T10:00:00Z"), ledger: day1Ledger },
+    );
+    expect(expectedSlug("pref-a", "pref-b", "pref-c")).not.toBe(day1Slug);
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+    // Nothing written: the day-3 budget stays unspent, the ledger update
+    // is null.
+    expect(result.ledger).toBeNull();
+    // The skip is disclosed with its reason and the rule it duplicates.
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0]!.code).toBe("cross-topic-duplicate-rule");
+    expect(result.skips[0]!.message).toContain(`pref-${day1Slug}`);
+  });
+
+  test("a cluster that only extends a live rule's evidence skips too (superset branch)", () => {
+    // The old rule's principle has drifted below the floor from the
+    // cluster's current representative (a source rewrite since the
+    // promotion), but the cluster's sources already evidence the rule:
+    // extending that evidence is a future concern, not a second rule.
+    const { result, plan: planState } = plan([
+      rec("pref-c", "Gamma", P_BASE_A),
+      rec("pref-d", "Delta", P_BASE_B),
+      promotedRec("pref-cross-manual", "Gamma + Delta", P_FAR, ["[[pref-c]]", "[[pref-d]]"]),
+    ]);
+    expect(result.fired).toBe(false);
+    expect(planState.crossTopicRules).toHaveLength(0);
+    expect(result.skips).toHaveLength(1);
+    expect(result.skips[0]!.code).toBe("cross-topic-duplicate-rule");
+    expect(result.skips[0]!.message).toContain("pref-cross-manual");
+  });
+
+  test("a genuinely different principle still promotes beside an existing rule", () => {
+    const { result, plan: planState } = plan([
+      rec("pref-c", "Gamma", P_BASE_A),
+      rec("pref-d", "Delta", P_BASE_B),
+      promotedRec("pref-cross-manual", "Alpha + Beta", P_ALPHA),
+    ]);
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules).toHaveLength(1);
+    expect(planState.crossTopicRules[0]!.slug).toBe(expectedSlug("pref-c", "pref-d"));
+    expect(result.skips).toHaveLength(0);
+  });
+
+  test("the guard is owner-scoped: another owner's rule never blocks a cluster", () => {
+    const { result, plan: planState } = plan([
+      rec("pref-a", "Alpha", P_ALPHA),
+      rec("pref-b", "Beta", P_BETA),
+      promotedRec("pref-cross-kates", "Alpha + Beta", P_ALPHA, undefined, "kate"),
+    ]);
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules).toHaveLength(1);
+    expect(planState.crossTopicRules[0]!.owner).toBeUndefined();
+    expect(result.skips).toHaveLength(0);
+  });
+
+  test("a guard skip spends no daily budget: a different cluster still promotes that day", () => {
+    const { result, plan: planState } = plan([
+      rec("pref-a", "Alpha", P_ALPHA),
+      rec("pref-b", "Beta", P_BETA),
+      rec("pref-c", "Gamma", P_BASE_A),
+      rec("pref-d", "Delta", P_BASE_B),
+      promotedRec("pref-cross-manual", "Alpha + Beta", P_ALPHA, ["[[pref-a]]", "[[pref-b]]"]),
+    ]);
+    // The duplicate cluster skips (the manual rule cites exactly its
+    // sources), the different-principle cluster still fires under the
+    // same owner token on the same day.
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules.map((e) => e.slug)).toEqual([
+      expectedSlug("pref-c", "pref-d"),
+    ]);
+    expect(result.ledger?.last_promoted[""]).toBe(TODAY);
+    expect(result.skips).toHaveLength(1);
+  });
+
+  test("an existing rule this pass retires does not guard its replacement", () => {
+    const day1Slug = expectedSlug("pref-a", "pref-b");
+    const { result, plan: planState } = plan(
+      [
+        rec("pref-a", "Alpha", P_ALPHA),
+        rec("pref-b", "Beta", P_BETA),
+        rec("pref-c", "Gamma", P_ALPHA),
+        promotedRec(`pref-${day1Slug}`, "Alpha + Beta", P_ALPHA),
+      ],
+      { now: new Date("2026-07-21T10:00:00Z"), retireSlugs: [day1Slug] },
+    );
+    expect(result.fired).toBe(true);
+    expect(planState.crossTopicRules).toHaveLength(1);
+    expect(planState.crossTopicRules[0]!.slug).toBe(expectedSlug("pref-a", "pref-b", "pref-c"));
+    expect(result.skips).toHaveLength(0);
+  });
 });
 
 describe("cross-topic ledger", () => {
@@ -953,6 +1094,50 @@ describe("dream pass wiring (end to end)", () => {
       (f) => f.startsWith("pref-cross-") && f.endsWith(".md"),
     );
     expect(crossFiles).toEqual([`pref-${slug}.md`]);
+  });
+
+  test("day-3 membership churn mints no second rule (M8); the summary reads like the budget skip", () => {
+    const vault = makeVault("churn", ENABLED);
+    seedPair(vault);
+    const day1Slug = expectedSlug("pref-alpha", "pref-beta");
+
+    const day1 = dream(vault, { now: NOW_E2E });
+    expect(day1.cross_topic_rules).toEqual([`pref-${day1Slug}`]);
+
+    // Gamma joins the cluster before the promoted rule ever confirms
+    // (no applied evidence yet, still inside its 14-day trial window).
+    // The joined cluster elects under a new content slug; without the
+    // guard this pass mints a second live rule with the identical
+    // principle while the day-1 rule stays live.
+    writePreference(vault, {
+      slug: "gamma",
+      topic: "Gamma",
+      principle: P_ALPHA,
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-07-17T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      applied_count: 0,
+      violated_count: 0,
+      last_evidence_at: null,
+      confidence_value: 0,
+    });
+
+    const DAY3 = new Date("2026-07-21T10:00:00Z");
+    const day3 = dream(vault, { now: DAY3 });
+
+    // The guard's skip discloses on the run summary exactly the way the
+    // daily budget's skip does: as the absence of a promotion -
+    // `cross_topic_rules` stays absent, nothing counts as created.
+    expect(day3.cross_topic_rules).toBeUndefined();
+    // Exactly one live rule remains.
+    const crossFiles = readdirSync(join(vault, "Brain", "preferences")).filter(
+      (f) => f.startsWith("pref-cross-") && f.endsWith(".md"),
+    );
+    expect(crossFiles).toEqual([`pref-${day1Slug}.md`]);
+    // And nothing was written: the ledger still carries only day 1's stamp.
+    expect(readCrossTopicLedger(vault)?.last_promoted).toEqual({ "": "2026-07-19" });
   });
 
   test("the rule's provenance and lineage survive its first counter change (finding 77)", () => {

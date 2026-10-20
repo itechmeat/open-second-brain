@@ -37,8 +37,12 @@
  *     detector and the digest's merge suggestions WILL eventually
  *     nominate it against its own sources. Teaching those predicates to
  *     skip pairs where one side cites the other is a follow-up unit;
- *     this module only keeps its own output idempotent (content-derived
- *     slug) so re-runs never multiply the artifact.
+ *     this module only keeps its own output idempotent: the
+ *     content-derived slug dedups the exact source set, and the
+ *     duplicate-rule guard below keeps membership churn (a source
+ *     joining or leaving a promoted cluster, which mints a fresh slug)
+ *     from re-creating a live rule for a principle the owner's existing
+ *     inferred rules already carry.
  *   - Topic-keyed recall (`query.ts` compares raw topic bytes) will not
  *     surface the rule: its synthetic topic is a key no signal carries.
  *     The `related` lineage and evidence wikilinks are the way back to
@@ -113,6 +117,18 @@ const SLUG_ID_JOIN = "\n";
 
 /** Separator of the synthetic topic display. */
 const TOPIC_JOIN = " + ";
+
+/**
+ * Disclosure code carried by every promotion the duplicate-rule guard
+ * declined. The skips ride the planner's result summary - the same
+ * channel the daily budget's skips answer on (`fired: false`, nothing
+ * written) - so a caller can lift them onto its own warning surface
+ * without the planner owning one.
+ */
+export const CROSS_TOPIC_DUPLICATE_RULE_CODE = "cross-topic-duplicate-rule";
+
+/** Frozen empty skips, shared by every pass that declined nothing. */
+const NO_SKIPS: ReadonlyArray<CrossTopicSkip> = Object.freeze([]);
 
 /** Resolved knobs the planner plans against. */
 export interface ResolvedCrossTopicConfig {
@@ -248,6 +264,12 @@ export interface CrossTopicPlannerInput {
   readonly plan: PlanState;
 }
 
+/** One promotion the duplicate-rule guard declined, with its reason. */
+export interface CrossTopicSkip {
+  readonly code: string;
+  readonly message: string;
+}
+
 export interface CrossTopicPlannerResult {
   readonly fired: boolean;
   /**
@@ -256,6 +278,14 @@ export interface CrossTopicPlannerResult {
    * the same byte-identical opt-out the rollup ledger uses.
    */
   readonly ledger: CrossTopicLedger | null;
+  /**
+   * Promotions the duplicate-rule guard declined this pass, each naming
+   * the live rule it would have duplicated. Disclosed, never written: a
+   * skipped cluster spends no daily budget, stamps no ledger, and on
+   * the run summary reads exactly like the budget's skips -
+   * `cross_topic_rules` simply stays absent.
+   */
+  readonly skips: ReadonlyArray<CrossTopicSkip>;
 }
 
 /**
@@ -264,16 +294,25 @@ export interface CrossTopicPlannerResult {
  * are the smallest member index, clusters are elected by their sorted
  * source-id join, and at most one cluster per owner token fires (the
  * daily budget, stamped into the returned ledger).
+ *
+ * Each elected cluster survives three gates in order: the daily budget
+ * (a budgeted-out pass is a no-op), the content-slug check (the exact
+ * source set promoted before, live or dead), and the duplicate-rule
+ * guard (M8) - a near-identical principle, or a superset of a live
+ * rule's evidence, skips the promotion with a disclosure instead of
+ * minting a second live rule.
  */
 export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPlannerResult {
   const { scan, refresh, config, ledger, now, plan } = input;
-  if (config === null) return { fired: false, ledger: null };
+  if (config === null) return { fired: false, ledger: null, skips: NO_SKIPS };
   const today = isoDate(now);
 
   const sources = collectSources(scan, refresh, plan);
   const clusters = electClusters(sources, config);
+  const existingRules = collectExistingRules(scan, plan);
   const lastPromoted: Record<string, string> = { ...ledger?.last_promoted };
   let fired = false;
+  const skips: CrossTopicSkip[] = [];
 
   for (const cluster of clusters) {
     const ownerKey = cluster.members[0]!.ownerKey;
@@ -284,6 +323,15 @@ export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPl
     const normalizedIds = cluster.members.map((m) => m.normalizedId);
     const slug = `${CROSS_SLUG_PREFIX}${sha256Hex(normalizedIds.join(SLUG_ID_JOIN)).slice(0, 12)}`;
     if (slugTaken(slug, scan)) continue;
+    const duplicate = findDuplicateRule(cluster, existingRules.get(ownerKey), config.jaccard);
+    if (duplicate !== null) {
+      // The dedup guard: membership churn mints a new content slug, so
+      // the exact-set check above cannot catch a re-statement of a live
+      // rule. Skip with a disclosure, and spend no budget - nothing was
+      // promoted, so nothing is stamped into the ledger.
+      skips.push(skipDuplicate(duplicate, config.jaccard));
+      continue;
+    }
     lastPromoted[ownerKey] = today;
     fired = true;
     const representative = cluster.members[0]!;
@@ -313,6 +361,7 @@ export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPl
           last_promoted: Object.freeze(lastPromoted),
         })
       : null,
+    skips: skips.length > 0 ? Object.freeze(skips) : NO_SKIPS,
   };
 }
 
@@ -333,6 +382,10 @@ export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPl
  * prefix, and the `inferred` provenance every promoted rule carries
  * (which also keeps one inferred fact from citing another inferred fact
  * as its cross-topic evidence).
+ *
+ * The same two identifiers are what let {@link collectExistingRules}
+ * find those records again as duplicate-rule guards: excluded from the
+ * sources, admitted against them.
  */
 function collectSources(scan: ScanResult, refresh: RefreshResult, plan: PlanState): Source[] {
   const retiring = new Set(plan.retires.map((r) => r.slug));
@@ -420,6 +473,117 @@ function electClusters(
   }
   clusters.sort((a, b) => (a.idJoin < b.idJoin ? -1 : a.idJoin > b.idJoin ? 1 : 0));
   return clusters;
+}
+
+/** One live inferred cross-topic rule the duplicate guard compares against. */
+interface ExistingCrossRule {
+  /** The `pref-<slug>` id a disclosure names. */
+  readonly id: string;
+  readonly tokens: ReadonlySet<string>;
+  /** The rule's evidenced_by wikilinks, normalized to source slugs. */
+  readonly evidenceSlugs: ReadonlySet<string>;
+}
+
+/** The first live rule a cluster would duplicate, and which gate caught it. */
+interface DuplicateHit {
+  readonly rule: ExistingCrossRule;
+  /** True when the principles matched at the floor; false means evidence. */
+  readonly byPrinciple: boolean;
+  /** The representative-vs-rule score, for the principle disclosure. */
+  readonly score: number;
+}
+
+/**
+ * The owner's live cross-topic rules, grouped by owner token, projected
+ * from the very records the source pool excludes: a preference carrying
+ * the reserved `cross-` slug prefix, or the `inferred` provenance every
+ * promotion carries.
+ *
+ * An UNCONFIRMED rule guards too - the churn window this guard closes
+ * sits exactly in the trial days before a promoted rule's first applied
+ * evidence confirms it - but a rule this same pass plans to retire does
+ * not, by the same discipline that keeps retiring sources ineligible:
+ * replacing a rule the run is moving into `retired/` is how a
+ * principle's evidence is allowed to grow.
+ */
+function collectExistingRules(scan: ScanResult, plan: PlanState): Map<string, ExistingCrossRule[]> {
+  const retiring = new Set(plan.retires.map((r) => r.slug));
+  const byOwner = new Map<string, ExistingCrossRule[]>();
+  for (const record of scan.preferences) {
+    const slug = preferenceSlug(record.pref.id);
+    if (!slug.startsWith(CROSS_SLUG_PREFIX) && record.pref.provenance !== "inferred") continue;
+    if (retiring.has(slug)) continue;
+    const ownerKey = preferenceOwner(record.pref) ?? "";
+    const rules = byOwner.get(ownerKey) ?? [];
+    rules.push({
+      id: `pref-${slug}`,
+      tokens: tokenise(record.pref.principle),
+      evidenceSlugs: new Set(
+        record.pref.evidenced_by.map((link) => preferenceSlug(evidenceLinkId(link))),
+      ),
+    });
+    byOwner.set(ownerKey, rules);
+  }
+  // Deterministic comparison order: the disclosure names the first
+  // matching rule in code-unit id order, a property of the corpus alone.
+  for (const rules of byOwner.values()) {
+    rules.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+  return byOwner;
+}
+
+/** The pref id a `[[pref-...]]` evidence wikilink spells (alias-tolerant). */
+function evidenceLinkId(link: string): string {
+  return link.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? "";
+}
+
+/**
+ * The first live rule this cluster would duplicate, or null. Either the
+ * cluster's representative principle is near-identical to the rule's -
+ * at the same jaccard floor the clusters themselves elect at, so an
+ * operator who raised the knob raised it for both - or the cluster's
+ * source set already superset-evidences the rule, which is membership
+ * churn by another route: the sources are cited, only their membership
+ * moved. Extending the existing rule's evidence is a future concern,
+ * deliberately not planned here.
+ */
+function findDuplicateRule(
+  cluster: Cluster,
+  ownerRules: ReadonlyArray<ExistingCrossRule> | undefined,
+  floor: number,
+): DuplicateHit | null {
+  if (!ownerRules) return null;
+  const representative = cluster.members[0]!;
+  const sourceSlugs = new Set(cluster.members.map((m) => m.slug));
+  for (const rule of ownerRules) {
+    const score = jaccard(representative.tokens, rule.tokens);
+    if (score >= floor) {
+      return { rule, byPrinciple: true, score };
+    }
+    // An empty evidence list never matches: the superset of nothing is
+    // everything, and a hand-made inferred rule with no lineage must
+    // not veto every cluster its owner ever elects.
+    if (rule.evidenceSlugs.size === 0) continue;
+    let covered = true;
+    for (const slug of rule.evidenceSlugs) {
+      if (!sourceSlugs.has(slug)) {
+        covered = false;
+        break;
+      }
+    }
+    if (covered) return { rule, byPrinciple: false, score };
+  }
+  return null;
+}
+
+/** The disclosure for a declined promotion: the code, the rule, the reason. */
+function skipDuplicate(hit: DuplicateHit, floor: number): CrossTopicSkip {
+  const message = hit.byPrinciple
+    ? `cross_topic: skipped a duplicate promotion; ${hit.rule.id} already carries this ` +
+      `principle (jaccard ${hit.score.toFixed(2)} >= ${floor})`
+    : `cross_topic: skipped a duplicate promotion; the cluster's sources already evidence ` +
+      `${hit.rule.id}, and extending that rule's evidence is not planned here`;
+  return Object.freeze({ code: CROSS_TOPIC_DUPLICATE_RULE_CODE, message });
 }
 
 /**
