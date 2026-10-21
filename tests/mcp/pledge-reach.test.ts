@@ -245,7 +245,12 @@ describe("brain_pledge answers at the caller's reach", () => {
   test("local control: the operator's own shell lists and shows the withheld page", async () => {
     const a = fixture(true);
     const local = TRANSPORT_REACH.local;
-    expect(await pledge(a, { operation: "list" }, local)).toContain(PRIVATE_TITLE);
+    const listed = JSON.parse(await pledge(a, { operation: "list" }, local)) as {
+      pledges: Array<{ slug: string }>;
+    };
+    expect(listed.pledges.map((p) => p.slug).toSorted()).toEqual(
+      [PRIVATE_SLUG, PUBLIC_SLUG].toSorted(),
+    );
     expect(await pledge(a, { operation: "show", slug: PRIVATE_SLUG }, local)).toContain(
       PRIVATE_TITLE,
     );

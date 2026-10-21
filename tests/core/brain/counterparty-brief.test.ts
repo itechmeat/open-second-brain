@@ -65,8 +65,19 @@ function writeSourcePage(rel: string, body: string): void {
   writeFileSync(abs, ["---", "title: Scratch", "---", "", body].join("\n"));
 }
 
-/** A preference page in the vault's preferences directory; returns its rel. */
-function writePref(slug: string, body: string, createdAt = "2026-05-01T00:00:00Z"): string {
+/**
+ * A preference page in the vault's preferences directory; returns its rel.
+ *
+ * The principle defaults to the slug (the page's own fact text) and can be
+ * overridden with text that appears NOWHERE else, so a test can ask whether
+ * the page's bytes reached a render - not only whether its path did.
+ */
+function writePref(
+  slug: string,
+  body: string,
+  createdAt = "2026-05-01T00:00:00Z",
+  principle = slug,
+): string {
   const rel = `Brain/preferences/pref-${slug}.md`;
   const abs = join(vault, rel);
   mkdirSync(dirname(abs), { recursive: true });
@@ -76,7 +87,7 @@ function writePref(slug: string, body: string, createdAt = "2026-05-01T00:00:00Z
       "---",
       `id: pref-${slug}`,
       "topic: project notes",
-      `principle: ${slug}`,
+      `principle: ${principle}`,
       "tier: core",
       `created_at: ${createdAt}`,
       "---",
@@ -149,6 +160,9 @@ describe("buildCounterpartyBrief abstentions", () => {
 
   test("the trigger match is deterministic containment over the operator token", () => {
     const id = seedPerson("Ada Lovelace");
+    // A second record the prompt does NOT name: the matcher had a choice
+    // to make, so the name it reports is evidence, not decoration.
+    seedPerson("Grace Hopper");
     seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
     // "meet" occurs inside "Meeting": containment, no morphology, no list.
     const brief = buildCounterpartyBrief(vault, {
@@ -157,6 +171,9 @@ describe("buildCounterpartyBrief abstentions", () => {
       now: NOW,
     });
     expect(brief?.entityId).toBe(id);
+    // The id alone cannot say WHICH record was matched - two records of
+    // the same shape share every property but their name.
+    expect(brief?.entityName).toBe("Ada Lovelace");
   });
 
   test("zero entity matches abstain", () => {
@@ -179,6 +196,23 @@ describe("buildCounterpartyBrief abstentions", () => {
         triggers: TRIGGERS,
         now: NOW,
       }),
+    ).toBeNull();
+  });
+
+  test("two canonical records claiming one name abstain (exactly-one rule)", () => {
+    const first = seedPerson("Ada Lovelace");
+    // The same name claimed by a second canonical record in another
+    // category: the vault stands behind two identities for one name, so
+    // neither of them is the ONE the prompt named.
+    const second = upsertEntity(vault, {
+      category: "concept",
+      name: "Ada Lovelace",
+      agent: AGENT,
+      now: NOW,
+    }).entity;
+    expect(second.id).not.toBe(first);
+    expect(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
     ).toBeNull();
   });
 
@@ -275,10 +309,21 @@ describe("buildCounterpartyBrief items", () => {
   test("a preference page carrying the reserved token never surfaces", () => {
     seedPerson("Ada Lovelace");
     const kept = writePref("kept", "Ada Lovelace reviewed the draft");
-    const hidden = writePref("hidden", "Ada Lovelace shared a confidence", "2026-05-02T00:00:00Z");
+    const hidden = writePref(
+      "hidden",
+      "Ada Lovelace shared a confidence",
+      "2026-05-02T00:00:00Z",
+      "the confidential merger plan",
+    );
     addVisibility(hidden, REMOTE_DENY_VISIBILITY_TOKEN);
     const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
     expect(brief!.items.map((i) => i.sourceRel)).toEqual([kept]);
+    // The path is not the only thing withheld: the private page's own
+    // bytes never reach the render either. A regression that surfaced the
+    // item under a sanitized path would still carry its principle text.
+    const rendered = renderCounterpartyBrief(brief!);
+    expect(rendered).not.toContain("the confidential merger plan");
+    expect(rendered).not.toContain("pref-hidden");
   });
 
   test("a pledge whose cited source carries the reserved token is dropped", () => {
@@ -294,6 +339,12 @@ describe("buildCounterpartyBrief items", () => {
     addVisibility(sourceRel, REMOTE_DENY_VISIBILITY_TOKEN);
     const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
     expect(brief!.items).toHaveLength(0);
+    // Dropped means dropped: neither the pledge's own text nor the
+    // private source it cites reaches the render.
+    const rendered = renderCounterpartyBrief(brief!);
+    expect(rendered).toBe("");
+    expect(rendered).not.toContain("Ship the parser");
+    expect(rendered).not.toContain("private-log");
   });
 
   test("an item drawn from two pages drops when their token intersection is empty", () => {

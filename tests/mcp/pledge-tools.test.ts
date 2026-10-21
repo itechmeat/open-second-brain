@@ -11,12 +11,12 @@
  * `INVALID_PARAMS` under the tool prefix, exactly once.
  */
 
-import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { test, expect, beforeEach, afterEach, setSystemTime } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { addPledge, noPledgeError, showPledge } from "../../src/core/brain/pledges.ts";
+import { addPledge, showPledge } from "../../src/core/brain/pledges.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -24,6 +24,7 @@ import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { PLEDGE_TOOLS } from "../../src/mcp/brain/pledge-tools.ts";
+import { MCPServer } from "../../src/mcp/server.ts";
 
 const SOURCE_REL = "notes/team-meeting.md";
 // Frontmatter included: the reach case reserves this page by inserting a
@@ -41,9 +42,11 @@ const SOURCE_TEXT = [
 const QUOTE = "Ada asked for a written recap of the migration steps";
 const QUOTE_TWO = "The storage budget review moves to next quarter";
 
-/** UTC calendar days relative to today, so the overdue boundary is real. */
+const NOW = new Date("2026-06-19T23:59:59.999Z");
+
+/** UTC calendar days relative to the same fixed clock the handlers read. */
 function day(offsetDays: number): string {
-  return new Date(Date.now() + offsetDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  return new Date(NOW.getTime() + offsetDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 const AGENT = "claude";
@@ -53,6 +56,7 @@ let vault: string;
 let ctx: ServerContext;
 
 beforeEach(() => {
+  setSystemTime(NOW);
   vault = mkdtempSync(join(tmpdir(), "osb-pledge-tools-"));
   mkdirSync(join(vault, "Brain"), { recursive: true });
   mkdirSync(join(vault, "notes"), { recursive: true });
@@ -62,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   rmSync(vault, { recursive: true, force: true });
 });
 
@@ -93,18 +98,39 @@ test("both pledge tools are registered on the tool table", () => {
   expect(tool("brain_intake_pledges")).toBeDefined();
 });
 
-test("both schemas are closed to unknown properties", () => {
+test("both schemas are closed to unknown properties", async () => {
   for (const def of PLEDGE_TOOLS) {
     expect(def.inputSchema["additionalProperties"]).toBe(false);
     expect(def.previewBudget).toBeDefined();
   }
+  expect(tool("brain_pledge").inputSchema["required"]).toEqual(["operation"]);
   const intake = PLEDGE_TOOLS.find((t) => t.name === "brain_intake_pledges")!;
+  expect(intake.inputSchema["required"]).toEqual(["source", "pledges"]);
   const pledges = (intake.inputSchema as Record<string, unknown>)["properties"] as Record<
     string,
     { type?: string; items?: Record<string, unknown> }
   >;
   expect(pledges["pledges"]?.["type"]).toBe("array");
   expect(pledges["pledges"]?.["items"]?.["additionalProperties"]).toBe(false);
+
+  // Closure is enforced at the MCP invocation boundary, before either handler.
+  const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
+  const pledgeFailure = await mcpFailure(() =>
+    server.callTool("brain_pledge", { operation: "list", unknown_property: true }),
+  );
+  expect(pledgeFailure.code).toBe(INVALID_PARAMS);
+  expect(pledgeFailure.message).toContain("brain_pledge: unknown argument 'unknown_property'");
+  const intakeFailure = await mcpFailure(() =>
+    server.callTool("brain_intake_pledges", {
+      source: SOURCE_REL,
+      pledges: [{ title: "Send Ada the recap", due: day(4), evidence: [QUOTE] }],
+      unknown_property: true,
+    }),
+  );
+  expect(intakeFailure.code).toBe(INVALID_PARAMS);
+  expect(intakeFailure.message).toContain(
+    "brain_intake_pledges: unknown argument 'unknown_property'",
+  );
 });
 
 test("brain_pledge add / fulfill / list / show / remove round-trip", async () => {
@@ -264,22 +290,26 @@ test("brain_pledge honors the readable predicate at remote reach", async () => {
   })) as { operation: string; slug: string; present: boolean };
   expect(shown).toEqual({ operation: "show", slug: "zzreserved-promise", present: false });
 
-  // The withheld slug is refused with the same `no pledge` error an
-  // absent slug gets - the exact refusal `noPledgeError` produces for a
-  // slug naming no page - so the wording carries no withheld hint. The
-  // two-vault identity check (same slug, absent elsewhere) is the reach
-  // suite's acceptance; here the wording is pinned to its source.
-  const withheldFulfill = await mcpFailure(() =>
-    pledge.handler(remote, { operation: "fulfill", slug: "zzreserved-promise" }),
-  );
-  expect(withheldFulfill.code).toBe(INVALID_PARAMS);
-  expect(withheldFulfill.message).toBe(
-    `brain_pledge: ${noPledgeError("zzreserved-promise").message}`,
-  );
-  const withheldRemove = await mcpFailure(() =>
-    pledge.handler(remote, { operation: "remove", slug: "zzreserved-promise" }),
-  );
-  expect(withheldRemove.message).toBe(withheldFulfill.message);
+  // Compare against a genuinely absent page in this vault, allowing only
+  // the caller-supplied slug to differ in the refusal.
+  const withheldSlug = "zzreserved-promise";
+  const absentSlug = "missing-promise";
+  for (const operation of ["fulfill", "remove"]) {
+    // oxlint-disable-next-line no-await-in-loop
+    const withheld = await mcpFailure(() =>
+      pledge.handler(remote, { operation, slug: withheldSlug }),
+    );
+    // oxlint-disable-next-line no-await-in-loop
+    const absent = await mcpFailure(() => pledge.handler(remote, { operation, slug: absentSlug }));
+    expect(absent).toEqual({
+      code: INVALID_PARAMS,
+      message: "brain_pledge: no pledge: missing-promise",
+    });
+    expect(withheld).toEqual({
+      ...absent,
+      message: absent.message.replace(absentSlug, withheldSlug),
+    });
+  }
 
   // Below local reach the remove answer names no archive path at all.
   const removed = (await pledge.handler(remote, {
@@ -296,7 +326,7 @@ test("brain_intake_pledges creates pledges and anchors counterparties server-sid
     name: "Ada Lovelace",
     aliases: ["Ada"],
     agent: AGENT,
-    now: new Date(),
+    now: NOW,
   }).entity.id;
   const intake = tool("brain_intake_pledges");
   const result = (await intake.handler(ctx, {
@@ -381,6 +411,8 @@ test("brain_intake_pledges preserves typed errors as INVALID_PARAMS, wrapped onc
 
 test("brain_intake_pledges refuses a malformed item before any write", async () => {
   const intake = tool("brain_intake_pledges");
+  const pledgesDir = join(vault, "Brain", "pledges");
+  mkdirSync(pledgesDir, { recursive: true });
   const item = await mcpFailure(() =>
     intake.handler(ctx, {
       source: SOURCE_REL,
@@ -389,16 +421,7 @@ test("brain_intake_pledges refuses a malformed item before any write", async () 
   );
   expect(item.code).toBe(INVALID_PARAMS);
   expect(item.message).toContain("pledges[0]");
-  // The sentinel write succeeds, proving the refusal above wrote nothing:
-  // the slug is free for it.
-  const sentinel = addPledge(vault, {
-    title: "Sentinel pledge",
-    due: day(4),
-    source: SOURCE_REL,
-    evidence: [QUOTE],
-    agent: AGENT,
-  });
-  expect(sentinel.slug).toBe("sentinel-pledge");
+  expect(readdirSync(pledgesDir)).toEqual([]);
 });
 
 test("brain_intake_pledges refuses the whole intake when the source page is withheld", async () => {

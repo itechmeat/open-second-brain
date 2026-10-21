@@ -9,7 +9,9 @@
  * items; the injection ledger keeps it to once per session; a sessionless
  * payload neither emits nor records (once-per-session is impossible
  * without a session, and an unrecordable brief would repeat on every
- * prompt); an empty trigger vocabulary is inert; every path exits 0.
+ * prompt); an empty trigger vocabulary is inert; the process ceiling ends
+ * a stalled read with a silent exit 0; every path exits 0, and every
+ * fail-open path keeps stderr empty.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -32,6 +34,7 @@ import { hookAuditDir } from "../../src/core/brain/paths.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { readBriefDelivered } from "../../hooks/lib/injection-ledger.ts";
+import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
@@ -63,24 +66,29 @@ function seedCounterparty(promptText = "Ada Lovelace"): string {
     agent: AGENT,
     now: NOW,
   });
-  const sourceRel = "notes/scratch.md";
+  seedPledgeFor(entity.id, "Ship the parser", "2026-06-05", "notes/scratch.md");
+  return entity.id;
+}
+
+/** Seed one open promise to the counterparty, citing a source page. */
+function seedPledgeFor(entityId: string, title: string, due: string, sourceRel: string): void {
   const abs = join(vault, sourceRel);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, "Scratch notes.\n\nThe promise was made in prose here.\n");
   addPledge(vault, {
-    title: "Ship the parser",
-    due: "2026-06-05",
+    title,
+    due,
     source: sourceRel,
     evidence: ["The promise was made in prose here."],
-    counterparties: [entity.id],
+    counterparties: [entityId],
     agent: AGENT,
     now: NOW,
   });
-  return entity.id;
 }
 
 interface RunResult {
   readonly stdout: string;
+  readonly stderr: string;
   readonly exit: number;
 }
 
@@ -153,9 +161,12 @@ async function runHook(
   });
   proc.stdin.write(JSON.stringify(payload));
   await proc.stdin.end();
-  const stdout = await new Response(proc.stdout).text();
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   const exit = await proc.exited;
-  return { stdout, exit };
+  return { stdout, stderr, exit };
 }
 
 const FLAG_ON = { OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED: "true" } as const;
@@ -175,22 +186,60 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
   }, 20000);
 
   test("flag on with a qualifying prompt emits exactly one additionalContext envelope", async () => {
     const entityId = seedCounterparty();
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(r.exit).toBe(0);
-    const parsed = JSON.parse(r.stdout) as {
+    expect(r.stderr).toBe("");
+    // Exactly one envelope: one JSON object on stdout, carrying one
+    // additionalContext. A second envelope would show up as a second line
+    // and a second occurrence of the key.
+    const lines = r.stdout.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(r.stdout.match(/additionalContext/gu) ?? []).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]!) as {
       hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
+    expect(Object.keys(parsed)).toEqual(["hookSpecificOutput"]);
     expect(parsed.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
     const context = parsed.hookSpecificOutput.additionalContext;
     expect(context).toContain("Ada Lovelace");
-    expect(context).toContain("Ship the parser");
-    expect(context).toContain("2026-06-05");
+    // The item line is pinned by its SHAPE, not by the fixture values it
+    // happens to repeat: date, text and source path, in that order.
+    expect(context.split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      "- 2026-06-05 Ship the parser (notes/scratch.md)",
+    ]);
     // The delivered entity is in the ledger, so the suppression read sees it.
     expect(readBriefDelivered(vault, SESSION.session_id)).toBe(entityId);
+  }, 20000);
+
+  test("the brief carries at most three dated items", async () => {
+    const entityId = seedCounterparty();
+    // Four open promises to the same counterparty: the injection budget is
+    // three dated lines, and the fourth stays in the vault.
+    seedPledgeFor(entityId, "Second promise", "2026-06-06", "notes/second.md");
+    seedPledgeFor(entityId, "Third promise", "2026-06-07", "notes/third.md");
+    seedPledgeFor(entityId, "Fourth promise", "2026-06-08", "notes/fourth.md");
+    const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout.trim()) as {
+      hookSpecificOutput: { additionalContext: string };
+    };
+    const itemLines = parsed.hookSpecificOutput.additionalContext
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+    // Three lines, the three earliest promises (due-sorted), and never the
+    // fourth.
+    expect(itemLines).toHaveLength(3);
+    expect(itemLines).toEqual([
+      "- 2026-06-05 Ship the parser (notes/scratch.md)",
+      "- 2026-06-06 Second promise (notes/second.md)",
+      "- 2026-06-07 Third promise (notes/third.md)",
+    ]);
   }, 20000);
 
   test("a second run in the same session emits nothing (ledger)", async () => {
@@ -200,6 +249,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const second = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(second.exit).toBe(0);
     expect(second.stdout).toBe("");
+    expect(second.stderr).toBe("");
   }, 20000);
 
   test("no real session id means no ledger write and no emission", async () => {
@@ -210,7 +260,15 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     );
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+    // The empty key is not the key shape the hook would have used, so the
+    // answer under it says little on its own: the SCOPE FILES are the
+    // evidence. No ledger write means no scope file at all - not the one
+    // an empty session id maps to, and not one under any other scope.
     expect(readBriefDelivered(vault, "")).toBeNull();
+    expect(existsSync(hookStateFilePath(vault, ""))).toBe(false);
+    const stateDir = dirname(hookStateFilePath(vault, ""));
+    expect(existsSync(stateDir) ? readdirSync(stateDir) : []).toEqual([]);
   }, 20000);
 
   test("an empty trigger list is inert even with a counterparty match", async () => {
@@ -219,6 +277,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
   }, 20000);
 
   test("a prompt naming no counterparty emits nothing", async () => {
@@ -229,6 +288,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     );
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
   }, 20000);
 
   test("a counterparty whose entity page carries the reserved token emits nothing", async () => {
@@ -237,6 +297,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
   }, 20000);
 
   // A mode change cannot make a file unreadable to uid 0, nor on Windows.
@@ -249,6 +310,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
       const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
       expect(r.exit).toBe(0);
       expect(r.stdout).not.toBe("");
+      expect(r.stderr).toBe("");
       const emit = auditRecords().find((record) => record["ok"] === true);
       const details = emit?.["details"] as Record<string, unknown> | undefined;
       expect(details?.["skipped_reads"]).toBe(1);
@@ -273,10 +335,16 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     });
     proc.stdin.write("not json at all");
     await proc.stdin.end();
-    const stdout = await new Response(proc.stdout).text();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
     const exit = await proc.exited;
     expect(exit).toBe(0);
     expect(stdout).toBe("");
+    // Silent means silent on BOTH streams: a crash trace on stderr with a
+    // zero exit is a crash the exit code hides.
+    expect(stderr).toBe("");
   }, 20000);
 
   test("an unresolvable vault is a silent exit 0", async () => {
@@ -287,6 +355,50 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { ...FLAG_ON });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+  }, 20000);
+
+  test("the process ceiling ends a stalled read with a silent exit 0", async () => {
+    seedCounterparty();
+    // The ceiling is the hook's own watchdog, and the env override is how
+    // a test pulls it down to its floor (the module ignores anything
+    // below it). The vault read itself is SYNCHRONOUS, and a JS timer
+    // cannot interrupt a synchronous hang - which is why the module's own
+    // docblock calls the host timeout the outer bound - so the stall the
+    // ceiling exists for is the ASYNC read the hook blocks on first: the
+    // payload. The fixture therefore writes a payload and never closes
+    // stdin, so the hook waits for an end that never comes.
+    const proc = Bun.spawn(["bun", "run", join(HOOKS_DIR, "counterparty-brief.ts")], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: configHome,
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        ...homeEnv(configHome),
+        OPEN_SECOND_BRAIN_CONFIG: configPath,
+        VAULT_DIR: vault,
+        ...FLAG_ON,
+        OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "1000",
+      },
+    });
+    proc.stdin.write(JSON.stringify(userPromptPayload()));
+    await proc.stdin.flush();
+    const started = Date.now();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exit = await proc.exited;
+    const elapsed = Date.now() - started;
+    // A clean exit with no output: the prompt is never blocked, and it
+    // never receives a partial brief.
+    expect(exit).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+    // The process was still alive at the deadline, so the exit came from
+    // the ceiling and not from a hook that finished early.
+    expect(elapsed).toBeGreaterThanOrEqual(900);
   }, 20000);
 
   test("the registration rides hooks.json in the exact sibling command shape", () => {
@@ -313,5 +425,30 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(entry.command).toContain("$CLAUDE_PLUGIN_ROOT");
     // The dispatch target resolves to the hook this suite just exercised.
     expect(existsSync(join(repoRoot, "hooks", "counterparty-brief.ts"))).toBe(true);
+
+    // The generated plugin mirror carries the SAME row: the mirror is what
+    // the other runtime reads, so a row that drifted out of it would
+    // register the hook in one runtime only.
+    const mirror = JSON.parse(
+      readFileSync(join(repoRoot, "plugins", "codex", "hooks", "hooks.json"), "utf8"),
+    ) as {
+      hooks: Record<
+        string,
+        Array<{
+          matcher?: string;
+          hooks: Array<{ command: string; timeout?: number; statusMessage?: string }>;
+        }>
+      >;
+    };
+    const mirrorGroup = (mirror.hooks["UserPromptSubmit"] ?? []).find((g) => g.matcher === "*");
+    expect(mirrorGroup).toBeDefined();
+    const mirrorEntries = mirrorGroup!.hooks.filter((h) =>
+      h.command.includes("o2b-hook counterparty-brief"),
+    );
+    expect(mirrorEntries).toHaveLength(1);
+    const mirrorEntry = mirrorEntries[0]!;
+    expect(mirrorEntry.command).toBe(entry.command);
+    expect(mirrorEntry.timeout).toBe(entry.timeout);
+    expect(mirrorEntry.statusMessage).toBe(entry.statusMessage);
   });
 });

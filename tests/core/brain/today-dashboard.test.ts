@@ -341,6 +341,9 @@ describe("buildTodayDashboard - pledges section", () => {
     expect(dashboard.text).toContain(
       "- Today Pledge (slug: today-pledge) - due 2026-07-17 - due today",
     );
+    expect(dashboard.text).toContain(
+      "- Future Pledge (slug: future-pledge) - due 2026-07-24 - due in 7d",
+    );
   });
 
   test("an undated pledge sorts last and reports a null days-until-due", () => {
@@ -425,11 +428,20 @@ describe("buildTodayDashboard - pledges section", () => {
     expect(dashboard.errors.map((e) => e.section)).not.toContain("obligations");
   });
 
-  test("an empty vault renders an empty pledges section with no error", () => {
+  test("a vault with no pledges directory renders an empty pledges section with no error", () => {
+    // seedFullVault populates the other four sections but never creates
+    // Brain/pledges, so the pledges section answers empty on its own
+    // directory-missing branch while the sections that do have pages still
+    // render - a distinct shape from the empty-vault describe, where every
+    // section is empty and this assertion would duplicate it.
+    seedFullVault();
     const dashboard = buildTodayDashboard(vault, { now: NOW });
     expect(dashboard.pledges.items).toEqual([]);
     expect(dashboard.errors).toEqual([]);
     expect(dashboard.text).toContain("## Pledges\n(none)");
+    expect(dashboard.obligations.items.map((i) => i.slug)).toEqual(["past-due", "upcoming"]);
+    expect(dashboard.openLoops.counts.openCount).toBe(1);
+    expect(dashboard.recentActivity.total).toBe(1);
   });
 });
 

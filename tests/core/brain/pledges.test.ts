@@ -106,10 +106,20 @@ test("addPledge creates a page under Brain/pledges and reads back round-trip", (
   expect(shown!.notes).toBe("She asked twice.");
   expect(shown!.agent).toBe("test-agent");
   expect(shown!.createdAt).toBe("2026-06-19T12:00:00Z");
+  // The round-trip alone would echo the injected instant even from a broken
+  // formatter, so pin the canonical shape independently: whole-second UTC,
+  // no milliseconds and no date-only fallback.
+  expect(shown!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u);
+  expect(raw).toMatch(/^created_at: "?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"?$/mu);
 });
 
 test("addPledge accepts a [[wikilink]] source reference and stores the vault path", () => {
-  const page = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  // A differently spelled source - backslash separators and surrounding
+  // whitespace - proves normalization, where echoing the input would not.
+  const page = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    source: "  notes\\team-meeting.md  ",
+  });
   expect(page.source).toBe(SOURCE_REL);
   const linked = addPledge(vault, {
     ...cite(["Grace will review the incident timeline"]),
@@ -166,7 +176,28 @@ test("addPledge honors the pledge-path lock and still refuses a taken slug after
   expect(existsSync(`${path}.lock`)).toBe(false);
 });
 
-test("addPledge refuses a non-ISO due date", () => {
+test("addPledge refuses a missing, empty or non-ISO due date", () => {
+  const withoutDue = {
+    title: "Recap pledge",
+    source: SOURCE_REL,
+    evidence: ["Grace will review the incident timeline"],
+    agent: "test-agent",
+    now: NOW,
+  } as unknown as Parameters<typeof addPledge>[1];
+  expect(() => addPledge(vault, withoutDue)).toThrow(PledgeError);
+  expect(() => addPledge(vault, withoutDue)).toThrow(/due is not a valid calendar date: undefined/);
+  expect(() =>
+    addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      due: "",
+    }),
+  ).toThrow(PledgeError);
+  expect(() =>
+    addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      due: "",
+    }),
+  ).toThrow(/due is not a valid calendar date: ""/);
   expect(() =>
     addPledge(vault, {
       ...cite(["Grace will review the incident timeline"]),
@@ -179,6 +210,10 @@ test("addPledge refuses a non-ISO due date", () => {
       due: "next Friday",
     }),
   ).toThrow(PledgeError);
+  // The due check runs before the lock and the write: no page, and not even
+  // the pledges directory, may exist after any of these refusals.
+  expect(pledgeExists(vault, "recap-pledge")).toBe(false);
+  expect(existsSync(join(vault, "Brain", "pledges"))).toBe(false);
 });
 
 test("addPledge refuses an empty evidence list", () => {
@@ -455,5 +490,13 @@ test("listPledges readCap bounds readable page reads in stable name order", () =
 });
 
 test("listPledges answers an empty list for a vault without the pledges directory", () => {
+  // The fixture never creates Brain/pledges/, so the empty answer is only
+  // attributable to the missing directory if the same call finds a page once
+  // that directory exists.
+  expect(existsSync(join(vault, "Brain", "pledges"))).toBe(false);
   expect(listPledges(vault, { now: NOW })).toEqual([]);
+
+  addPledge(vault, cite(["Grace will review the incident timeline"]));
+  expect(existsSync(join(vault, "Brain", "pledges"))).toBe(true);
+  expect(listPledges(vault, { now: NOW }).map((item) => item.slug)).toEqual(["recap-pledge"]);
 });

@@ -16,7 +16,7 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,12 +141,17 @@ test("the created page carries the promise text and evidence in its frontmatter 
 });
 
 test("an empty intake is a no-op that reports nothing", () => {
+  // The MCP tool refuses an empty array as INVALID_PARAMS in parseIntakeArgs
+  // before the kernel runs, so no tool caller reaches this branch; the test
+  // pins the kernel's own contract - empty in, empty reports, nothing written,
+  // not even the pledges directory created.
   const result = intake([]);
   expect(result.created).toEqual([]);
   expect(result.duplicates).toEqual([]);
   expect(result.reanchored).toEqual([]);
   expect(result.unanchoredCounterparties).toEqual([]);
   expect(listPledges(vault, { now: NOW })).toEqual([]);
+  expect(existsSync(join(vault, "Brain", "pledges"))).toBe(false);
 });
 
 test("one invalid item writes no page (validate before write, no partials)", () => {
@@ -225,6 +230,31 @@ test("the same identity with a changed payload throws the named mismatch and cha
   expect(message).toMatch(/send-ada-the-migration-recap/);
   const page = showPledge(vault, { slug: "send-ada-the-migration-recap" });
   expect(page!.evidence).toEqual([QUOTE]);
+  expect(listPledges(vault, { now: NOW })).toHaveLength(1);
+});
+
+test("a same-title post under a different source is a held slug, not a mismatch", () => {
+  const otherSourceRel = "notes/other-meeting.md";
+  writeFileSync(join(vault, otherSourceRel), SOURCE_TEXT, "utf8");
+  intake([item()]);
+  const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  const before = readFileSync(stored!.path, "utf8");
+  let message = "";
+  try {
+    intakePledges(vault, { source: otherSourceRel, pledges: [item()] }, { agent: AGENT, now: NOW });
+  } catch (err) {
+    expect(err).toBeInstanceOf(PledgeIntakeError);
+    message = (err as Error).message;
+  }
+  // The documented identity hashes (title, due, source), but the slug derives
+  // from the title alone: a same-title post cites a different source and is
+  // refused as a held slug before the identity comparison runs, so the source
+  // component of the hash is unreachable through the public intake. Pin the
+  // refusal that actually happens, so the contract is documented rather than
+  // silently dead.
+  expect(message).toMatch(/slug already held by a different pledge/);
+  expect(message).not.toMatch(/mismatch/);
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
