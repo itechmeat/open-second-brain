@@ -367,12 +367,12 @@ test("fulfillPledge defaults the date to the injected now and shares the no-pled
   const done = fulfillPledge(vault, { slug: "timeline-pass", now: NOW });
   expect(done.fulfilled).toBe("2026-06-19");
   expect(() => fulfillPledge(vault, { slug: "ghost" })).toThrow(noPledgeError("ghost"));
-  expect(() => showPledgeForAbsentRefusal()).toThrow(/no pledge: ghost/);
+  expect(() => removeAbsentPledge()).toThrow(/no pledge: ghost/);
 });
 
 // The no-pledge refusal is one named error shared by every slug-addressed
 // operation; this helper keeps that assertion next to the error import.
-function showPledgeForAbsentRefusal(): unknown {
+function removeAbsentPledge(): unknown {
   return removePledge(vault, { slug: "ghost" });
 }
 
@@ -465,6 +465,23 @@ test("fulfillPledge honors the pledge-path lock across its read and write", () =
   expect(showPledge(vault, { slug: page.slug })!.fulfilled).toBeNull();
   fulfillPledge(vault, { slug: page.slug, date: "2026-06-19" });
   expect(showPledge(vault, { slug: page.slug })!.fulfilled).toBe("2026-06-19");
+});
+
+test("listPledges reports a fulfilled past-due pledge as not overdue", () => {
+  addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Late but done",
+    due: "2026-06-10",
+  });
+  fulfillPledge(vault, { slug: "late-but-done", date: "2026-06-18" });
+  const items = listPledges(vault, { now: NOW, includeFulfilled: true });
+  expect(items).toHaveLength(1);
+  expect(items[0]!.fulfilled).toBe("2026-06-18");
+  // Overdue is a fact about an OPEN promise: a done pledge reports false
+  // however long past its due date, so an overdue filter never shows it.
+  expect(items[0]!.overdue).toBe(false);
+  // The calendar delta itself is unchanged: nine days past due.
+  expect(items[0]!.daysUntilDue).toBe(-9);
 });
 
 test("removePledge honors the pledge-path lock across the archive move", () => {

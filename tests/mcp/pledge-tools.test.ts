@@ -17,7 +17,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { addPledge, showPledge } from "../../src/core/brain/pledges.ts";
-import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
+import { MAX_INTAKE_COUNTERPARTIES } from "../../src/core/brain/pledge-intake.ts";
+import { archiveEntity, upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
@@ -80,6 +81,20 @@ async function mcpFailure(run: () => unknown): Promise<{ code: number; message: 
     await run();
   } catch (err) {
     if (err instanceof MCPError) return { code: err.code, message: err.message };
+    throw err;
+  }
+  throw new Error("expected the handler to refuse");
+}
+
+/** The precise registry code a refusal carries in `error.data.code`, if any. */
+async function mcpCodeName(run: () => unknown): Promise<string | undefined> {
+  try {
+    await run();
+  } catch (err) {
+    if (err instanceof MCPError) {
+      const data = err.data as { code?: unknown } | undefined;
+      return typeof data?.code === "string" ? data.code : undefined;
+    }
     throw err;
   }
   throw new Error("expected the handler to refuse");
@@ -192,6 +207,106 @@ test("brain_pledge add / fulfill / list / show / remove round-trip", async () =>
     slug,
     present: false,
   });
+});
+
+test("a brain_pledge list item carries no page path", async () => {
+  const pledge = tool("brain_pledge");
+  await pledge.handler(ctx, {
+    operation: "add",
+    title: "Recap the migration",
+    due: day(6),
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: AGENT,
+  });
+  const listed = (await pledge.handler(ctx, { operation: "list" })) as {
+    pledges: Array<Record<string, unknown>>;
+  };
+  expect(listed.pledges[0]?.["slug"]).toBe("recap-the-migration");
+  // The list arm matches brain_obligation's listItemJson, which omits the
+  // absolute path; `show` still carries it (the pageJson precedent).
+  expect(listed.pledges[0]).not.toHaveProperty("path");
+});
+
+test("an unknown operation answers unknown_operation before the slug is coerced", async () => {
+  const pledge = tool("brain_pledge");
+  // No `slug` supplied: the closed-set check must run before slug coercion,
+  // or this answers the missing-slug refusal instead of the unknown one.
+  const failure = await mcpFailure(() => pledge.handler(ctx, { operation: "bogus" }));
+  expect(failure.code).toBe(INVALID_PARAMS);
+  expect(failure.message).toBe(
+    "brain_pledge operation must be one of: add, fulfill, list, show, remove",
+  );
+  expect(await mcpCodeName(() => pledge.handler(ctx, { operation: "bogus" }))).toBe(
+    "unknown_operation",
+  );
+});
+
+test("brain_pledge add refuses a counterparty that is not a canonical entity at the caller's reach", async () => {
+  const ada = upsertEntity(vault, {
+    category: "people",
+    name: "Ada Lovelace",
+    agent: AGENT,
+    now: NOW,
+  }).entity;
+  upsertEntity(vault, { category: "people", name: "Grace Hopper", agent: AGENT, now: NOW });
+  const retired = archiveEntity(vault, { query: "Grace Hopper", category: "people" }, { now: NOW });
+  const pledge = tool("brain_pledge");
+  const addWith =
+    (counterparties: string[], context: ServerContext = ctx) =>
+    () =>
+      pledge.handler(context, {
+        operation: "add",
+        title: "Recap the migration",
+        due: day(6),
+        source: SOURCE_REL,
+        evidence: [QUOTE],
+        agent: AGENT,
+        counterparties,
+      });
+
+  for (const id of ["ent-people-nobody", retired.id, "e".repeat(201)]) {
+    // oxlint-disable-next-line no-await-in-loop
+    const failure = await mcpFailure(addWith([id]));
+    expect(failure.code).toBe(INVALID_PARAMS);
+    expect(failure.message.startsWith("brain_pledge: ")).toBe(true);
+  }
+  const unknown = await mcpFailure(addWith(["ent-people-nobody"]));
+  expect(unknown.message).toContain(
+    "counterparty is not a canonical entity at the caller's reach: ent-people-nobody",
+  );
+  const overCap = await mcpFailure(
+    addWith(Array.from({ length: MAX_INTAKE_COUNTERPARTIES + 1 }, (_, index) => `ent-id-${index}`)),
+  );
+  expect(overCap.code).toBe(INVALID_PARAMS);
+  expect(overCap.message).toContain(`at most ${MAX_INTAKE_COUNTERPARTIES}`);
+
+  // A withheld entity page is not a canonical counterparty at remote reach.
+  const remote: ServerContext = { vault, configPath: null, repoRoot: null };
+  reserve(ada.path);
+  const withheld = await mcpFailure(addWith([ada.id], remote));
+  expect(withheld.code).toBe(INVALID_PARAMS);
+  expect(withheld.message).toContain(
+    `counterparty is not a canonical entity at the caller's reach: ${ada.id}`,
+  );
+
+  // The positive control: the canonical, readable entity id is stored.
+  const local: ServerContext = {
+    vault,
+    configPath: null,
+    repoRoot: null,
+    reach: TRANSPORT_REACH.local,
+  };
+  await pledge.handler(local, {
+    operation: "add",
+    title: "Recap the migration",
+    due: day(6),
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: AGENT,
+    counterparties: [ada.id],
+  });
+  expect(showPledge(vault, { slug: "recap-the-migration" })!.counterparties).toEqual([ada.id]);
 });
 
 test("brain_pledge refuses an unanchored evidence quote as INVALID_PARAMS", async () => {

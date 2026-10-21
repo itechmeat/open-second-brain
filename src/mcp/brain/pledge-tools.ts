@@ -34,19 +34,39 @@ import {
 } from "../../core/brain/pledges.ts";
 import {
   intakePledges,
+  MAX_INTAKE_COUNTERPARTIES,
+  MAX_INTAKE_COUNTERPARTY_NAME_LENGTH,
   PledgeIntakeError,
   type PledgeIntakeItem,
 } from "../../core/brain/pledge-intake.ts";
+import { buildEntityIndex } from "../../core/brain/entities/index-builder.ts";
+import {
+  ENTITY_STATUS_SCOPE,
+  entityStatusInScope,
+} from "../../core/brain/entities/status-scope.ts";
 import { slugify } from "../../core/vault.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
-import { wrapToolErrors } from "./shared.ts";
+import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
 import { isRecord } from "./intake-args.ts";
 
 const INTAKE_TOOL = "brain_intake_pledges";
+
+/** The closed operation set; anything else answers before any coercion. */
+const PLEDGE_OPERATIONS = ["add", "fulfill", "list", "show", "remove"] as const;
+
+type PledgeOperation = (typeof PLEDGE_OPERATIONS)[number];
+
+const PLEDGE_OPERATION_SET: ReadonlySet<string> = new Set(PLEDGE_OPERATIONS);
+
+const UNKNOWN_OPERATION_MESSAGE = `brain_pledge operation must be one of: ${PLEDGE_OPERATIONS.join(", ")}`;
+
+function isPledgeOperation(value: string): value is PledgeOperation {
+  return PLEDGE_OPERATION_SET.has(value);
+}
 
 function pageJson(page: PledgePage): Record<string, unknown> {
   return {
@@ -75,8 +95,54 @@ function listItemJson(item: PledgeListItem): Record<string, unknown> {
     promised_to: [...item.counterparties],
     fulfilled: item.fulfilled,
     source: item.source,
-    path: item.path,
   };
+}
+
+/**
+ * Validate the `promised_to` ids an add call supplies, at this seam:
+ * `addPledge` only trims, so a dangling, unreadable or oversized edge must
+ * be refused before it reaches the page. Each id must name a
+ * canonical-scope entity whose page the caller's reach admits - the same
+ * pair of gates the intake's name anchoring asks - and the list obeys the
+ * intake caps, so both write paths refuse the same edges.
+ */
+function assertCanonicalCounterparties(
+  ctx: ServerContext,
+  counterparties: ReadonlyArray<string>,
+): void {
+  if (counterparties.length === 0) return;
+  if (counterparties.length > MAX_INTAKE_COUNTERPARTIES) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_pledge: at most ${MAX_INTAKE_COUNTERPARTIES} counterparties may be promised to, got ${counterparties.length}`,
+    );
+  }
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const canonical = new Map(
+    buildEntityIndex(ctx.vault)
+      .entities.filter((entity) =>
+        entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical),
+      )
+      .map((entity) => [entity.id, entity] as const),
+  );
+  for (const id of counterparties) {
+    if (id.length > MAX_INTAKE_COUNTERPARTY_NAME_LENGTH) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_pledge: counterparty id is longer than ${MAX_INTAKE_COUNTERPARTY_NAME_LENGTH} characters (${id.length}): ${id}`,
+      );
+    }
+    const entity = canonical.get(id);
+    if (
+      entity === undefined ||
+      (readable !== undefined && !readable(vaultRelativeSafe(ctx.vault, entity.path)))
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_pledge: counterparty is not a canonical entity at the caller's reach: ${id}`,
+      );
+    }
+  }
 }
 
 /** The agent identity a page is stamped with: the trimmed override or the server's. */
@@ -90,6 +156,11 @@ function toolBrainPledge(
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
+  // The closed set answers first: an unknown operation is not a missing
+  // slug, so no operation-specific argument is coerced before this check.
+  if (!isPledgeOperation(operation)) {
+    throw unknownOperationError(UNKNOWN_OPERATION_MESSAGE);
+  }
   // Every operation answers at the caller's reach, exactly as
   // `brain_obligation` does; `undefined` at local reach with the owner
   // gate off, so an unfiltered read skips the per-page check entirely.
@@ -99,64 +170,69 @@ function toolBrainPledge(
     return readable !== undefined && !readable(rel);
   };
   try {
-    if (operation === "list") {
-      const items = listPledges(ctx.vault, {
-        now: new Date(),
-        ...(readable !== undefined ? { readable } : {}),
-      });
-      const kept = args["overdue"] === true ? items.filter((item) => item.overdue) : items;
-      return { operation, pledges: kept.map(listItemJson) };
-    }
-    if (operation === "add") {
-      const title = coerceStr(args, "title", true)!;
-      const due = coerceStr(args, "due", true)!;
-      const source = coerceStr(args, "source", true)!;
-      const evidence = coerceStrList(args, "evidence");
-      const counterparties = coerceStrList(args, "counterparties");
-      const text = coerceStr(args, "text", false);
-      const notes = coerceStr(args, "notes", false);
-      // `addPledge` refuses a taken slug and never overwrites it; the
-      // refusal is the one answer that cannot match an absent page's,
-      // because creating the page would replace the withheld one.
-      const page = addPledge(ctx.vault, {
-        title,
-        due,
-        source,
-        evidence,
-        agent: agentFor(ctx, coerceStr(args, "agent", false)),
-        readable: readableAtContextReach(ctx),
-        ...(text !== null ? { text } : {}),
-        ...(notes !== null ? { notes } : {}),
-        ...(counterparties.length > 0 ? { counterparties } : {}),
-      });
-      return { operation, pledge: pageJson(page) };
-    }
-    const slug = coerceStr(args, "slug", true)!;
-    if (withheld(slug)) {
-      if (operation === "show") return { operation, slug, present: false };
-      if (operation === "fulfill" || operation === "remove") {
-        throw noPledgeError(slugify(slug));
+    switch (operation) {
+      case "list": {
+        const items = listPledges(ctx.vault, {
+          now: new Date(),
+          ...(readable !== undefined ? { readable } : {}),
+        });
+        const kept = args["overdue"] === true ? items.filter((item) => item.overdue) : items;
+        return { operation, pledges: kept.map(listItemJson) };
       }
-    }
-    if (operation === "show") {
-      const page = showPledge(ctx.vault, {
-        slug,
-        ...(readable !== undefined ? { readable } : {}),
-      });
-      if (page === null) return { operation, slug, present: false };
-      return { operation, present: true, pledge: pageJson(page) };
-    }
-    if (operation === "fulfill") {
-      const date = coerceStr(args, "date", false);
-      const page = fulfillPledge(ctx.vault, { slug, ...(date !== null ? { date } : {}) });
-      return { operation, pledge: pageJson(page) };
-    }
-    if (operation === "remove") {
-      const removed = removePledge(ctx.vault, { slug });
-      // The archive name steps past every name already taken in archive/,
-      // readable or not, so below local reach it is left out of the answer.
-      if (readable !== undefined) return { operation, slug: removed.slug };
-      return { operation, slug: removed.slug, archive_path: removed.archivePath };
+      case "add": {
+        const title = coerceStr(args, "title", true)!;
+        const due = coerceStr(args, "due", true)!;
+        const source = coerceStr(args, "source", true)!;
+        const evidence = coerceStrList(args, "evidence");
+        const counterparties = coerceStrList(args, "counterparties")
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0);
+        assertCanonicalCounterparties(ctx, counterparties);
+        const text = coerceStr(args, "text", false);
+        const notes = coerceStr(args, "notes", false);
+        // `addPledge` refuses a taken slug and never overwrites it; the
+        // refusal is the one answer that cannot match an absent page's,
+        // because creating the page would replace the withheld one.
+        const page = addPledge(ctx.vault, {
+          title,
+          due,
+          source,
+          evidence,
+          agent: agentFor(ctx, coerceStr(args, "agent", false)),
+          readable: readableAtContextReach(ctx),
+          ...(text !== null ? { text } : {}),
+          ...(notes !== null ? { notes } : {}),
+          ...(counterparties.length > 0 ? { counterparties } : {}),
+        });
+        return { operation, pledge: pageJson(page) };
+      }
+      case "show":
+      case "fulfill":
+      case "remove": {
+        const slug = coerceStr(args, "slug", true)!;
+        if (withheld(slug)) {
+          if (operation === "show") return { operation, slug, present: false };
+          throw noPledgeError(slugify(slug));
+        }
+        if (operation === "show") {
+          const page = showPledge(ctx.vault, {
+            slug,
+            ...(readable !== undefined ? { readable } : {}),
+          });
+          if (page === null) return { operation, slug, present: false };
+          return { operation, present: true, pledge: pageJson(page) };
+        }
+        if (operation === "fulfill") {
+          const date = coerceStr(args, "date", false);
+          const page = fulfillPledge(ctx.vault, { slug, ...(date !== null ? { date } : {}) });
+          return { operation, pledge: pageJson(page) };
+        }
+        const removed = removePledge(ctx.vault, { slug });
+        // The archive name steps past every name already taken in archive/,
+        // readable or not, so below local reach it is left out of the answer.
+        if (readable !== undefined) return { operation, slug: removed.slug };
+        return { operation, slug: removed.slug, archive_path: removed.archivePath };
+      }
     }
   } catch (err) {
     // Preserve an already-typed MCPError (e.g. from coerceStr) instead of
@@ -172,9 +248,6 @@ function toolBrainPledge(
     const reason = err instanceof Error ? err.message : String(err);
     throw new MCPError(INTERNAL_ERROR, `brain_pledge: ${reason}`);
   }
-  throw unknownOperationError(
-    "brain_pledge operation must be one of: add, fulfill, list, show, remove",
-  );
 }
 
 /**

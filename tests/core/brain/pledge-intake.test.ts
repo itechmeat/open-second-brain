@@ -31,6 +31,7 @@ import {
 } from "../../../src/core/brain/pledge-intake.ts";
 import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
@@ -134,6 +135,17 @@ test("the created page carries the promise text and evidence in its frontmatter 
   expect(raw).toContain("due: 2026-06-25");
   expect(raw).toContain(`source: ${SOURCE_REL}`);
   expect(raw).toContain("evidence: [Ada asked for a written recap of the migration steps]");
+});
+
+test("a created pledge inherits the source page's visibility", () => {
+  writeFileSync(
+    join(vault, SOURCE_REL),
+    `---\nvisibility: ${REMOTE_DENY_VISIBILITY_TOKEN}\n---\n\n${SOURCE_TEXT}`,
+    "utf8",
+  );
+  intake([item()]);
+  const page = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  expect(parseFrontmatter(page!.path)[0]["visibility"]).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
 });
 
 test("an empty intake is a no-op that reports nothing", () => {

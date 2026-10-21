@@ -48,6 +48,7 @@ import {
   BRAIN_PLEDGES_REL,
 } from "./paths.ts";
 import { pageVisibility, strictestVisibilityOf } from "../graph/visibility.ts";
+import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { isoDate, isoSecond } from "./time.ts";
@@ -92,6 +93,12 @@ export interface AddPledgeInput {
   readonly source: string;
   readonly evidence: ReadonlyArray<string>;
   readonly text?: string;
+  /**
+   * Anchored counterparty entity ids (`promised_to` relation targets).
+   * Trust boundary: ids are anchored by the intake or validated at the MCP
+   * seam against the canonical registry and the caller's reach; this
+   * function only trims them, so it never invents an edge from a dangling id.
+   */
   readonly counterparties?: ReadonlyArray<string>;
   readonly notes?: string;
   readonly agent: string;
@@ -121,7 +128,7 @@ export interface PledgeListItem {
   readonly slug: string;
   readonly title: string;
   readonly due: string;
-  /** True when due is strictly before today (UTC). */
+  /** True when the pledge is unfulfilled and due is strictly before today (UTC). */
   readonly overdue: boolean;
   /** Whole days until due; negative when overdue, null when undated. */
   readonly daysUntilDue: number | null;
@@ -233,7 +240,7 @@ function render(page: Omit<PledgePage, "path">, visibility: ReadonlyArray<string
       due: page.due,
       source: page.source,
       evidence: [...page.evidence],
-      promised_to: [...page.counterparties],
+      [PROMISED_TO_RELATION]: [...page.counterparties],
       fulfilled: page.fulfilled ?? "",
       agent: page.agent,
       ...(visibility.length > 0 ? { visibility: [...visibility] } : {}),
@@ -272,12 +279,74 @@ function parsePage(vault: string, slug: string): PledgePage | null {
     createdAt: typeof meta["created_at"] === "string" ? meta["created_at"] : "",
     source: typeof meta["source"] === "string" ? meta["source"] : "",
     evidence: Object.freeze(requireStringList(meta["evidence"])),
-    counterparties: Object.freeze(requireStringList(meta["promised_to"])),
+    counterparties: Object.freeze(requireStringList(meta[PROMISED_TO_RELATION])),
     fulfilled: parseIsoDate(meta["fulfilled"]) || null,
     agent: typeof meta["agent"] === "string" ? meta["agent"] : "",
     notes,
     path,
   });
+}
+
+/** The write-side input of one pledge page; the caller owns validation. */
+export interface CreatePledgePageInput {
+  readonly title: string;
+  readonly due: string;
+  /** Vault-relative POSIX path of the cited source page (already normalized). */
+  readonly source: string;
+  /**
+   * The cited source page's bytes, read once by the caller's validation
+   * pass. Evidence containment is re-checked against them here, so the
+   * write path never stores an unverified quote and never re-reads disk.
+   */
+  readonly sourceText: string;
+  readonly evidence: ReadonlyArray<string>;
+  /** Visibility inherited from the source page, derived from `sourceText`. */
+  readonly visibility: ReadonlyArray<string>;
+  readonly text?: string;
+  readonly notes?: string;
+  readonly counterparties?: ReadonlyArray<string>;
+  readonly agent: string;
+  readonly now?: Date;
+}
+
+/**
+ * Commit one pledge page: slug, lock, taken-slug refusal, render, atomic
+ * write. No reads of its own - the caller supplies the source bytes it
+ * validated - so the extraction intake can create a whole batch from the
+ * one source read its validation pass already paid for. Refusals are the
+ * family's named errors, byte-identical to {@link addPledge}'s.
+ */
+export function createPledgePage(vault: string, input: CreatePledgePageInput): PledgePage {
+  const evidence = input.evidence.map((quote) => quote.trim()).filter((quote) => quote.length > 0);
+  assertEvidenceInSource(input.source, input.sourceText, evidence);
+  const slug = slugify(input.title);
+  const now = input.now ?? new Date();
+  const page = {
+    slug,
+    title: input.title,
+    text: (input.text ?? "").trim(),
+    due: input.due,
+    createdAt: isoSecond(now),
+    source: input.source,
+    evidence: Object.freeze(evidence),
+    counterparties: Object.freeze(
+      (input.counterparties ?? []).map((id) => id.trim()).filter((id) => id.length > 0),
+    ),
+    fulfilled: null,
+    agent: input.agent,
+    notes: (input.notes ?? "").trim(),
+  };
+  const path = pledgePath(vault, slug);
+  const handle = acquireLockSyncWithRetry(path);
+  try {
+    if (existsSync(path)) {
+      throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
+    }
+    atomicWriteFileSync(path, render(page, input.visibility));
+    return Object.freeze({ ...page, path });
+  } finally {
+    handle.release();
+  }
 }
 
 /** Create a one-off pledge page. */
@@ -312,37 +381,21 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
     );
   }
   const sourceText = readFileSync(sourceAbs, "utf8");
-  assertEvidenceInSource(source, sourceText, evidence);
   const [sourceMeta] = parseFrontmatterText(sourceText);
   const visibility = strictestVisibilityOf([pageVisibility(sourceMeta)]);
-  const slug = slugify(title);
-  const now = input.now ?? new Date();
-  const page = {
-    slug,
+  return createPledgePage(vault, {
     title,
-    text: (input.text ?? "").trim(),
     due,
-    createdAt: isoSecond(now),
     source,
-    evidence: Object.freeze(evidence),
-    counterparties: Object.freeze(
-      (input.counterparties ?? []).map((id) => id.trim()).filter((id) => id.length > 0),
-    ),
-    fulfilled: null,
+    sourceText,
+    visibility,
+    evidence,
+    ...(input.text !== undefined ? { text: input.text } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    ...(input.counterparties !== undefined ? { counterparties: input.counterparties } : {}),
     agent: input.agent,
-    notes: (input.notes ?? "").trim(),
-  };
-  const path = pledgePath(vault, slug);
-  const handle = acquireLockSyncWithRetry(path);
-  try {
-    if (existsSync(path)) {
-      throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
-    }
-    atomicWriteFileSync(path, render(page, visibility));
-    return Object.freeze({ ...page, path });
-  } finally {
-    handle.release();
-  }
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
 }
 
 /** Stamp a pledge fulfilled. A one-off stays stamped: a second stamp refuses. */
@@ -424,7 +477,7 @@ export function listPledges(
     if (page.fulfilled !== null && input.includeFulfilled !== true) continue;
     const dueMs = page.due === "" ? Number.NaN : Date.parse(`${page.due}T00:00:00Z`);
     const daysUntilDue = Number.isNaN(dueMs) ? null : Math.round((dueMs - todayMs) / ONE_DAY_MS);
-    const overdue = !Number.isNaN(dueMs) && dueMs < todayMs;
+    const overdue = page.fulfilled === null && !Number.isNaN(dueMs) && dueMs < todayMs;
     out.push(
       Object.freeze({
         slug: page.slug,

@@ -47,13 +47,13 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { slugify } from "../vault.ts";
+import { parseFrontmatterText, slugify } from "../vault.ts";
 import { entityNameEqualsAnchorForm } from "./atomic-facts.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 import {
-  addPledge,
+  createPledgePage,
   isSourcePage,
   NOTES_HEADER,
   normalizePledgeSource,
@@ -65,6 +65,8 @@ import {
 import { validateIsoDate } from "./paths.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { pageVisibility, strictestVisibilityOf } from "../graph/visibility.ts";
+import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
 
 /** A pledge-intake payload or anchor failed validation; nothing was written. */
@@ -126,7 +128,15 @@ export interface PledgeIntakeOptions {
    * like an absent page - nothing is read from it, nothing is written
    * from it, and nothing about it leaks. The same predicate governs the
    * stored pledge lookup and the entity pages counterparties may anchor
-   * to, so a withheld page is identical to an absent one everywhere.
+   * to, so on those read surfaces a withheld page is identical to an
+   * absent one.
+   *
+   * The create path is the deliberate exception: a slug already held is
+   * refused at any reach ("pledge already exists"), because creating the
+   * page would replace the withheld one - the same discipline
+   * `brain_pledge` documents for its add arm. A caller can therefore learn
+   * that some page holds a slug it cannot read; it can never read or
+   * overwrite it.
    */
   readonly readable?: (rel: string) => boolean;
 }
@@ -284,7 +294,13 @@ export function intakePledges(
       `pledge intake source page not found: ${source} - a pledge cites bytes the vault holds`,
     );
   }
-  const haystack = quoteHaystack(normalizeForQuoteComparison(readFileSync(sourceAbs, "utf8")));
+  const sourceText = readFileSync(sourceAbs, "utf8");
+  const haystack = quoteHaystack(normalizeForQuoteComparison(sourceText));
+  // Read once, derived twice: the containment haystack above and the
+  // visibility the created pages inherit. The write pass hands both to
+  // `createPledgePage`, so a full batch never re-reads the source.
+  const [sourceMeta] = parseFrontmatterText(sourceText);
+  const visibility = strictestVisibilityOf([pageVisibility(sourceMeta)]);
 
   const prepared: PreparedIntakeItem[] = [];
   const seenSlugs = new Set<string>();
@@ -423,10 +439,12 @@ export function intakePledges(
       ),
     ].toSorted();
     if (prep.existing === null) {
-      addPledge(vault, {
+      createPledgePage(vault, {
         title: prep.title,
         due: prep.due,
         source,
+        sourceText,
+        visibility,
         evidence: prep.evidence,
         ...(prep.text !== undefined ? { text: prep.text } : {}),
         counterparties: anchoredIds,
@@ -488,7 +506,7 @@ function rewritePledgeCounterparties(
     atomicWriteFileSync(
       page.path,
       rewritePledgeFrontmatter(page, (meta) => {
-        meta["promised_to"] = [...counterparties];
+        meta[PROMISED_TO_RELATION] = [...counterparties];
       }),
     );
   } finally {
