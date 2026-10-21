@@ -56,7 +56,7 @@ import type { BrainEntity } from "./entities/types.ts";
 import { readLifecycleState } from "./lifecycle/tombstone.ts";
 import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { validateIsoDate } from "./paths.ts";
-import { listPledges, pledgeRel, type PledgeListItem } from "./pledges.ts";
+import { listPledges, normalizePledgeSource, pledgeRel, type PledgeListItem } from "./pledges.ts";
 import { neutralizeSingleLine, untrustedFramingHeader } from "./untrusted-source.ts";
 import {
   REMOTE_DENY_VISIBILITY_TOKEN,
@@ -68,7 +68,11 @@ import {
   emitDegradationNotice,
   type DegradationNotice,
 } from "../integrity/degradation.ts";
-import { parseFrontmatter, parseFrontmatterTextWithNotices } from "../vault.ts";
+import {
+  parseFrontmatter,
+  parseFrontmatterTextWithNotices,
+  parseFrontmatterWithNotices,
+} from "../vault.ts";
 
 /**
  * The most items one brief may carry. Three dated lines is the injection
@@ -247,8 +251,15 @@ function matchExactlyOneEntity(vault: string, input: CounterpartyBriefInput): Br
  * token, or two non-empty token sets that share nothing, drops the item
  * (the folded list is exactly the reserved token then). A source page the
  * `readable` predicate refuses withholds the whole item: a pledge citing
- * bytes the caller cannot see is not shown second-hand. The item names the
- * cited source page, which is where the promise was read.
+ * bytes the caller cannot see is not shown second-hand. The stored source
+ * is normalized exactly as the writers normalize it before anything is
+ * read from it, and an item whose source escapes the vault is dropped -
+ * the walk never reads, nor renders, a path from outside the vault. A
+ * cited source that cannot be read (or whose frontmatter parse reports
+ * dropped lines) withholds the item too: the gate decides whether the
+ * item may leave the machine, so it fails closed, the same discipline
+ * the preference walk applies to its own pages. The item names the cited
+ * source page, which is where the promise was read.
  */
 function pledgeItem(
   vault: string,
@@ -257,20 +268,25 @@ function pledgeItem(
 ): CounterpartyBriefItem | null {
   const [meta] = parseFrontmatter(pledge.path);
   const tagLists: ReadonlyArray<string>[] = [[...pageVisibility(meta)]];
+  let sourceRel = pledgeRel(pledge.slug);
   if (pledge.source.length > 0) {
-    if (readable !== undefined && !readable(pledge.source)) return null;
-    const sourceAbs = join(vault, pledge.source);
+    const source = normalizePledgeSource(pledge.source);
+    if (source.length === 0 || source.startsWith("..") || posix.isAbsolute(source)) return null;
+    if (readable !== undefined && !readable(source)) return null;
+    const sourceAbs = join(vault, source);
     if (existsSync(sourceAbs)) {
-      const [sourceMeta] = parseFrontmatter(sourceAbs);
+      const [sourceMeta, , sourceNotices] = parseFrontmatterWithNotices(sourceAbs);
+      if (sourceNotices.length > 0) return null;
       tagLists.push([...pageVisibility(sourceMeta)]);
     }
+    sourceRel = source;
   }
   const folded = strictestVisibilityOf(tagLists);
   if (folded.includes(REMOTE_DENY_VISIBILITY_TOKEN)) return null;
   return Object.freeze({
     date: pledge.due,
     text: clipText(pledge.title),
-    sourceRel: pledge.source.length > 0 ? pledge.source : pledgeRel(pledge.slug),
+    sourceRel,
   });
 }
 

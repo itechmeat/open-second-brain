@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import {
   BRIEF_CHAR_BUDGET,
@@ -375,6 +375,41 @@ describe("buildCounterpartyBrief items", () => {
     addVisibility(sourceRel, "team");
     const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
     expect(brief!.items).toHaveLength(1);
+  });
+
+  test("a hand-edited source that escapes the vault drops the item", () => {
+    const id = seedPerson("Ada Lovelace");
+    const pledgeRel = seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
+    // A page is read back from bytes anyone could have hand-edited: the
+    // walk normalizes the stored source like the writers do and never
+    // reads - nor renders - a path that leaves the vault. The decoy page
+    // lives outside the vault, in its own cleaned-up temp root.
+    const outer = mkdtempSync(join(tmpdir(), "o2b-brief-outside-"));
+    try {
+      const outside = join(outer, "outside-secret.md");
+      writeFileSync(outside, "outside\n");
+      const abs = join(vault, pledgeRel);
+      for (const hostile of [relative(vault, outside), outside]) {
+        writeFileSync(abs, readFileSync(abs, "utf8").replace(/source: .*/u, `source: ${hostile}`));
+        const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
+        expect(brief!.items).toEqual([]);
+        expect(renderCounterpartyBrief(brief!)).toBe("");
+      }
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable cited source withholds the pledge item", () => {
+    const id = seedPerson("Ada Lovelace");
+    seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
+    // The item's shareability is decided from BOTH pages, so a source that
+    // cannot be read cannot be verified shareable: the item is withheld,
+    // the same fail-closed discipline the preference walk applies.
+    chmodSync(join(vault, "notes", "scratch.md"), 0o000);
+    const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
+    expect(brief!.items).toEqual([]);
+    expect(renderCounterpartyBrief(brief!)).toBe("");
   });
 
   test("a readable predicate removes pages before anything counts them", () => {
