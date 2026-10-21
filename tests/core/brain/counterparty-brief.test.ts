@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import {
   BRIEF_CHAR_BUDGET,
@@ -506,7 +506,21 @@ describe("buildCounterpartyBrief items", () => {
       const outside = join(outer, "outside-secret.md");
       writeFileSync(outside, "outside\n");
       const abs = join(vault, pledgeRel);
-      for (const hostile of [relative(vault, outside), outside]) {
+      // Every hostile spelling of a path outside the vault, in BOTH
+      // separator conventions. A stored vault path is POSIX-joined by
+      // convention, so a backslash-spelled one is refused on EVERY
+      // platform, and a POSIX-spelled one is refused once it is
+      // normalized. The relative form is spelled POSIX on every host, so
+      // the case means the same thing everywhere; the literal backslash
+      // forms name a path that cannot resolve inside the vault, so they
+      // are refused rather than found.
+      const hostileSources = [
+        relative(vault, outside).split(sep).join("/"),
+        outside,
+        "..\\..\\outside-secret.md",
+        "C:\\outside-secret.md",
+      ];
+      for (const hostile of hostileSources) {
         writeFileSync(abs, readFileSync(abs, "utf8").replace(/source: .*/u, `source: ${hostile}`));
         const brief = expectBrief(
           buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),

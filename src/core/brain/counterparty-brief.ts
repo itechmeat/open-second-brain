@@ -116,6 +116,20 @@ export const BRIEF_PLEDGE_READ_CAP = 24;
 /** The length of the `YYYY-MM-DD` head of a date or timestamp. */
 const ISO_DATE_HEAD_LENGTH = 10;
 
+/**
+ * The separator a POSIX-joined vault path never carries. A stored path
+ * that carries it was spelled for another platform, so it names a path
+ * the vault never wrote.
+ */
+const WINDOWS_PATH_SEPARATOR = "\\";
+
+/**
+ * A Windows drive-letter absolute path, in either separator spelling. A
+ * stored vault path is POSIX-joined by convention, so a drive letter can
+ * only mean a path outside the vault.
+ */
+const DRIVE_LETTER_PATH_RE = /^[A-Za-z]:[\\/]/u;
+
 /** The degradation site the preference walk reports its read failures at. */
 const DEGRADATION_SITE = "brain.counterpartyBrief.preferenceWalk";
 
@@ -279,6 +293,29 @@ function matchExactlyOneEntity(
 }
 
 /**
+ * The stored pledge source as the vault-relative path it names, or null
+ * when the stored value escapes the vault.
+ *
+ * A stored vault path is POSIX-joined by convention, so a stored source
+ * that carries a backslash separator was spelled for another platform:
+ * it is refused before anything is read from it, whatever it would
+ * resolve to. So is a source that is absolute in ANY spelling - a drive
+ * letter (Windows) or a POSIX root - and so is one that still escapes
+ * after normalization. The value is normalized exactly as the writers
+ * normalize it, so the check and the read that follows agree on one
+ * path.
+ */
+function pledgeSourceWithinVault(stored: string): string | null {
+  if (stored.includes(WINDOWS_PATH_SEPARATOR)) return null;
+  const source = normalizePledgeSource(stored);
+  if (source.length === 0) return null;
+  if (DRIVE_LETTER_PATH_RE.test(source)) return null;
+  if (posix.isAbsolute(source)) return null;
+  if (source.startsWith("..")) return null;
+  return source;
+}
+
+/**
  * One pledge item, or null when the item is not shareable. The item is
  * drawn from TWO pages - the pledge page and the source it cites - so the
  * strictest visibility of the two governs: either carrying the reserved
@@ -292,9 +329,10 @@ function matchExactlyOneEntity(
  * bytes the caller cannot see is not shown second-hand. The stored source
  * is normalized exactly as the writers normalize it before anything is
  * read from it, and an item whose source escapes the vault is dropped -
- * the walk never reads, nor renders, a path from outside the vault. A
- * cited source that cannot be read (or whose frontmatter parse reports
- * dropped lines) withholds the item too: the gate decides whether the
+ * the walk never reads, nor renders, a path from outside the vault, in any
+ * spelling (a backslash separator, a drive letter, a POSIX root, a `..`
+ * escape). A cited source that cannot be read (or whose frontmatter parse
+ * reports dropped lines) withholds the item too: the gate decides whether the
  * item may leave the machine, so it fails closed, the same discipline
  * the preference walk applies to its own pages. The item names the cited
  * source page, which is where the promise was read.
@@ -314,8 +352,8 @@ function pledgeItem(
   const tagLists: ReadonlyArray<string>[] = [[...pageVisibility(meta)]];
   let sourceRel = pledgeRel(pledge.slug);
   if (pledge.source.length > 0) {
-    const source = normalizePledgeSource(pledge.source);
-    if (source.length === 0 || source.startsWith("..") || posix.isAbsolute(source)) return null;
+    const source = pledgeSourceWithinVault(pledge.source);
+    if (source === null) return null;
     if (readable !== undefined && !readable(source)) return null;
     const sourceAbs = join(vault, source);
     if (existsSync(sourceAbs)) {
