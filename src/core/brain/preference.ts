@@ -1185,11 +1185,16 @@ export function parsePreference(
   return Object.freeze(result);
 }
 
-type PreferenceRelationField = Exclude<DefaultRelationType, "superseded_by">;
+// `promised_to` stays out: pledge projection rides the shared
+// frontmatter-relations ingest (see relation-vocab.ts), and the
+// dated-commitments design rejects projecting pledges into preference
+// facts as duplication.
+type PreferenceRelationField = Exclude<DefaultRelationType, "superseded_by" | "promised_to">;
 
 const PREFERENCE_RELATION_FIELDS = Object.freeze(
   DEFAULT_RELATION_TYPES.filter(
-    (field): field is PreferenceRelationField => field !== "superseded_by",
+    (field): field is PreferenceRelationField =>
+      field !== "superseded_by" && field !== "promised_to",
   ),
 );
 
