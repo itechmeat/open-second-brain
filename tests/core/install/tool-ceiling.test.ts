@@ -345,7 +345,9 @@ describe("the capability report states the ceiling it runs under", () => {
 
   test("the advertised count is the one a host lists, not the registered one", () => {
     const evaluated = report("cursor");
-    expect(evaluated.available_tool_count).toBe(118);
+    // 118 registered tools through v1.90.0; the dated-commitments wave
+    // added brain_pledge and brain_intake_pledges (120).
+    expect(evaluated.available_tool_count).toBe(120);
     expect(evaluated.advertised_tool_count).toBe(7);
   });
 });
