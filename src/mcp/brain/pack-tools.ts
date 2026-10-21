@@ -12,6 +12,7 @@ import { isAbsolute, relative } from "node:path";
 
 import {
   resolveDensityRankingContextPack,
+  resolveEntityFactsContextPack,
   resolveModelContextWindowEnvTokens,
   resolveRecallAdequacyThresholds,
   resolveRecallGateTelemetry,
@@ -448,6 +449,10 @@ async function toolBrainContextPack(
   // gated on the density_ranking_context_pack config key (default off)
   // so the default pack stays byte-identical to the tier → recency order.
   const densityRanking = resolveDensityRankingContextPack(ctx.configPath ?? undefined);
+  // Entity-facts wiring (dated commitments, t_43b0a379): gated on the
+  // entity_facts_context_pack config key (default off) so the default
+  // tool output carries no entity_facts key.
+  const entityFacts = resolveEntityFactsContextPack(ctx.configPath ?? undefined);
   const agentScope = coerceAgentScope(ctx, args, true);
   // Root closure (t_sec_pack_reach): the pack reads page bodies by path,
   // outside the three read roots, so the reserved-token rule is asked per
@@ -495,6 +500,7 @@ async function toolBrainContextPack(
           maxTokens,
           ...(agentScope !== undefined ? { agentScope } : {}),
           ...(densityRanking ? { densityRanking: true } : {}),
+          ...(entityFacts ? { entityFacts: true } : {}),
           ...(sessionFocus !== null ? { sessionFocus } : {}),
           ...(query ? { query } : {}),
           ...(queryMode !== null ? { queryMode } : {}),
@@ -591,6 +597,20 @@ async function toolBrainContextPack(
     // The packing accounting appears only when the caller named a
     // policy - the same conditional shape as `semantic` above.
     ...(report.packing ? { packing: report.packing } : {}),
+    // The entity-facts rollup appears only when the config key resolved
+    // on - the same conditional shape as `packing` above. Fields project
+    // to the tool's wire casing.
+    ...(report.entityFacts
+      ? {
+          entity_facts: {
+            entities: report.entityFacts.entities.map((e) => ({
+              entity_id: e.entityId,
+              name: e.name,
+              item_ids: e.itemIds,
+            })),
+          },
+        }
+      : {}),
     ...(adequacy !== undefined
       ? {
           adequacy: {

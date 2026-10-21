@@ -17,6 +17,7 @@ import { CONTEXT_GUARD_PLACEHOLDER } from "../../src/core/brain/safety/context-g
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { persistTension } from "../../src/core/brain/tensions.ts";
 import { BELIEF_VECTORS_BACKFILL_COMMAND } from "../../src/core/brain/context-pack.ts";
+import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../../src/core/search/embeddings/signature.ts";
@@ -252,6 +253,60 @@ describe("brain_context_pack tool — round trip", () => {
     expect(items.map((i) => i.id)).toEqual(["pref-dense", "pref-sparse"]);
     expect(typeof items[0]!.density).toBe("number");
     expect(items[0]!.density!).toBeGreaterThan(items[1]!.density!);
+  });
+
+  test("entity_facts is gated off by default (no entity_facts key emitted)", async () => {
+    upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      agent: "test-agent",
+      now: new Date("2026-06-01T00:00:00Z"),
+    });
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-ada.md"),
+      "---\nid: pref-ada\ntopic: x\nprinciple: p\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n\nPair with Ada Lovelace on the engine\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {
+      max_tokens: 10_000,
+      query: "meeting with Ada Lovelace",
+      query_mode: "ranked",
+    });
+    expect(out["entity_facts"]).toBeUndefined();
+  });
+
+  test("entity_facts_context_pack config gate emits the entity rollup", async () => {
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\nentity_facts_context_pack: "true"\n`,
+    );
+    upsertEntity(vault, {
+      category: "people",
+      name: "Ada Lovelace",
+      agent: "test-agent",
+      now: new Date("2026-06-01T00:00:00Z"),
+    });
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-ada.md"),
+      "---\nid: pref-ada\ntopic: x\nprinciple: p\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n\nPair with Ada Lovelace on the engine\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {
+      max_tokens: 10_000,
+      query: "meeting with Ada Lovelace",
+      query_mode: "ranked",
+    });
+    const facts = out["entity_facts"] as {
+      entities: Array<{ entity_id: string; name: string; item_ids: string[] }>;
+    };
+    expect(facts.entities).toHaveLength(1);
+    expect(facts.entities[0]).toEqual({
+      entity_id: "ent-people-ada-lovelace",
+      name: "Ada Lovelace",
+      item_ids: ["pref-ada"],
+    });
   });
 
   test("rejects non-positive max_tokens via INVALID_PARAMS", async () => {

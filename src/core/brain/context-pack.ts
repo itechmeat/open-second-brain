@@ -86,6 +86,11 @@ import { buildAttentionContextBlock } from "./attention-flows.ts";
 import { buildPackStamp, type ContextPackStamp } from "./pack-stamp.ts";
 import { scoreSessionFocusTarget, sessionFocusIsActive } from "../search/session-focus.ts";
 import type { SearchSessionFocus } from "../search/types.ts";
+import { anchorEntityForms } from "./atomic-facts.ts";
+import { buildEntityIndex } from "./entities/index-builder.ts";
+import type { BrainEntity } from "./entities/types.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
+import { resolveEntityLexicon } from "./entities/lexicon.ts";
 
 const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.core,
@@ -244,6 +249,39 @@ export interface ContextPackSemanticReport {
   readonly unembedded: ReadonlyArray<string>;
 }
 
+/**
+ * One entity's rollup in the conditional `entityFacts` section: the
+ * canonical entity anchored from the pack query and the ids of the
+ * candidates the pack already kept whose bodies anchor the entity.
+ */
+export interface ContextPackEntityFactsEntry {
+  readonly entityId: string;
+  readonly name: string;
+  readonly itemIds: ReadonlyArray<string>;
+}
+
+/**
+ * The conditional `entityFacts` report (dated commitments,
+ * t_43b0a379): canonical-scope entities anchored from the pack query,
+ * capped at {@link CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES}. Entities are
+ * sorted by entity id; each `itemIds` follows the pack's item order and
+ * is drawn ONLY from ids already present in the report's `items`.
+ * Present ONLY when the caller passed
+ * {@link ContextPackOptions.entityFacts}, so the default pack stays
+ * byte-identical - the same conditional shape `semantic` and `packing`
+ * use.
+ */
+export interface ContextPackEntityFactsReport {
+  readonly entities: ReadonlyArray<ContextPackEntityFactsEntry>;
+}
+
+/**
+ * How many entities the conditional `entityFacts` section may anchor
+ * from one pack query. A named constant, not a knob: the section is a
+ * rollup over work the pack already did, not a second recall lane.
+ */
+export const CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES = 3;
+
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
@@ -320,6 +358,12 @@ export interface ContextPackReport {
    * {@link ContextPackPackingReport}.
    */
   readonly packing?: ContextPackPackingReport;
+  /**
+   * Present only when the caller opted in via
+   * {@link ContextPackOptions.entityFacts}; see
+   * {@link ContextPackEntityFactsReport}.
+   */
+  readonly entityFacts?: ContextPackEntityFactsReport;
 }
 
 /**
@@ -472,6 +516,19 @@ export interface ContextPackOptions {
    * Omitted keeps the report byte-identical.
    */
   readonly stamp?: PackStampOptions;
+  /**
+   * Conditional entity-facts rollup (dated commitments, t_43b0a379).
+   * When true, the report gains `entityFacts`: the canonical-scope
+   * entities the pack query anchors (capped at
+   * {@link CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES}), each listing the
+   * ids of already-kept candidates whose bodies anchor the entity. No
+   * new reads beyond the entity registry itself; an entity page that
+   * fails the caller's {@link ContextPackOptions.visible} view is
+   * treated as absent and its rollup is dropped silently. Omitted/false
+   * keeps the report byte-identical. Callers gate this on the
+   * `entity_facts_context_pack` config key.
+   */
+  readonly entityFacts?: boolean;
   /**
    * Which candidate pages the caller may see, asked with each page's
    * ABSOLUTE path. Applied to the collected candidates before ranking,
@@ -1305,6 +1362,52 @@ function semanticRelevanceFor(opts: ContextPackOptions): ReadonlyMap<string, num
   return opts.semanticRelevance;
 }
 
+/**
+ * The conditional `entityFacts` rollup (dated commitments, t_43b0a379).
+ * Entities: canonical scope only (`entityStatusInScope` - a quarantined
+ * record never holds an identity a read resolves to), anchored from the
+ * pack query through the shared occurrence kernel with the vault's
+ * store-learned lexicon, an entity page the caller's view refuses read
+ * as absent. Items: the caller's kept items ONLY, so a candidate the
+ * budget or the view dropped contributes no id; an anchored entity with
+ * no kept item still lists, with empty item ids. Sorted by entity id;
+ * item ids follow the pack's item order.
+ */
+function buildEntityFactsReport(
+  vault: string,
+  query: string | undefined,
+  items: ReadonlyArray<ContextPackItem>,
+  visible: ((absPath: string) => boolean) | undefined,
+): ContextPackEntityFactsReport {
+  const trimmed = query?.trim() ?? "";
+  if (trimmed === "") return Object.freeze({ entities: Object.freeze([]) });
+  const lexicon = resolveEntityLexicon(vault);
+  const anchored: BrainEntity[] = [];
+  for (const entity of buildEntityIndex(vault).entities) {
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
+    if (visible !== undefined && !visible(entity.path)) continue;
+    if (anchorEntityForms(trimmed, [entity.name, ...entity.aliases], { lexicon }).length > 0) {
+      anchored.push(entity);
+    }
+  }
+  anchored.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const entities = anchored.slice(0, CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES).map((entity) => {
+    // The same gated forms the query anchored, so an item body is asked
+    // exactly the question the match was won with.
+    const forms = anchorEntityForms(trimmed, [entity.name, ...entity.aliases], { lexicon });
+    const itemIds: string[] = [];
+    for (const item of items) {
+      if (anchorEntityForms(item.body, forms, { lexicon }).length > 0) itemIds.push(item.id);
+    }
+    return Object.freeze({
+      entityId: entity.id,
+      name: entity.name,
+      itemIds: Object.freeze(itemIds),
+    });
+  });
+  return Object.freeze({ entities: Object.freeze(entities) });
+}
+
 function finalizeContextPackReport(
   vault: string,
   opts: ContextPackOptions,
@@ -1325,6 +1428,19 @@ function finalizeContextPackReport(
   withheldIds: ReadonlySet<string> = new Set(),
 ): ContextPackReport {
   let enriched = report;
+  // Conditional entity-facts rollup (dated commitments, t_43b0a379).
+  // Attached in the one funnel every return path passes through, so the
+  // zero-budget pack, the char-budget-degraded packs and the
+  // packing-policy packs all carry the same section, and every rollup is
+  // computed over the FINAL kept items (post-transforms) - the ids the
+  // caller actually received. Absent option, absent key: the default
+  // pack stays byte-identical.
+  if (opts.entityFacts === true) {
+    enriched = {
+      ...enriched,
+      entityFacts: buildEntityFactsReport(vault, opts.query, report.items, opts.visible),
+    };
+  }
   // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
   // is a subject of an unresolved (open/confirmed) tension. Additive: with
   // no such tension the helper returns [] and the `warnings` key is never
