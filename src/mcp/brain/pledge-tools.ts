@@ -270,6 +270,7 @@ async function toolBrainIntakePledges(
       created: [...result.created],
       duplicates: [...result.duplicates],
       reanchored: [...result.reanchored],
+      stale_edges: [...result.staleEdges],
       unanchored_counterparties: [...result.unanchoredCounterparties],
     };
   });

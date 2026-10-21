@@ -21,31 +21,42 @@
  *     preference idempotency-key precedent.
  *   - Counterparties are anchored server-side. The kernel never trusts
  *     caller-supplied entity ids: names are anchored against
- *     canonical-scope entities (`entityStatusInScope`) through the
- *     shared occurrence-anchoring kernel (`anchorEntityForms`). A name
- *     that anchors to exactly one entity becomes a `promised_to` edge;
- *     a name that anchors nowhere - or that two canonical records claim
- *     - is reported on the result and stored nowhere, so a pledge exists
+ *     canonical-scope entities the caller can read (`entityStatusInScope`
+ *     plus the reach predicate - a withheld record is absent, so it can
+ *     neither match nor block a match) through the shared
+ *     occurrence-anchoring kernel (`anchorEntityForms`). A name that
+ *     anchors to exactly one entity becomes a `promised_to` edge; a name
+ *     that anchors nowhere - or that two canonical records claim - is
+ *     reported on the result and stored nowhere, so a pledge exists
  *     without edges rather than with fake ones.
  *   - The re-anchor arm. Re-posting the same identity and payload after
  *     the entity has since been registered computes the edge the first
  *     post could not, rewrites the page's `promised_to` frontmatter (the
  *     frontmatter-relations ingest projects the typed edges) and reports
  *     the slug under `reanchored`; a third identical post is a plain
- *     duplicate again.
+ *     duplicate again. The arm is additive: it merges the stored and the
+ *     freshly anchored ids and rewrites only when that union is larger,
+ *     so an entity leaving canonical scope is reported under `staleEdges`
+ *     and never turns an identical repost into an edge deletion.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { formatFrontmatter, slugify } from "../vault.ts";
+import { slugify } from "../vault.ts";
 import { anchorEntityForms } from "./atomic-facts.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
-import { normalizePledgeSource, showPledge, addPledge, type PledgePage } from "./pledges.ts";
+import {
+  addPledge,
+  normalizePledgeSource,
+  rewritePledgeFrontmatter,
+  showPledge,
+  type PledgePage,
+} from "./pledges.ts";
 import { validateIsoDate } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
@@ -82,6 +93,13 @@ export interface PledgeIntakeResult {
   /** Slugs whose `promised_to` edges this post added (the re-anchor arm). */
   readonly reanchored: ReadonlyArray<string>;
   /**
+   * Slugs whose stored `promised_to` edge the anchor can no longer
+   * reproduce (the entity left canonical scope, or became unreadable).
+   * Reported, never removed: the page is left byte-identical, because an
+   * edge that was valid when computed is not the caller's to delete.
+   */
+  readonly staleEdges: ReadonlyArray<string>;
+  /**
    * Counterparty names that anchored to no canonical-scope entity, first
    * seen first, deduplicated. Stored nowhere: the pledge carries only the
    * edges that anchored.
@@ -98,7 +116,9 @@ export interface PledgeIntakeOptions {
    * May the caller read the vault page at this vault-relative path? The
    * cited source is refused up front when the predicate says no, exactly
    * like an absent page - nothing is read from it, nothing is written
-   * from it, and nothing about it leaks.
+   * from it, and nothing about it leaks. The same predicate governs the
+   * stored pledge lookup and the entity pages counterparties may anchor
+   * to, so a withheld page is identical to an absent one everywhere.
    */
   readonly readable?: (rel: string) => boolean;
 }
@@ -106,12 +126,59 @@ export interface PledgeIntakeOptions {
 /** Length of the identity digest: a 12-hex sha256 prefix, the 48-bit idiom. */
 const IDENTITY_HEX_LENGTH = 12;
 
-/** Body section header holding the pledge notes, after the promise text. */
-const NOTES_HEADER = "## Notes";
+/**
+ * Hard cap on the pledge items one intake may post. Every distinct
+ * counterparty name scans the canonical entity registry synchronously
+ * inside one handler, so an unbounded batch multiplies that work; the
+ * number follows the family's write-batch ceiling (`MAX_BATCH_OPERATIONS`,
+ * 100) rather than inventing a second scale.
+ */
+export const MAX_INTAKE_PLEDGES = 100;
+
+/** Per-item cap on counterparty names: each name is one registry scan. */
+export const MAX_INTAKE_COUNTERPARTIES = 32;
+
+/**
+ * Longest counterparty name the intake accepts. The schema caps a pledge
+ * title at 200 characters and a name is matched by the same occurrence
+ * kernel, so one bound governs both.
+ */
+export const MAX_INTAKE_COUNTERPARTY_NAME_LENGTH = 200;
 
 /** Collapse whitespace runs and trim: the intake's normalization for text. */
 function collapse(value: string): string {
   return value.replaceAll(/\s+/gu, " ").trim();
+}
+
+/** A vault-relative POSIX path from an absolute one, whatever the host separator. */
+function vaultRel(vault: string, abs: string): string {
+  return relative(vault, abs).split(sep).join("/");
+}
+
+/**
+ * Normalize one item's counterparty names and enforce the per-item caps
+ * at the point the work happens: every name is a registry scan, and a
+ * name is matched by the same occurrence kernel that bounds a title, so
+ * a longer or more numerous list is refused with a named error before
+ * anything is anchored or written.
+ */
+function prepareCounterpartyNames(slug: string, raw: ReadonlyArray<string> | undefined): string[] {
+  const names = (raw ?? []).map((name) => name.trim()).filter((name) => name.length > 0);
+  if (names.length > MAX_INTAKE_COUNTERPARTIES) {
+    throw new PledgeIntakeError(
+      `pledge intake item names more than ${MAX_INTAKE_COUNTERPARTIES} counterparties: ${slug} - ` +
+        "keep the counterparty list to the people the promise is owed to",
+    );
+  }
+  for (const name of names) {
+    if (name.length > MAX_INTAKE_COUNTERPARTY_NAME_LENGTH) {
+      throw new PledgeIntakeError(
+        `pledge intake counterparty name is longer than ${MAX_INTAKE_COUNTERPARTY_NAME_LENGTH} ` +
+          `characters (${name.length}): ${slug}`,
+      );
+    }
+  }
+  return names;
 }
 
 /**
@@ -165,9 +232,10 @@ interface PreparedIntakeItem {
  * Intake a typed pledge extraction into the pledge family. Validates the
  * full payload first (throwing {@link PledgeIntakeError} with no write on
  * failure), anchors counterparties server-side, then commits: creates new
- * pledges, reports stored identity-and-payload repeats as duplicates, and
+ * pledges, reports stored identity-and-payload repeats as duplicates,
  * adds edges through the re-anchor arm when an entity registered between
- * two identical posts.
+ * two identical posts, and reports - without writing - a stored edge the
+ * anchor can no longer reproduce under `staleEdges`.
  */
 export function intakePledges(
   vault: string,
@@ -176,6 +244,14 @@ export function intakePledges(
 ): PledgeIntakeResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+
+  // The batch ceiling comes before any read: an oversized extraction is
+  // refused whole, so a caller cannot buy unbounded registry scans.
+  if (input.pledges.length > MAX_INTAKE_PLEDGES) {
+    throw new PledgeIntakeError(
+      `a pledge intake may contain at most ${MAX_INTAKE_PLEDGES} pledges, got ${input.pledges.length}`,
+    );
+  }
 
   // --- Validation pass: everything, before any write. ---
   const source = normalizePledgeSource(input.source);
@@ -236,7 +312,14 @@ export function intakePledges(
       );
     }
     seenSlugs.add(slug);
-    const existing = showPledge(vault, { slug });
+    const existing = showPledge(vault, {
+      slug,
+      // The stored-page lookup answers at the caller's reach: a withheld
+      // page is identical to an absent one, so nothing is compared,
+      // classified or rewritten behind the gate. The create arm below
+      // refuses the taken slug exactly as it does for a readable page.
+      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    });
     if (existing !== null) {
       // A slug already held is either the SAME pledge (idempotent path) or
       // a different one (refusal). Identity decides; nothing is overwritten
@@ -253,9 +336,7 @@ export function intakePledges(
         );
       }
     }
-    const counterparties = (item.counterparties ?? [])
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0);
+    const counterparties = prepareCounterpartyNames(slug, item.counterparties);
     for (const name of counterparties) {
       if (!seenNames.has(name)) {
         seenNames.add(name);
@@ -275,8 +356,14 @@ export function intakePledges(
 
   // --- Anchoring pass: read-only, server-side, never caller-supplied ids. ---
   const lexicon = resolveEntityLexicon(vault);
-  const canonical = buildEntityIndex(vault).entities.filter((entity) =>
-    entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical),
+  // Canonical scope AND the caller's reach: a record the caller cannot
+  // read is absent, so it can neither match a name nor block the one
+  // readable record that does (the brief's stated rule). At local reach
+  // the predicate is undefined and the per-entity check is skipped.
+  const canonical = buildEntityIndex(vault).entities.filter(
+    (entity) =>
+      entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical) &&
+      (opts.readable === undefined || opts.readable(vaultRel(vault, entity.path))),
   );
   const verdictByName = new Map<string, string | null>();
   const unanchoredCounterparties: string[] = [];
@@ -292,6 +379,7 @@ export function intakePledges(
   const created: string[] = [];
   const duplicates: string[] = [];
   const reanchored: string[] = [];
+  const staleEdges: string[] = [];
   for (const prep of prepared) {
     const anchoredIds = [
       ...new Set(
@@ -314,15 +402,22 @@ export function intakePledges(
       created.push(prep.slug);
       continue;
     }
-    const storedIds = [...prep.existing.counterparties].toSorted();
-    if (
-      storedIds.length === anchoredIds.length &&
-      storedIds.every((id, index) => id === anchoredIds[index])
-    ) {
+    const storedIds = [...new Set(prep.existing.counterparties)].toSorted();
+    const storedSet = new Set(storedIds);
+    // Additive only: a stored edge the anchor can no longer reproduce
+    // (the entity left canonical scope, or became unreadable) is reported
+    // and the page is left byte-identical - an identical repost must
+    // never delete an edge that was valid when it was computed.
+    if (anchoredIds.length < storedIds.length && anchoredIds.every((id) => storedSet.has(id))) {
+      staleEdges.push(prep.slug);
+      continue;
+    }
+    const mergedIds = [...new Set([...storedIds, ...anchoredIds])].toSorted();
+    if (mergedIds.length === storedIds.length) {
       duplicates.push(prep.slug);
       continue;
     }
-    rewritePledgeCounterparties(prep.existing, anchoredIds);
+    rewritePledgeCounterparties(prep.existing, mergedIds);
     reanchored.push(prep.slug);
   }
 
@@ -330,37 +425,29 @@ export function intakePledges(
     created: Object.freeze(created),
     duplicates: Object.freeze(duplicates),
     reanchored: Object.freeze(reanchored),
+    staleEdges: Object.freeze(staleEdges),
     unanchoredCounterparties: Object.freeze(unanchoredCounterparties),
   });
 }
 
 /**
- * Rewrite one stored pledge page's `promised_to` frontmatter in place,
- * preserving every other field and the body byte-for-byte as the parser
- * sees them. The page shape mirrors the family render (`pledges.ts`
- * render is module-private, so the re-anchor arm carries the same fixed
- * key set here); the round-trip test pins the equality.
+ * Rewrite one stored pledge page's `promised_to` frontmatter in place
+ * through the shared family helper ({@link rewritePledgeFrontmatter}):
+ * the stored map is parsed back whole, only `promised_to` is mutated, and
+ * the page is re-rendered with its body bytes untouched - a `visibility`
+ * a private pledge carries, or any key an operator added by hand, survives
+ * the rewrite. A fixed-key render would be correct only for creation,
+ * where there are no prior bytes to preserve; a rewrite has them, so it
+ * mutates rather than regenerates.
  */
 function rewritePledgeCounterparties(
   page: PledgePage,
   counterparties: ReadonlyArray<string>,
 ): void {
-  const body =
-    page.notes.length > 0 ? `${page.text}\n\n${NOTES_HEADER}\n\n${page.notes}` : page.text;
   atomicWriteFileSync(
     page.path,
-    formatFrontmatter(
-      {
-        title: page.title,
-        created_at: page.createdAt,
-        due: page.due,
-        source: page.source,
-        evidence: [...page.evidence],
-        promised_to: [...counterparties],
-        fulfilled: page.fulfilled ?? "",
-        agent: page.agent,
-      },
-      body,
-    ),
+    rewritePledgeFrontmatter(page, (meta) => {
+      meta["promised_to"] = [...counterparties];
+    }),
   );
 }

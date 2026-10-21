@@ -20,13 +20,22 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listPledges, pledgeExists, showPledge } from "../../../src/core/brain/pledges.ts";
+import {
+  listPledges,
+  pledgeExists,
+  PledgeError,
+  showPledge,
+} from "../../../src/core/brain/pledges.ts";
 import {
   intakePledges,
+  MAX_INTAKE_COUNTERPARTIES,
+  MAX_INTAKE_COUNTERPARTY_NAME_LENGTH,
+  MAX_INTAKE_PLEDGES,
   PledgeIntakeError,
   type PledgeIntakeItem,
 } from "../../../src/core/brain/pledge-intake.ts";
-import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
+import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
+import { parseFrontmatter } from "../../../src/core/vault.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
 const AGENT = "intake-agent";
@@ -90,6 +99,18 @@ function registerAda(): string {
     agent: AGENT,
     now: NOW,
   }).entity.id;
+}
+
+/**
+ * Hand-mark a stored entity page `visibility: private`, as an operator edit
+ * would, and return its vault-relative path (the reach predicate's key).
+ */
+function markEntityPrivate(id: string): string {
+  const rel = `Brain/entities/people/${id}.md`;
+  const abs = join(vault, rel);
+  const raw = readFileSync(abs, "utf8");
+  writeFileSync(abs, raw.replace(/^---\n/u, "---\nvisibility: private\n"), "utf8");
+  return rel;
 }
 
 test("a valid intake creates every pledge and reports the created slugs", () => {
@@ -156,6 +177,20 @@ test("a readable predicate that refuses the source page refuses the whole intake
     /readable at the caller's reach|withheld/,
   );
   expect(listPledges(vault, { now: NOW })).toEqual([]);
+});
+
+test("a withheld pledge page reads as absent and the create arm refuses the taken slug", () => {
+  intake([item()]);
+  const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  const before = readFileSync(stored!.path, "utf8");
+  // The source stays readable; only the stored pledge page is withheld, so
+  // the intake must not classify the withheld page as a duplicate or a
+  // re-anchor target, and must not compare or rewrite its bytes.
+  const refusePledge = (rel: string) => rel !== "Brain/pledges/send-ada-the-migration-recap.md";
+  expect(() => intake([item()], { readable: refusePledge })).toThrow(PledgeError);
+  expect(() => intake([item()], { readable: refusePledge })).toThrow(/pledge already exists/);
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
+  expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
 test("a re-post of the same payload is a duplicate no-op reporting the slug", () => {
@@ -260,14 +295,47 @@ test("a name two canonical entities claim anchors nowhere and is reported", () =
   expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([]);
 });
 
+test("a private entity is reported as unanchored and never stored as an edge", () => {
+  const adaId = registerAda();
+  const entityRel = markEntityPrivate(adaId);
+  const result = intake([item({ counterparties: ["Ada Lovelace"] })], {
+    readable: (rel) => rel !== entityRel,
+  });
+  // A record the caller cannot read is absent: same report as a name that
+  // matches nothing, and no canonical id is disclosed into the pledge.
+  expect(result.unanchoredCounterparties).toEqual(["Ada Lovelace"]);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([]);
+});
+
+test("a private entity does not block a readable entity naming the same counterparty", () => {
+  const privateId = registerAda();
+  const privateRel = markEntityPrivate(privateId);
+  const visibleId = upsertEntity(vault, {
+    category: "concept",
+    name: "Ada Lovelace",
+    agent: AGENT,
+    now: NOW,
+  }).entity.id;
+  const result = intake([item({ counterparties: ["Ada Lovelace"] })], {
+    readable: (rel) => rel !== privateRel,
+  });
+  expect(result.unanchoredCounterparties).toEqual([]);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([
+    visibleId,
+  ]);
+});
+
 test("re-posting after the entity registers adds the edge (re-anchor arm)", () => {
   const first = intake([item({ counterparties: ["Ada Lovelace"], text: "Send the recap." })]);
   expect(first.unanchoredCounterparties).toEqual(["Ada Lovelace"]);
   const before = showPledge(vault, { slug: "send-ada-the-migration-recap" });
-  // A note an operator (or another tool) added to the stored page by hand:
-  // the intake has no notes field, so a re-anchor must carry it through.
-  const noted = readFileSync(before!.path, "utf8").replace(/\n*$/u, "\n");
-  writeFileSync(before!.path, `${noted}\n## Notes\n\nDue Friday.\n`, "utf8");
+  // A frontmatter key an operator added by hand (and the visibility stamp a
+  // private pledge carries), plus a note the intake has no field for: a
+  // re-anchor must preserve all of them and change only `promised_to`.
+  const handEdited = readFileSync(before!.path, "utf8")
+    .replace(/^---\n/u, "---\nvisibility: private\noperator_note: keep me\n")
+    .replace(/\n*$/u, "\n");
+  writeFileSync(before!.path, `${handEdited}\n## Notes\n\nDue Friday.\n`, "utf8");
   const adaId = registerAda();
   const again = intake([item({ counterparties: ["Ada Lovelace"], text: "Send the recap." })]);
   expect(again.created).toEqual([]);
@@ -284,9 +352,66 @@ test("re-posting after the entity registers adds the edge (re-anchor arm)", () =
   expect(after!.due).toBe(before!.due);
   expect(after!.evidence).toEqual(before!.evidence);
   expect(after!.fulfilled).toBeNull();
+  const [afterMeta] = parseFrontmatter(after!.path);
+  expect(afterMeta["visibility"]).toBe("private");
+  expect(afterMeta["operator_note"]).toBe("keep me");
+  expect(afterMeta["promised_to"]).toEqual([adaId]);
   // A third identical post is now a plain duplicate: the edge is present.
   const third = intake([item({ counterparties: ["Ada Lovelace"], text: "Send the recap." })]);
   expect(third.reanchored).toEqual([]);
   expect(third.duplicates).toEqual(["send-ada-the-migration-recap"]);
   expect(third.unanchoredCounterparties).toEqual([]);
+});
+
+test("an entity leaving canonical scope never deletes a stored edge", () => {
+  const adaId = registerAda();
+  intake([item({ counterparties: ["Ada Lovelace"] })]);
+  const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  const before = readFileSync(stored!.path, "utf8");
+  archiveEntity(vault, { query: "Ada Lovelace", category: "people" }, { now: NOW });
+  const again = intake([item({ counterparties: ["Ada Lovelace"] })]);
+  // The edge was valid when it was computed: an entity that left canonical
+  // scope is reported instead of silently dropping it.
+  expect(again.reanchored).toEqual([]);
+  expect(again.duplicates).toEqual([]);
+  expect(again.staleEdges).toEqual(["send-ada-the-migration-recap"]);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([
+    adaId,
+  ]);
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
+  // The same post is still a no-write report while the entity stays out of
+  // scope; once it is canonical again the identical post is a duplicate.
+  const third = intake([item({ counterparties: ["Ada Lovelace"] })]);
+  expect(third.staleEdges).toEqual(["send-ada-the-migration-recap"]);
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
+  archiveEntity(vault, { query: "Ada Lovelace", category: "people" }, { now: NOW, restore: true });
+  const fourth = intake([item({ counterparties: ["Ada Lovelace"] })]);
+  expect(fourth.duplicates).toEqual(["send-ada-the-migration-recap"]);
+  expect(fourth.staleEdges).toEqual([]);
+});
+
+test("a batch over the intake cap refuses whole before any read", () => {
+  const overCap = Array.from({ length: MAX_INTAKE_PLEDGES + 1 }, (_value, index) =>
+    item({ title: `Pledge number ${index}` }),
+  );
+  expect(() => intake(overCap)).toThrow(PledgeIntakeError);
+  expect(() => intake(overCap)).toThrow(/at most/);
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
+});
+
+test("more counterparties than the per-item cap refuses the intake", () => {
+  const names = Array.from(
+    { length: MAX_INTAKE_COUNTERPARTIES + 1 },
+    (_value, index) => `Person ${index}`,
+  );
+  expect(() => intake([item({ counterparties: names })])).toThrow(PledgeIntakeError);
+  expect(() => intake([item({ counterparties: names })])).toThrow(/counterparty/i);
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
+});
+
+test("a counterparty name over the title-length limit refuses the intake", () => {
+  const longName = "a".repeat(MAX_INTAKE_COUNTERPARTY_NAME_LENGTH + 1);
+  expect(() => intake([item({ counterparties: [longName] })])).toThrow(PledgeIntakeError);
+  expect(() => intake([item({ counterparties: [longName] })])).toThrow(/counterparty/i);
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
 });
