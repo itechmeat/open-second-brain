@@ -11,7 +11,8 @@
  * without a session, and an unrecordable brief would repeat on every
  * prompt); an empty trigger vocabulary is inert; the process ceiling ends
  * a stalled read with a silent exit 0; every path exits 0, and every
- * fail-open path keeps stderr empty.
+ * fail-open path keeps stderr empty. The audit line names the cause of a
+ * refusal (`no_trigger`, `no_match`, `ambiguous`), never a blanket one.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -298,6 +299,60 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe("");
+    // The audit line names the CAUSE, not a blanket refusal: the prompt
+    // carried the trigger but named no canonical counterparty.
+    const abstain = auditRecords().find((record) => record["ok"] === false);
+    const details = abstain?.["details"] as Record<string, unknown> | undefined;
+    expect(details?.["decision"]).toBe("abstain");
+    expect(details?.["reason"]).toBe("no_match");
+  }, 20000);
+
+  test("a prompt without a trigger token names that cause", async () => {
+    seedCounterparty();
+    // The counterparty IS named, but the prompt carries none of the
+    // operator's trigger tokens, so the brief never starts.
+    const r = await runHook(
+      {
+        hook_event_name: "UserPromptSubmit",
+        ...SESSION,
+        prompt: "Ada Lovelace to plan the launch",
+      },
+      { VAULT_DIR: vault, ...FLAG_ON },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+    const abstain = auditRecords().find((record) => record["ok"] === false);
+    const details = abstain?.["details"] as Record<string, unknown> | undefined;
+    expect(details?.["decision"]).toBe("abstain");
+    expect(details?.["reason"]).toBe("no_trigger");
+  }, 20000);
+
+  test("a prompt naming two counterparties names that cause", async () => {
+    seedCounterparty();
+    // Only the second RECORD is needed here: the ambiguity is in the
+    // prompt, not in the promises.
+    upsertEntity(vault, {
+      category: "people",
+      name: "Grace Hopper",
+      agent: AGENT,
+      now: NOW,
+    });
+    const r = await runHook(
+      {
+        hook_event_name: "UserPromptSubmit",
+        ...SESSION,
+        prompt: "meet Ada Lovelace and Grace Hopper to plan",
+      },
+      { VAULT_DIR: vault, ...FLAG_ON },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+    const abstain = auditRecords().find((record) => record["ok"] === false);
+    const details = abstain?.["details"] as Record<string, unknown> | undefined;
+    expect(details?.["decision"]).toBe("abstain");
+    expect(details?.["reason"]).toBe("ambiguous");
   }, 20000);
 
   test("a counterparty whose entity page carries the reserved token emits nothing", async () => {

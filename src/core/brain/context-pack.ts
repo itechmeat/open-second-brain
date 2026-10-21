@@ -1437,10 +1437,17 @@ function finalizeContextPackReport(
   // caller actually received. Absent option, absent key: the default
   // pack stays byte-identical.
   if (opts.entityFacts === true) {
-    enriched = {
-      ...enriched,
-      entityFacts: buildEntityFactsReport(vault, opts.query, report.items, opts.visible),
-    };
+    // The rollup is an OPTIONAL section, so it fails OPEN: a broken
+    // entity store must not fail the pack. The sibling optional
+    // emissions route through emitGatedTelemetry for the same reason
+    // ("a broken continuity store can no longer fail the pack").
+    let entityFacts: ContextPackEntityFactsReport = { entities: Object.freeze([]) };
+    try {
+      entityFacts = buildEntityFactsReport(vault, opts.query, report.items, opts.visible);
+    } catch {
+      // fail open: an optional rollup never fails the pack
+    }
+    enriched = { ...enriched, entityFacts };
   }
   // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
   // is a subject of an unresolved (open/confirmed) tension. Additive: with

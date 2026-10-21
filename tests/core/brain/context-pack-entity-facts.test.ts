@@ -266,4 +266,25 @@ describe("packContext entityFacts", () => {
     const r = packContext(vault, { maxTokens: 10_000, entityFacts: true });
     expect([...r.entityFacts!.entities]).toEqual([]);
   });
+
+  test("a broken entity store leaves the pack answered, with an empty rollup", () => {
+    seedPerson("Ada Lovelace");
+    writePref("notes", "Pair with Ada Lovelace on the engine");
+    // The entity store stops being a directory, so the index build throws
+    // where the rollup reads it.
+    rmSync(join(vault, "Brain", "entities"), { recursive: true, force: true });
+    writeFileSync(join(vault, "Brain", "entities"), "not a directory\n");
+    const r = packContext(vault, {
+      maxTokens: 10_000,
+      query: "prepare the meeting with Ada Lovelace",
+      queryMode: "ranked",
+      entityFacts: true,
+    });
+    // The rollup is an OPTIONAL section, so a broken entity store must not
+    // fail the pack: the pack still answers, and the section is present
+    // and empty.
+    expect(r.entityFacts).toBeDefined();
+    expect([...r.entityFacts!.entities]).toEqual([]);
+    expect(r.items.map((i) => i.id)).toEqual(["pref-notes"]);
+  });
 });

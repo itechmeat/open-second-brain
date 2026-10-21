@@ -8,17 +8,18 @@
  * into a UserPromptSubmit `additionalContext` envelope; this module knows
  * nothing about hooks.
  *
- * Every refusal is an abstention (`null`), never a weaker match:
- *   - an empty trigger list abstains (the hook is inert without a
- *     vocabulary the operator declared);
- *   - a prompt carrying no trigger token abstains (deterministic token
- *     containment - the tokens are the operator's, in the operator's
- *     language; nothing here ships a natural-language word list, the
- *     standing refusal in status-scope.ts and visibility.ts);
- *   - zero or several canonical-scope entity matches abstain (the
- *     exactly-one rule: a brief that fires on a weak match injects the
- *     wrong person's facts, so anything weaker than one confident match
- *     is silence).
+ * Every refusal is a typed abstention, never a weaker match:
+ *   - an empty trigger list abstains as `no_trigger` (the hook is inert
+ *     without a vocabulary the operator declared);
+ *   - a prompt carrying no trigger token abstains as `no_trigger`
+ *     (deterministic token containment - the tokens are the operator's,
+ *     in the operator's language; nothing here ships a natural-language
+ *     word list, the standing refusal in status-scope.ts and
+ *     visibility.ts);
+ *   - zero canonical-scope entity matches abstain as `no_match`, and
+ *     several as `ambiguous` (the exactly-one rule: a brief that fires
+ *     on a weak match injects the wrong person's facts, so anything
+ *     weaker than one confident match is silence).
  *
  * Items are shareable-only and dated: open pledges promised to the entity
  * (due-sorted, through `listPledges`) first, then recent preference pages
@@ -52,7 +53,7 @@ import { join, relative, sep } from "node:path";
 import { posix } from "node:path";
 
 import { anchorEntityForms } from "./atomic-facts.ts";
-import { type ValidateEntityLabelOptions } from "./entities/canonical.ts";
+import { type EntityLexiconHandle, type ValidateEntityLabelOptions } from "./entities/canonical.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
@@ -132,12 +133,21 @@ export interface CounterpartyBriefItem {
   readonly sourceRel: string;
 }
 
-/** A brief for exactly one counterparty, or the abstention null. */
+/**
+ * A typed abstention: the core's refusal, naming its cause. The reason
+ * travels to the hook's audit line, so a prompt that named nobody stays
+ * distinguishable from a prompt that named two.
+ */
+export type CounterpartyBriefAbstention = {
+  readonly abstain: "no_trigger" | "no_match" | "ambiguous";
+};
+
+/** A brief for exactly one counterparty, or the typed abstention. */
 export interface CounterpartyBrief {
   readonly entityId: string;
   readonly entityName: string;
   readonly items: ReadonlyArray<CounterpartyBriefItem>;
-  /** Pages the walks could not read. Counted, never swallowed. */
+  /** Preference pages the walk could not read. Counted, never swallowed. */
   readonly skippedReads: number;
   /** One typed degradation notice per unreadable page. */
   readonly notices: ReadonlyArray<DegradationNotice>;
@@ -219,26 +229,42 @@ function isoDateHead(value: unknown): string {
  * Does the entity page carry the reserved visibility token? The check is
  * reach-independent, like the preference arm's: a hook-injected block
  * leaves the machine, so a private record may neither match nor block a
- * match. A page that cannot be read carries no token and answers false.
+ * match. The gate FAILS CLOSED, the same discipline the pledge-source
+ * gate applies: a page that cannot be read, or whose frontmatter parse
+ * reports dropped lines, is treated as carrying the token - an unreadable
+ * record is not shareable, so it may neither match nor block a match.
  */
 function entityCarriesReservedToken(entity: BrainEntity): boolean {
-  const [meta] = parseFrontmatter(entity.path);
+  let text: string;
+  try {
+    text = readFileSync(entity.path, "utf8");
+  } catch {
+    return true;
+  }
+  const [meta, , notices] = parseFrontmatterTextWithNotices(text);
+  if (notices.length > 0) return true;
   return pageVisibility(meta).includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
 
 /**
- * The exactly-one canonical entity the text names, or null. Canonical scope
- * only (`entityStatusInScope` - a quarantined record never holds an identity
- * a read resolves to), anchored by name or alias through the shared
- * occurrence kernel with the vault's store-learned lexicon. An entity page
- * the caller's view refuses is treated as absent, so a withheld record can
- * neither match nor block a match; the same holds for an entity page
- * carrying the reserved visibility token, whatever the caller's reach.
+ * The exactly-one canonical entity the text names, or the abstention it
+ * earned. Canonical scope only (`entityStatusInScope` - a quarantined
+ * record never holds an identity a read resolves to), anchored by name or
+ * alias through the shared occurrence kernel with the vault's
+ * store-learned lexicon (resolved by the caller and threaded in, so the
+ * brief reads the derived artifact once). An entity page the caller's
+ * view refuses is treated as absent, so a withheld record can neither
+ * match nor block a match; the same holds for an entity page carrying
+ * the reserved visibility token, whatever the caller's reach. Zero
+ * shareable matches abstain as `no_match`, more than one as `ambiguous`.
  */
-function matchExactlyOneEntity(vault: string, input: CounterpartyBriefInput): BrainEntity | null {
+function matchExactlyOneEntity(
+  vault: string,
+  input: CounterpartyBriefInput,
+  lexicon: EntityLexiconHandle | null,
+): BrainEntity | CounterpartyBriefAbstention {
   const trimmed = input.text.trim();
-  if (trimmed === "") return null;
-  const lexicon = resolveEntityLexicon(vault);
+  if (trimmed === "") return { abstain: "no_match" };
   const matched: BrainEntity[] = [];
   for (const entity of buildEntityIndex(vault).entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
@@ -252,7 +278,8 @@ function matchExactlyOneEntity(vault: string, input: CounterpartyBriefInput): Br
   // pages that actually matched are read for it - and it removes a private
   // record from the set instead of letting it block the match beside it.
   const shareable = matched.filter((entity) => !entityCarriesReservedToken(entity));
-  return shareable.length === 1 ? shareable[0]! : null;
+  if (shareable.length === 1) return shareable[0]!;
+  return { abstain: shareable.length === 0 ? "no_match" : "ambiguous" };
 }
 
 /**
@@ -403,22 +430,30 @@ function preferenceItems(
 }
 
 /**
- * Build the brief for the prompt, or abstain with null. See the module
- * docblock for the abstention, shareability and cap contract.
+ * Build the brief for the prompt, or abstain with the typed reason. See
+ * the module docblock for the abstention, shareability and cap contract.
  */
 export function buildCounterpartyBrief(
   vault: string,
   input: CounterpartyBriefInput,
-): CounterpartyBrief | null {
+): CounterpartyBrief | CounterpartyBriefAbstention {
   const triggers = input.triggers.map(normalizeToken).filter((token) => token.length > 0);
-  if (triggers.length === 0) return null;
+  if (triggers.length === 0) return { abstain: "no_trigger" };
   const haystack = input.text.normalize("NFC").toLowerCase();
-  if (!triggers.some((token) => haystack.includes(token))) return null;
-  const entity = matchExactlyOneEntity(vault, input);
-  if (entity === null) return null;
-
+  if (!triggers.some((token) => haystack.includes(token))) return { abstain: "no_trigger" };
+  // The lexicon is resolved ONCE and threaded into the match: the derived
+  // artifact is read a single time per brief, not once per walk.
   const lexicon = resolveEntityLexicon(vault);
-  const itemLimit = input.itemLimit ?? DEFAULT_BRIEF_ITEM_LIMIT;
+  const match = matchExactlyOneEntity(vault, input, lexicon);
+  if ("abstain" in match) return match;
+  const entity = match;
+
+  // A caller-supplied limit is clamped: a NaN, a zero or a negative
+  // number would otherwise disable the limit outright and hand an
+  // unbounded brief to the hook.
+  const rawItemLimit = input.itemLimit ?? DEFAULT_BRIEF_ITEM_LIMIT;
+  const itemLimit =
+    Number.isInteger(rawItemLimit) && rawItemLimit > 0 ? rawItemLimit : DEFAULT_BRIEF_ITEM_LIMIT;
   const items: CounterpartyBriefItem[] = [];
   const notices: DegradationNotice[] = [];
   let spent = 0;

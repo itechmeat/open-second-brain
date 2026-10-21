@@ -146,8 +146,10 @@ async function main(): Promise<void> {
     }
 
     const brief = buildCounterpartyBrief(vault, { text: prompt, triggers, now: new Date() });
-    if (brief === null) {
-      audit(vault, false, { decision: "abstain", reason: "no_counterparty" });
+    // A typed abstention names its cause, so the audit line says WHY the
+    // brief did not fire instead of one blanket reason.
+    if ("abstain" in brief) {
+      audit(vault, false, { decision: "abstain", reason: brief.abstain });
       return;
     }
     const rendered = renderCounterpartyBrief(brief);
