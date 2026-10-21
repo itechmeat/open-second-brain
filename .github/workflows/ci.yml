@@ -46,9 +46,10 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-26.04
-    # The full suite outgrew twenty minutes on a slow runner; the bound is
-    # there so a hung run cannot hold a runner for GitHub's six-hour default.
-    timeout-minutes: 30
+    # The full suite outgrew twenty minutes on a slow runner, then thirty
+    # once the pledges wave added its thousand; the bound is there so a hung
+    # run cannot hold a runner for GitHub's six-hour default.
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
