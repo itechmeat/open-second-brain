@@ -81,7 +81,10 @@ function pageJson(page: PledgePage): Record<string, unknown> {
     fulfilled: page.fulfilled,
     agent: page.agent,
     notes: page.notes,
-    path: page.path,
+    // Vault-relative, never the host path the core object carries: these
+    // answers land in model context, and pledgeRel is the same identity the
+    // reach predicate keys on.
+    path: pledgeRel(page.slug),
   };
 }
 
@@ -190,9 +193,9 @@ function toolBrainPledge(
         assertCanonicalCounterparties(ctx, counterparties);
         const text = coerceStr(args, "text", false);
         const notes = coerceStr(args, "notes", false);
-        // `addPledge` refuses a taken slug and never overwrites it; the
-        // refusal is the one answer that cannot match an absent page's,
-        // because creating the page would replace the withheld one.
+        // `addPledge` never overwrites a page: a title slug held by a
+        // different identity takes an identity suffix, and a true duplicate
+        // refuses with the family's taken-slug error.
         const page = addPledge(ctx.vault, {
           title,
           due,
@@ -231,7 +234,12 @@ function toolBrainPledge(
         // The archive name steps past every name already taken in archive/,
         // readable or not, so below local reach it is left out of the answer.
         if (readable !== undefined) return { operation, slug: removed.slug };
-        return { operation, slug: removed.slug, archive_path: removed.archivePath };
+        return {
+          operation,
+          slug: removed.slug,
+          // Vault-relative like every other path this surface returns.
+          archive_path: vaultRelativeSafe(ctx.vault, removed.archivePath),
+        };
       }
     }
   } catch (err) {

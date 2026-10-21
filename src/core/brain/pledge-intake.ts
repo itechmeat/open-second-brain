@@ -12,7 +12,13 @@
  *   - Validate EVERYTHING before any write. Structure, source
  *     readability at the caller's reach, and quote containment for every
  *     item are checked first; one invalid item refuses the whole intake
- *     and leaves the vault untouched (no partial batches).
+ *     and leaves the vault untouched (no partial batches). The create arm
+ *     re-checks each slug under its own write lock, so a concurrent writer
+ *     can still take a slug between validation and commit: that failure
+ *     removes the pages this intake already created (best effort) and
+ *     reports both what was created and what was rolled back. The residual
+ *     window is a rollback that cannot remove a page (reported by name, not
+ *     hidden) and any re-anchor rewrites made before the failing item.
  *   - Identity is idempotent. A pledge's identity is the sha256 prefix
  *     (first 12 hex) over the normalized `(title, due, source)` triple.
  *     A re-post of the same identity with the same normalized payload is
@@ -42,12 +48,11 @@
  *     and never turns an identical repost into an edge deletion.
  */
 
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { parseFrontmatterText, slugify } from "../vault.ts";
+import { parseFrontmatterText } from "../vault.ts";
 import { entityNameEqualsAnchorForm } from "./atomic-facts.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
@@ -58,6 +63,8 @@ import {
   NOTES_HEADER,
   normalizePledgeSource,
   pledgeExists,
+  pledgeIdentity,
+  pledgeSlugCandidates,
   rewritePledgeFrontmatter,
   showPledge,
   type PledgePage,
@@ -131,18 +138,17 @@ export interface PledgeIntakeOptions {
    * to, so on those read surfaces a withheld page is identical to an
    * absent one.
    *
-   * The create path is the deliberate exception: a slug already held is
-   * refused at any reach ("pledge already exists"), because creating the
-   * page would replace the withheld one - the same discipline
-   * `brain_pledge` documents for its add arm. A caller can therefore learn
-   * that some page holds a slug it cannot read; it can never read or
-   * overwrite it.
+   * The create path is the deliberate exception: a slug already held by a
+   * page the caller cannot read is refused at any reach ("pledge already
+   * exists"), because the identity behind the gate cannot be compared and
+   * creating there would replace the withheld page - the same discipline
+   * `brain_pledge` documents for its add arm. A readable page held by a
+   * DIFFERENT identity is not that case: the new pledge files under its
+   * identity suffix instead. A caller can therefore learn that some page
+   * holds a slug it cannot read; it can never read or overwrite it.
    */
   readonly readable?: (rel: string) => boolean;
 }
-
-/** Length of the identity digest: a 12-hex sha256 prefix, the 48-bit idiom. */
-const IDENTITY_HEX_LENGTH = 12;
 
 /**
  * Hard cap on the pledge items one intake may post. Every distinct
@@ -200,18 +206,6 @@ function prepareCounterpartyNames(slug: string, raw: ReadonlyArray<string> | und
 }
 
 /**
- * The identity of a pledge: sha256 first 12 hex over the normalized
- * `(title, due, source)` triple. Whitespace in the title folds, so a
- * re-post that only reformats the title keeps its identity.
- */
-function pledgeIdentity(normalizedTitle: string, due: string, normalizedSource: string): string {
-  return createHash("sha256")
-    .update(`${normalizedTitle}\n${due}\n${normalizedSource}`)
-    .digest("hex")
-    .slice(0, IDENTITY_HEX_LENGTH);
-}
-
-/**
  * The normalized payload a stored pledge must match for a re-post to read
  * as a duplicate: the promise text and the evidence quote set, order-
  * insensitive over the quotes. Counterparty names are deliberately not
@@ -224,10 +218,6 @@ function pledgeIdentity(normalizedTitle: string, due: string, normalizedSource: 
  */
 function payloadKey(text: string, evidence: ReadonlyArray<string>): string {
   return JSON.stringify([collapse(text), evidence.map((quote) => collapse(quote)).toSorted()]);
-}
-
-function storedIdentity(page: PledgePage): string {
-  return pledgeIdentity(collapse(page.title), page.due, page.source);
 }
 
 function storedPayloadKey(page: PledgePage): string {
@@ -304,6 +294,7 @@ export function intakePledges(
 
   const prepared: PreparedIntakeItem[] = [];
   const seenSlugs = new Set<string>();
+  const seenIdentities = new Map<string, string>();
   const counterpartyNames: string[] = [];
   const seenNames = new Set<string>();
   for (const item of input.pledges) {
@@ -332,54 +323,84 @@ export function intakePledges(
         );
       }
     }
-    const slug = slugify(title);
-    if (seenSlugs.has(slug)) {
+    const identity = pledgeIdentity(title, due, source);
+    // Slug resolution, exactly the order the create arm will try: the title
+    // slug, then its identity suffix. A candidate held by a DIFFERENT
+    // identity is skipped, not refused - titles that differ only in
+    // non-ASCII letters fold to one slug, and promises to different people
+    // are the family's core case. A repeat of the SAME identity inside one
+    // batch keeps the duplicated-post refusal.
+    const candidates = pledgeSlugCandidates(title, due, source);
+    let slug = candidates[0]!;
+    let existing: PledgePage | null = null;
+    // The first candidate no stored page occupies. The scan records it and
+    // keeps going: a LATER candidate may hold this exact identity (the
+    // suffixed page a since-removed slug-holder once forced), and the same
+    // promise must win over a free slot or a re-post would file a second
+    // copy under the freed slug.
+    let free: string | null = null;
+    let resolved = false;
+    for (const candidate of candidates) {
+      if (seenSlugs.has(candidate)) {
+        if (seenIdentities.get(candidate) === identity) {
+          throw new PledgeIntakeError(
+            `pledge intake repeats a slug within one batch: ${candidate} - post each pledge once per intake`,
+          );
+        }
+        continue;
+      }
+      const stored = showPledge(vault, {
+        slug: candidate,
+        // The stored-page lookup answers at the caller's reach: a withheld
+        // page is identical to an absent one, so nothing is compared,
+        // classified or rewritten behind the gate.
+        ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+      });
+      if (stored !== null) {
+        if (pledgeIdentity(stored.title, stored.due, stored.source) === identity) {
+          slug = candidate;
+          existing = stored;
+          resolved = true;
+          break;
+        }
+        continue;
+      }
+      // A withheld page passes the lookup above as absent; the create arm
+      // refuses that taken slug, and so does the validation pass, before any
+      // write - a create would otherwise replace a page the caller cannot
+      // read.
+      if (pledgeExists(vault, candidate)) {
+        throw new PledgeIntakeError(
+          `pledge already exists: ${candidate} (remove it first to recreate)`,
+        );
+      }
+      if (free === null) free = candidate;
+    }
+    if (!resolved && free !== null) {
+      slug = free;
+      existing = null;
+      resolved = true;
+    }
+    if (!resolved) {
       throw new PledgeIntakeError(
-        `pledge intake repeats a slug within one batch: ${slug} - post each pledge once per intake`,
+        `pledge intake slug already held by a different pledge: ${candidates[0]} - remove the existing pledge first`,
       );
     }
     seenSlugs.add(slug);
-    const existing = showPledge(vault, {
-      slug,
-      // The stored-page lookup answers at the caller's reach: a withheld
-      // page is identical to an absent one, so nothing is compared,
-      // classified or rewritten behind the gate. The create arm below
-      // refuses the taken slug exactly as it does for a readable page.
-      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
-    });
-    if (existing !== null) {
-      // A slug already held is either the SAME pledge (idempotent path) or
-      // a different one (refusal). Identity decides; nothing is overwritten
-      // either way.
-      if (storedIdentity(existing) !== pledgeIdentity(title, due, source)) {
-        throw new PledgeIntakeError(
-          `pledge intake slug already held by a different pledge: ${slug} - remove the existing pledge first`,
-        );
-      }
-      if (storedPayloadKey(existing) !== payloadKey(item.text ?? "", evidence)) {
-        throw new PledgeIntakeError(
-          `pledge intake identity mismatch: ${slug} already stores this identity with a different ` +
-            "payload - repost the stored payload or remove the pledge first",
-        );
-      }
+    seenIdentities.set(slug, identity);
+    if (existing !== null && storedPayloadKey(existing) !== payloadKey(item.text ?? "", evidence)) {
+      throw new PledgeIntakeError(
+        `pledge intake identity mismatch: ${slug} already stores this identity with a different ` +
+          "payload - repost the stored payload or remove the pledge first",
+      );
     }
-    // Two refusals the create arm would only produce at WRITE time, pulled
-    // into the validation pass so one failing item cannot strand the items
-    // before it on disk (the no-partial-batches promise):
-    //   - a text carrying the notes-section header is refused by
-    //     `addPledge` when the page is rendered;
-    //   - a slug held by a page the caller cannot read passes the stored-
-    //     page lookup above as absent and is refused by `addPledge`'s
-    //     existence check. The refusal and its message are exactly the
-    //     ones the create arm produces - only earlier, so nothing has
-    //     been written when they fire.
+    // The text arm of the same promise: a notes-section header is refused by
+    // `addPledge` when the page is rendered, pulled into the validation pass
+    // so one failing item cannot strand the items before it on disk.
     if ((item.text ?? "").split(/\r?\n/u).some((line) => line.trim() === NOTES_HEADER)) {
       throw new PledgeIntakeError(
         `pledge intake item text must not contain the ${NOTES_HEADER} section header: ${slug}`,
       );
-    }
-    if (existing === null && pledgeExists(vault, slug)) {
-      throw new PledgeIntakeError(`pledge already exists: ${slug} (remove it first to recreate)`);
     }
     const counterparties = prepareCounterpartyNames(slug, item.counterparties);
     for (const name of counterparties) {
@@ -427,52 +448,84 @@ export function intakePledges(
 
   // --- Write pass: nothing above wrote; everything below is decided. ---
   const created: string[] = [];
+  const createdPages: PledgePage[] = [];
   const duplicates: string[] = [];
   const reanchored: string[] = [];
   const staleEdges: string[] = [];
-  for (const prep of prepared) {
-    const anchoredIds = [
-      ...new Set(
-        prep.counterparties
-          .map((name) => verdictByName.get(name))
-          .filter((id): id is string => typeof id === "string"),
-      ),
-    ].toSorted();
-    if (prep.existing === null) {
-      createPledgePage(vault, {
-        title: prep.title,
-        due: prep.due,
-        source,
-        sourceText,
-        visibility,
-        evidence: prep.evidence,
-        ...(prep.text !== undefined ? { text: prep.text } : {}),
-        counterparties: anchoredIds,
-        agent: opts.agent,
-        now: opts.now,
-      });
-      created.push(prep.slug);
-      continue;
+  try {
+    for (const prep of prepared) {
+      const anchoredIds = [
+        ...new Set(
+          prep.counterparties
+            .map((name) => verdictByName.get(name))
+            .filter((id): id is string => typeof id === "string"),
+        ),
+      ].toSorted();
+      if (prep.existing === null) {
+        const page = createPledgePage(vault, {
+          title: prep.title,
+          due: prep.due,
+          source,
+          sourceText,
+          visibility,
+          evidence: prep.evidence,
+          ...(prep.text !== undefined ? { text: prep.text } : {}),
+          counterparties: anchoredIds,
+          agent: opts.agent,
+          now: opts.now,
+        });
+        createdPages.push(page);
+        // The page's own slug, not the validation pass's prediction: the
+        // create arm re-resolves the candidates under its lock, and the
+        // report must name the page that is actually on disk.
+        created.push(page.slug);
+        continue;
+      }
+      const storedIds = [...new Set(prep.existing.counterparties)].toSorted();
+      // Staleness is a fact about each STORED edge versus the readable
+      // canonical registry, never about the names this particular post
+      // carried: names are anchor requests, not part of the payload, so a
+      // repost that omits some (or all) of them asked for no anchoring and
+      // says nothing about the stored edges. A slug with a stale edge is
+      // reported and left byte-identical - no edge is removed, and the
+      // re-anchor arm does not grow a new edge beside a dead one.
+      if (storedIds.some((id) => !canonicalIds.has(id))) {
+        staleEdges.push(prep.slug);
+        continue;
+      }
+      const mergedIds = [...new Set([...storedIds, ...anchoredIds])].toSorted();
+      if (mergedIds.length === storedIds.length) {
+        duplicates.push(prep.slug);
+        continue;
+      }
+      rewritePledgeCounterparties(prep.existing, mergedIds);
+      reanchored.push(prep.slug);
     }
-    const storedIds = [...new Set(prep.existing.counterparties)].toSorted();
-    // Staleness is a fact about each STORED edge versus the readable
-    // canonical registry, never about the names this particular post
-    // carried: names are anchor requests, not part of the payload, so a
-    // repost that omits some (or all) of them asked for no anchoring and
-    // says nothing about the stored edges. A slug with a stale edge is
-    // reported and left byte-identical - no edge is removed, and the
-    // re-anchor arm does not grow a new edge beside a dead one.
-    if (storedIds.some((id) => !canonicalIds.has(id))) {
-      staleEdges.push(prep.slug);
-      continue;
+  } catch (err) {
+    // Validation checked every slug, but a create takes its lock and checks
+    // again at write time: a concurrent add or a second intake can take a
+    // slug in between, so item N can fail after items 1..N-1 were written.
+    // Remove the pages this intake created (best effort) and report both
+    // lists, so the no-partial-batches promise holds rather than leaving a
+    // silent half-batch on disk. Nothing created means nothing to undo: the
+    // original refusal (a lock collision included) surfaces unchanged.
+    if (createdPages.length === 0) throw err;
+    const removed: string[] = [];
+    const stuck: string[] = [];
+    for (const page of createdPages) {
+      try {
+        rmSync(page.path, { force: true });
+        removed.push(page.slug);
+      } catch {
+        stuck.push(page.slug);
+      }
     }
-    const mergedIds = [...new Set([...storedIds, ...anchoredIds])].toSorted();
-    if (mergedIds.length === storedIds.length) {
-      duplicates.push(prep.slug);
-      continue;
-    }
-    rewritePledgeCounterparties(prep.existing, mergedIds);
-    reanchored.push(prep.slug);
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new PledgeIntakeError(
+      `pledge intake failed after creating ${createdPages.length} pledge(s): ${reason}; ` +
+        `rolled back ${removed.length > 0 ? removed.join(", ") : "none"}` +
+        (stuck.length > 0 ? ` - could not remove ${stuck.join(", ")}` : ""),
+    );
   }
 
   return Object.freeze({

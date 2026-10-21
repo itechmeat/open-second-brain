@@ -658,6 +658,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "clears the git ingest `state.json` on a rescan that found no head, so the next " +
       "run starts as an initial walk rather than inheriting a stale marker.",
   },
+  "src/core/brain/pledge-intake.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "removes the pages this same intake created when a subsequent create fails " +
+      "mid-batch, restoring the pre-intake state the no-partial-batches promise names; " +
+      "a rollback has no file form a shared writer could produce, and the refusal " +
+      "reports every slug it removed and any it could not.",
+  },
   "src/core/brain/checkpoint-store.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
@@ -1348,8 +1357,12 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * (`src/core/brain/pledges.ts`) - the obligations move one family over,
  * `renameWithRetry` read as its renameSync shape plus the fallback rmSync;
  * every byte it writes routes through the shared writers.
+ *
+ * 84 -> 85: the pledge intake's mid-batch rollback
+ * (`src/core/brain/pledge-intake.ts`) - one rmSync that resets the vault to
+ * the pre-intake state, its re-anchor rewrite still on the shared writer.
  */
-const DIRECT_WRITE_ROWS = 84;
+const DIRECT_WRITE_ROWS = 85;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1585,8 +1598,11 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 82 -> 83: the pledge family's archive move
  * (`src/core/brain/pledges.ts`) - a lifecycle move stamps no channel,
  * the obligations entry one family over.
+ * 83 -> 84: the pledge intake's mid-batch rollback
+ * (`src/core/brain/pledge-intake.ts`) - a reset to the pre-intake state
+ * stamps no channel either.
  */
-const UNSTAMPED_DIRECT_ROWS = 83;
+const UNSTAMPED_DIRECT_ROWS = 84;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

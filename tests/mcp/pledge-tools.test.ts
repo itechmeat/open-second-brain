@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { addPledge, showPledge } from "../../src/core/brain/pledges.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../src/core/brain/sync-lockfile.ts";
 import { MAX_INTAKE_COUNTERPARTIES } from "../../src/core/brain/pledge-intake.ts";
 import { archiveEntity, upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
@@ -159,9 +160,12 @@ test("brain_pledge add / fulfill / list / show / remove round-trip", async () =>
     evidence: [QUOTE],
     agent: AGENT,
     notes: "Ada is waiting on it.",
-  })) as { pledge: { slug: string; due: string; fulfilled: null } };
+  })) as { pledge: { slug: string; due: string; fulfilled: null; path: string } };
   expect(added.pledge.slug).toBe(slug);
   expect(added.pledge.fulfilled).toBe(null);
+  // The answer lands in model context: the page is named in vault form, not
+  // as the host path the core object carries.
+  expect(added.pledge.path).toBe(`Brain/pledges/${slug}.md`);
 
   const listed = (await pledge.handler(ctx, { operation: "list" })) as {
     pledges: Array<{ slug: string; overdue: boolean; days_until_due: number }>;
@@ -171,18 +175,20 @@ test("brain_pledge add / fulfill / list / show / remove round-trip", async () =>
 
   const shown = (await pledge.handler(ctx, { operation: "show", slug })) as {
     present: boolean;
-    pledge: { title: string; notes: string };
+    pledge: { title: string; notes: string; path: string };
   };
   expect(shown.present).toBe(true);
   expect(shown.pledge.title).toBe("Recap the migration");
   expect(shown.pledge.notes).toBe("Ada is waiting on it.");
+  expect(shown.pledge.path).toBe(`Brain/pledges/${slug}.md`);
 
   const fulfilled = (await pledge.handler(ctx, {
     operation: "fulfill",
     slug,
     date: day(0),
-  })) as { pledge: { fulfilled: string } };
+  })) as { pledge: { fulfilled: string; path: string } };
   expect(fulfilled.pledge.fulfilled).toBe(day(0));
+  expect(fulfilled.pledge.path).toBe(`Brain/pledges/${slug}.md`);
 
   // Open pledges only by default: the fulfilled one leaves the list.
   const after = (await pledge.handler(ctx, { operation: "list" })) as {
@@ -195,7 +201,9 @@ test("brain_pledge add / fulfill / list / show / remove round-trip", async () =>
     archive_path: string;
   };
   expect(removed.slug).toBe(slug);
-  expect(removed.archive_path).toContain("archive");
+  // Vault-relative and forward-slash on every host, like every path this
+  // surface returns; the archive itself is still named.
+  expect(removed.archive_path).toBe(`Brain/pledges/archive/${slug}.md`);
   expect(
     (await pledge.handler(ctx, { operation: "show", slug })) as {
       operation: string;
@@ -224,8 +232,14 @@ test("a brain_pledge list item carries no page path", async () => {
   };
   expect(listed.pledges[0]?.["slug"]).toBe("recap-the-migration");
   // The list arm matches brain_obligation's listItemJson, which omits the
-  // absolute path; `show` still carries it (the pageJson precedent).
+  // path; `show` still carries it, in vault-relative form (the pageJson
+  // contract).
   expect(listed.pledges[0]).not.toHaveProperty("path");
+  const shown = (await pledge.handler(ctx, {
+    operation: "show",
+    slug: "recap-the-migration",
+  })) as { pledge: Record<string, unknown> };
+  expect(shown.pledge["path"]).toBe("Brain/pledges/recap-the-migration.md");
 });
 
 test("an unknown operation answers unknown_operation before the slug is coerced", async () => {
@@ -566,18 +580,59 @@ test("brain_intake_pledges refuses the whole intake when the source page is with
 });
 
 test("a brain_pledge failure that is not an input problem is the server's fault", async () => {
-  // A pledge "page" that is really a directory: the stamp write fails on
-  // the filesystem, which the caller cannot fix by re-sending different
-  // arguments - the same classification wrapToolErrors applies across the
-  // domain tools, so the caller is not blamed for a server-side fault.
-  const pledgesDir = join(vault, "Brain", "pledges");
-  mkdirSync(join(pledgesDir, "broken-pledge.md"), { recursive: true });
-  const fulfill = tool("brain_pledge");
-  const failure = await mcpFailure(() =>
-    fulfill.handler(ctx, { operation: "fulfill", slug: "broken-pledge" }),
-  );
+  // A held pledge-path lock: the fulfiller queues on the lock, the zero
+  // wait budget refuses with ELOCKED, and the caller cannot fix that by
+  // re-sending different arguments - the same classification wrapToolErrors
+  // applies across the domain tools, so the caller is not blamed for a
+  // server-side fault. Deliberately not a directory-read fault: that one
+  // differs by platform, which is what stalled the Windows shard.
+  const page = addPledge(vault, {
+    title: "Recap the migration",
+    due: day(6),
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: AGENT,
+  });
+  const held = acquireLockSync(page.path);
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let failure: { code: number; message: string };
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    failure = await mcpFailure(() =>
+      tool("brain_pledge").handler(ctx, { operation: "fulfill", slug: page.slug }),
+    );
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
   expect(failure.code).toBe(INTERNAL_ERROR);
   expect(failure.message.startsWith("brain_pledge: ")).toBe(true);
+});
+
+test("a pledge page that is a directory answers the absent-page refusal, never its bytes", async () => {
+  // A directory named `*.md` satisfies a bare existence probe and no page
+  // read. The kernel refuses it as a non-page BEFORE reading, so the answer
+  // is the shared no-pledge refusal and the test terminates on every
+  // platform - the Windows shard used to hang in the directory read here.
+  const pledgesDir = join(vault, "Brain", "pledges");
+  mkdirSync(join(pledgesDir, "broken-pledge.md"), { recursive: true });
+  const pledge = tool("brain_pledge");
+  const failure = await mcpFailure(() =>
+    pledge.handler(ctx, { operation: "fulfill", slug: "broken-pledge" }),
+  );
+  expect(failure.code).toBe(INVALID_PARAMS);
+  expect(failure.message).toBe("brain_pledge: no pledge: broken-pledge");
+  expect(
+    (await pledge.handler(ctx, { operation: "show", slug: "broken-pledge" })) as Record<
+      string,
+      unknown
+    >,
+  ).toEqual({ operation: "show", slug: "broken-pledge", present: false });
+  const listed = (await pledge.handler(ctx, { operation: "list" })) as {
+    pledges: ReadonlyArray<unknown>;
+  };
+  expect(listed.pledges).toEqual([]);
 });
 
 test("an agent override is stamped trimmed", async () => {

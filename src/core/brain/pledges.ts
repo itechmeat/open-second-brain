@@ -13,7 +13,9 @@
  *   - `add`     creates the page; every evidence quote must occur in the
  *               cited source page (quote-span containment through the
  *               shared comparators), or the write refuses with a named
- *               error.
+ *               error. A title slug another pledge already holds is taken
+ *               with an identity suffix, so two promises whose titles differ
+ *               only in non-ASCII letters land on distinct pages.
  *   - `fulfill` stamps the fulfillment date; a fulfilled pledge stays
  *               stamped (one-off, not recurring).
  *   - `list`    reads pages up to an optional cap, due-sorted, with an
@@ -34,6 +36,7 @@
  * therefore cannot replace the first page written for the same slug.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 
@@ -179,6 +182,54 @@ export function pledgeRel(slug: string): string {
   return posix.join(BRAIN_PLEDGES_REL, `${slug}.md`);
 }
 
+/** Length of the pledge identity digest: a 12-hex sha256 prefix, the 48-bit idiom. */
+const IDENTITY_HEX_LENGTH = 12;
+
+/**
+ * Length of the suffix appended to a title slug another identity already
+ * holds: a 6-hex (24-bit) prefix of this pledge's own identity. Six hex is
+ * the conventional short-id width and keeps the collision space far above
+ * the handful of promises one title slug can plausibly share.
+ */
+const SLUG_SUFFIX_HEX_LENGTH = 6;
+
+/** Collapse whitespace runs and trim: the identity's title normalization. */
+function collapseWhitespace(value: string): string {
+  return value.replaceAll(/\s+/gu, " ").trim();
+}
+
+/**
+ * The identity of one pledge: a sha256 prefix over the normalized
+ * `(title, due, source)` triple. Two posts with the same identity are the
+ * same promise however the title's whitespace was formatted; a different
+ * due date or source is a different promise even under one title slug.
+ */
+export function pledgeIdentity(title: string, due: string, source: string): string {
+  return createHash("sha256")
+    .update(`${collapseWhitespace(title)}\n${due}\n${source}`)
+    .digest("hex")
+    .slice(0, IDENTITY_HEX_LENGTH);
+}
+
+/**
+ * The page slugs one pledge may occupy, in preference order: the title
+ * slug, then the same slug with a short identity suffix. `slugify` folds
+ * every non-ASCII letter into a separator, so titles that differ only in
+ * diacritics share the base slug; the suffix is what keeps them apart
+ * without transliterating or rewriting the title.
+ */
+export function pledgeSlugCandidates(
+  title: string,
+  due: string,
+  source: string,
+): ReadonlyArray<string> {
+  const base = slugify(title);
+  return Object.freeze([
+    base,
+    `${base}-${pledgeIdentity(title, due, source).slice(0, SLUG_SUFFIX_HEX_LENGTH)}`,
+  ]);
+}
+
 function requireIsoDate(value: string, label: string): string {
   try {
     validateIsoDate(value);
@@ -265,7 +316,11 @@ export function rewritePledgeFrontmatter(
 
 function parsePage(vault: string, slug: string): PledgePage | null {
   const path = pledgePath(vault, slug);
-  if (!existsSync(path)) return null;
+  // A regular-file probe, not a bare existence probe: a directory named
+  // `*.md` satisfies `existsSync` and then stalls or throws inside the
+  // directory read. A path that is not a page answers null exactly like an
+  // absent one, so every surface refuses it before touching its bytes.
+  if (!isSourcePage(path)) return null;
   const [meta, body] = parseFrontmatter(path);
   const headerMatch = new RegExp(`^${NOTES_HEADER}$`, "mu").exec(body);
   const headerIndex = headerMatch?.index ?? -1;
@@ -310,19 +365,24 @@ export interface CreatePledgePageInput {
 }
 
 /**
- * Commit one pledge page: slug, lock, taken-slug refusal, render, atomic
- * write. No reads of its own - the caller supplies the source bytes it
- * validated - so the extraction intake can create a whole batch from the
- * one source read its validation pass already paid for. Refusals are the
- * family's named errors, byte-identical to {@link addPledge}'s.
+ * Commit one pledge page: slug resolution, lock, taken-slug refusal,
+ * render, atomic write. No reads of its own - the caller supplies the
+ * source bytes it validated - so the extraction intake can create a whole
+ * batch from the one source read its validation pass already paid for.
+ * Refusals are the family's named errors, byte-identical to
+ * {@link addPledge}'s.
+ *
+ * A title slug held by a DIFFERENT identity is not a refusal: the page
+ * takes the identity-suffixed candidate instead, under that candidate's
+ * own lock. A true duplicate - the same `(title, due, source)` identity
+ * already stored at the base slug - keeps the taken-slug refusal.
  */
 export function createPledgePage(vault: string, input: CreatePledgePageInput): PledgePage {
   const evidence = input.evidence.map((quote) => quote.trim()).filter((quote) => quote.length > 0);
   assertEvidenceInSource(input.source, input.sourceText, evidence);
-  const slug = slugify(input.title);
   const now = input.now ?? new Date();
+  const identity = pledgeIdentity(input.title, input.due, input.source);
   const page = {
-    slug,
     title: input.title,
     text: (input.text ?? "").trim(),
     due: input.due,
@@ -336,17 +396,47 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
     agent: input.agent,
     notes: (input.notes ?? "").trim(),
   };
-  const path = pledgePath(vault, slug);
-  const handle = acquireLockSyncWithRetry(path);
-  try {
-    if (existsSync(path)) {
+  const candidates = pledgeSlugCandidates(input.title, input.due, input.source);
+  // A page holding this exact identity is the same promise wherever it
+  // files - including the suffixed candidate a since-removed slug-holder
+  // once forced - so the true-duplicate refusal is decided across ALL
+  // candidates before the create loop, not only when the loop happens to
+  // reach that candidate before the first free one.
+  for (const slug of candidates) {
+    const stored = parsePage(vault, slug);
+    if (stored !== null && pledgeIdentity(stored.title, stored.due, stored.source) === identity) {
       throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
     }
-    atomicWriteFileSync(path, render(page, input.visibility));
-    return Object.freeze({ ...page, path });
-  } finally {
-    handle.release();
   }
+  for (const slug of candidates) {
+    const path = pledgePath(vault, slug);
+    const handle = acquireLockSyncWithRetry(path);
+    try {
+      if (existsSync(path)) {
+        const stored = parsePage(vault, slug);
+        // A different identity frees the NEXT candidate; anything this
+        // lookup cannot read as a pledge - a non-regular path included -
+        // is occupied by something a create must not replace.
+        if (
+          stored === null ||
+          pledgeIdentity(stored.title, stored.due, stored.source) === identity
+        ) {
+          throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
+        }
+        continue;
+      }
+      const resolved = { ...page, slug };
+      atomicWriteFileSync(path, render(resolved, input.visibility));
+      return Object.freeze({ ...resolved, path });
+    } finally {
+      handle.release();
+    }
+  }
+  // Every candidate is held by another pledge: the title slug and its
+  // identity suffix both name different promises.
+  throw new PledgeError(
+    `pledge already exists: ${candidates[candidates.length - 1]} (remove it first to recreate)`,
+  );
 }
 
 /** Create a one-off pledge page. */
@@ -456,7 +546,11 @@ export function listPledges(
     now: Date;
     readable?: (rel: string) => boolean;
     includeFulfilled?: boolean;
-    /** Maximum readable pages to read in name order; omitted means unbounded. */
+    /**
+     * Maximum pages this call keeps, in name order; omitted means unbounded.
+     * Counted after the `includeFulfilled` filter, so completed pledges do
+     * not consume the window an open one needs.
+     */
     readonly readCap?: number;
   },
 ): ReadonlyArray<PledgeListItem> {
@@ -473,8 +567,12 @@ export function listPledges(
     if (input.readable !== undefined && !input.readable(pledgeRel(slug))) continue;
     const page = parsePage(vault, slug);
     if (page === null) continue;
-    pagesRead += 1;
+    // The cap bounds the pages a caller actually receives, not the pages on
+    // disk: a fulfilled page the default filter drops spends no budget, so
+    // a long tail of completed promises cannot crowd an open one out of the
+    // brief's read window.
     if (page.fulfilled !== null && input.includeFulfilled !== true) continue;
+    pagesRead += 1;
     const dueMs = page.due === "" ? Number.NaN : Date.parse(`${page.due}T00:00:00Z`);
     const daysUntilDue = Number.isNaN(dueMs) ? null : Math.round((dueMs - todayMs) / ONE_DAY_MS);
     const overdue = page.fulfilled === null && !Number.isNaN(dueMs) && dueMs < todayMs;
@@ -496,7 +594,8 @@ export function listPledges(
     if (a.due === "" && b.due !== "") return 1;
     if (a.due !== "" && b.due === "") return -1;
     if (a.due !== b.due) return a.due < b.due ? -1 : 1;
-    return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+    if (a.slug === b.slug) return 0;
+    return a.slug < b.slug ? -1 : 1;
   });
 }
 

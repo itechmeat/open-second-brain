@@ -638,20 +638,97 @@ test("listPledges readCap bounds readable page reads in stable name order", () =
   ]);
   expect(listPledges(vault, { now: NOW, readCap: 0 })).toEqual([]);
   fulfillPledge(vault, { slug: "bravo", date: "2026-06-20" });
-  // Withheld pages spend no reads; a readable fulfilled page still spends one.
+  // Withheld pages spend no reads; a fulfilled page the filter drops spends
+  // no read budget either, so the cap still admits the next two open pages.
   expect(
     listPledges(vault, {
       now: NOW,
       readCap: 2,
       readable: (rel) => rel !== "Brain/pledges/alpha.md",
     }).map((item) => item.slug),
-  ).toEqual(["charlie"]);
+  ).toEqual(["charlie", "delta"]);
   expect(listPledges(vault, { now: NOW }).map((item) => item.slug)).toEqual([
     "alpha",
     "charlie",
     "delta",
     "echo",
   ]);
+});
+
+test("listPledges readCap counts only the pages the open-only filter keeps", () => {
+  // The active directory keeps every fulfilled pledge in place, so a run of
+  // fulfilled pages that sort before an open one must not consume the whole
+  // window: the counterparty brief's pledge arm reads through listPledges
+  // under a 24-page cap, and fulfilled pages filling it would hide every
+  // open promise behind them.
+  for (let index = 0; index < 24; index++) {
+    const page = addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      title: `A${String(index).padStart(2, "0")} done`,
+      due: "2026-06-01",
+    });
+    fulfillPledge(vault, { slug: page.slug, date: "2026-06-02" });
+  }
+  addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Z ship the parser",
+    due: "2026-07-01",
+  });
+  expect(listPledges(vault, { now: NOW, readCap: 24 }).map((item) => item.slug)).toEqual([
+    "z-ship-the-parser",
+  ]);
+});
+
+test("two titles differing only in diacritics land as distinct pages", () => {
+  // `slugify` folds every non-ASCII letter into a separator, so Müller and
+  // Möller share one title slug. Promises to different people are the
+  // family's core use case: the second add files under an identity suffix
+  // instead of refusing or overwriting the first page.
+  const muller = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Ship the parser to Müller",
+  });
+  const moeller = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Ship the parser to Möller",
+  });
+  expect(muller.slug).toBe("ship-the-parser-to-m-ller");
+  expect(moeller.slug).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
+  expect(showPledge(vault, { slug: muller.slug })!.title).toBe("Ship the parser to Müller");
+  expect(showPledge(vault, { slug: moeller.slug })!.title).toBe("Ship the parser to Möller");
+  // A true duplicate keeps the family's taken-slug refusal: identity, not
+  // title-suffix chance, decides what is a repeat.
+  expect(() =>
+    addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      title: "Ship the parser to Müller",
+    }),
+  ).toThrow(/pledge already exists: ship-the-parser-to-m-ller/);
+  expect(listPledges(vault, { now: NOW })).toHaveLength(2);
+});
+
+test("a re-post of a suffix-filed pledge refuses once the title slug's holder is gone", () => {
+  // The unblocked re-post is the trap: the freed base slug invites a second
+  // page for an identity that already lives at the suffix, so the
+  // true-duplicate check has to run across ALL candidates before any create.
+  const muller = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Ship the parser to Müller",
+  });
+  const moeller = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Ship the parser to Möller",
+  });
+  removePledge(vault, { slug: muller.slug });
+  expect(() =>
+    addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      title: "Ship the parser to Möller",
+    }),
+  ).toThrow(/pledge already exists: /);
+  expect(showPledge(vault, { slug: muller.slug })).toBeNull();
+  expect(showPledge(vault, { slug: moeller.slug })).not.toBeNull();
+  expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
 test("listPledges answers an empty list for a vault without the pledges directory", () => {

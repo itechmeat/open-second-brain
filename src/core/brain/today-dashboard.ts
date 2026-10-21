@@ -336,16 +336,14 @@ function renderObligationLine(item: TodayDashboardObligationItem): string {
 }
 
 function renderPledgeLine(item: TodayDashboardPledgeItem): string {
-  const state =
-    item.daysUntilDue === null
-      ? "undated"
-      : item.overdue
-        ? `overdue by ${Math.abs(item.daysUntilDue)}d`
-        : item.daysUntilDue === 0
-          ? "due today"
-          : `due in ${item.daysUntilDue}d`;
-  const due = item.daysUntilDue === null ? "" : `due ${item.due} - `;
-  return `- ${item.title} (slug: ${item.slug}) - ${due}${state}`;
+  if (item.daysUntilDue === null) {
+    return `- ${item.title} (slug: ${item.slug}) - undated`;
+  }
+  let state: string;
+  if (item.overdue) state = `overdue by ${Math.abs(item.daysUntilDue)}d`;
+  else if (item.daysUntilDue === 0) state = "due today";
+  else state = `due in ${item.daysUntilDue}d`;
+  return `- ${item.title} (slug: ${item.slug}) - due ${item.due} - ${state}`;
 }
 
 function renderOpenLoopLine(loop: OpenLoopScan["openLoops"][number]): string {

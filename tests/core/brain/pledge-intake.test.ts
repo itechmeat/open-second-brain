@@ -20,7 +20,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listPledges, pledgeExists, showPledge } from "../../../src/core/brain/pledges.ts";
+import {
+  listPledges,
+  pledgeExists,
+  removePledge,
+  showPledge,
+} from "../../../src/core/brain/pledges.ts";
 import {
   intakePledges,
   MAX_INTAKE_COUNTERPARTIES,
@@ -290,40 +295,106 @@ test("the same identity with a changed payload throws the named mismatch and cha
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
-test("a same-title post under a different source is a held slug, not a mismatch", () => {
+test("a same-title post under a different source files under an identity suffix", () => {
   const otherSourceRel = "notes/other-meeting.md";
   writeFileSync(join(vault, otherSourceRel), SOURCE_TEXT, "utf8");
   intake([item()]);
   const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
   const before = readFileSync(stored!.path, "utf8");
-  let message = "";
-  try {
-    intakePledges(vault, { source: otherSourceRel, pledges: [item()] }, { agent: AGENT, now: NOW });
-  } catch (err) {
-    expect(err).toBeInstanceOf(PledgeIntakeError);
-    message = (err as Error).message;
-  }
-  // The documented identity hashes (title, due, source), but the slug derives
-  // from the title alone: a same-title post cites a different source and is
-  // refused as a held slug before the identity comparison runs, so the source
-  // component of the hash is unreachable through the public intake. Pin the
-  // refusal that actually happens, so the contract is documented rather than
-  // silently dead.
-  expect(message).toMatch(/slug already held by a different pledge/);
-  expect(message).not.toMatch(/mismatch/);
+  // The documented identity hashes (title, due, source), and the title slug
+  // is held by a different identity: the new pledge files under the
+  // identity suffix instead of colliding with or overwriting the stored one.
+  const again = intakePledges(
+    vault,
+    { source: otherSourceRel, pledges: [item()] },
+    { agent: AGENT, now: NOW },
+  );
+  expect(again.created).toHaveLength(1);
+  expect(again.created[0]).toMatch(/^send-ada-the-migration-recap-[0-9a-f]{6}$/u);
+  expect(again.duplicates).toEqual([]);
   expect(readFileSync(stored!.path, "utf8")).toBe(before);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.source).toBe(SOURCE_REL);
+  expect(showPledge(vault, { slug: again.created[0]! })!.source).toBe(otherSourceRel);
+  expect(listPledges(vault, { now: NOW })).toHaveLength(2);
+});
+
+test("a slug held by a different pledge files the new pledge under an identity suffix", () => {
+  intake([item({ title: "Recap pledge" })]);
+  // Same title slug, different identity (different due): a create at the
+  // base slug would overwrite the stored page, so the new one takes the
+  // identity suffix that the base slug's other-identity holder leaves free.
+  const result = intake([
+    item({ title: "Recap pledge", due: "2026-08-01", evidence: [QUOTE_TWO] }),
+  ]);
+  expect(result.created).toHaveLength(1);
+  expect(result.created[0]).toMatch(/^recap-pledge-[0-9a-f]{6}$/u);
+  expect(showPledge(vault, { slug: "recap-pledge" })!.due).toBe("2026-06-25");
+  expect(showPledge(vault, { slug: result.created[0]! })!.due).toBe("2026-08-01");
+});
+
+test("two titles differing only in diacritics create distinct pages in one batch", () => {
+  // `slugify` drops every non-ASCII letter, so Müller and Möller share one
+  // title slug. Promises to different people are the core use case: the
+  // batch must create both pages, the second under its identity suffix,
+  // rather than refusing as a repeated slug.
+  const result = intake([
+    item({ title: "Ship the parser to Müller" }),
+    item({ title: "Ship the parser to Möller" }),
+  ]);
+  expect(result.created).toHaveLength(2);
+  expect(new Set(result.created).size).toBe(2);
+  expect(result.created[0]).toBe("ship-the-parser-to-m-ller");
+  expect(result.created[1]).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
+  expect(showPledge(vault, { slug: result.created[0]! })!.title).toBe("Ship the parser to Müller");
+  expect(showPledge(vault, { slug: result.created[1]! })!.title).toBe("Ship the parser to Möller");
+});
+
+test("a re-post of a suffix-filed pledge stays idempotent once the title slug frees up", () => {
+  // The first post files under the suffix because the base slug is held;
+  // once the holder is removed, the freed base slug must not seduce a
+  // re-post into a second page for the same identity.
+  intake([item({ title: "Ship the parser to Müller" })]);
+  const first = intake([item({ title: "Ship the parser to Möller" })]);
+  expect(first.created).toHaveLength(1);
+  expect(first.created[0]).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
+  removePledge(vault, { slug: "ship-the-parser-to-m-ller" });
+  const again = intake([item({ title: "Ship the parser to Möller" })]);
+  expect(again.created).toEqual([]);
+  expect(again.duplicates).toEqual(first.created);
+  expect(showPledge(vault, { slug: "ship-the-parser-to-m-ller" })).toBeNull();
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
-test("a slug held by a different pledge refuses the intake before any write", () => {
-  intake([item({ title: "Recap pledge" })]);
-  // Same slug, different identity (different due): a create here would
-  // either overwrite the page or die on the taken-slug refusal mid-batch,
-  // so the whole intake is refused up front.
-  expect(() =>
-    intake([item({ title: "Recap pledge", due: "2026-08-01", evidence: [QUOTE_TWO] })]),
-  ).toThrow(PledgeIntakeError);
-  expect(showPledge(vault, { slug: "recap-pledge" })!.due).toBe("2026-06-25");
+test("a create that fails under the lock mid-batch removes the pages this intake created", () => {
+  // Validation passes (no lock is taken there); the second create meets a
+  // held pledge-path lock and refuses at write time, after the first page
+  // is already on disk. The no-partial-batches promise requires the intake
+  // to remove what it created and report both lists in a named error.
+  const held = acquireLockSync(join(vault, "Brain", "pledges", "chase-the-budget-review.md"));
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let failure: unknown;
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    try {
+      intake([
+        item(),
+        item({ title: "Chase the budget review", due: "2026-07-01", evidence: [QUOTE_TWO] }),
+      ]);
+    } catch (err) {
+      failure = err;
+    }
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
+  expect(failure).toBeInstanceOf(PledgeIntakeError);
+  const message = (failure as Error).message;
+  expect(message).toMatch(/send-ada-the-migration-recap/);
+  expect(message).toMatch(/rolled back/);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })).toBeNull();
+  expect(showPledge(vault, { slug: "chase-the-budget-review" })).toBeNull();
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
 });
 
 test("a repeated slug inside one batch refuses before any write", () => {

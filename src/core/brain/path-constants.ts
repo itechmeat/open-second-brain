@@ -50,8 +50,11 @@ export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 /**
  * One-off pledge pages: `Brain/pledges/<slug>.md` (dated-commitments wave).
  * A pledge is a promise made in prose with a due date, a cited source page
- * and evidence quotes verified against that source; fulfilling archives the
- * page under `Brain/pledges/archive/` beside the recurring-obligation idiom.
+ * and evidence quotes verified against that source. `fulfill` stamps the
+ * page in place - a fulfilled pledge stays in the active directory, so
+ * listers filter on the stamp rather than assuming the page moved - and
+ * `remove` retires it under `Brain/pledges/archive/`, beside the
+ * recurring-obligation idiom.
  */
 export const BRAIN_PLEDGES_REL = posix.join(BRAIN_ROOT_REL, "pledges");
 /** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */

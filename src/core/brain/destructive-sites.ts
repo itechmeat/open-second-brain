@@ -218,6 +218,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "cross-device fallback's source half, after the copy went through " +
         "`atomicWriteFileSync` from bytes already read.",
     },
+    "src/core/brain/pledge-intake.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "rolls back the pages THIS intake created when a later create fails mid-batch, " +
+        "restoring the pre-intake state the no-partial-batches promise names. The removed " +
+        "bytes were written by this same call from source text already in memory, and the " +
+        "refusal reports every slug it removed and any it could not.",
+    },
     "src/core/brain/recompile.ts": {
       calls: ["renameSync"],
       recovery: UNARCHIVED_BRAIN,
