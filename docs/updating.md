@@ -77,9 +77,12 @@ intake: the agent posts typed pledge extractions citing one source page, the
 kernel validates every item before writing anything (a batch with one invalid
 item writes no page), commits idempotently, anchors counterparty names
 server-side against canonical-scope entities, and reports names that anchor
-nowhere instead of storing them. The kernel never calls a model. Both tools
-answer at the caller's reach: below local reach a withheld pledge page reads
-exactly as an absent one.
+nowhere instead of storing them. The batch is capped by name: at most 100
+pledges per intake, at most 32 counterparty names per pledge, and no
+counterparty name longer than 200 characters - a batch over a cap refuses
+whole. The kernel never calls a model. Both tools answer at the caller's
+reach: below local reach a withheld pledge page reads exactly as an absent
+one.
 
 **A pledges section joins the today dashboard, and two existing outputs gain
 members.** `o2b brain today` and `brain_brief` `view="today"` now render a
