@@ -114,7 +114,20 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
   },
   {
     event: "UserPromptSubmit",
-    groups: [{ hooks: ["session-capture", "recall-inject", "nav-inject"] }],
+    groups: [
+      {
+        hooks: [
+          "session-capture",
+          "recall-inject",
+          "nav-inject",
+          // The opt-in counterparty brief (dated commitments), in the
+          // plugin's own order: default-off like recall-inject, once per
+          // session through the injection ledger, one additionalContext
+          // envelope at most.
+          "counterparty-brief",
+        ],
+      },
+    ],
   },
   {
     event: "PreToolUse",

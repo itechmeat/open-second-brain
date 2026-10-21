@@ -15,6 +15,9 @@
  *   vault-relative note paths the delivered payload was built from (the
  *   evidence an answer-time quote check may verify that sub-agent's
  *   quoted spans against).
+ * - {@link LEDGER_KEY_COUNTERPARTY_BRIEF}: the entity id the counterparty
+ *   brief was delivered for, so the brief rides the first qualifying turn
+ *   of a session only (dated commitments, t_43b0a379).
  *
  * Every entry carries a {@link LEDGER_TTL_MS} expiry refreshed on each write.
  * Readers degrade to "empty" on any failure and never throw; writers return
@@ -27,6 +30,7 @@ export const LEDGER_KEY_RECALL = "osb.recall_inject.injected";
 export const LEDGER_KEY_ACTIVE = "osb.active_inject.emitted";
 export const LEDGER_KEY_REGROUND = "osb.reground.queue";
 export const LEDGER_KEY_SUBAGENT_INJECT = "osb.subagent_inject.delivered";
+export const LEDGER_KEY_COUNTERPARTY_BRIEF = "osb.counterparty_brief.delivered";
 
 /** Lifetime of every ledger entry (24 h), refreshed on every write. */
 export const LEDGER_TTL_MS = 86_400_000;
@@ -259,6 +263,49 @@ export function readActiveEmittedPaths(
   nowMs: number = Date.now(),
 ): ReadonlySet<string> {
   return readStringSet(vault, sessionId, LEDGER_KEY_ACTIVE, "paths", nowMs);
+}
+
+/**
+ * The entity id the counterparty brief was already delivered for this
+ * session, or null. The key is the whole brief's suppressant, not a
+ * per-entity set: the hook emits at most one brief per session, so any
+ * non-null answer suppresses the next qualifying turn.
+ */
+export function readBriefDelivered(
+  vault: string,
+  sessionId: string,
+  nowMs: number = Date.now(),
+): string | null {
+  const stamp = readHookStamp(vault, sessionId, LEDGER_KEY_COUNTERPARTY_BRIEF, nowMs);
+  const entityId = stamp?.data?.["entityId"];
+  return typeof entityId === "string" && entityId.length > 0 ? entityId : null;
+}
+
+/**
+ * Record the entity id the counterparty brief was delivered for, with the
+ * ledger's standard TTL. Returns `false` on any failure; the hook treats a
+ * failed record as a possible one-brief repeat, never as a reason to
+ * withhold a brief it already printed.
+ */
+export function recordBriefDelivered(
+  vault: string,
+  sessionId: string,
+  entityId: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const outcome = updateHookState(
+    vault,
+    sessionId,
+    (state, now) => {
+      state[LEDGER_KEY_COUNTERPARTY_BRIEF] = {
+        expiresAt: now + LEDGER_TTL_MS,
+        data: { entityId },
+      };
+      return { state, result: true };
+    },
+    { nowMs },
+  );
+  return outcome.status === "ok";
 }
 
 /**
