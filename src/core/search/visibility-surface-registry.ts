@@ -841,11 +841,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "page is neither stamped nor archived. Below local reach remove leaves the archive name, " +
       "which steps past withheld archived pages, out of the answer. Residual: add over a taken " +
       "slug is refused whoever may read the page, because creating it would replace the " +
-      "withheld page; and add verifies its evidence quotes against the cited source page's raw " +
-      "bytes without consulting a read root, so it answers a quote-containment verdict - and " +
-      "on success writes a caller-worded page - about bytes the reach rules did not filter. " +
-      "The refusal message quotes the caller's own argument, never the source's, and the " +
-      "intake beside it gates its whole batch on the source's readability instead.",
+      "withheld page. add asks the same reach check about the cited source page before its " +
+      "evidence quotes are verified against the page's raw bytes, refusing a withheld source " +
+      "identically to an absent one, exactly as the intake beside it gates its whole batch.",
   },
   {
     surface: "brain_intake_pledges",

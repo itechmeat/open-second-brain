@@ -527,8 +527,8 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     calls: ["renameSync", "rmSync"],
     reason:
       "archives a removed pledge into `Brain/pledges/archive/` under a collision-suffixed " +
-      "name, the obligations move one family over; the fallback arm writes the copy through " +
-      "`atomicWriteFileSync` from bytes already read and removes the source. The rename is " +
+      "name, the obligations move one family over; the fallback arm re-reads the page and " +
+      "writes the copy through `atomicWriteFileSync`, then removes the source. The rename is " +
       "`renameWithRetry`, the shared helper the detector reads as its renameSync shape.",
   },
   "src/core/brain/pending/pending-lanes.ts": {
