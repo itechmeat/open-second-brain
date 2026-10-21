@@ -12,6 +12,7 @@ import {
   DEFAULT_RELATION_TYPES,
   isKnownRelation,
   normalizeRelation,
+  PROMISED_TO_RELATION,
   relationFromFrontmatterField,
 } from "../../../src/core/graph/relation-vocab.ts";
 
@@ -21,10 +22,14 @@ test("the default vocabulary covers the declared relation types", () => {
     "contradicts",
     "depends_on",
     "extends",
+    "promised_to",
     "refines",
     "related",
     "superseded_by",
   ]);
+  // The pledge-to-counterparty edge is exported as its own named token, so
+  // producers read the relation from this module instead of hardcoding it.
+  expect(PROMISED_TO_RELATION).toBe("promised_to");
 });
 
 test("normalizeRelation is NFC + trimmed + lower-cased", () => {
@@ -45,6 +50,7 @@ test("relationFromFrontmatterField maps a known relation field to its relation, 
   expect(relationFromFrontmatterField("Depends_On")).toBe("depends_on");
   expect(relationFromFrontmatterField("refines")).toBe("refines");
   expect(relationFromFrontmatterField("Superseded_By")).toBe("superseded_by");
+  expect(relationFromFrontmatterField("Promised_To")).toBe("promised_to");
   expect(relationFromFrontmatterField("title")).toBeNull();
   expect(relationFromFrontmatterField("aliases")).toBeNull();
 });

@@ -54,6 +54,7 @@ import {
   BRAIN_PAYLOADS_REL,
   BRAIN_PENDING_REL,
   BRAIN_PINNED_FILE,
+  BRAIN_PLEDGES_REL,
   BRAIN_PREFERENCES_REL,
   BRAIN_PROCEDURAL_MEMORY_REL,
   BRAIN_PROCEDURES_REL,
@@ -514,6 +515,21 @@ export function obligationsArchiveDir(vault: string): string {
 /** A single obligation page: `Brain/obligations/<slug>.md`. */
 export function obligationPath(vault: string, slug: string): string {
   return ensureInsideVault(join(vault, BRAIN_OBLIGATIONS_REL, `${slug}.md`), vault);
+}
+
+/** One-off pledge pages dir: `Brain/pledges/`. */
+export function pledgesDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PLEDGES_REL), vault);
+}
+
+/** Fulfilled-pledge archive dir: `Brain/pledges/archive/`. */
+export function pledgesArchiveDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PLEDGES_REL, "archive"), vault);
+}
+
+/** A single pledge page: `Brain/pledges/<slug>.md`. */
+export function pledgePath(vault: string, slug: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PLEDGES_REL, `${slug}.md`), vault);
 }
 
 /** Declared-thesis register pages dir: `Brain/theses/`. */

@@ -29,6 +29,15 @@
 export const SUPERSEDED_BY_RELATION = "superseded_by";
 
 /**
+ * The pledge-to-counterparty edge (dated-commitments wave): the token a
+ * pledge page's `promised_to:` frontmatter field declares, ingested as a
+ * typed pledge-to-entity edge by the shared frontmatter-relations path.
+ * Exported once here - the vocabulary's single boundary - so the pledge
+ * family reads the relation from this module instead of hardcoding it.
+ */
+export const PROMISED_TO_RELATION = "promised_to";
+
+/**
  * The default semantic relation types. A frontmatter relation field
  * name is identical to the relation it produces (`contradicts:` →
  * `contradicts`), so this set doubles as the recognised frontmatter
@@ -41,6 +50,7 @@ export const DEFAULT_RELATION_TYPES = Object.freeze([
   "refines",
   "contradicts",
   SUPERSEDED_BY_RELATION,
+  PROMISED_TO_RELATION,
 ] as const);
 
 export type DefaultRelationType = (typeof DEFAULT_RELATION_TYPES)[number];

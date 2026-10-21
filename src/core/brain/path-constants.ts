@@ -47,6 +47,13 @@ export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
 export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
+/**
+ * One-off pledge pages: `Brain/pledges/<slug>.md` (dated-commitments wave).
+ * A pledge is a promise made in prose with a due date, a cited source page
+ * and evidence quotes verified against that source; fulfilling archives the
+ * page under `Brain/pledges/archive/` beside the recurring-obligation idiom.
+ */
+export const BRAIN_PLEDGES_REL = posix.join(BRAIN_ROOT_REL, "pledges");
 /** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */
 export const BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
 export const BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
