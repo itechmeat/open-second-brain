@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 # `hermes_agent.memory_providers` group, not a CLI script.
 [project]
 name = "open-second-brain"
-version = "1.90.0"
+version = "1.91.0"
 description = "Hermes Python shim for Open Second Brain. Most of the project (CLI, MCP server, OpenClaw plugin) is TypeScript on Bun; see package.json."
 readme = "README.md"
 requires-python = ">=3.11"
