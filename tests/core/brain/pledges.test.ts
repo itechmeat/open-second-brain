@@ -243,6 +243,32 @@ test("addPledge refuses a source page the vault does not hold", () => {
   ).toThrow(/source page not found/);
 });
 
+test("addPledge refuses a source path that names a directory with the same named error", () => {
+  // A directory exists, so the existence probe alone would let the read
+  // through and the failure would surface as a raw fs error past the
+  // typed error boundary.
+  expect(() =>
+    addPledge(vault, {
+      title: "Directory source",
+      due: "2026-06-25",
+      source: "notes",
+      evidence: ["anything"],
+      agent: "a",
+      now: NOW,
+    }),
+  ).toThrow(PledgeError);
+  expect(() =>
+    addPledge(vault, {
+      title: "Directory source",
+      due: "2026-06-25",
+      source: "notes",
+      evidence: ["anything"],
+      agent: "a",
+      now: NOW,
+    }),
+  ).toThrow(/source page not found/);
+});
+
 test("addPledge refuses an unreadable source before reading it", () => {
   // Reading this directory as a page would throw EISDIR instead of the reach refusal.
   rmSync(join(vault, SOURCE_REL));

@@ -41,7 +41,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -52,6 +52,7 @@ import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 import {
   addPledge,
+  isSourcePage,
   NOTES_HEADER,
   normalizePledgeSource,
   pledgeExists,
@@ -270,7 +271,7 @@ export function intakePledges(
     );
   }
   const sourceAbs = join(vault, source);
-  if (!existsSync(sourceAbs)) {
+  if (!isSourcePage(sourceAbs)) {
     throw new PledgeIntakeError(
       `pledge intake source page not found: ${source} - a pledge cites bytes the vault holds`,
     );

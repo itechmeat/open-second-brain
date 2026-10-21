@@ -34,7 +34,7 @@
  * therefore cannot replace the first page written for the same slug.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
@@ -144,6 +144,17 @@ const ONE_DAY_MS = 24 * 3600 * 1000;
 
 /** A `[[wikilink]]`-wrapped target, to unwrap into the vault path itself. */
 const WIKILINK_SOURCE_RE = /^\[\[([\s\S]+)\]\]$/u;
+
+/**
+ * True when the absolute path names an existing regular file. A directory
+ * satisfies a bare existence probe but no page read: callers check this so
+ * a source that names a folder refuses with the family's named error
+ * instead of surfacing a raw fs error past the typed error boundary.
+ */
+export function isSourcePage(abs: string): boolean {
+  const stat = statSync(abs, { throwIfNoEntry: false });
+  return stat !== undefined && stat.isFile();
+}
 
 /**
  * Normalize a caller-supplied source reference to the vault-relative POSIX
@@ -295,7 +306,7 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
     throw new PledgeError(`pledge source page is not readable or absent: ${source}`);
   }
   const sourceAbs = join(vault, source);
-  if (!existsSync(sourceAbs)) {
+  if (!isSourcePage(sourceAbs)) {
     throw new PledgeError(
       `pledge source page not found: ${source} - a pledge cites bytes the vault holds`,
     );

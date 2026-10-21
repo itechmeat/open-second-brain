@@ -179,6 +179,16 @@ test("a readable predicate that refuses the source page refuses the whole intake
   expect(listPledges(vault, { now: NOW })).toEqual([]);
 });
 
+test("a source path that names a directory refuses by name, not with a raw fs error", () => {
+  // The directory exists, so the existence probe alone would let the read
+  // through and EISDIR would escape the typed intake error boundary.
+  const refuse = () =>
+    intakePledges(vault, { source: "notes", pledges: [item()] }, { agent: AGENT, now: NOW });
+  expect(refuse).toThrow(PledgeIntakeError);
+  expect(refuse).toThrow(/source page not found/);
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
+});
+
 test("a withheld pledge page reads as absent and the create arm refuses the taken slug", () => {
   intake([item()]);
   const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
