@@ -858,6 +858,61 @@ export function resolveDensityRankingContextPack(configPath?: string): boolean {
 }
 
 /**
+ * Context-pack entity-facts gate (dated commitments, t_43b0a379). Default
+ * OFF: brain_context_pack carries no `entity_facts` section unless
+ * `entity_facts_context_pack: "true"` (or the env override), keeping the
+ * default pack byte-identical. When on, the report gains a per-entity
+ * rollup over candidates the pack already kept.
+ */
+export function resolveEntityFactsContextPack(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK",
+    "entity_facts_context_pack",
+    configPath,
+  );
+}
+
+/**
+ * Counterparty-brief hook gate (dated commitments, t_43b0a379). Default
+ * OFF: the UserPromptSubmit hook exits without output unless
+ * `counterparty_brief_enabled: "true"` (or the env override), so the
+ * hook's stdout stays byte-identical on unchanged installs.
+ */
+export function resolveCounterpartyBriefEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
+    "counterparty_brief_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Operator-declared trigger vocabulary for the counterparty brief (dated
+ * commitments, t_43b0a379): a machine-local main-config list key holding
+ * comma-separated tokens in the operator's language; the brief fires only
+ * when at least one token occurs in the prompt. Nothing ships a built-in
+ * word list (the standing refusal on hardcoded natural-language phrases).
+ *
+ * Each entry is NFC-normalized and trimmed; empty entries are dropped.
+ * ABSENT or MALFORMED answers `[]`, which keeps the brief inert - the
+ * safe direction, since a malformed vocabulary silently matching nothing
+ * is disclosed in the hooks README. A bracket-shaped value (real YAML
+ * list syntax the flat config parser cannot represent) is malformed: its
+ * literal text would ship tokens no prompt ever contains.
+ */
+export function resolveCounterpartyBriefTriggers(configPath?: string): ReadonlyArray<string> {
+  const raw = discoverConfig(configPath).data["counterparty_brief_triggers"]?.trim();
+  if (raw === undefined || raw === "") return [];
+  if (raw.startsWith("[") && raw.endsWith("]")) return [];
+  const tokens: string[] = [];
+  for (const part of raw.split(",")) {
+    const token = part.normalize("NFC").trim();
+    if (token.length > 0) tokens.push(token);
+  }
+  return tokens;
+}
+
+/**
  * Post-compaction pinned-anchor survival audit gate
  * (session-lifecycle-capture-durability, t_12c8b256). Default OFF: the
  * `o2b brain post-compact-audit` entry is a no-op unless
