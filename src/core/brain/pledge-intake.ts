@@ -20,15 +20,17 @@
  *     payload throws a named {@link PledgeIntakeError} mismatch - the
  *     preference idempotency-key precedent.
  *   - Counterparties are anchored server-side. The kernel never trusts
- *     caller-supplied entity ids: names are anchored against
- *     canonical-scope entities the caller can read (`entityStatusInScope`
- *     plus the reach predicate - a withheld record is absent, so it can
- *     neither match nor block a match) through the shared
- *     occurrence-anchoring kernel (`anchorEntityForms`). A name that
- *     anchors to exactly one entity becomes a `promised_to` edge; a name
- *     that anchors nowhere - or that two canonical records claim - is
- *     reported on the result and stored nowhere, so a pledge exists
- *     without edges rather than with fake ones.
+ *     caller-supplied entity ids: names are resolved against canonical-
+ *     scope entities the caller can read (`entityStatusInScope` plus the
+ *     reach predicate - a withheld record is absent, so it can neither
+ *     match nor block a match) by whole-name equality over the shared
+ *     quality-gated match forms (`entityNameEqualsAnchorForm` - a name is
+ *     resolved, not scanned for, so a name that merely contains an
+ *     entity's name anchors nowhere). A name that resolves to exactly one
+ *     entity becomes a `promised_to` edge; a name that resolves nowhere -
+ *     or that two canonical records claim - is reported on the result and
+ *     stored nowhere, so a pledge exists without edges rather than with
+ *     fake ones.
  *   - The re-anchor arm. Re-posting the same identity and payload after
  *     the entity has since been registered computes the edge the first
  *     post could not, rewrites the page's `promised_to` frontmatter (the
@@ -46,7 +48,7 @@ import { join, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { slugify } from "../vault.ts";
-import { anchorEntityForms } from "./atomic-facts.ts";
+import { entityNameEqualsAnchorForm } from "./atomic-facts.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
@@ -389,8 +391,12 @@ export function intakePledges(
   const verdictByName = new Map<string, string | null>();
   const unanchoredCounterparties: string[] = [];
   for (const name of counterpartyNames) {
-    const matches = canonical.filter(
-      (entity) => anchorEntityForms(name, [entity.name, ...entity.aliases], { lexicon }).length > 0,
+    // Whole-name equality, not occurrence: a counterparty NAME is resolved
+    // to the entity it names, so a name that merely contains an entity's
+    // name ("the Ada Lovelace team") is a different party and anchors
+    // nowhere, reported below instead of stored as a false edge.
+    const matches = canonical.filter((entity) =>
+      entityNameEqualsAnchorForm(name, [entity.name, ...entity.aliases], { lexicon }),
     );
     verdictByName.set(name, matches.length === 1 ? matches[0]!.id : null);
     if (matches.length !== 1) unanchoredCounterparties.push(name);

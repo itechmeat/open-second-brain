@@ -355,6 +355,17 @@ test("a name that partly anchors stores the anchored id and reports only the res
   expect(result.unanchoredCounterparties).toEqual(["Grace Hopper"]);
 });
 
+test("a name that merely contains an entity name anchors nowhere", () => {
+  // A counterparty is resolved, not scanned for: "the Ada Lovelace team" is
+  // a different party from Ada Lovelace, so occurrence inside the name must
+  // not mint a promised_to edge to her.
+  registerAda();
+  const result = intake([item({ counterparties: ["the Ada Lovelace team"] })]);
+  expect(result.unanchoredCounterparties).toEqual(["the Ada Lovelace team"]);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([]);
+  expect(result.created).toEqual(["send-ada-the-migration-recap"]);
+});
+
 test("a name two canonical entities claim anchors nowhere and is reported", () => {
   const first = registerAda();
   const second = upsertEntity(vault, {

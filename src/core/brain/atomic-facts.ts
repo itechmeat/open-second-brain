@@ -177,6 +177,31 @@ export function anchorEntityForms(
 }
 
 /**
+ * Whole-name equality over the same quality-gated, variant-folded match
+ * forms the occurrence kernel anchors with - the resolution kernel for a
+ * NAME that must name one entity and nothing looser. Counterparty name
+ * resolution asks "who IS this name", not "does this name mention an
+ * entity": a name that merely contains a form ("the Ada Lovelace team")
+ * is a different party, so the pledge intake resolves names through this
+ * predicate and not through {@link anchorEntityForms}. The same shape
+ * gate applies: forms below {@link MIN_ANCHOR_FORM_LENGTH} never
+ * participate. Pure: no I/O, no registry.
+ */
+export function entityNameEqualsAnchorForm(
+  name: string,
+  forms: ReadonlyArray<string>,
+  opts: ValidateEntityLabelOptions = {},
+): boolean {
+  const nameVariants = matchFormVariants(normalizeEntityName(name));
+  if (nameVariants.length === 0) return false;
+  return entityMatchForms(forms, opts).some(
+    (form) =>
+      form.length >= MIN_ANCHOR_FORM_LENGTH &&
+      matchFormVariants(form).some((variant) => nameVariants.includes(variant)),
+  );
+}
+
+/**
  * Anchor an assertion against active registry entities, sorted ids. Labels
  * pass through the quality gate (sanitise decoration, then normalise, drop
  * structurally-invalid forms) before matching - the same shared kernel the
