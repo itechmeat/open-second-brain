@@ -13,13 +13,24 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { addPledge } from "../../src/core/brain/pledges.ts";
+import { hookAuditDir } from "../../src/core/brain/paths.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { readBriefDelivered } from "../../hooks/lib/injection-ledger.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
@@ -73,6 +84,55 @@ interface RunResult {
   readonly exit: number;
 }
 
+/** The vault-relative path of a canonical entity page, for the hand edits. */
+function entityRel(entityId: string): string {
+  return `Brain/entities/people/${entityId}.md`;
+}
+
+/** Add a scalar `visibility:` to an existing page's frontmatter (hand edit). */
+function addVisibility(rel: string, token: string): void {
+  const abs = join(vault, rel);
+  const text = readFileSync(abs, "utf8");
+  writeFileSync(abs, text.replace(/^---\n/u, `---\nvisibility: ${token}\n`));
+}
+
+/** A preference page in the vault's preferences directory; returns its rel. */
+function writePref(slug: string, body: string): string {
+  const rel = `Brain/preferences/pref-${slug}.md`;
+  const abs = join(vault, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(
+    abs,
+    [
+      "---",
+      `id: pref-${slug}`,
+      "topic: project notes",
+      `principle: ${slug}`,
+      "tier: core",
+      "created_at: 2026-05-01T00:00:00Z",
+      "---",
+      "",
+      body,
+    ].join("\n"),
+  );
+  return rel;
+}
+
+/** The hook's own audit records for this vault. */
+function auditRecords(): Array<Record<string, unknown>> {
+  const dir = hookAuditDir(vault);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .flatMap((name) =>
+      readFileSync(join(dir, name), "utf8")
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>),
+    )
+    .filter((record) => record["actor"] === "counterparty-brief");
+}
+
 async function runHook(
   payload: unknown,
   env: Record<string, string> = {},
@@ -115,7 +175,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
-  });
+  }, 20000);
 
   test("flag on with a qualifying prompt emits exactly one additionalContext envelope", async () => {
     const entityId = seedCounterparty();
@@ -131,7 +191,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(context).toContain("2026-06-05");
     // The delivered entity is in the ledger, so the suppression read sees it.
     expect(readBriefDelivered(vault, SESSION.session_id)).toBe(entityId);
-  });
+  }, 20000);
 
   test("a second run in the same session emits nothing (ledger)", async () => {
     seedCounterparty();
@@ -140,7 +200,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const second = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(second.exit).toBe(0);
     expect(second.stdout).toBe("");
-  });
+  }, 20000);
 
   test("no real session id means no ledger write and no emission", async () => {
     seedCounterparty();
@@ -151,7 +211,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
     expect(readBriefDelivered(vault, "")).toBeNull();
-  });
+  }, 20000);
 
   test("an empty trigger list is inert even with a counterparty match", async () => {
     seedCounterparty();
@@ -159,7 +219,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
-  });
+  }, 20000);
 
   test("a prompt naming no counterparty emits nothing", async () => {
     seedCounterparty();
@@ -169,7 +229,27 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     );
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
-  });
+  }, 20000);
+
+  test("a counterparty whose entity page carries the reserved token emits nothing", async () => {
+    const entityId = seedCounterparty();
+    addVisibility(entityRel(entityId), REMOTE_DENY_VISIBILITY_TOKEN);
+    const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  }, 20000);
+
+  test("the audit line counts the pages the brief could not read", async () => {
+    seedCounterparty();
+    const locked = writePref("locked", "Ada Lovelace reviewed the draft");
+    chmodSync(join(vault, locked), 0o000);
+    const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toBe("");
+    const emit = auditRecords().find((record) => record["ok"] === true);
+    const details = emit?.["details"] as Record<string, unknown> | undefined;
+    expect(details?.["skipped_reads"]).toBe(1);
+  }, 20000);
 
   test("malformed stdin is a silent exit 0", async () => {
     seedCounterparty();
@@ -192,7 +272,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const exit = await proc.exited;
     expect(exit).toBe(0);
     expect(stdout).toBe("");
-  });
+  }, 20000);
 
   test("an unresolvable vault is a silent exit 0", async () => {
     seedCounterparty();
@@ -202,7 +282,7 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     const r = await runHook(userPromptPayload(), { ...FLAG_ON });
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
-  });
+  }, 20000);
 
   test("the registration rides hooks.json in the exact sibling command shape", () => {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");

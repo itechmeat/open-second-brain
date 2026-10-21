@@ -29,7 +29,8 @@
  *     silence, never a blocked prompt.
  *   - AUDITED: one structured audit line per decision (counts and reasons
  *     only - never the prompt text or the brief content) lands in the
- *     LOCAL hook-audit trail.
+ *     LOCAL hook-audit trail; the line counts the pages the brief could
+ *     not read, so a degraded walk is visible instead of silent.
  *
  * Contract mirrors recall-inject.ts: stdin is the hook payload JSON; the
  * vault is resolved from the environment/config, not the payload; stdout,
@@ -151,7 +152,12 @@ async function main(): Promise<void> {
     }
     const rendered = renderCounterpartyBrief(brief);
     if (rendered === "") {
-      audit(vault, false, { decision: "abstain", reason: "empty_brief", entity: brief.entityId });
+      audit(vault, false, {
+        decision: "abstain",
+        reason: "empty_brief",
+        entity: brief.entityId,
+        skipped_reads: brief.skippedReads,
+      });
       return;
     }
 
@@ -170,6 +176,7 @@ async function main(): Promise<void> {
       decision: "emit",
       entity: brief.entityId,
       items: brief.items.length,
+      skipped_reads: brief.skippedReads,
       recorded,
     });
   } finally {
