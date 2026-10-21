@@ -2153,7 +2153,7 @@ var init_errors = __esm(() => {
 
 // src/core/brain/path-constants.ts
 import { posix } from "node:path";
-var BRAIN_ROOT_REL = "Brain", BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL, BRAIN_PENDING_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL, BRAIN_SKILL_PROPOSALS_REL, BRAIN_SKILL_PROPOSALS_PENDING_REL, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, BRAIN_SKILL_PROPOSALS_REJECTED_REL, BRAIN_SKILL_ACCEPT_JOURNAL_REL, BRAIN_PROCEDURES_REL, BRAIN_PROCEDURAL_MEMORY_REL, BRAIN_ATTENTION_REL, BRAIN_OBLIGATIONS_REL, BRAIN_THESES_REL, BRAIN_DECISIONS_REL, BRAIN_GAP_TASKS_REL, BRAIN_TENSIONS_REL, BRAIN_LOG_DIR = "log", BRAIN_LOG_REL, BRAIN_CAPTURES_REL, BRAIN_CAPTURES_PROCESSED_REL, BRAIN_ENTITIES_REL, BRAIN_STATE_REL, BRAIN_INTERNAL_STATE_DIR = ".state", BRAIN_INTERNAL_STATE_REL, BRAIN_BASES_REL, BRAIN_SOURCES_REL, BRAIN_REPORTS_REL, BRAIN_DISTILLATIONS_REL, BRAIN_SNAPSHOTS_DIR = ".snapshots", BRAIN_SNAPSHOTS_REL, BRAIN_ARTIFACTS_DIR = ".artifacts", BRAIN_ARTIFACTS_REL, BRAIN_ARCHIVES_DIR = ".archives", BRAIN_ARCHIVES_REL, BRAIN_PAYLOADS_DIR = ".payloads", BRAIN_PAYLOADS_REL, BRAIN_WRITE_IMAGES_DIR = "write-images", BRAIN_WRITE_IMAGES_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, JSONL_LEDGER_EXT = "jsonl", BRAIN_CONFIG_FILE = "_brain.yaml", BRAIN_ACTIVE_FILE = "active.md", BRAIN_LESSONS_FILE = "lessons.md", BRAIN_COMPILED_DIGEST_RELS, BRAIN_INDEX_FILE = "_INDEX.md", BRAIN_INDEX_REL, BRAIN_PAGE_LANES_REL;
+var BRAIN_ROOT_REL = "Brain", BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL, BRAIN_PENDING_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL, BRAIN_SKILL_PROPOSALS_REL, BRAIN_SKILL_PROPOSALS_PENDING_REL, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, BRAIN_SKILL_PROPOSALS_REJECTED_REL, BRAIN_SKILL_ACCEPT_JOURNAL_REL, BRAIN_PROCEDURES_REL, BRAIN_PROCEDURAL_MEMORY_REL, BRAIN_ATTENTION_REL, BRAIN_OBLIGATIONS_REL, BRAIN_PLEDGES_REL, BRAIN_THESES_REL, BRAIN_DECISIONS_REL, BRAIN_GAP_TASKS_REL, BRAIN_TENSIONS_REL, BRAIN_LOG_DIR = "log", BRAIN_LOG_REL, BRAIN_CAPTURES_REL, BRAIN_CAPTURES_PROCESSED_REL, BRAIN_ENTITIES_REL, BRAIN_STATE_REL, BRAIN_INTERNAL_STATE_DIR = ".state", BRAIN_INTERNAL_STATE_REL, BRAIN_BASES_REL, BRAIN_SOURCES_REL, BRAIN_REPORTS_REL, BRAIN_DISTILLATIONS_REL, BRAIN_SNAPSHOTS_DIR = ".snapshots", BRAIN_SNAPSHOTS_REL, BRAIN_ARTIFACTS_DIR = ".artifacts", BRAIN_ARTIFACTS_REL, BRAIN_ARCHIVES_DIR = ".archives", BRAIN_ARCHIVES_REL, BRAIN_PAYLOADS_DIR = ".payloads", BRAIN_PAYLOADS_REL, BRAIN_WRITE_IMAGES_DIR = "write-images", BRAIN_WRITE_IMAGES_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, JSONL_LEDGER_EXT = "jsonl", BRAIN_CONFIG_FILE = "_brain.yaml", BRAIN_ACTIVE_FILE = "active.md", BRAIN_LESSONS_FILE = "lessons.md", BRAIN_COMPILED_DIGEST_RELS, BRAIN_INDEX_FILE = "_INDEX.md", BRAIN_INDEX_REL, BRAIN_PAGE_LANES_REL;
 var init_path_constants = __esm(() => {
   BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
   BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
@@ -2170,6 +2170,7 @@ var init_path_constants = __esm(() => {
   BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
   BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
   BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
+  BRAIN_PLEDGES_REL = posix.join(BRAIN_ROOT_REL, "pledges");
   BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
   BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
   BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
@@ -2264,11 +2265,14 @@ __export(exports_config, {
   resolveBacklogNudgeEnabled: () => resolveBacklogNudgeEnabled,
   resolveBenchJudgeCmd: () => resolveBenchJudgeCmd,
   resolveContextPackOutcomeEnabled: () => resolveContextPackOutcomeEnabled,
+  resolveCounterpartyBriefEnabled: () => resolveCounterpartyBriefEnabled,
+  resolveCounterpartyBriefTriggers: () => resolveCounterpartyBriefTriggers,
   resolveDecisionRecallMaxPerSession: () => resolveDecisionRecallMaxPerSession,
   resolveDecisionRecallMinSpacingTurns: () => resolveDecisionRecallMinSpacingTurns,
   resolveDefaultConfigPath: () => resolveDefaultConfigPath,
   resolveDensityRankingContextPack: () => resolveDensityRankingContextPack,
   resolveDeviceId: () => resolveDeviceId,
+  resolveEntityFactsContextPack: () => resolveEntityFactsContextPack,
   resolveExposeHostPaths: () => resolveExposeHostPaths,
   resolveGapLoopEnabled: () => resolveGapLoopEnabled,
   resolveGapLoopThreshold: () => resolveGapLoopThreshold,
@@ -2620,6 +2624,26 @@ function resolveSearchFocusContextPack(configPath) {
 }
 function resolveDensityRankingContextPack(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_DENSITY_RANKING_CONTEXT_PACK", "density_ranking_context_pack", configPath);
+}
+function resolveEntityFactsContextPack(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK", "entity_facts_context_pack", configPath);
+}
+function resolveCounterpartyBriefEnabled(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED", "counterparty_brief_enabled", configPath);
+}
+function resolveCounterpartyBriefTriggers(configPath) {
+  const raw = discoverConfig(configPath).data["counterparty_brief_triggers"]?.trim();
+  if (raw === undefined || raw === "")
+    return [];
+  if (raw.startsWith("[") && raw.endsWith("]"))
+    return [];
+  const tokens = [];
+  for (const part of raw.split(",")) {
+    const token = part.normalize("NFC").trim();
+    if (token.length > 0)
+      tokens.push(token);
+  }
+  return tokens;
 }
 function resolvePostCompactSurvivalAudit(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_POST_COMPACT_SURVIVAL_AUDIT", "post_compact_survival_audit", configPath);
