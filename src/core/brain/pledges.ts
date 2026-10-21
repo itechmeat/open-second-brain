@@ -21,6 +21,8 @@
  *   - `list`    reads pages up to an optional cap, due-sorted, with an
  *               overdue flag and whole days until due (null if undated);
  *               open pledges only unless the caller asks for fulfilled too.
+ *               A keep cap bounds the pages the call returns and a scan
+ *               cap the pages it parses, so the work stays bounded.
  *   - `show`    reads one page; a page the caller's reach withholds
  *               answers null, identical to an absent slug.
  *   - `remove`  retires the page into `Brain/pledges/archive/` with a
@@ -536,35 +538,58 @@ export function pledgeExists(vault: string, slug: string): boolean {
 }
 
 /**
+ * The input of one pledge listing: the reach, the filters, and the two
+ * ceilings that bound the work.
+ */
+export interface ListPledgesInput {
+  now: Date;
+  readable?: (rel: string) => boolean;
+  includeFulfilled?: boolean;
+  /**
+   * Maximum pages this call keeps, in name order; omitted means unbounded.
+   * Counted after the `includeFulfilled` filter, so completed pledges do
+   * not consume the window an open one needs.
+   */
+  readonly readCap?: number;
+  /**
+   * Maximum markdown pages this call scans, including pages it drops;
+   * omitted means unbounded. The ceiling bounds the FILESYSTEM work: a
+   * page the walk parses and then drops - fulfilled, unparseable or
+   * filtered out - still spends the budget, so the work cannot grow with
+   * the number of pledge pages on disk. A page the `readable` predicate
+   * refuses is never parsed, so it spends no budget.
+   */
+  readonly scanCap?: number;
+}
+
+/**
  * Pledges sorted by due (earliest first), then slug; undated pages last.
  * Open pledges only unless `includeFulfilled`. A page the `readable`
  * predicate refuses is dropped before anything counts it: identical-to-absent.
+ * Two ceilings bound the work: `readCap` bounds the pages the call KEEPS
+ * and `scanCap` the pages it PARSES, so the filesystem work does not grow
+ * with the number of pledge pages on disk.
  */
-export function listPledges(
-  vault: string,
-  input: {
-    now: Date;
-    readable?: (rel: string) => boolean;
-    includeFulfilled?: boolean;
-    /**
-     * Maximum pages this call keeps, in name order; omitted means unbounded.
-     * Counted after the `includeFulfilled` filter, so completed pledges do
-     * not consume the window an open one needs.
-     */
-    readonly readCap?: number;
-  },
-): ReadonlyArray<PledgeListItem> {
+export function listPledges(vault: string, input: ListPledgesInput): ReadonlyArray<PledgeListItem> {
   const dir = pledgesDir(vault);
   if (!existsSync(dir)) return [];
   const today = isoDate(input.now);
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   const out: PledgeListItem[] = [];
   let pagesRead = 0;
+  let pagesScanned = 0;
   for (const name of readdirSync(dir).toSorted()) {
     if (input.readCap !== undefined && pagesRead >= input.readCap) break;
     if (!name.endsWith(".md")) continue;
     const slug = name.replace(/\.md$/u, "");
     if (input.readable !== undefined && !input.readable(pledgeRel(slug))) continue;
+    // The scan ceiling bounds the PARSING, not only the keeping: a page the
+    // walk parses and then drops - fulfilled, unparseable - spends the
+    // budget, so the filesystem work cannot grow with the number of pledge
+    // pages on disk. A page the `readable` predicate refuses is never
+    // parsed, so it spends no budget.
+    if (input.scanCap !== undefined && pagesScanned >= input.scanCap) break;
+    pagesScanned += 1;
     const page = parsePage(vault, slug);
     if (page === null) continue;
     // The cap bounds the pages a caller actually receives, not the pages on

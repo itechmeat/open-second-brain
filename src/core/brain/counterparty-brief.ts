@@ -34,15 +34,21 @@
  * refuses contributes nothing and is not counted - identical to absent.
  *
  * Both walks are bounded: the preference walk reads at most
- * {@link BRIEF_PAGE_READ_CAP} pages and the pledge walk at most
- * {@link BRIEF_PLEDGE_READ_CAP}, each in the vault's stable (code-unit)
+ * {@link BRIEF_PAGE_READ_CAP} pages and the pledge walk keeps at most
+ * {@link BRIEF_PLEDGE_READ_CAP} and parses at most
+ * {@link BRIEF_PLEDGE_SCAN_CAP}, each in the vault's stable (code-unit)
  * name order, so the hook's worst-case latency is bounded by the cap and
  * not by the size of the vault. The preference walk counts a page it
  * cannot read (`skippedReads` plus a typed degradation notice) - never
  * swallowed; the pledge walk inherits the family's soft-parse discipline
  * instead, so an unreadable or unparseable pledge page withholds its item
  * and drops out of the counterparty filter silently - the bounded window,
- * not the skip count, is the pledge walk's contract.
+ * not the skip count, is the pledge walk's contract. The pledge walk's two
+ * ceilings are separate on purpose: the kept window counts only the pages
+ * the brief keeps, so a long tail of completed promises cannot crowd an
+ * open one out, while the scan ceiling above it bounds the pages the walk
+ * PARSES - the dropped ones included - so the filesystem work cannot grow
+ * with the size of the pledge directory.
  *
  * Dates are dates: an item's date is a `YYYY-MM-DD` day, taken from a
  * pledge's due date or from the day a preference page was created. A value
@@ -111,14 +117,28 @@ export const BRIEF_CHAR_BUDGET = 900;
 export const BRIEF_PAGE_READ_CAP = 24;
 
 /**
- * Page-read cap on the pledge walk, the same discipline as
+ * Kept-window cap on the pledge walk, the same discipline as
  * {@link BRIEF_PAGE_READ_CAP} and the same value: at most this many pledge
- * pages are parsed per brief, in the vault's stable name order. The cap
- * bounds the hook's worst-case latency on a large pledge directory - the
- * arm used to read every page in `Brain/pledges/` before the item limit
- * applied, while the sibling preference walk was already capped.
+ * pages the brief KEEPS, in the vault's stable name order. The cap bounds
+ * the hook's worst-case latency on a large pledge directory - the arm used
+ * to read every page in `Brain/pledges/` before the item limit applied,
+ * while the sibling preference walk was already capped. Counted after the
+ * fulfilled filter, so a completed promise spends no window an open one
+ * needs; the pages the walk PARSES are bounded separately, by
+ * {@link BRIEF_PLEDGE_SCAN_CAP}.
  */
 export const BRIEF_PLEDGE_READ_CAP = 24;
+
+/**
+ * Scan ceiling on the pledge walk: at most this many pledge pages the walk
+ * may PARSE, the pages it parses and then drops included. The kept window
+ * ({@link BRIEF_PLEDGE_READ_CAP}) counts only the pages the brief keeps, so
+ * without a scan ceiling a long tail of completed promises would make the
+ * walk's filesystem work grow with the size of `Brain/pledges/` even though
+ * it keeps nothing. The ceiling sits above the kept window, so the window
+ * still has room to fill before the scan budget runs out.
+ */
+export const BRIEF_PLEDGE_SCAN_CAP = 96;
 
 /** The length of the `YYYY-MM-DD` head of a date or timestamp. */
 const ISO_DATE_HEAD_LENGTH = 10;
@@ -577,14 +597,16 @@ export function buildCounterpartyBrief(
   let skippedReads = 0;
   // Open pledges promised to the entity first (listPledges is due-sorted),
   // then undated preference facts - the dated supply leads. The pledge
-  // walk reads at most BRIEF_PLEDGE_READ_CAP pages, so a large pledge
-  // directory cannot make the hook's work unbounded; listPledges refuses a
-  // page the predicate withholds before parsing it and does not count it
-  // against the cap, the same discipline as the preference walk.
+  // walk keeps at most BRIEF_PLEDGE_READ_CAP pages and parses at most
+  // BRIEF_PLEDGE_SCAN_CAP, so a large pledge directory cannot make the
+  // hook's work unbounded; listPledges refuses a page the predicate
+  // withholds before parsing it and does not count it against either cap,
+  // the same discipline as the preference walk.
   for (const pledge of listPledges(vault, {
     now: input.now,
     ...(input.readable !== undefined ? { readable: input.readable } : {}),
     readCap: BRIEF_PLEDGE_READ_CAP,
+    scanCap: BRIEF_PLEDGE_SCAN_CAP,
   })) {
     if (items.length >= itemLimit) break;
     if (!pledge.counterparties.includes(entity.id)) continue;

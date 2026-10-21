@@ -20,13 +20,14 @@ import {
   BRIEF_ITEM_CHAR_CAP,
   BRIEF_PAGE_READ_CAP,
   BRIEF_PLEDGE_READ_CAP,
+  BRIEF_PLEDGE_SCAN_CAP,
   DEFAULT_BRIEF_ITEM_LIMIT,
   buildCounterpartyBrief,
   renderCounterpartyBrief,
   type CounterpartyBrief,
   type CounterpartyBriefAbstention,
 } from "../../../src/core/brain/counterparty-brief.ts";
-import { addPledge } from "../../../src/core/brain/pledges.ts";
+import { addPledge, fulfillPledge } from "../../../src/core/brain/pledges.ts";
 import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { buildEntityIndex } from "../../../src/core/brain/entities/index-builder.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
@@ -141,6 +142,16 @@ function seedPledge(seed: {
     now: NOW,
   });
   return `Brain/pledges/${page.slug}.md`;
+}
+
+/**
+ * A completed pledge page promised to the entity, seeded through the
+ * writer: a fulfilled promise the walk parses and then drops.
+ */
+function seedFulfilledPledge(seed: { title: string; entityId: string }): void {
+  const rel = seedPledge({ title: seed.title, due: "2026-06-05", entityId: seed.entityId });
+  const slug = rel.replace(/^Brain\/pledges\//u, "").replace(/\.md$/u, "");
+  fulfillPledge(vault, { slug, date: "2026-05-06" });
 }
 
 /**
@@ -745,6 +756,34 @@ describe("buildCounterpartyBrief items", () => {
     expect(pledgeAsks).toHaveLength(BRIEF_PLEDGE_READ_CAP);
     const pastCapSlug = `pledge-${String(BRIEF_PLEDGE_READ_CAP).padStart(2, "0")}.md`;
     expect(pledgeAsks.some((rel) => rel.endsWith(pastCapSlug))).toBe(false);
+  });
+
+  test("the pledge scan ceiling bounds the pages the walk parses", () => {
+    const adaId = seedPerson("Ada Lovelace");
+    // The kept window and the scan ceiling are two ceilings: the window
+    // bounds the pages the brief KEEPS, the ceiling above it bounds the
+    // pages the walk PARSES - the dropped ones included - so a long tail
+    // of completed promises cannot make the hook's work grow with the
+    // size of the pledge directory.
+    expect(BRIEF_PLEDGE_SCAN_CAP).toBeGreaterThan(BRIEF_PLEDGE_READ_CAP);
+    // One completed promise short of the ceiling: the open promise behind
+    // them is still inside the scan budget, so the walk still finds it.
+    for (let i = 0; i < BRIEF_PLEDGE_SCAN_CAP - 1; i++) {
+      seedFulfilledPledge({ title: `Pledge ${String(i).padStart(3, "0")} done`, entityId: adaId });
+    }
+    seedPledge({ title: "Zzz open promise", due: "2026-06-05", entityId: adaId });
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(brief.items.map((item) => item.text)).toEqual(["Zzz open promise"]);
+    // One more completed promise: the open promise is now past the scan
+    // ceiling in name order, so the walk never parses it and the brief
+    // carries nothing - the work stayed bounded.
+    seedFulfilledPledge({ title: "Pledge 095 done", entityId: adaId });
+    const capped = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(capped.items).toEqual([]);
   });
 
   test("the character budget stops the walk when the next item would not fit whole", () => {

@@ -6,7 +6,8 @@
  * wave plan pins for A1.
  */
 
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -677,6 +678,89 @@ test("listPledges readCap counts only the pages the open-only filter keeps", () 
   expect(listPledges(vault, { now: NOW, readCap: 24 }).map((item) => item.slug)).toEqual([
     "z-ship-the-parser",
   ]);
+});
+
+/**
+ * How many of the recorded fs reads named a page under `Brain/pledges/`:
+ * the page parses the walk spends on that page, counted on any platform's
+ * separators.
+ */
+const pledgePageReads = (calls: ReadonlyArray<ReadonlyArray<unknown>>): number =>
+  calls.filter((args) => String(args[0]).replaceAll("\\", "/").includes("/Brain/pledges/")).length;
+
+test("listPledges scanCap bounds the pages one call parses", () => {
+  // The scan ceiling bounds the FILESYSTEM work, not only the kept window:
+  // the walk parses at most scanCap pages, so the reads cannot grow with
+  // the number of pledge pages on disk.
+  for (const title of ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]) {
+    addPledge(vault, { ...cite(["Grace will review the incident timeline"]), title });
+  }
+  const read = spyOn(fs, "readFileSync");
+  try {
+    const kept = listPledges(vault, { now: NOW, readCap: 10, scanCap: 2 });
+    // Two pages parsed, two pages kept: the kept window (10) never bound
+    // here, the scan ceiling did.
+    expect(pledgePageReads(read.mock.calls)).toBe(2);
+    expect(kept.map((item) => item.slug)).toEqual(["alpha", "bravo"]);
+  } finally {
+    read.mockRestore();
+  }
+});
+
+test("listPledges scanCap charges a dropped page and leaves the kept window alone", () => {
+  // A fulfilled page the walk parses and then drops still spends the scan
+  // budget, so the open promise behind it is never parsed. The kept
+  // window on its own is unchanged: the same open promise is still the
+  // one the call returns.
+  for (let index = 0; index < 3; index++) {
+    const page = addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      title: `A${index} done`,
+      due: "2026-06-01",
+    });
+    fulfillPledge(vault, { slug: page.slug, date: "2026-06-02" });
+  }
+  addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Z ship the parser",
+    due: "2026-07-01",
+  });
+  const read = spyOn(fs, "readFileSync");
+  try {
+    const kept = listPledges(vault, { now: NOW, readCap: 24, scanCap: 3 });
+    expect(pledgePageReads(read.mock.calls)).toBe(3);
+    expect(kept).toEqual([]);
+  } finally {
+    read.mockRestore();
+  }
+  expect(listPledges(vault, { now: NOW, readCap: 24 }).map((item) => item.slug)).toEqual([
+    "z-ship-the-parser",
+  ]);
+});
+
+test("listPledges scanCap does not charge a page the readable predicate refuses", () => {
+  // A withheld page is never parsed, so it spends no scan budget: the open
+  // promises behind it are still parsed, and still kept.
+  addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "A withheld",
+  });
+  for (const title of ["B open", "C open"]) {
+    addPledge(vault, { ...cite(["Grace will review the incident timeline"]), title });
+  }
+  const read = spyOn(fs, "readFileSync");
+  try {
+    const kept = listPledges(vault, {
+      now: NOW,
+      readCap: 10,
+      scanCap: 2,
+      readable: (rel) => rel !== "Brain/pledges/a-withheld.md",
+    });
+    expect(pledgePageReads(read.mock.calls)).toBe(2);
+    expect(kept.map((item) => item.slug)).toEqual(["b-open", "c-open"]);
+  } finally {
+    read.mockRestore();
+  }
 });
 
 test("two titles differing only in diacritics land as distinct pages", () => {
