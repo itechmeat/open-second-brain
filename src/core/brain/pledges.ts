@@ -506,12 +506,15 @@ export function removePledge(vault: string, input: { slug: string }): RemovePled
   assertVaultIdentityForWrite(vault);
   const normalized = slugify(input.slug);
   const activePath = pledgePath(vault, normalized);
-  if (!existsSync(activePath)) throw noPledgeError(normalized);
   // The archive move is a mutation of the page's presence, so it holds the
   // same pledge-path lock the family's other writers do: two concurrent
   // removes must not both pass the existence probe and race the rename.
   const handle = acquireLockSyncWithRetry(activePath);
   try {
+    // The probe lives inside the lock, like fulfillPledge's read: a page the
+    // winning remover already moved answers the named no-pledge refusal here,
+    // instead of the archive move's fallback surfacing a raw ENOENT.
+    if (!existsSync(activePath)) throw noPledgeError(normalized);
     const archiveDir = pledgesArchiveDir(vault);
     mkdirSync(archiveDir, { recursive: true });
     let archivePath = join(archiveDir, `${normalized}.md`);

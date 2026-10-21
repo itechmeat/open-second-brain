@@ -7,7 +7,15 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -504,6 +512,73 @@ test("removePledge honors the pledge-path lock across the archive move", () => {
   expect((collision as NodeJS.ErrnoException | undefined)?.code).toBe("ELOCKED");
   expect(pledgeExists(vault, page.slug)).toBe(true);
 });
+
+test("removePledge names the absent pledge when the page vanishes under the lock", async () => {
+  // Two removers can pass an existence probe taken before the lock and then
+  // race the archive move: the winner renames the page, and the loser's
+  // fallback reads the vanished file. The refusal must be the shared named
+  // no-pledge error, not the fallback arm's raw ENOENT.
+  const page = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  const child = join(vault, "remove-pledge.ts");
+  writeFileSync(
+    child,
+    [
+      `import { removePledge } from ${JSON.stringify(join(import.meta.dir, "../../../src/core/brain/pledges.ts"))};`,
+      "const [vault, slug] = process.argv.slice(2);",
+      "try {",
+      "  removePledge(vault, { slug });",
+      "  console.log(JSON.stringify({ ok: true }));",
+      "} catch (err) {",
+      "  const e = err;",
+      "  console.log(JSON.stringify({ ok: false, name: e.name, message: e.message, code: e.code ?? null }));",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const held = acquireLockSync(page.path);
+  const baseSize = statSync(`${page.path}.lock`).size;
+  const proc = Bun.spawn(["bun", child, vault, page.slug], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env },
+  });
+  let exitCode = -1;
+  let stdout = "";
+  let stderr = "";
+  try {
+    // The child's probe passes, then it queues on the pledge lock; only then
+    // does the page disappear, exactly as the winning remover leaves it.
+    const until = Date.now() + 20_000;
+    while (statSync(`${page.path}.lock`).size <= baseSize) {
+      if (Date.now() > until || proc.exitCode !== null) {
+        throw new Error("the remover never reached the pledge lock");
+      }
+      // oxlint-disable-next-line no-await-in-loop -- polling the child's progress, one wait at a time by design
+      await Bun.sleep(5);
+    }
+    rmSync(page.path);
+    held.release();
+  } finally {
+    held.release();
+    exitCode = await proc.exited;
+    stdout = await new Response(proc.stdout).text();
+    stderr = await new Response(proc.stderr).text();
+  }
+
+  expect(stderr.trim()).toBe("");
+  expect(exitCode).toBe(0);
+  const outcome = JSON.parse(stdout) as {
+    ok: boolean;
+    name?: string;
+    message?: string;
+    code?: string | null;
+  };
+  expect(outcome.ok).toBe(false);
+  expect(outcome.name).toBe("PledgeError");
+  expect(outcome.message).toBe(`no pledge: ${page.slug}`);
+  expect(outcome.code).toBeNull();
+}, 60_000);
 
 test("a hand-edited frontmatter date soft-parses instead of crashing the family", () => {
   const page = addPledge(vault, cite(["Ada asked for a written recap of the migration steps"]));
