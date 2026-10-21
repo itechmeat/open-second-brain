@@ -100,7 +100,7 @@ derived, identical to absent.
 `counterparty_brief_enabled: "true"` in the machine-local main config (or the
 env override `OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED`; the default is
 off), a UserPromptSubmit hook reads each submitted prompt and, when it fires,
-injects one `additionalContext` block: at most three dated, shareable items
+injects one `additionalContext` block: at most three shareable items
 about a counterparty the prompt names - open pledges promised to that entity
 first, then recent non-private preference pages whose bodies anchor it - each
 carrying its source page. It fires only when ALL of the following hold: the

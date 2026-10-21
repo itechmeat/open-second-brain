@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.91.0] - 2026-10-21
 
-Open Second Brain 1.91.0 turns one-off promises into first-class memory. A promise made in prose becomes a pledge page under `Brain/pledges/` - title, promise text, due date, the source page it was read from, and evidence quotes the kernel verified against that source at write time - with direct CRUD and a validate-everything-first extraction intake over MCP, a pledges section on the today dashboard, and two delivery surfaces for the moment of need: an opt-in context-pack rollup that groups what a query's entities already kept, and an opt-in counterparty brief that hands the agent at most three dated, shareable facts about the person a prompt names, once per session. Both delivery surfaces are off by default and byte-identical when off, and nothing in the release calls a model.
+Open Second Brain 1.91.0 turns one-off promises into first-class memory. A promise made in prose becomes a pledge page under `Brain/pledges/` - title, promise text, due date, the source page it was read from, and evidence quotes the kernel verified against that source at write time - with direct CRUD and a validate-everything-first extraction intake over MCP, a pledges section on the today dashboard, and two delivery surfaces for the moment of need: an opt-in context-pack rollup that groups what a query's entities already kept, and an opt-in counterparty brief that hands the agent at most three shareable facts about the person a prompt names, once per session. Both delivery surfaces are off by default and byte-identical when off, and nothing in the release calls a model.
 
 ### Changed
 
