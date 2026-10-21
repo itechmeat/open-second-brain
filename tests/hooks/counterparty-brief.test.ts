@@ -32,7 +32,7 @@ import { hookAuditDir } from "../../src/core/brain/paths.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { readBriefDelivered } from "../../hooks/lib/injection-ledger.ts";
-import { homeEnv } from "../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 
@@ -239,17 +239,22 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(r.stdout).toBe("");
   }, 20000);
 
-  test("the audit line counts the pages the brief could not read", async () => {
-    seedCounterparty();
-    const locked = writePref("locked", "Ada Lovelace reviewed the draft");
-    chmodSync(join(vault, locked), 0o000);
-    const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
-    expect(r.exit).toBe(0);
-    expect(r.stdout).not.toBe("");
-    const emit = auditRecords().find((record) => record["ok"] === true);
-    const details = emit?.["details"] as Record<string, unknown> | undefined;
-    expect(details?.["skipped_reads"]).toBe(1);
-  }, 20000);
+  // A mode change cannot make a file unreadable to uid 0, nor on Windows.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the audit line counts the pages the brief could not read",
+    async () => {
+      seedCounterparty();
+      const locked = writePref("locked", "Ada Lovelace reviewed the draft");
+      chmodSync(join(vault, locked), 0o000);
+      const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
+      expect(r.exit).toBe(0);
+      expect(r.stdout).not.toBe("");
+      const emit = auditRecords().find((record) => record["ok"] === true);
+      const details = emit?.["details"] as Record<string, unknown> | undefined;
+      expect(details?.["skipped_reads"]).toBe(1);
+    },
+    20000,
+  );
 
   test("malformed stdin is a silent exit 0", async () => {
     seedCounterparty();

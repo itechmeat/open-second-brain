@@ -26,6 +26,7 @@ import {
 import { addPledge } from "../../../src/core/brain/pledges.ts";
 import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const NOW = new Date("2026-06-01T12:00:00Z");
 const AGENT = "test-agent";
@@ -454,7 +455,8 @@ describe("buildCounterpartyBrief items", () => {
     );
   });
 
-  test("an unreadable preference page is skipped and counted", () => {
+  // A mode change cannot make a file unreadable to uid 0, nor on Windows.
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable preference page is skipped and counted", () => {
     seedPerson("Ada Lovelace");
     const locked = writePref("locked", "Ada Lovelace reviewed the draft");
     const kept = writePref("kept", "Ada Lovelace reviewed the draft", "2026-05-02T00:00:00Z");
