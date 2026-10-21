@@ -62,7 +62,8 @@ is a promise read in prose: a title, a promise text, a due date, the source
 page it was read from, and evidence quotes the kernel verified against that
 source at write time, so a stored quote is one the source contained when the
 pledge was written. The frontmatter keys are `title`, `created_at`, `due`,
-`source`, `evidence`, `promised_to`, `fulfilled`, `agent`; the word
+`source`, `evidence`, `promised_to`, `fulfilled`, `agent`, plus `visibility`
+inherited from the cited source page when it carries one; the word
 `commitment` keeps meaning the epistemic tier and appears nowhere in this
 family. `promised_to` is a new relation token in the shared vocabulary, so the
 existing frontmatter-relations ingest projects counterparty edges with no new
@@ -109,8 +110,9 @@ matches abstain); and it is the first qualifying prompt of the session - the
 injection ledger suppresses repeats, so later turns in the same session emit
 nothing. A page whose visibility carries the reserved `private` token never
 surfaces whatever the caller's reach, and a prompt without a real session id
-never writes the ledger. The hook is registered for Claude Code and mirrored
-for Codex; flag off keeps its stdout byte-identical to an install without it.
+never writes the ledger. The hook is registered for Claude Code, mirrored
+for Codex, and included in the Grok hook install; flag off keeps its stdout
+byte-identical to an install without it.
 To turn the brief off, set `counterparty_brief_enabled: "false"` or clear the
 trigger list; per-hook detail lives in `hooks/README.md`. One limit stated
 plainly, the same one `brain_context_pack` already carries: a readable page

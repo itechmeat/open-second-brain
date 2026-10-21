@@ -33,10 +33,14 @@
  *
  * Both walks are bounded: the preference walk reads at most
  * {@link BRIEF_PAGE_READ_CAP} pages and the pledge walk at most
- * {@link BRIEF_PLEDGE_READ_CAP}, each in the vault's stable name order, so
- * the hook's worst-case latency is bounded by the cap and not by the size
- * of the vault. A page that cannot be read is skipped AND counted
- * (`skippedReads` plus a typed degradation notice) - never swallowed.
+ * {@link BRIEF_PLEDGE_READ_CAP}, each in the vault's stable (code-unit)
+ * name order, so the hook's worst-case latency is bounded by the cap and
+ * not by the size of the vault. The preference walk counts a page it
+ * cannot read (`skippedReads` plus a typed degradation notice) - never
+ * swallowed; the pledge walk inherits the family's soft-parse discipline
+ * instead, so an unreadable pledge page parses as an empty one and drops
+ * out of the counterparty filter silently - the bounded window, not the
+ * skip count, is the pledge walk's contract.
  *
  * Dates are dates: an item's date is a `YYYY-MM-DD` day, taken from a
  * pledge's due date or from the day a preference page was created. A value
