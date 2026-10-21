@@ -38,7 +38,7 @@ import {
   type PledgeIntakeItem,
 } from "../../core/brain/pledge-intake.ts";
 import { slugify } from "../../core/vault.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
@@ -79,11 +79,10 @@ function listItemJson(item: PledgeListItem): Record<string, unknown> {
   };
 }
 
-/** The agent identity a page is stamped with: the override or the server's. */
+/** The agent identity a page is stamped with: the trimmed override or the server's. */
 function agentFor(ctx: ServerContext, override: string | null): string {
-  return override !== null && override.trim().length > 0
-    ? override
-    : resolveAgentName(ctx.configPath ?? undefined);
+  const trimmed = override?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : resolveAgentName(ctx.configPath ?? undefined);
 }
 
 function toolBrainPledge(
@@ -162,9 +161,16 @@ function toolBrainPledge(
   } catch (err) {
     // Preserve an already-typed MCPError (e.g. from coerceStr) instead of
     // re-wrapping it with a doubled "brain_pledge: " prefix and flattening
-    // its code. Only wrap unexpected thrown values.
+    // its code. A PledgeError is a client-resolvable input refusal; any
+    // other failure is the server's fault and is reported as such - the
+    // same classification wrapToolErrors applies across the domain tools,
+    // so a filesystem fault is never blamed on the caller.
     if (err instanceof MCPError) throw err;
-    throw new MCPError(INVALID_PARAMS, `brain_pledge: ${(err as Error).message}`);
+    if (err instanceof PledgeError) {
+      throw new MCPError(INVALID_PARAMS, `brain_pledge: ${(err as Error).message}`);
+    }
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new MCPError(INTERNAL_ERROR, `brain_pledge: ${reason}`);
   }
   throw unknownOperationError(
     "brain_pledge operation must be one of: add, fulfill, list, show, remove",

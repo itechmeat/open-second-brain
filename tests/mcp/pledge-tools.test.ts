@@ -22,7 +22,7 @@ import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
-import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import { INVALID_PARAMS, INTERNAL_ERROR, MCPError } from "../../src/mcp/protocol.ts";
 import { PLEDGE_TOOLS } from "../../src/mcp/brain/pledge-tools.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
@@ -436,4 +436,33 @@ test("brain_intake_pledges refuses the whole intake when the source page is with
   );
   expect(failure.code).toBe(INVALID_PARAMS);
   expect(failure.message.startsWith("brain_intake_pledges: ")).toBe(true);
+});
+
+test("a brain_pledge failure that is not an input problem is the server's fault", async () => {
+  // A pledge "page" that is really a directory: the stamp write fails on
+  // the filesystem, which the caller cannot fix by re-sending different
+  // arguments - the same classification wrapToolErrors applies across the
+  // domain tools, so the caller is not blamed for a server-side fault.
+  const pledgesDir = join(vault, "Brain", "pledges");
+  mkdirSync(join(pledgesDir, "broken-pledge.md"), { recursive: true });
+  const fulfill = tool("brain_pledge");
+  const failure = await mcpFailure(() =>
+    fulfill.handler(ctx, { operation: "fulfill", slug: "broken-pledge" }),
+  );
+  expect(failure.code).toBe(INTERNAL_ERROR);
+  expect(failure.message.startsWith("brain_pledge: ")).toBe(true);
+});
+
+test("an agent override is stamped trimmed", async () => {
+  const add = tool("brain_pledge");
+  const answer = (await add.handler(ctx, {
+    operation: "add",
+    title: "Agent trim",
+    due: day(4),
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: "  claude  ",
+  })) as Record<string, unknown>;
+  const pledge = answer["pledge"] as Record<string, unknown>;
+  expect(pledge["agent"]).toBe("claude");
 });
