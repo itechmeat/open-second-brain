@@ -38,6 +38,7 @@ import { WRITE_BATCH_TOOLS } from "./brain/write-batch-tools.ts";
 import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
 import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
+import { PLEDGE_TOOLS } from "./brain/pledge-tools.ts";
 import { MEMORY_BRIDGE_TOOLS } from "./brain/memory-bridge-tools.ts";
 import { LIFECYCLE_TOOLS } from "./brain/lifecycle-tools.ts";
 import { LIFECYCLE_FILE_TOOLS } from "./brain/lifecycle-file-tools.ts";
@@ -78,6 +79,8 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...SYNTHESIS_TOOLS,
   ...GENERATION_TOOLS,
   ...CALENDAR_TOOLS,
+  // One-off pledge CRUD, then the agent-executed pledge extraction intake.
+  ...PLEDGE_TOOLS,
   ...MEMORY_BRIDGE_TOOLS,
   ...LIFECYCLE_TOOLS,
   ...LIFECYCLE_FILE_TOOLS,
