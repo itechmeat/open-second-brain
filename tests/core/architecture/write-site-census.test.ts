@@ -522,6 +522,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "archives a closed obligation; the fallback arm writes the copy through " +
       "`atomicWriteFileSync` and removes the source.",
   },
+  "src/core/brain/pledges.ts": {
+    categories: [C.lifecycleMove],
+    calls: ["renameSync", "rmSync"],
+    reason:
+      "archives a removed pledge into `Brain/pledges/archive/` under a collision-suffixed " +
+      "name, the obligations move one family over; the fallback arm writes the copy through " +
+      "`atomicWriteFileSync` from bytes already read and removes the source. The rename is " +
+      "`renameWithRetry`, the shared helper the detector reads as its renameSync shape.",
+  },
   "src/core/brain/pending/pending-lanes.ts": {
     categories: [C.lifecycleMove],
     calls: ["unlinkSync"],
@@ -1334,8 +1343,13 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * archives the dropped entity page inside `withDestructiveSnapshot` - a
  * retention delete whose every rewrite in the same block routes through
  * the shared frontmatter writer.
+ *
+ * 83 -> 84: the pledge family's remove archives its page
+ * (`src/core/brain/pledges.ts`) - the obligations move one family over,
+ * `renameWithRetry` read as its renameSync shape plus the fallback rmSync;
+ * every byte it writes routes through the shared writers.
  */
-const DIRECT_WRITE_ROWS = 83;
+const DIRECT_WRITE_ROWS = 84;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1473,8 +1487,14 @@ const DIRECT_WRITE_ROWS = 83;
  * daily-budget ledger through the shared atomic writer when a promotion
  * fires - machine state beside the rollup ledger, written only on the
  * changed path, needing no exclusion.
+ *
+ * 126 -> 128: the dated-commitments wave's two page writers -
+ * `src/core/brain/pledge-intake.ts` and `src/core/brain/pledges.ts` -
+ * commit `Brain/pledges/` pages through the shared atomic writer
+ * (note-shaped pages by design; pledges.ts also carries the archive move
+ * the direct-fs record excused, needing no exclusion for its write half).
  */
-const SHARED_HELPER_ROWS = 126;
+const SHARED_HELPER_ROWS = 128;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1562,8 +1582,11 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * confirmed delete-by-source removed; no origin stamp on archive cleanup.
  * 81 -> 82: the entity page-merge's archive removal
  * (`src/core/brain/entities/page-merge.ts`) - a delete stamps nothing.
+ * 82 -> 83: the pledge family's archive move
+ * (`src/core/brain/pledges.ts`) - a lifecycle move stamps no channel,
+ * the obligations entry one family over.
  */
-const UNSTAMPED_DIRECT_ROWS = 82;
+const UNSTAMPED_DIRECT_ROWS = 83;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1618,8 +1641,12 @@ const UNSTAMPED_DIRECT_ROWS = 82;
  * dream-plan-cross-topic.ts`) writes its `Brain/cross-topic-rules.json`
  * daily-budget ledger through the shared atomic writer when a promotion
  * fires (machine state beside the rollup ledger; no origin stamp).
+ * 123 -> 125: the dated-commitments wave's two page writers -
+ * `src/core/brain/pledge-intake.ts` and `src/core/brain/pledges.ts` both
+ * commit pledge pages through the shared atomic writer (vault note pages,
+ * and no origin stamp on the pledge lane).
  */
-const UNSTAMPED_SHARED_ROWS = 123;
+const UNSTAMPED_SHARED_ROWS = 125;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

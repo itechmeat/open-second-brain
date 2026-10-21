@@ -514,6 +514,13 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
       "brain_scaffold_stub: 'action' must be one of list, write",
     ],
     [
+      "brain_pledge",
+      // slug is coerced before the operation dispatch, so the fallthrough
+      // refusal only answers once every shared argument is well-formed.
+      { operation: BOGUS, slug: "probe-pledge" },
+      "brain_pledge operation must be one of: add, fulfill, list, show, remove",
+    ],
+    [
       "brain_session_grep",
       { operation: BOGUS },
       "brain_session_grep: operation must be 'match' or 'coverage'",

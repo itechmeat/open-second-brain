@@ -282,6 +282,10 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     specifierIncludes: "/brain/obligations.ts",
     identifiers: ["listObligations", "showObligation"],
   },
+  // Pledge pages are the one-off sibling of the obligations family: the
+  // tool's list, show and add arms hand page text, titles and due dates
+  // to a caller through the same primitives.
+  { specifierIncludes: "/brain/pledges.ts", identifiers: ["listPledges", "showPledge"] },
   // The trigger scan folds semantic health and the retention review into
   // queued triggers that name the records they fired on.
   { specifierIncludes: "/brain/triggers/scan.ts", identifiers: ["scanTriggers"] },
@@ -608,8 +612,14 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * 84 -> 85: brain_write_destinations (actionable-now batch, t_69fec179)
  * joins beside brain_writes, reach-filtered the same way, and classifies
  * as covered.
+ *
+ * 85 -> 87: the dated-commitments release adds `/brain/pledges.ts` to the
+ * producer list (the one-off sibling of the obligations rule) and with it
+ * `pledge-tools.ts`'s two registrations: `brain_pledge` and
+ * `brain_intake_pledges`. Both ask readableAtContextReach before a pledge
+ * page is read or written, so both classify as covered.
  */
-const MCP_TOOL_POPULATION_SIZE = 85;
+const MCP_TOOL_POPULATION_SIZE = 87;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -695,6 +705,7 @@ describe("visibility surface census", () => {
         "brain_idea_discovery",
         "brain_ingest_batch_plan",
         "brain_ingest_source",
+        "brain_intake_pledges",
         "brain_intent_review",
         "brain_intention",
         "brain_labels",
@@ -702,6 +713,7 @@ describe("visibility surface census", () => {
         "brain_maintenance",
         "brain_note_lifecycle",
         "brain_obligation",
+        "brain_pledge",
         "brain_pre_compress_pack",
         "brain_procedural_memory",
         "brain_query",

@@ -342,6 +342,9 @@ describe("tool listing", () => {
         // Knowledge Provenance Suite (v1.7.0).
         "brain_intake_entities",
         "brain_ingest_source",
+        // Dated-commitments wave: one-off pledge CRUD and its extraction intake.
+        "brain_pledge",
+        "brain_intake_pledges",
         // Large-folder ingest planner (memory-signal-provenance-lifecycle A3).
         "brain_ingest_batch_plan",
         // Source distillation into atomic claims (ingestion-import-robustness t_2e2e959f).

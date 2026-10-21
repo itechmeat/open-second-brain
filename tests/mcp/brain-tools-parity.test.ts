@@ -71,7 +71,14 @@
  * vocabulary) and `brain_storage` (the storage report: the per-surface
  * measured-or-refused byte census, the forecast and tier against the
  * configured cap, and the usage sample each invocation records; the
- * vault-wide measurement answers measured: false below local reach).
+ * vault-wide measurement answers measured: false below local reach); the
+ * dated-commitments release added `brain_pledge` (one-off pledge CRUD over
+ * `Brain/pledges/` pages: add with evidence quotes verified against the
+ * cited source at write time, fulfill, list, show, remove) and
+ * `brain_intake_pledges` (the agent-executed extraction intake over the
+ * same family: typed pledge extractions posted against a source page,
+ * validated whole before any write, counterparty names anchored
+ * server-side against the canonical entity registry).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -124,6 +131,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_ingest_batch_plan",
   "brain_ingest_source",
   "brain_intake_entities",
+  "brain_intake_pledges",
   "brain_intent_review",
   "brain_intention",
   "brain_knowledge_gaps",
@@ -139,6 +147,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_obligation",
   "brain_observed_use",
   "brain_pinned_context",
+  "brain_pledge",
   "brain_pre_compact_extract",
   "brain_pre_compress_pack",
   "brain_procedural_graph",

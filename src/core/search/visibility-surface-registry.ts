@@ -830,6 +830,36 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "crosses this surface.",
   },
   {
+    surface: "brain_pledge",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "every operation asks readableAtContextReach about Brain/pledges/<slug>.md before the " +
+      "page is read or written, exactly as brain_obligation does: list keeps only the pledges " +
+      "the caller may read, show answers a withheld slug as an absent one ({present: false}), " +
+      "and fulfill and remove refuse it with the 'no pledge' error an absent slug gets, so the " +
+      "page is neither stamped nor archived. Below local reach remove leaves the archive name, " +
+      "which steps past withheld archived pages, out of the answer. Residual: add over a taken " +
+      "slug is refused whoever may read the page, because creating it would replace the " +
+      "withheld page; and add verifies its evidence quotes against the cited source page's raw " +
+      "bytes without consulting a read root, so it answers a quote-containment verdict - and " +
+      "on success writes a caller-worded page - about bytes the reach rules did not filter. " +
+      "The refusal message quotes the caller's own argument, never the source's, and the " +
+      "intake beside it gates its whole batch on the source's readability instead.",
+  },
+  {
+    surface: "brain_intake_pledges",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the intake asks readableAtContextReach(ctx) about the cited source page before anything " +
+      "is validated against its bytes: a source the caller may not read refuses the whole " +
+      "batch identically to an absent one, so no quote containment verdict, title or evidence " +
+      "text derived from a withheld page crosses, and nothing is written. Created pledge pages " +
+      "land in the caller's own lane under Brain/pledges/ and the answer names only slugs the " +
+      "intake itself just wrote.",
+  },
+  {
     surface: "brain_trigger",
     kind: K.mcpTool,
     category: C.covered,

@@ -78,8 +78,12 @@ const AGENT_ARG_NAME = "agent";
  * 25 -> 26: `brain_write_destinations` (actionable-now batch) joins the
  * same filtering minority - it reads the identity off recorded events and
  * narrows on it, stamping nothing.
+ *
+ * 26 -> 28: the dated-commitments release adds two - `brain_pledge`
+ * (stamps the author or actor of a pledge page) and `brain_intake_pledges`
+ * (stamps the agent that posted the extraction), both stamping writers.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 26;
+const AGENT_ARGUMENT_TOOL_COUNT = 28;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;

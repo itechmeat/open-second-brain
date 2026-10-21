@@ -209,6 +209,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "copy through `atomicWriteFileSync` from bytes already in memory before the " +
         "source is removed.",
     },
+    "src/core/brain/pledges.ts": {
+      calls: ["renameSync", "rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "archives a removed pledge into `Brain/pledges/archive/` under a collision-suffixed " +
+        "name, so an existing archive entry can never be renamed over; the `rmSync` is the " +
+        "cross-device fallback's source half, after the copy went through " +
+        "`atomicWriteFileSync` from bytes already read.",
+    },
     "src/core/brain/recompile.ts": {
       calls: ["renameSync"],
       recovery: UNARCHIVED_BRAIN,

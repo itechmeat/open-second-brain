@@ -296,8 +296,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 104;
-export const PROBE_RECIPE_COUNT = 241;
+export const PROBE_ENTRY_COUNT = 106;
+export const PROBE_RECIPE_COUNT = 247;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -763,6 +763,21 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     name: "brain_intake_entities",
     calls: one({ entities: [], source: "sources/paper.md" }, REASON.writerEcho),
   },
+  {
+    name: "brain_intake_pledges",
+    // The evidence quote is verbatim in the shared note, so the probe
+    // drives a SUCCEEDING intake - the response names only the slug the
+    // call itself just wrote, the same writerEcho claim intake_entities
+    // makes - and the source gate keeps a withheld page identical to an
+    // absent one, so a refusal names nothing either.
+    calls: one(
+      {
+        source: "notes/shared.md",
+        pledges: [{ title: "probe intake pledge", due: "2026-06-01", evidence: [QUERY] }],
+      },
+      REASON.writerEcho,
+    ),
+  },
   { name: "brain_intent_review", calls: one({}, REASON.signalCluster) },
   {
     name: "brain_intention",
@@ -895,6 +910,30 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { operation: "write", content: "probe pinned" }, reason: REASON.ownerlessLane },
       { args: { operation: "append", content: "probe pinned" }, reason: REASON.ownerlessLane },
       { args: { operation: "clear" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_pledge",
+    // The pledge lane carries `agent:` but no `owner:`, the same shape
+    // obligations are probed with. The add recipe cites the shared note
+    // with a quote verbatim in it, so the probe drives a SUCCEEDING add
+    // and the writer arms that follow it answer for a page this very
+    // probe created or for one absent, never for another caller's.
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "show", slug: "probe-pledge" }, reason: REASON.ownerlessLane },
+      {
+        args: {
+          operation: "add",
+          title: "probe pledge",
+          due: "2026-06-01",
+          source: "notes/shared.md",
+          evidence: [QUERY],
+        },
+        reason: REASON.ownerlessLane,
+      },
+      { args: { operation: "fulfill", slug: "probe-pledge" }, reason: REASON.ownerlessLane },
+      { args: { operation: "remove", slug: "probe-pledge" }, reason: REASON.ownerlessLane },
     ],
   },
   {
