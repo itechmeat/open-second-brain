@@ -20,12 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  listPledges,
-  pledgeExists,
-  PledgeError,
-  showPledge,
-} from "../../../src/core/brain/pledges.ts";
+import { listPledges, pledgeExists, showPledge } from "../../../src/core/brain/pledges.ts";
 import {
   intakePledges,
   MAX_INTAKE_COUNTERPARTIES,
@@ -190,11 +185,50 @@ test("a withheld pledge page reads as absent and the create arm refuses the take
   const before = readFileSync(stored!.path, "utf8");
   // The source stays readable; only the stored pledge page is withheld, so
   // the intake must not classify the withheld page as a duplicate or a
-  // re-anchor target, and must not compare or rewrite its bytes.
+  // re-anchor target, and must not compare or rewrite its bytes. The taken
+  // slug is refused in the VALIDATION pass - the same refusal the create
+  // arm produces, only before any write - so a batch cannot strand the
+  // items before it on disk.
   const refusePledge = (rel: string) => rel !== "Brain/pledges/send-ada-the-migration-recap.md";
-  expect(() => intake([item()], { readable: refusePledge })).toThrow(PledgeError);
+  expect(() => intake([item()], { readable: refusePledge })).toThrow(PledgeIntakeError);
   expect(() => intake([item()], { readable: refusePledge })).toThrow(/pledge already exists/);
   expect(readFileSync(stored!.path, "utf8")).toBe(before);
+  expect(listPledges(vault, { now: NOW })).toHaveLength(1);
+});
+
+test("a later item's write-pass refusal leaves no earlier page behind", () => {
+  // The notes-section header is refused by `addPledge` at write time; the
+  // intake has to catch it in the validation pass, or the items before the
+  // failing one are already committed when the error fires.
+  expect(() =>
+    intake([
+      item(),
+      item({
+        title: "Log the followup",
+        due: "2026-07-02",
+        evidence: [QUOTE_TWO],
+        text: "Ship it\n\n## Notes\nv2",
+      }),
+    ]),
+  ).toThrow(PledgeIntakeError);
+  expect(listPledges(vault, { now: NOW })).toEqual([]);
+});
+
+test("a taken-but-withheld slug in a later item refuses the whole batch before any write", () => {
+  intake([item()]);
+  const refusePledge = (rel: string) => rel !== "Brain/pledges/send-ada-the-migration-recap.md";
+  // The NEW pledge comes first: a write-pass refusal would strand it on
+  // disk, which is exactly what the validate-everything promise forbids.
+  expect(() =>
+    intake(
+      [
+        item({ title: "Chase the budget review", due: "2026-07-01", evidence: [QUOTE_TWO] }),
+        item(),
+      ],
+      { readable: refusePledge },
+    ),
+  ).toThrow(/pledge already exists: send-ada-the-migration-recap/);
+  expect(pledgeExists(vault, "chase-the-budget-review")).toBe(false);
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 

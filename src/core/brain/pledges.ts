@@ -137,7 +137,7 @@ export interface RemovePledgeResult {
 }
 
 /** Body section header holding the pledge notes, after the promise text. */
-const NOTES_HEADER = "## Notes";
+export const NOTES_HEADER = "## Notes";
 
 /** Milliseconds in one UTC day; the due-delta unit of the list math. */
 const ONE_DAY_MS = 24 * 3600 * 1000;

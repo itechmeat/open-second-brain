@@ -52,7 +52,9 @@ import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 import {
   addPledge,
+  NOTES_HEADER,
   normalizePledgeSource,
+  pledgeExists,
   rewritePledgeFrontmatter,
   showPledge,
   type PledgePage,
@@ -335,6 +337,24 @@ export function intakePledges(
             "payload - repost the stored payload or remove the pledge first",
         );
       }
+    }
+    // Two refusals the create arm would only produce at WRITE time, pulled
+    // into the validation pass so one failing item cannot strand the items
+    // before it on disk (the no-partial-batches promise):
+    //   - a text carrying the notes-section header is refused by
+    //     `addPledge` when the page is rendered;
+    //   - a slug held by a page the caller cannot read passes the stored-
+    //     page lookup above as absent and is refused by `addPledge`'s
+    //     existence check. The refusal and its message are exactly the
+    //     ones the create arm produces - only earlier, so nothing has
+    //     been written when they fire.
+    if ((item.text ?? "").split(/\r?\n/u).some((line) => line.trim() === NOTES_HEADER)) {
+      throw new PledgeIntakeError(
+        `pledge intake item text must not contain the ${NOTES_HEADER} section header: ${slug}`,
+      );
+    }
+    if (existing === null && pledgeExists(vault, slug)) {
+      throw new PledgeIntakeError(`pledge already exists: ${slug} (remove it first to recreate)`);
     }
     const counterparties = prepareCounterpartyNames(slug, item.counterparties);
     for (const name of counterparties) {
