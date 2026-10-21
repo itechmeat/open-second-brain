@@ -429,6 +429,37 @@ describe("buildCounterpartyBrief items", () => {
     expect(rendered).not.toContain("private-log");
   });
 
+  test("a pledge whose visibility line is corrupted withholds the item", () => {
+    const id = seedPerson("Ada Lovelace");
+    const sourceRel = "notes/scratch.md";
+    const pledgeRel = seedPledge({
+      title: "Ship the parser",
+      due: "2026-06-05",
+      entityId: id,
+      sourceRel,
+    });
+    // The pledge page is private, the source it cites is public: the
+    // pledge's OWN visibility line is then the only gate that can withhold
+    // the item.
+    addVisibility(pledgeRel, REMOTE_DENY_VISIBILITY_TOKEN);
+    // A hand edit corrupts that line. The scanner has no branch for it, so
+    // the line is DROPPED - and a gate that reads the parse without the
+    // notices it produced sees a pledge page with no visibility at all.
+    const abs = join(vault, pledgeRel);
+    writeFileSync(
+      abs,
+      readFileSync(abs, "utf8").replace(/^visibility: private$/mu, "visibility = private"),
+    );
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(brief.items).toEqual([]);
+    // Withheld means withheld: the promise itself never leaves the machine.
+    const rendered = renderCounterpartyBrief(brief);
+    expect(rendered).toBe("");
+    expect(rendered).not.toContain("Ship the parser");
+  });
+
   test("an item drawn from two pages drops when their token intersection is empty", () => {
     const id = seedPerson("Ada Lovelace");
     const sourceRel = "notes/client-notes.md";

@@ -39,9 +39,9 @@
  * not by the size of the vault. The preference walk counts a page it
  * cannot read (`skippedReads` plus a typed degradation notice) - never
  * swallowed; the pledge walk inherits the family's soft-parse discipline
- * instead, so an unreadable pledge page parses as an empty one and drops
- * out of the counterparty filter silently - the bounded window, not the
- * skip count, is the pledge walk's contract.
+ * instead, so an unreadable or unparseable pledge page withholds its item
+ * and drops out of the counterparty filter silently - the bounded window,
+ * not the skip count, is the pledge walk's contract.
  *
  * Dates are dates: an item's date is a `YYYY-MM-DD` day, taken from a
  * pledge's due date or from the day a preference page was created. A value
@@ -73,11 +73,7 @@ import {
   emitDegradationNotice,
   type DegradationNotice,
 } from "../integrity/degradation.ts";
-import {
-  parseFrontmatter,
-  parseFrontmatterTextWithNotices,
-  parseFrontmatterWithNotices,
-} from "../vault.ts";
+import { parseFrontmatterTextWithNotices, parseFrontmatterWithNotices } from "../vault.ts";
 
 /**
  * The most items one brief may carry. Three dated lines is the injection
@@ -287,7 +283,11 @@ function matchExactlyOneEntity(
  * drawn from TWO pages - the pledge page and the source it cites - so the
  * strictest visibility of the two governs: either carrying the reserved
  * token, or two non-empty token sets that share nothing, drops the item
- * (the folded list is exactly the reserved token then). A source page the
+ * (the folded list is exactly the reserved token then). The pledge page's
+ * OWN frontmatter is read with the notices its parse produced: a page whose
+ * parse reports a dropped line - a hand edit that corrupted the
+ * `visibility:` key - cannot be shown to be shareable, so the gate fails
+ * closed and withholds the item. A source page the
  * `readable` predicate refuses withholds the whole item: a pledge citing
  * bytes the caller cannot see is not shown second-hand. The stored source
  * is normalized exactly as the writers normalize it before anything is
@@ -304,7 +304,13 @@ function pledgeItem(
   pledge: PledgeListItem,
   readable: ((rel: string) => boolean) | undefined,
 ): CounterpartyBriefItem | null {
-  const [meta] = parseFrontmatter(pledge.path);
+  const [meta, , pledgeNotices] = parseFrontmatterWithNotices(pledge.path);
+  // The pledge page decides whether its OWN item may leave the machine, so
+  // the gate fails closed: a frontmatter parse that reports a dropped line
+  // (a hand edit that corrupted the `visibility:` key) cannot be shown to
+  // be shareable, so the item is withheld - the same discipline the
+  // cited-source gate applies.
+  if (pledgeNotices.length > 0) return null;
   const tagLists: ReadonlyArray<string>[] = [[...pageVisibility(meta)]];
   let sourceRel = pledgeRel(pledge.slug);
   if (pledge.source.length > 0) {
