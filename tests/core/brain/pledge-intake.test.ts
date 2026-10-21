@@ -30,6 +30,7 @@ import {
   type PledgeIntakeItem,
 } from "../../../src/core/brain/pledge-intake.ts";
 import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
@@ -408,6 +409,34 @@ test("a private entity does not block a readable entity naming the same counterp
   expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual([
     visibleId,
   ]);
+});
+
+test("the re-anchor rewrite honors the pledge-path lock", () => {
+  // The rewrite is a read-modify-write of the whole frontmatter: holding
+  // the page's lock must hold it off, or a re-anchor racing a fulfill (or
+  // a second re-anchor) can silently drop one of the two edits.
+  const first = intake([item({ counterparties: ["Ada Lovelace"], text: "Send the recap." })]);
+  expect(first.unanchoredCounterparties).toEqual(["Ada Lovelace"]);
+  const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  const before = readFileSync(stored!.path, "utf8");
+  const held = acquireLockSync(stored!.path);
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let collision: unknown;
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    registerAda();
+    try {
+      intake([item({ counterparties: ["Ada Lovelace"], text: "Send the recap." })]);
+    } catch (err) {
+      collision = err;
+    }
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
+  expect((collision as NodeJS.ErrnoException | undefined)?.code).toBe("ELOCKED");
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
 });
 
 test("re-posting after the entity registers adds the edge (re-anchor arm)", () => {

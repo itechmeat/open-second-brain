@@ -63,6 +63,7 @@ import {
   type PledgePage,
 } from "./pledges.ts";
 import { validateIsoDate } from "./paths.ts";
+import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
 
@@ -476,10 +477,18 @@ function rewritePledgeCounterparties(
   page: PledgePage,
   counterparties: ReadonlyArray<string>,
 ): void {
-  atomicWriteFileSync(
-    page.path,
-    rewritePledgeFrontmatter(page, (meta) => {
-      meta["promised_to"] = [...counterparties];
-    }),
-  );
+  // Same lock discipline as the family's other writers: the rewrite is a
+  // read-modify-write of the whole frontmatter, so a re-anchor racing a
+  // fulfill (or a second re-anchor) must never overwrite either edit.
+  const handle = acquireLockSyncWithRetry(page.path);
+  try {
+    atomicWriteFileSync(
+      page.path,
+      rewritePledgeFrontmatter(page, (meta) => {
+        meta["promised_to"] = [...counterparties];
+      }),
+    );
+  } finally {
+    handle.release();
+  }
 }

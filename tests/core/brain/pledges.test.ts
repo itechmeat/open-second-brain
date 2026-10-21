@@ -441,6 +441,53 @@ test("listPledges hides fulfilled pledges unless includeFulfilled", () => {
   expect(withDone.find((i) => i.slug === "done-deal")!.fulfilled).toBe("2026-06-19");
 });
 
+test("fulfillPledge honors the pledge-path lock across its read and write", () => {
+  // The stamp is a read-modify-write of the whole frontmatter: holding the
+  // page's lock must hold the writer off, or a fulfill racing the intake's
+  // re-anchor rewrite can silently drop one of the two edits.
+  const page = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  const held = acquireLockSync(page.path);
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let collision: unknown;
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    try {
+      fulfillPledge(vault, { slug: page.slug });
+    } catch (err) {
+      collision = err;
+    }
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
+  expect((collision as NodeJS.ErrnoException | undefined)?.code).toBe("ELOCKED");
+  expect(showPledge(vault, { slug: page.slug })!.fulfilled).toBeNull();
+  fulfillPledge(vault, { slug: page.slug, date: "2026-06-19" });
+  expect(showPledge(vault, { slug: page.slug })!.fulfilled).toBe("2026-06-19");
+});
+
+test("removePledge honors the pledge-path lock across the archive move", () => {
+  const page = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  const held = acquireLockSync(page.path);
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let collision: unknown;
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    try {
+      removePledge(vault, { slug: page.slug });
+    } catch (err) {
+      collision = err;
+    }
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
+  expect((collision as NodeJS.ErrnoException | undefined)?.code).toBe("ELOCKED");
+  expect(pledgeExists(vault, page.slug)).toBe(true);
+});
+
 test("a hand-edited frontmatter date soft-parses instead of crashing the family", () => {
   const page = addPledge(vault, cite(["Ada asked for a written recap of the migration steps"]));
   const edited = readFileSync(page.path, "utf8").replace(`due: ${page.due}`, "due: not-a-date");

@@ -350,20 +350,30 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
-  const prior = parsePage(vault, slug);
-  if (prior === null) throw noPledgeError(slug);
-  if (prior.fulfilled !== null) {
-    throw new PledgeError(`pledge already fulfilled: ${slug} (on ${prior.fulfilled})`);
+  const path = pledgePath(vault, slug);
+  // The stamp is a read-modify-write of the whole frontmatter, so it holds
+  // the same pledge-path lock a create does: a fulfill racing the intake's
+  // re-anchor rewrite (or a second fulfill) must never overwrite either
+  // writer's edit.
+  const handle = acquireLockSyncWithRetry(path);
+  try {
+    const prior = parsePage(vault, slug);
+    if (prior === null) throw noPledgeError(slug);
+    if (prior.fulfilled !== null) {
+      throw new PledgeError(`pledge already fulfilled: ${slug} (on ${prior.fulfilled})`);
+    }
+    const now = input.now ?? new Date();
+    const date = input.date ? requireIsoDate(input.date, "date") : isoDate(now);
+    atomicWriteFileSync(
+      prior.path,
+      rewritePledgeFrontmatter(prior, (meta) => {
+        meta["fulfilled"] = date;
+      }),
+    );
+    return Object.freeze({ ...prior, fulfilled: date });
+  } finally {
+    handle.release();
   }
-  const now = input.now ?? new Date();
-  const date = input.date ? requireIsoDate(input.date, "date") : isoDate(now);
-  atomicWriteFileSync(
-    prior.path,
-    rewritePledgeFrontmatter(prior, (meta) => {
-      meta["fulfilled"] = date;
-    }),
-  );
-  return Object.freeze({ ...prior, fulfilled: date });
 }
 
 /** One pledge, or null. A page the caller's reach withholds answers null. */
@@ -444,17 +454,25 @@ export function removePledge(vault: string, input: { slug: string }): RemovePled
   const normalized = slugify(input.slug);
   const activePath = pledgePath(vault, normalized);
   if (!existsSync(activePath)) throw noPledgeError(normalized);
-  const archiveDir = pledgesArchiveDir(vault);
-  mkdirSync(archiveDir, { recursive: true });
-  let archivePath = join(archiveDir, `${normalized}.md`);
-  for (let suffix = 2; existsSync(archivePath); suffix++) {
-    archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
-  }
+  // The archive move is a mutation of the page's presence, so it holds the
+  // same pledge-path lock the family's other writers do: two concurrent
+  // removes must not both pass the existence probe and race the rename.
+  const handle = acquireLockSyncWithRetry(activePath);
   try {
-    renameWithRetry(activePath, archivePath);
-  } catch {
-    atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
-    rmSync(activePath, { force: true });
+    const archiveDir = pledgesArchiveDir(vault);
+    mkdirSync(archiveDir, { recursive: true });
+    let archivePath = join(archiveDir, `${normalized}.md`);
+    for (let suffix = 2; existsSync(archivePath); suffix++) {
+      archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
+    }
+    try {
+      renameWithRetry(activePath, archivePath);
+    } catch {
+      atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
+      rmSync(activePath, { force: true });
+    }
+    return Object.freeze({ slug: normalized, archivePath });
+  } finally {
+    handle.release();
   }
-  return Object.freeze({ slug: normalized, archivePath });
 }
