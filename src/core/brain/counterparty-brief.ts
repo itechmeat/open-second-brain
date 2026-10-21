@@ -177,13 +177,20 @@ function clipText(text: string): string {
   return `${codePoints.slice(0, BRIEF_ITEM_CHAR_CAP).join("")}…`;
 }
 
+/** The length of a string in code points, the unit the budget is specified in. */
+function codePointLength(text: string): number {
+  let length = 0;
+  for (const _ of text) length += 1;
+  return length;
+}
+
 /**
  * The one character-budget predicate, used by both arms: the next item's
  * text must fit WHOLE inside what is left of the budget. Tested before the
  * push, so a brief never carries more text than the budget allows.
  */
 function fitsCharBudget(spent: number, text: string): boolean {
-  return spent + text.length <= BRIEF_CHAR_BUDGET;
+  return spent + codePointLength(text) <= BRIEF_CHAR_BUDGET;
 }
 
 /**
@@ -335,8 +342,11 @@ function preferenceItems(
   const read: Array<{ item: CounterpartyBriefItem; date: string; name: string }> = [];
   let reads = 0;
   let skippedReads = 0;
+  // Code-unit name order, the same order listPledges walks its directory
+  // in: the read window - and so the brief - must not depend on the host's
+  // ICU locale.
   for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
-    a.name.localeCompare(b.name),
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
   )) {
     if (reads >= BRIEF_PAGE_READ_CAP) break;
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
@@ -426,7 +436,7 @@ export function buildCounterpartyBrief(
     if (item === null) continue;
     if (!fitsCharBudget(spent, item.text)) break;
     items.push(item);
-    spent += item.text.length;
+    spent += codePointLength(item.text);
   }
   // The preference walk runs only when the budget can still hold an item:
   // with the budget spent, the one predicate refuses every item anyway.
@@ -438,7 +448,7 @@ export function buildCounterpartyBrief(
       if (items.length >= itemLimit) break;
       if (!fitsCharBudget(spent, item.text)) break;
       items.push(item);
-      spent += item.text.length;
+      spent += codePointLength(item.text);
     }
   }
   return Object.freeze({

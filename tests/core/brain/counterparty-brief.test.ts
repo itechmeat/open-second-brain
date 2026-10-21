@@ -541,6 +541,48 @@ describe("buildCounterpartyBrief items", () => {
     );
   });
 
+  test("the character budget counts code points, not code units", () => {
+    const id = seedPerson("Ada Lovelace");
+    // Every item is astral text: BRIEF_ITEM_CHAR_CAP code points, but two
+    // UTF-16 code units per character once clipped. Counted in code points
+    // the three clipped items total 843 - under the budget, so the item
+    // limit is what clips the brief, exactly as the budget's contract
+    // promises; counted in code units only one item would fit.
+    for (const slug of ["one", "two", "three"]) {
+      writePref(
+        slug,
+        `Ada Lovelace reviewed the ${slug} draft`,
+        "2026-05-01T00:00:00Z",
+        "🎉".repeat(BRIEF_ITEM_CHAR_CAP),
+      );
+    }
+    const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
+    expect(brief!.items).toHaveLength(3);
+  });
+
+  test("the preference walk's read window is the code-unit name order", () => {
+    seedPerson("Ada Lovelace");
+    // A name the ICU collation orders differently from code-unit order: in
+    // code units '_' sorts before the letters, so pref-_zzz is the FIRST
+    // page in the window, while the collation - which ignores the
+    // underscore - reads it as the last one and would read it never. The
+    // window, and so the brief, must not depend on the host's locale,
+    // which is why the walk sorts the directory exactly like listPledges
+    // does.
+    for (let i = 0; i < BRIEF_PAGE_READ_CAP - 1; i++) {
+      writePref(`filler-${String(i).padStart(2, "0")}`, "Nothing about anyone here");
+    }
+    writePref("filler-z", "Nothing about anyone here");
+    const kept = writePref(
+      "_zzz",
+      "Ada Lovelace reviewed the underscore draft",
+      "2026-05-01T00:00:00Z",
+      "the underscore principle",
+    );
+    const brief = buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW });
+    expect(brief!.items.map((item) => item.sourceRel)).toEqual([kept]);
+  });
+
   // A mode change cannot make a file unreadable to uid 0, nor on Windows.
   test.skipIf(CHMOD_CANNOT_DENY)("an unreadable preference page is skipped and counted", () => {
     seedPerson("Ada Lovelace");
