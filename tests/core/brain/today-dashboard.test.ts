@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { addObligation } from "../../../src/core/brain/obligations.ts";
+import { addPledge, fulfillPledge } from "../../../src/core/brain/pledges.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-template.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
@@ -86,10 +87,11 @@ function seedFullVault(): void {
 }
 
 describe("buildTodayDashboard - empty vault", () => {
-  test("all four sections are present with zero counts and no errors", () => {
+  test("all five sections are present with zero counts and no errors", () => {
     const dashboard = buildTodayDashboard(vault, { now: NOW });
 
     expect(dashboard.obligations.items).toEqual([]);
+    expect(dashboard.pledges.items).toEqual([]);
     expect(dashboard.openLoops.openLoops).toEqual([]);
     expect(dashboard.openLoops.counts).toEqual({ openCount: 0, closedCount: 0, scannedFiles: 0 });
     expect(dashboard.recentActivity.entries).toEqual([]);
@@ -98,6 +100,8 @@ describe("buildTodayDashboard - empty vault", () => {
       obligationsTotal: 0,
       obligationsOverdue: 0,
       obligationsDueToday: 0,
+      pledgesTotal: 0,
+      pledgesOverdue: 0,
       openLoopsCount: 0,
       recentActivityTotal: 0,
       scannedFiles: 0,
@@ -112,6 +116,9 @@ describe("buildTodayDashboard - empty vault", () => {
         "## Obligations",
         "(none)",
         "",
+        "## Pledges",
+        "(none)",
+        "",
         "## Open loops",
         "(none)",
         "",
@@ -122,6 +129,8 @@ describe("buildTodayDashboard - empty vault", () => {
         "Obligations: 0",
         "Overdue: 0",
         "Due today: 0",
+        "Pledges: 0",
+        "Pledges overdue: 0",
         "Open loops: 0",
         "Recent activity: 0",
         "Scanned files: 0",
@@ -200,12 +209,13 @@ describe("buildTodayDashboard - populated vault", () => {
     expect(dashboard.totals.scannedFiles).toBe(dashboard.openLoops.counts.scannedFiles);
   });
 
-  test("rendered text carries all four sections in fixed order with real content", () => {
+  test("rendered text carries all five sections in fixed order with real content", () => {
     seedFullVault();
     const dashboard = buildTodayDashboard(vault, { now: NOW });
     const headerOrder = [...dashboard.text.matchAll(/^## .+$/gmu)].map((m) => m[0]);
     expect(headerOrder).toEqual([
       "## Obligations",
+      "## Pledges",
       "## Open loops",
       "## Recent activity",
       "## Totals",
@@ -282,6 +292,120 @@ describe("buildTodayDashboard - fault isolation", () => {
   });
 });
 
+describe("buildTodayDashboard - pledges section", () => {
+  const SOURCE_REL = "Notes/promises-meeting.md";
+  const EVIDENCE = ["send the weekly report"];
+
+  function seedPledgeVault(): void {
+    writeMd(
+      SOURCE_REL,
+      "# Promises meeting\n\nAlice asked me to send the weekly report to the team.\n",
+    );
+    for (const [title, due] of [
+      ["Past Pledge", "2026-07-01"],
+      ["Today Pledge", "2026-07-17"],
+      ["Future Pledge", "2026-07-24"],
+    ] as const) {
+      addPledge(vault, {
+        title,
+        due,
+        source: SOURCE_REL,
+        evidence: EVIDENCE,
+        agent: "test-agent",
+        now: NOW,
+      });
+    }
+  }
+
+  test("the pledges section renders due-sorted open pledges with overdue and days-until-due", () => {
+    seedPledgeVault();
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+    expect(dashboard.pledges.items.map((i) => i.slug)).toEqual([
+      "past-pledge",
+      "today-pledge",
+      "future-pledge",
+    ]);
+    expect(dashboard.pledges.items[0]).toEqual({
+      slug: "past-pledge",
+      title: "Past Pledge",
+      due: "2026-07-01",
+      overdue: true,
+      daysUntilDue: -16,
+    });
+    expect(dashboard.pledges.items[1]!.overdue).toBe(false);
+    expect(dashboard.pledges.items[1]!.daysUntilDue).toBe(0);
+    expect(dashboard.pledges.items[2]!.daysUntilDue).toBe(7);
+    expect(dashboard.text).toContain(
+      "- Past Pledge (slug: past-pledge) - due 2026-07-01 - overdue by 16d",
+    );
+    expect(dashboard.text).toContain(
+      "- Today Pledge (slug: today-pledge) - due 2026-07-17 - due today",
+    );
+  });
+
+  test("a fulfilled pledge is left out of the section and the totals", () => {
+    seedPledgeVault();
+    fulfillPledge(vault, { slug: "today-pledge", now: NOW });
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+    expect(dashboard.pledges.items.map((i) => i.slug)).toEqual(["past-pledge", "future-pledge"]);
+    expect(dashboard.totals.pledgesTotal).toBe(2);
+    expect(dashboard.totals.pledgesOverdue).toBe(1);
+    expect(dashboard.text).not.toContain("Today Pledge");
+  });
+
+  test("totals gain pledgesTotal and pledgesOverdue derived from the already-built section", () => {
+    seedPledgeVault();
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+    expect(dashboard.totals.pledgesTotal).toBe(dashboard.pledges.items.length);
+    expect(dashboard.totals.pledgesOverdue).toBe(
+      dashboard.pledges.items.filter((i) => i.overdue).length,
+    );
+    expect(dashboard.totals.pledgesTotal).toBe(3);
+    expect(dashboard.totals.pledgesOverdue).toBe(1);
+    expect(dashboard.text).toContain("Pledges: 3");
+    expect(dashboard.text).toContain("Pledges overdue: 1");
+  });
+
+  test("a readable predicate removes withheld pledge pages before the totals", () => {
+    seedPledgeVault();
+    const dashboard = buildTodayDashboard(vault, {
+      now: NOW,
+      readable: (rel) => rel !== "Brain/pledges/past-pledge.md",
+    });
+    expect(dashboard.pledges.items.map((i) => i.slug)).toEqual(["today-pledge", "future-pledge"]);
+    expect(dashboard.totals.pledgesTotal).toBe(2);
+    expect(dashboard.totals.pledgesOverdue).toBe(0);
+    expect(dashboard.text).not.toContain("Past Pledge");
+  });
+
+  test("a corrupted pledges directory fails only that section; the rest still render", () => {
+    seedPledgeVault();
+    // Force listPledges to throw the way the obligations fixture does:
+    // swap the directory for a plain file so readdirSync throws ENOTDIR.
+    rmSync(join(brainDirs(vault).brain, "pledges"), { recursive: true, force: true });
+    writeFileSync(join(brainDirs(vault).brain, "pledges"), "not a directory", "utf8");
+
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+
+    expect(dashboard.errors).toHaveLength(1);
+    expect(dashboard.errors[0]!.section).toBe("pledges");
+    expect(dashboard.errors[0]!.message.length).toBeGreaterThan(0);
+    expect(dashboard.pledges.items).toEqual([]);
+    expect(dashboard.text).toContain("## Pledges\n- error:");
+    expect(dashboard.text).not.toContain("## Pledges\n(none)");
+    // The obligations section still computed over its own directory.
+    expect(dashboard.totals.obligationsTotal).toBe(0);
+    expect(dashboard.errors.map((e) => e.section)).not.toContain("obligations");
+  });
+
+  test("an empty vault renders an empty pledges section with no error", () => {
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+    expect(dashboard.pledges.items).toEqual([]);
+    expect(dashboard.errors).toEqual([]);
+    expect(dashboard.text).toContain("## Pledges\n(none)");
+  });
+});
+
 describe("buildTodayDashboard - determinism and framing", () => {
   test("two identical calls over the same vault produce identical envelopes", () => {
     seedFullVault();
@@ -296,6 +420,8 @@ describe("buildTodayDashboard - determinism and framing", () => {
     expect(Object.isFrozen(dashboard)).toBe(true);
     expect(Object.isFrozen(dashboard.obligations)).toBe(true);
     expect(Object.isFrozen(dashboard.obligations.items)).toBe(true);
+    expect(Object.isFrozen(dashboard.pledges)).toBe(true);
+    expect(Object.isFrozen(dashboard.pledges.items)).toBe(true);
     expect(Object.isFrozen(dashboard.openLoops)).toBe(true);
     expect(Object.isFrozen(dashboard.recentActivity)).toBe(true);
     expect(Object.isFrozen(dashboard.totals)).toBe(true);

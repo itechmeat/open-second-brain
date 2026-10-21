@@ -77,15 +77,17 @@ describe("brain_brief", () => {
     });
   }
 
-  test("view=today returns the four-section dashboard envelope", async () => {
+  test("view=today returns the dashboard envelope with the pledges member", async () => {
     const result = (await run("brain_brief", { view: "today" })) as Record<string, unknown>;
     expect(typeof result["text"]).toBe("string");
     expect(result["obligations"]).toBeDefined();
+    expect(result["pledges"]).toBeDefined();
     expect(result["open_loops"]).toBeDefined();
     expect(result["recent_activity"]).toBeDefined();
     expect(result["totals"]).toBeDefined();
     expect(result["errors"]).toBeDefined();
     expect(result["text"]).toContain("## Obligations");
+    expect(result["text"]).toContain("## Pledges");
   });
 
   test("today is advertised in the brain_brief view enum", () => {

@@ -1,13 +1,13 @@
 /**
  * `buildTodayDashboard(vault, opts)` - today operator surface (Task 4).
  *
- * Composes four independently-computed, live-derived sections into one
- * read-only envelope: due/overdue obligations, open loops, recent
- * activity, and a totals rollup. Each section is built from its own
- * primitive - `listObligations`, `scanOpenLoops`, `buildActivityTimeline`
- * over `buildTimelineIndex` - and nothing here re-scans the vault a
- * second time; `totals` is pure arithmetic over the three already-built
- * sections.
+ * Composes five independently-computed, live-derived sections into one
+ * read-only envelope: due/overdue obligations, one-off pledges, open
+ * loops, recent activity, and a totals rollup. Each section is built
+ * from its own primitive - `listObligations`, `listPledges`,
+ * `scanOpenLoops`, `buildActivityTimeline` over `buildTimelineIndex` -
+ * and nothing here re-scans the vault a second time; `totals` is pure
+ * arithmetic over the four already-built sections.
  *
  * Fault isolation: each section is computed inside its own try/catch. A
  * section whose builder throws contributes an explicit entry to the
@@ -25,6 +25,7 @@
  */
 
 import { listObligations } from "./obligations.ts";
+import { listPledges, type PledgeListItem } from "./pledges.ts";
 import { BRAIN_OBLIGATIONS_REL } from "./path-constants.ts";
 import { scanOpenLoops, type OpenLoopScan } from "./open-loops.ts";
 import { isoSecond } from "./time.ts";
@@ -48,10 +49,10 @@ export interface TodayDashboardOptions {
    */
   readonly eventAtReach?: (ev: TemporalEvent) => TemporalEvent | null;
   /**
-   * Whether the caller may read a vault-relative path. Obligation pages
-   * and open-loop notes it rejects are left out before the totals, so
-   * they move no count. Omitted, every page is listed (the operator's own
-   * shell).
+   * Whether the caller may read a vault-relative path. Obligation pages,
+   * pledge pages and open-loop notes it rejects are left out before the
+   * totals, so they move no count. Omitted, every page is listed (the
+   * operator's own shell).
    */
   readonly readable?: (rel: string) => boolean;
 }
@@ -72,18 +73,41 @@ export interface TodayDashboardObligationsSection {
   readonly items: ReadonlyArray<TodayDashboardObligationItem>;
 }
 
-/** Deterministic counters derived from the other three sections. No second scan. */
+/** One pledge row surfaced on the dashboard (open pledges only). */
+export interface TodayDashboardPledgeItem {
+  readonly slug: string;
+  readonly title: string;
+  readonly due: string;
+  /** True when due is strictly before today (UTC). */
+  readonly overdue: boolean;
+  /** Whole days until due; negative when overdue, zero when due today. */
+  readonly daysUntilDue: number;
+}
+
+/** Pledges section: earliest-due first, via `listPledges`'s own sort. */
+export interface TodayDashboardPledgesSection {
+  readonly items: ReadonlyArray<TodayDashboardPledgeItem>;
+}
+
+/** Deterministic counters derived from the other four sections. No second scan. */
 export interface TodayDashboardTotals {
   readonly obligationsTotal: number;
   readonly obligationsOverdue: number;
   readonly obligationsDueToday: number;
+  readonly pledgesTotal: number;
+  readonly pledgesOverdue: number;
   readonly openLoopsCount: number;
   readonly recentActivityTotal: number;
   readonly scannedFiles: number;
 }
 
-/** The four independently-computed dashboard sections. */
-export type TodayDashboardSectionName = "obligations" | "openLoops" | "recentActivity" | "totals";
+/** The five independently-computed dashboard sections. */
+export type TodayDashboardSectionName =
+  | "obligations"
+  | "pledges"
+  | "openLoops"
+  | "recentActivity"
+  | "totals";
 
 /** One per-section computation failure. */
 export interface TodayDashboardSectionError {
@@ -94,12 +118,13 @@ export interface TodayDashboardSectionError {
 /** Frozen envelope returned by {@link buildTodayDashboard}. */
 export interface TodayDashboard {
   readonly obligations: TodayDashboardObligationsSection;
+  readonly pledges: TodayDashboardPledgesSection;
   readonly openLoops: OpenLoopScan;
   readonly recentActivity: ActivityTimeline;
   readonly totals: TodayDashboardTotals;
   /** Per-section failures; empty when every section computed cleanly. */
   readonly errors: ReadonlyArray<TodayDashboardSectionError>;
-  /** Rendered Markdown: `## Obligations`, `## Open loops`, `## Recent activity`, `## Totals`, in that order. */
+  /** Rendered Markdown: `## Obligations`, `## Pledges`, `## Open loops`, `## Recent activity`, `## Totals`, in that order. */
   readonly text: string;
 }
 
@@ -109,6 +134,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const EMPTY_OBLIGATIONS_SECTION: TodayDashboardObligationsSection = Object.freeze({
   items: Object.freeze([]) as ReadonlyArray<TodayDashboardObligationItem>,
+});
+
+const EMPTY_PLEDGES_SECTION: TodayDashboardPledgesSection = Object.freeze({
+  items: Object.freeze([]) as ReadonlyArray<TodayDashboardPledgeItem>,
 });
 
 const EMPTY_OPEN_LOOP_SCAN: OpenLoopScan = Object.freeze({
@@ -129,6 +158,8 @@ const EMPTY_TOTALS: TodayDashboardTotals = Object.freeze({
   obligationsTotal: 0,
   obligationsOverdue: 0,
   obligationsDueToday: 0,
+  pledgesTotal: 0,
+  pledgesOverdue: 0,
   openLoopsCount: 0,
   recentActivityTotal: 0,
   scannedFiles: 0,
@@ -196,6 +227,32 @@ function buildObligationsSection(
   return Object.freeze({ items: Object.freeze(items) });
 }
 
+/**
+ * The pledges section reads the family through `listPledges`, which takes
+ * the same readable predicate the obligations section filters with, so a
+ * withheld page is dropped before anything counts it - identical to absent.
+ */
+function buildPledgesSection(
+  vault: string,
+  now: Date,
+  readable: TodayDashboardOptions["readable"],
+): TodayDashboardPledgesSection {
+  const listed: ReadonlyArray<PledgeListItem> = listPledges(vault, {
+    now,
+    ...(readable === undefined ? {} : { readable }),
+  });
+  const items = listed.map((p) =>
+    Object.freeze({
+      slug: p.slug,
+      title: p.title,
+      due: p.due,
+      overdue: p.overdue,
+      daysUntilDue: p.daysUntilDue,
+    }),
+  );
+  return Object.freeze({ items: Object.freeze(items) });
+}
+
 function buildRecentActivitySection(
   vault: string,
   now: Date,
@@ -243,6 +300,7 @@ function indexAtReach(
 
 function computeTotals(
   obligations: TodayDashboardObligationsSection,
+  pledges: TodayDashboardPledgesSection,
   openLoops: OpenLoopScan,
   recentActivity: ActivityTimeline,
 ): TodayDashboardTotals {
@@ -252,10 +310,16 @@ function computeTotals(
     if (item.overdue) overdue++;
     else if (item.daysUntilDue === 0) dueToday++;
   }
+  let pledgesOverdue = 0;
+  for (const item of pledges.items) {
+    if (item.overdue) pledgesOverdue++;
+  }
   return Object.freeze({
     obligationsTotal: obligations.items.length,
     obligationsOverdue: overdue,
     obligationsDueToday: dueToday,
+    pledgesTotal: pledges.items.length,
+    pledgesOverdue,
     openLoopsCount: openLoops.counts.openCount,
     recentActivityTotal: recentActivity.total,
     scannedFiles: openLoops.counts.scannedFiles,
@@ -269,6 +333,15 @@ function renderObligationLine(item: TodayDashboardObligationItem): string {
       ? "due today"
       : `due in ${item.daysUntilDue}d`;
   return `- ${item.title} (slug: ${item.slug}) - next due ${item.nextDue} - ${state}`;
+}
+
+function renderPledgeLine(item: TodayDashboardPledgeItem): string {
+  const state = item.overdue
+    ? `overdue by ${Math.abs(item.daysUntilDue)}d`
+    : item.daysUntilDue === 0
+      ? "due today"
+      : `due in ${item.daysUntilDue}d`;
+  return `- ${item.title} (slug: ${item.slug}) - due ${item.due} - ${state}`;
 }
 
 function renderOpenLoopLine(loop: OpenLoopScan["openLoops"][number]): string {
@@ -288,6 +361,7 @@ function renderSection(
 
 function renderDashboardText(
   obligations: TodayDashboardObligationsSection,
+  pledges: TodayDashboardPledgesSection,
   openLoops: OpenLoopScan,
   recentActivity: ActivityTimeline,
   totals: TodayDashboardTotals,
@@ -299,6 +373,11 @@ function renderDashboardText(
     "## Obligations",
     errorBySection.get("obligations"),
     obligations.items.map(renderObligationLine),
+  );
+  const pledgesBlock = renderSection(
+    "## Pledges",
+    errorBySection.get("pledges"),
+    pledges.items.map(renderPledgeLine),
   );
   const openLoopsBlock = renderSection(
     "## Open loops",
@@ -314,17 +393,21 @@ function renderDashboardText(
     `Obligations: ${totals.obligationsTotal}`,
     `Overdue: ${totals.obligationsOverdue}`,
     `Due today: ${totals.obligationsDueToday}`,
+    `Pledges: ${totals.pledgesTotal}`,
+    `Pledges overdue: ${totals.pledgesOverdue}`,
     `Open loops: ${totals.openLoopsCount}`,
     `Recent activity: ${totals.recentActivityTotal}`,
     `Scanned files: ${totals.scannedFiles}`,
   ]);
 
-  return [obligationsBlock, openLoopsBlock, recentActivityBlock, totalsBlock].join("\n\n");
+  return [obligationsBlock, pledgesBlock, openLoopsBlock, recentActivityBlock, totalsBlock].join(
+    "\n\n",
+  );
 }
 
 /**
  * Build the today dashboard for a vault. Read-only; deterministic given
- * `opts.now`. Each of the four sections computes independently - a
+ * `opts.now`. Each of the five sections computes independently - a
  * section that throws is recorded in `errors` and rendered as an
  * explicit error line, the rest of the envelope still reflects a normal
  * computation.
@@ -338,6 +421,12 @@ export function buildTodayDashboard(vault: string, opts: TodayDashboardOptions):
     errors,
     () => buildObligationsSection(vault, opts.now, opts.readable),
     EMPTY_OBLIGATIONS_SECTION,
+  );
+  const pledges = computeSection(
+    "pledges",
+    errors,
+    () => buildPledgesSection(vault, opts.now, opts.readable),
+    EMPTY_PLEDGES_SECTION,
   );
   const openLoops = computeSection(
     "openLoops",
@@ -354,14 +443,15 @@ export function buildTodayDashboard(vault: string, opts: TodayDashboardOptions):
   const totals = computeSection(
     "totals",
     errors,
-    () => computeTotals(obligations, openLoops, recentActivity),
+    () => computeTotals(obligations, pledges, openLoops, recentActivity),
     EMPTY_TOTALS,
   );
 
-  const text = renderDashboardText(obligations, openLoops, recentActivity, totals, errors);
+  const text = renderDashboardText(obligations, pledges, openLoops, recentActivity, totals, errors);
 
   return Object.freeze({
     obligations,
+    pledges,
     openLoops,
     recentActivity,
     totals,

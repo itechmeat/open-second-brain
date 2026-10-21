@@ -573,10 +573,11 @@ async function toolBrainOperatorSummary(
 
 /**
  * `brain_brief view=today` - the today operator dashboard: due/overdue
- * obligations, open loops, merged recent activity, and a totals rollup.
- * Read-only; the clock is resolved at the tool boundary so the core
- * builder stays deterministic. Write-back (the `@osb set` engine) stays
- * CLI-only in this release and is deliberately not exposed here.
+ * obligations, one-off pledges, open loops, merged recent activity, and
+ * a totals rollup. Read-only; the clock is resolved at the tool boundary
+ * so the core builder stays deterministic. Write-back (the `@osb set`
+ * engine) stays CLI-only in this release and is deliberately not
+ * exposed here.
  */
 async function toolBrainToday(
   ctx: ServerContext,
@@ -595,8 +596,8 @@ async function toolBrainToday(
   // (or under the ownership gate) it shows them as this caller may see
   // them, before the limit and the totals.
   const refs = requestRefView(ctx);
-  // Obligation pages and open-loop notes are listed only when the caller
-  // may read them, before the totals.
+  // Obligation pages, pledge pages and open-loop notes are listed only
+  // when the caller may read them, before the totals.
   const readable = readableAtContextReachOrUndefined(ctx);
   const dashboard = buildTodayDashboard(ctx.vault, {
     now: new Date(),
@@ -609,6 +610,7 @@ async function toolBrainToday(
     vault_path: vaultPathField(ctx),
     text: dashboard.text,
     obligations: dashboard.obligations,
+    pledges: dashboard.pledges,
     open_loops: dashboard.openLoops,
     recent_activity: dashboard.recentActivity,
     totals: dashboard.totals,
@@ -681,7 +683,7 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_brief",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, open loops, recent activity, totals). Replaces the per-window brief tools.",
+      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
     inputSchema: {
       type: "object",
       properties: {
