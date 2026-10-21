@@ -318,6 +318,35 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     20000,
   );
 
+  // A mode change cannot make a directory unreadable to uid 0, nor on Windows.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an internal error still lands its audit line and never blocks the prompt",
+    async () => {
+      seedCounterparty();
+      // The pledges directory itself unreadable: the brief's walk cannot
+      // even list it, so building the brief throws instead of abstaining.
+      const pledgesDir = join(vault, "Brain", "pledges");
+      chmodSync(pledgesDir, 0o000);
+      try {
+        const r = await runHook(userPromptPayload(), { VAULT_DIR: vault, ...FLAG_ON });
+        expect(r.exit).toBe(0);
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toBe("");
+        // The decision trail keeps its one-line-per-decision contract on
+        // the error path too: the failure is on the record, by name.
+        const errorLine = auditRecords().find(
+          (record) =>
+            record["ok"] === false &&
+            (record["details"] as Record<string, unknown> | undefined)?.["decision"] === "error",
+        );
+        expect(errorLine).toBeDefined();
+      } finally {
+        chmodSync(pledgesDir, 0o755);
+      }
+    },
+    20000,
+  );
+
   test("malformed stdin is a silent exit 0", async () => {
     seedCounterparty();
     const proc = Bun.spawn(["bun", "run", join(HOOKS_DIR, "counterparty-brief.ts")], {

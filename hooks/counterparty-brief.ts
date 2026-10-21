@@ -179,12 +179,21 @@ async function main(): Promise<void> {
       skipped_reads: brief.skippedReads,
       recorded,
     });
+  } catch {
+    // Never crash the runtime; the prompt submission must proceed regardless
+    // of any hook misbehaviour. The failure still lands on the audit trail
+    // once the vault is known - one line per decision, the error path
+    // included, the same record the process ceiling writes on expiry.
+    if (auditVault !== null) {
+      audit(auditVault, false, { decision: "error", reason: "internal_error" });
+    }
   } finally {
     disarm();
   }
 }
 
 main().catch(() => {
-  // Never crash the runtime; the prompt submission must proceed regardless
-  // of any hook misbehaviour.
+  // Last-resort silence: everything inside the ceiling is already caught
+  // and audited above; a throw before the vault resolves has nothing to
+  // audit and must never block the prompt.
 });
