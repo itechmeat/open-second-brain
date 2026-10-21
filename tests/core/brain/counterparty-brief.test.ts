@@ -176,16 +176,17 @@ describe("buildCounterpartyBrief abstentions", () => {
     ).toEqual({ abstain: "no_trigger" });
   });
 
-  test("the trigger match is deterministic containment over the operator token", () => {
+  test("the trigger match is deterministic over the operator token", () => {
     const id = seedPerson("Ada Lovelace");
     // A second record the prompt does NOT name: the matcher had a choice
     // to make, so the name it reports is evidence, not decoration.
     seedPerson("Grace Hopper");
     seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
-    // "meet" occurs inside "Meeting": containment, no morphology, no list.
+    // The trigger token occurs WHOLE in the prompt: a token is a token,
+    // not the prefix of one, and no morphology is invented for it.
     const brief = expectBrief(
       buildCounterpartyBrief(vault, {
-        text: "Meeting with Ada Lovelace tomorrow",
+        text: "meet Ada Lovelace tomorrow",
         triggers: TRIGGERS,
         now: NOW,
       }),
@@ -194,6 +195,67 @@ describe("buildCounterpartyBrief abstentions", () => {
     // The id alone cannot say WHICH record was matched - two records of
     // the same shape share every property but their name.
     expect(brief.entityName).toBe("Ada Lovelace");
+  });
+
+  test("a whole trigger token fires", () => {
+    const id = seedPerson("Ada Lovelace");
+    seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, {
+        text: "meet Ada Lovelace tomorrow",
+        triggers: TRIGGERS,
+        now: NOW,
+      }),
+    );
+    expect(brief.entityId).toBe(id);
+    expect(brief.items).toHaveLength(1);
+  });
+
+  test("a trigger inside a longer word does not fire", () => {
+    seedPerson("Ada Lovelace");
+    // The trigger token is a WHOLE token of none of these prompts: it
+    // occurs only inside a longer word, where a substring match would
+    // have fired the brief on an unrelated prompt.
+    for (const text of [
+      "summarize the Ada Lovelace documentary we watched at the homeet",
+      "the Ada Lovelace meetup is tomorrow",
+    ]) {
+      expect(buildCounterpartyBrief(vault, { text, triggers: TRIGGERS, now: NOW })).toEqual({
+        abstain: "no_trigger",
+      });
+    }
+    // The same rule for a second operator token: "call" is a whole token
+    // of neither prompt.
+    for (const text of ["email Ada Lovelace about the recall", "the Ada Lovelace callback"]) {
+      expect(buildCounterpartyBrief(vault, { text, triggers: ["call"], now: NOW })).toEqual({
+        abstain: "no_trigger",
+      });
+    }
+  });
+
+  test("a multi-token trigger entry matches a contiguous run of tokens", () => {
+    const id = seedPerson("Ada Lovelace");
+    seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
+    // The operator's entry carried a space, so it names a SEQUENCE: the
+    // prompt must carry it whole, in order.
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, {
+        text: "schedule meeting with Ada Lovelace",
+        triggers: ["schedule meeting"],
+        now: NOW,
+      }),
+    );
+    expect(brief.entityId).toBe(id);
+    // A run that is not contiguous is not the entry: "schedule the
+    // meeting" holds neither the sequence nor the token "schedule
+    // meeting" as a whole word.
+    expect(
+      buildCounterpartyBrief(vault, {
+        text: "schedule the meeting with Ada Lovelace",
+        triggers: ["schedule meeting"],
+        now: NOW,
+      }),
+    ).toEqual({ abstain: "no_trigger" });
   });
 
   test("zero entity matches abstain", () => {
@@ -531,6 +593,28 @@ describe("buildCounterpartyBrief items", () => {
     } finally {
       rmSync(outer, { recursive: true, force: true });
     }
+  });
+
+  test("a pledge whose cited source is missing inside the vault withholds the item", () => {
+    const id = seedPerson("Ada Lovelace");
+    const sourceRel = "notes/deleted-page.md";
+    seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id, sourceRel });
+    // The cited page is GONE - deleted, renamed, never written. The item
+    // is drawn from two pages, and one of them no longer exists, so its
+    // shareability cannot be shown: the gate withholds the item exactly
+    // like it withholds an unreadable source, instead of sharing the
+    // promise on the strength of the pledge page alone.
+    rmSync(join(vault, sourceRel));
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(brief.items).toEqual([]);
+    // Withheld means withheld: neither the promise nor the missing path
+    // reaches the render.
+    const rendered = renderCounterpartyBrief(brief);
+    expect(rendered).toBe("");
+    expect(rendered).not.toContain("Ship the parser");
+    expect(rendered).not.toContain("deleted-page");
   });
 
   test.skipIf(CHMOD_CANNOT_DENY)("an unreadable cited source withholds the pledge item", () => {

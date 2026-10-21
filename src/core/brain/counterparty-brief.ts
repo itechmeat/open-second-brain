@@ -12,8 +12,9 @@
  *   - an empty trigger list abstains as `no_trigger` (the hook is inert
  *     without a vocabulary the operator declared);
  *   - a prompt carrying no trigger token abstains as `no_trigger`
- *     (deterministic token containment - the tokens are the operator's,
- *     in the operator's language; nothing here ships a natural-language
+ *     (deterministic WHOLE-token containment - a trigger never fires
+ *     inside a longer word; the tokens are the operator's, in the
+ *     operator's language; nothing here ships a natural-language
  *     word list, the standing refusal in status-scope.ts and
  *     visibility.ts);
  *   - zero canonical-scope entity matches abstain as `no_match`, and
@@ -61,7 +62,13 @@ import type { BrainEntity } from "./entities/types.ts";
 import { readLifecycleState } from "./lifecycle/tombstone.ts";
 import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { validateIsoDate } from "./paths.ts";
-import { listPledges, normalizePledgeSource, pledgeRel, type PledgeListItem } from "./pledges.ts";
+import {
+  listPledges,
+  isSourcePage,
+  normalizePledgeSource,
+  pledgeRel,
+  type PledgeListItem,
+} from "./pledges.ts";
 import { neutralizeSingleLine, untrustedFramingHeader } from "./untrusted-source.ts";
 import {
   REMOTE_DENY_VISIBILITY_TOKEN,
@@ -189,9 +196,53 @@ function normalizeToken(raw: string): string {
   return raw.normalize("NFC").trim().toLowerCase();
 }
 
+/**
+ * One Unicode letter-or-number run: the unit a trigger token matches
+ * WHOLE. The segmentation is letter/number aware, so a non-ASCII word
+ * stays one token and a trigger never matches inside a longer word.
+ */
+const TOKEN_RE = /[\p{L}\p{N}]+/gu;
+
+/**
+ * The tokens of a normalized string, in order. A string that holds no
+ * letter and no number holds no token at all.
+ */
+function tokenize(normalized: string): ReadonlyArray<string> {
+  return normalized.match(TOKEN_RE) ?? [];
+}
+
+/**
+ * Does the prompt carry the trigger's tokens, whole? A one-token trigger
+ * matches a whole token of the prompt; a trigger the operator spelled
+ * with a space names a SEQUENCE and matches a contiguous run of the
+ * prompt's tokens. Nothing matches inside a longer word: "meet" fires on
+ * "meet", never on "homeet" or "meetup".
+ */
+function promptCarriesTrigger(promptTokens: ReadonlyArray<string>, trigger: string): boolean {
+  const triggerTokens = tokenize(trigger);
+  if (triggerTokens.length === 0) return false;
+  if (triggerTokens.length === 1) return promptTokens.includes(triggerTokens[0]!);
+  for (let start = 0; start + triggerTokens.length <= promptTokens.length; start += 1) {
+    const held = triggerTokens.every((token, offset) => promptTokens[start + offset] === token);
+    if (held) return true;
+  }
+  return false;
+}
+
 /** A vault-relative POSIX path from an absolute one, whatever the host separator. */
 function vaultRel(vault: string, abs: string): string {
   return relative(vault, abs).split(sep).join("/");
+}
+
+/**
+ * Code-unit string order: the same order on every host, where
+ * `localeCompare` varies with the host locale and would make the read
+ * window - and with it the brief - depend on where the process runs.
+ */
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 /** Clip to the per-item cap on code points, so astral letters stay whole. */
@@ -316,6 +367,20 @@ function pledgeSourceWithinVault(stored: string): string | null {
 }
 
 /**
+ * True when the absolute path names an existing regular file - the
+ * predicate the pledge writers use for a cited source. A path that
+ * cannot be stat'ed at all (a missing page, a directory, a path whose
+ * parent is a file) is not a page, and the caller fails closed on it.
+ */
+function isRegularFile(abs: string): boolean {
+  try {
+    return isSourcePage(abs);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One pledge item, or null when the item is not shareable. The item is
  * drawn from TWO pages - the pledge page and the source it cites - so the
  * strictest visibility of the two governs: either carrying the reserved
@@ -331,11 +396,14 @@ function pledgeSourceWithinVault(stored: string): string | null {
  * read from it, and an item whose source escapes the vault is dropped -
  * the walk never reads, nor renders, a path from outside the vault, in any
  * spelling (a backslash separator, a drive letter, a POSIX root, a `..`
- * escape). A cited source that cannot be read (or whose frontmatter parse
- * reports dropped lines) withholds the item too: the gate decides whether the
- * item may leave the machine, so it fails closed, the same discipline
- * the preference walk applies to its own pages. The item names the cited
- * source page, which is where the promise was read.
+ * escape). The cited source must also EXIST as a regular page inside the
+ * vault: a source that was renamed, deleted or never written cannot be
+ * shown to be shareable, so the item is withheld exactly like an
+ * unreadable one. A cited source that cannot be read (or whose frontmatter
+ * parse reports dropped lines) withholds the item too: the gate decides
+ * whether the item may leave the machine, so it fails closed, the same
+ * discipline the preference walk applies to its own pages. The item names
+ * the cited source page, which is where the promise was read.
  */
 function pledgeItem(
   vault: string,
@@ -356,11 +424,14 @@ function pledgeItem(
     if (source === null) return null;
     if (readable !== undefined && !readable(source)) return null;
     const sourceAbs = join(vault, source);
-    if (existsSync(sourceAbs)) {
-      const [sourceMeta, , sourceNotices] = parseFrontmatterWithNotices(sourceAbs);
-      if (sourceNotices.length > 0) return null;
-      tagLists.push([...pageVisibility(sourceMeta)]);
-    }
+    // The cited page must be there: the item is drawn from two pages,
+    // and a source that is gone (deleted, renamed, never written) leaves
+    // its own shareability unprovable. The gate fails closed, so the
+    // item is withheld rather than shared on the pledge page alone.
+    if (!isRegularFile(sourceAbs)) return null;
+    const [sourceMeta, , sourceNotices] = parseFrontmatterWithNotices(sourceAbs);
+    if (sourceNotices.length > 0) return null;
+    tagLists.push([...pageVisibility(sourceMeta)]);
     sourceRel = source;
   }
   const folded = strictestVisibilityOf(tagLists);
@@ -421,7 +492,7 @@ function preferenceItems(
   // in: the read window - and so the brief - must not depend on the host's
   // ICU locale.
   for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
-    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    compareCodeUnits(a.name, b.name),
   )) {
     if (reads >= BRIEF_PAGE_READ_CAP) break;
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
@@ -467,7 +538,7 @@ function preferenceItems(
   const items = read
     .toSorted((a, b) => {
       if (a.date !== b.date) return a.date > b.date ? -1 : 1;
-      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+      return compareCodeUnits(a.name, b.name);
     })
     .map((entry) => entry.item);
   return { items, skippedReads, notices };
@@ -483,8 +554,10 @@ export function buildCounterpartyBrief(
 ): CounterpartyBrief | CounterpartyBriefAbstention {
   const triggers = input.triggers.map(normalizeToken).filter((token) => token.length > 0);
   if (triggers.length === 0) return { abstain: "no_trigger" };
-  const haystack = input.text.normalize("NFC").toLowerCase();
-  if (!triggers.some((token) => haystack.includes(token))) return { abstain: "no_trigger" };
+  const promptTokens = tokenize(input.text.normalize("NFC").toLowerCase());
+  if (!triggers.some((trigger) => promptCarriesTrigger(promptTokens, trigger))) {
+    return { abstain: "no_trigger" };
+  }
   // The lexicon is resolved ONCE and threaded into the match: the derived
   // artifact is read a single time per brief, not once per walk.
   const lexicon = resolveEntityLexicon(vault);
