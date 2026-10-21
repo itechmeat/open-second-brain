@@ -103,8 +103,8 @@ test("both schemas are closed to unknown properties", () => {
     string,
     { type?: string; items?: Record<string, unknown> }
   >;
-  expect(pledges["pledges"]["type"]).toBe("array");
-  expect(pledges["pledges"]["items"]?.["additionalProperties"]).toBe(false);
+  expect(pledges["pledges"]?.["type"]).toBe("array");
+  expect(pledges["pledges"]?.["items"]?.["additionalProperties"]).toBe(false);
 });
 
 test("brain_pledge add / fulfill / list / show / remove round-trip", async () => {
@@ -155,7 +155,13 @@ test("brain_pledge add / fulfill / list / show / remove round-trip", async () =>
   };
   expect(removed.slug).toBe(slug);
   expect(removed.archive_path).toContain("archive");
-  expect((await pledge.handler(ctx, { operation: "show", slug })) as { present: boolean }).toEqual({
+  expect(
+    (await pledge.handler(ctx, { operation: "show", slug })) as {
+      operation: string;
+      slug: string;
+      present: boolean;
+    },
+  ).toEqual({
     operation: "show",
     slug,
     present: false,
@@ -240,7 +246,7 @@ test("brain_pledge honors the readable predicate at remote reach", async () => {
   const shown = (await pledge.handler(remote, {
     operation: "show",
     slug: "zzreserved-promise",
-  })) as { present: boolean };
+  })) as { operation: string; slug: string; present: boolean };
   expect(shown).toEqual({ operation: "show", slug: "zzreserved-promise", present: false });
 
   // The withheld slug is refused with the same `no pledge` error an
@@ -275,6 +281,7 @@ test("brain_intake_pledges creates pledges and anchors counterparties server-sid
     name: "Ada Lovelace",
     aliases: ["Ada"],
     agent: AGENT,
+    now: new Date(),
   }).entity.id;
   const intake = tool("brain_intake_pledges");
   const result = (await intake.handler(ctx, {
