@@ -203,12 +203,27 @@ test("brain_pledge list honors the overdue filter", async () => {
     evidence: [QUOTE],
     agent: AGENT,
   });
+  const undated = addPledge(vault, {
+    title: "Undated promise",
+    due: day(2),
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: AGENT,
+  });
+  writeFileSync(
+    undated.path,
+    readFileSync(undated.path, "utf8").replace(`due: ${undated.due}`, "due: invalid"),
+  );
   // Due-sorted: the overdue pledge lists first, one whole day in arrears.
   const all = (await pledge.handler(ctx, { operation: "list" })) as {
-    pledges: Array<{ slug: string; days_until_due: number }>;
+    pledges: Array<{ slug: string; days_until_due: number | null }>;
   };
-  expect(all.pledges.map((p) => p.slug)).toEqual(["overdue-promise", "future-promise"]);
-  expect(all.pledges.map((p) => p.days_until_due)).toEqual([-1, 1]);
+  expect(all.pledges.map((p) => p.slug)).toEqual([
+    "overdue-promise",
+    "future-promise",
+    "undated-promise",
+  ]);
+  expect(all.pledges.map((p) => p.days_until_due)).toEqual([-1, 1, null]);
   const overdue = (await pledge.handler(ctx, {
     operation: "list",
     overdue: true,

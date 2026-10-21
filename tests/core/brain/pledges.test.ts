@@ -21,6 +21,9 @@ import {
   showPledge,
   PledgeError,
 } from "../../../src/core/brain/pledges.ts";
+import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
 
@@ -118,12 +121,49 @@ test("addPledge accepts a [[wikilink]] source reference and stores the vault pat
 
 test("addPledge refuses a taken slug with a named error", () => {
   addPledge(vault, cite(["Grace will review the incident timeline"]));
+  let duplicate: unknown;
+  try {
+    addPledge(vault, cite(["Grace will review the incident timeline"]));
+  } catch (err) {
+    duplicate = err;
+  }
+  expect(duplicate).toBeInstanceOf(PledgeError);
+  expect((duplicate as Error).name).toBe("PledgeError");
+  expect(noPledgeError("x").name).toBe("PledgeError");
   expect(() => addPledge(vault, cite(["Grace will review the incident timeline"]))).toThrow(
     /pledge already exists: recap-pledge/,
   );
   expect(() => addPledge(vault, cite(["Grace will review the incident timeline"]))).toThrow(
     PledgeError,
   );
+});
+
+test("addPledge honors the pledge-path lock and still refuses a taken slug after release", () => {
+  const path = join(vault, "Brain", "pledges", "recap-pledge.md");
+  const held = acquireLockSync(path);
+  const originalBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  let collision: unknown;
+  try {
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    try {
+      addPledge(vault, cite(["Grace will review the incident timeline"]));
+    } catch (err) {
+      collision = err;
+    }
+  } finally {
+    held.release();
+    if (originalBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = originalBudget;
+  }
+  expect((collision as NodeJS.ErrnoException | undefined)?.code).toBe("ELOCKED");
+  expect(existsSync(path)).toBe(false);
+  const page = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  const before = readFileSync(page.path, "utf8");
+  expect(() => addPledge(vault, cite(["Grace will review the incident timeline"]))).toThrow(
+    PledgeError,
+  );
+  expect(readFileSync(page.path, "utf8")).toBe(before);
+  expect(existsSync(`${path}.lock`)).toBe(false);
 });
 
 test("addPledge refuses a non-ISO due date", () => {
@@ -168,6 +208,42 @@ test("addPledge refuses a source page the vault does not hold", () => {
   ).toThrow(/source page not found/);
 });
 
+test("addPledge refuses an unreadable source before reading it", () => {
+  // Reading this directory as a page would throw EISDIR instead of the reach refusal.
+  rmSync(join(vault, SOURCE_REL));
+  mkdirSync(join(vault, SOURCE_REL));
+  const checked: string[] = [];
+  const input = {
+    ...cite(["Grace will review the incident timeline"]),
+    source: `[[${SOURCE_REL}]]`,
+    readable: (rel: string) => {
+      checked.push(rel);
+      return false;
+    },
+  };
+  const refuse = () => addPledge(vault, input);
+  expect(refuse).toThrow(PledgeError);
+  expect(refuse).toThrow(/source page is not readable or absent/);
+  expect(checked).toEqual([SOURCE_REL, SOURCE_REL]);
+  expect(pledgeExists(vault, "recap-pledge")).toBe(false);
+});
+
+test("addPledge inherits source visibility and omits it for public sources", () => {
+  const publicPage = addPledge(vault, cite(["Grace will review the incident timeline"]));
+  expect(parseFrontmatter(publicPage.path)[0]).not.toHaveProperty("visibility");
+  writeFileSync(
+    join(vault, SOURCE_REL),
+    `---\nvisibility: ${REMOTE_DENY_VISIBILITY_TOKEN}\n---\n\n${SOURCE_TEXT}`,
+  );
+  const privatePage = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Private-source pledge",
+  });
+  expect(parseFrontmatter(privatePage.path)[0]["visibility"]).toEqual([
+    REMOTE_DENY_VISIBILITY_TOKEN,
+  ]);
+});
+
 test("evidence containment forgives presentation, never wording", () => {
   // The shared comparator strips Markdown emphasis and line markers, so a
   // quote over a list item or emphasis passes; wording and word boundaries
@@ -175,6 +251,20 @@ test("evidence containment forgives presentation, never wording", () => {
   const page = addPledge(vault, cite(["budget review moves to next quarter"]));
   expect(page.evidence).toEqual(["budget review moves to next quarter"]);
   expect(() => addPledge(vault, { ...cite(["view moves to next quarter"]) })).toThrow(PledgeError);
+});
+
+test("addPledge refuses a forged notes header in text or notes without writing", () => {
+  for (const field of ["text", "notes"] as const) {
+    for (const header of ["## Notes", "  ## Notes  "]) {
+      expect(() =>
+        addPledge(vault, {
+          ...cite(["Grace will review the incident timeline"]),
+          [field]: `Promise line one.\n${header}\nPromise line two.`,
+        }),
+      ).toThrow(PledgeError);
+      expect(pledgeExists(vault, "recap-pledge")).toBe(false);
+    }
+  }
 });
 
 test("addPledge refuses an empty title", () => {
@@ -189,6 +279,23 @@ test("fulfillPledge stamps the fulfillment date and refuses a second stamp", () 
   expect(done.fulfilled).toBe("2026-06-20");
   expect(showPledge(vault, { slug: "recap-pledge" })!.fulfilled).toBe("2026-06-20");
   expect(() => fulfillPledge(vault, { slug: "recap-pledge" })).toThrow(/already fulfilled/);
+});
+
+test("fulfill preserves visibility and unknown frontmatter keys", () => {
+  const page = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    text: "Review the timeline.",
+    notes: "Keep the record.",
+  });
+  const [meta, body] = parseFrontmatter(page.path);
+  meta["visibility"] = [REMOTE_DENY_VISIBILITY_TOKEN];
+  meta["review_marker"] = ["hand-added", "retain"];
+  meta["owner"] = "operator";
+  writeFileSync(page.path, formatFrontmatter(meta, body));
+  fulfillPledge(vault, { slug: page.slug, date: "2026-06-20" });
+  const [after, afterBody] = parseFrontmatter(page.path);
+  expect(after).toEqual({ ...meta, fulfilled: "2026-06-20" });
+  expect(afterBody).toBe(body);
 });
 
 test("fulfillPledge defaults the date to the injected now and shares the no-pledge refusal", () => {
@@ -230,12 +337,25 @@ test("listPledges sorts by due then slug with overdue and daysUntilDue boundarie
     due: "2026-06-20",
   });
 
+  for (const title of ["Zeta undated", "Alpha undated"]) {
+    const page = addPledge(vault, {
+      ...cite(["Grace will review the incident timeline"]),
+      title,
+    });
+    writeFileSync(
+      page.path,
+      readFileSync(page.path, "utf8").replace(`due: ${page.due}`, "due: invalid"),
+    );
+  }
+
   const items = listPledges(vault, { now: NOW });
   expect(items.map((i) => i.slug)).toEqual([
     "alpha-yesterday",
     "beta-yesterday",
     "today-item",
     "tomorrow-item",
+    "alpha-undated",
+    "zeta-undated",
   ]);
   expect(items[0]!.overdue).toBe(true);
   expect(items[0]!.daysUntilDue).toBe(-1);
@@ -243,6 +363,9 @@ test("listPledges sorts by due then slug with overdue and daysUntilDue boundarie
   expect(items[2]!.overdue).toBe(false);
   expect(items[2]!.daysUntilDue).toBe(0);
   expect(items[3]!.daysUntilDue).toBe(1);
+  expect(items[4]!.daysUntilDue).toBeNull();
+  expect(items[4]!.overdue).toBe(false);
+  expect(items[5]!.daysUntilDue).toBeNull();
   expect(items[0]!.title).toBe("Alpha yesterday");
   expect(items[0]!.source).toBe(SOURCE_REL);
 });
@@ -266,7 +389,7 @@ test("a hand-edited frontmatter date soft-parses instead of crashing the family"
   const items = listPledges(vault, { now: NOW });
   expect(items).toHaveLength(1);
   expect(items[0]!.due).toBe("");
-  expect(items[0]!.daysUntilDue).toBe(0);
+  expect(items[0]!.daysUntilDue).toBeNull();
   expect(items[0]!.overdue).toBe(false);
 });
 
@@ -303,6 +426,32 @@ test("a withheld pledge page answers show as null and drops from list", () => {
   const kept = listPledges(vault, { now: NOW, readable: () => true });
   expect(kept).toHaveLength(1);
   expect(kept[0]!.slug).toBe(page.slug);
+});
+
+test("listPledges readCap bounds readable page reads in stable name order", () => {
+  for (const title of ["Echo", "Delta", "Charlie", "Bravo", "Alpha"]) {
+    addPledge(vault, { ...cite(["Grace will review the incident timeline"]), title });
+  }
+  expect(listPledges(vault, { now: NOW, readCap: 2 }).map((item) => item.slug)).toEqual([
+    "alpha",
+    "bravo",
+  ]);
+  expect(listPledges(vault, { now: NOW, readCap: 0 })).toEqual([]);
+  fulfillPledge(vault, { slug: "bravo", date: "2026-06-20" });
+  // Withheld pages spend no reads; a readable fulfilled page still spends one.
+  expect(
+    listPledges(vault, {
+      now: NOW,
+      readCap: 2,
+      readable: (rel) => rel !== "Brain/pledges/alpha.md",
+    }).map((item) => item.slug),
+  ).toEqual(["charlie"]);
+  expect(listPledges(vault, { now: NOW }).map((item) => item.slug)).toEqual([
+    "alpha",
+    "charlie",
+    "delta",
+    "echo",
+  ]);
 });
 
 test("listPledges answers an empty list for a vault without the pledges directory", () => {

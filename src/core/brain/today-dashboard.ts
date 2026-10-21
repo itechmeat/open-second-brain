@@ -80,8 +80,8 @@ export interface TodayDashboardPledgeItem {
   readonly due: string;
   /** True when due is strictly before today (UTC). */
   readonly overdue: boolean;
-  /** Whole days until due; negative when overdue, zero when due today. */
-  readonly daysUntilDue: number;
+  /** Whole days until due; negative when overdue, zero when due today, null when undated. */
+  readonly daysUntilDue: number | null;
 }
 
 /** Pledges section: earliest-due first, via `listPledges`'s own sort. */
@@ -336,12 +336,16 @@ function renderObligationLine(item: TodayDashboardObligationItem): string {
 }
 
 function renderPledgeLine(item: TodayDashboardPledgeItem): string {
-  const state = item.overdue
-    ? `overdue by ${Math.abs(item.daysUntilDue)}d`
-    : item.daysUntilDue === 0
-      ? "due today"
-      : `due in ${item.daysUntilDue}d`;
-  return `- ${item.title} (slug: ${item.slug}) - due ${item.due} - ${state}`;
+  const state =
+    item.daysUntilDue === null
+      ? "undated"
+      : item.overdue
+        ? `overdue by ${Math.abs(item.daysUntilDue)}d`
+        : item.daysUntilDue === 0
+          ? "due today"
+          : `due in ${item.daysUntilDue}d`;
+  const due = item.daysUntilDue === null ? "" : `due ${item.due} - `;
+  return `- ${item.title} (slug: ${item.slug}) - ${due}${state}`;
 }
 
 function renderOpenLoopLine(loop: OpenLoopScan["openLoops"][number]): string {

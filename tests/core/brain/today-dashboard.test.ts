@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -341,6 +341,33 @@ describe("buildTodayDashboard - pledges section", () => {
     expect(dashboard.text).toContain(
       "- Today Pledge (slug: today-pledge) - due 2026-07-17 - due today",
     );
+  });
+
+  test("an undated pledge sorts last and reports a null days-until-due", () => {
+    seedPledgeVault();
+    const undated = addPledge(vault, {
+      title: "Undated Pledge",
+      due: "2026-07-24",
+      source: SOURCE_REL,
+      evidence: EVIDENCE,
+      agent: "test-agent",
+      now: NOW,
+    });
+    // A hand-edited frontmatter date the family soft-parses to empty.
+    writeFileSync(
+      undated.path,
+      readFileSync(undated.path, "utf8").replace(`due: ${undated.due}`, "due: invalid"),
+    );
+    const dashboard = buildTodayDashboard(vault, { now: NOW });
+    expect(dashboard.pledges.items.map((i) => i.slug)).toEqual([
+      "past-pledge",
+      "today-pledge",
+      "future-pledge",
+      "undated-pledge",
+    ]);
+    expect(dashboard.pledges.items[3]!.daysUntilDue).toBeNull();
+    expect(dashboard.pledges.items[3]!.overdue).toBe(false);
+    expect(dashboard.text).toContain("- Undated Pledge (slug: undated-pledge) - undated");
   });
 
   test("a fulfilled pledge is left out of the section and the totals", () => {

@@ -95,7 +95,10 @@ function toolBrainPledge(
   // `brain_obligation` does; `undefined` at local reach with the owner
   // gate off, so an unfiltered read skips the per-page check entirely.
   const readable = readableAtContextReachOrUndefined(ctx);
-  const withheld = (slug: string): boolean => readable !== undefined && !readable(pledgeRel(slug));
+  const withheld = (slug: string): boolean => {
+    const rel = pledgeRel(slugify(slug));
+    return readable !== undefined && !readable(rel);
+  };
   try {
     if (operation === "list") {
       const items = listPledges(ctx.vault, {
@@ -122,6 +125,7 @@ function toolBrainPledge(
         source,
         evidence,
         agent: agentFor(ctx, coerceStr(args, "agent", false)),
+        readable: readableAtContextReach(ctx),
         ...(text !== null ? { text } : {}),
         ...(notes !== null ? { notes } : {}),
         ...(counterparties.length > 0 ? { counterparties } : {}),

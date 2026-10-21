@@ -15,7 +15,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -152,6 +152,65 @@ describe("brain_pledge answers at the caller's reach", () => {
       }
     }
     expect(readFileSync(a.privatePage, "utf8")).toBe(before);
+  });
+
+  test("a raw slug whose pledgeRel folds to a readable page cannot drive fulfill/remove past the gate", async () => {
+    const a = fixture(false);
+    const b = fixture(false);
+    for (const f of [a, b]) {
+      addPledge(f.vault, {
+        title: "Public",
+        due: PUBLIC_DUE,
+        source: SOURCE_REL,
+        evidence: EVIDENCE,
+        agent: AGENT,
+      });
+    }
+    const hidden = addPledge(a.vault, {
+      title: "Pledges public",
+      due: PRIVATE_DUE,
+      source: SOURCE_REL,
+      evidence: EVIDENCE,
+      agent: AGENT,
+    });
+    reserve(hidden.path);
+    const before = readFileSync(hidden.path, "utf8");
+    const slug = "../pledges/public";
+    for (const operation of ["fulfill", "remove"]) {
+      // oxlint-disable-next-line no-await-in-loop
+      const withheld = await pledge(a, { operation, slug });
+      // oxlint-disable-next-line no-await-in-loop
+      const absent = await pledge(b, { operation, slug });
+      expect(withheld).toBe(absent);
+      expect(withheld).toContain("no pledge: pledges-public");
+      expect(readFileSync(hidden.path, "utf8")).toBe(before);
+    }
+    expect(existsSync(join(a.vault, BRAIN_PLEDGES_REL, "archive"))).toBe(false);
+    expect(await pledge(a, { operation: "show", slug })).toContain(
+      '"slug":"../pledges/public","present":false',
+    );
+  });
+
+  test("remote reach: add citing a private source answers as for an absent source and writes nothing", async () => {
+    const a = fixture(false);
+    const b = fixture(false);
+    writeFileSync(join(a.vault, SOURCE_REL), `---\n${RESERVE_LINE}\n---\n\n${SOURCE_TEXT}`);
+    rmSync(join(b.vault, SOURCE_REL));
+    const args = {
+      operation: "add",
+      title: "Private source pledge",
+      due: PUBLIC_DUE,
+      source: SOURCE_REL,
+      evidence: EVIDENCE,
+      agent: AGENT,
+    };
+    const withheld = await pledge(a, args);
+    const absent = await pledge(b, args);
+    expect(withheld.startsWith("error: ")).toBe(true);
+    expect(withheld).toBe(absent);
+    for (const f of [a, b]) {
+      expect(existsSync(join(f.vault, BRAIN_PLEDGES_REL, "private-source-pledge.md"))).toBe(false);
+    }
   });
 
   test("remote reach: the withheld pledge drops from list", async () => {

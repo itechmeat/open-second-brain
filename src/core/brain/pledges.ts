@@ -16,9 +16,9 @@
  *               error.
  *   - `fulfill` stamps the fulfillment date; a fulfilled pledge stays
  *               stamped (one-off, not recurring).
- *   - `list`    reads every page, due-sorted, with an overdue flag and
- *               whole days until due; open pledges only unless the caller
- *               asks for the fulfilled ones too.
+ *   - `list`    reads pages up to an optional cap, due-sorted, with an
+ *               overdue flag and whole days until due (null if undated);
+ *               open pledges only unless the caller asks for fulfilled too.
  *   - `show`    reads one page; a page the caller's reach withholds
  *               answers null, identical to an absent slug.
  *   - `remove`  retires the page into `Brain/pledges/archive/` with a
@@ -28,13 +28,18 @@
  * relation in the shared vocabulary (`PROMISED_TO_RELATION`), so the
  * existing frontmatter-relations ingest projects the typed edges; this
  * module adds no projection code of its own.
+ *
+ * Creates lock the pledge path across the existence check and atomic
+ * commit, using the shared bounded lock-wait policy. Concurrent creators
+ * therefore cannot replace the first page written for the same slug.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, posix } from "node:path";
 
+import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
-import { formatFrontmatter, parseFrontmatter, slugify } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatter, parseFrontmatterText, slugify } from "../vault.ts";
 import {
   pledgePath,
   pledgesArchiveDir,
@@ -42,11 +47,18 @@ import {
   validateIsoDate,
   BRAIN_PLEDGES_REL,
 } from "./paths.ts";
+import { pageVisibility, strictestVisibilityOf } from "../graph/visibility.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
 
-export class PledgeError extends Error {}
+export class PledgeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PledgeError";
+  }
+}
 
 /** The refusal for a slug that names no active pledge page. */
 export function noPledgeError(slug: string): PledgeError {
@@ -84,6 +96,8 @@ export interface AddPledgeInput {
   readonly notes?: string;
   readonly agent: string;
   readonly now?: Date;
+  /** Refuse a source page the caller cannot read, before probing its bytes. */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface FulfillPledgeInput {
@@ -109,8 +123,8 @@ export interface PledgeListItem {
   readonly due: string;
   /** True when due is strictly before today (UTC). */
   readonly overdue: boolean;
-  /** Whole days until due; negative when overdue. */
-  readonly daysUntilDue: number;
+  /** Whole days until due; negative when overdue, null when undated. */
+  readonly daysUntilDue: number | null;
   readonly counterparties: ReadonlyArray<string>;
   readonly fulfilled: string | null;
   readonly source: string;
@@ -198,7 +212,7 @@ function assertEvidenceInSource(
   }
 }
 
-function render(page: Omit<PledgePage, "path">): string {
+function render(page: Omit<PledgePage, "path">, visibility: ReadonlyArray<string> = []): string {
   const body =
     page.notes.length > 0 ? `${page.text}\n\n${NOTES_HEADER}\n\n${page.notes}` : page.text;
   return formatFrontmatter(
@@ -211,16 +225,31 @@ function render(page: Omit<PledgePage, "path">): string {
       promised_to: [...page.counterparties],
       fulfilled: page.fulfilled ?? "",
       agent: page.agent,
+      ...(visibility.length > 0 ? { visibility: [...visibility] } : {}),
     },
     body,
   );
+}
+
+/**
+ * Render a stored pledge with only the requested frontmatter mutation.
+ * Re-parse the full map so visibility and operator-added keys survive;
+ * the caller commits the returned bytes through its atomic write path.
+ */
+export function rewritePledgeFrontmatter(
+  page: Pick<PledgePage, "path">,
+  mutate: (meta: FrontmatterMap) => void,
+): string {
+  const [meta, body] = parseFrontmatter(page.path);
+  mutate(meta);
+  return formatFrontmatter(meta, body);
 }
 
 function parsePage(vault: string, slug: string): PledgePage | null {
   const path = pledgePath(vault, slug);
   if (!existsSync(path)) return null;
   const [meta, body] = parseFrontmatter(path);
-  const headerMatch = /^## Notes$/mu.exec(body);
+  const headerMatch = new RegExp(`^${NOTES_HEADER}$`, "mu").exec(body);
   const headerIndex = headerMatch?.index ?? -1;
   const text = (headerIndex < 0 ? body : body.slice(0, headerIndex)).trim();
   const notes = headerIndex < 0 ? "" : body.slice(headerIndex + NOTES_HEADER.length).trim();
@@ -247,6 +276,11 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
   const title = input.title.trim();
   if (title.length === 0) throw new PledgeError("pledge title must not be empty");
   const due = requireIsoDate(input.due, "due");
+  for (const field of ["text", "notes"] as const) {
+    if ((input[field] ?? "").split(/\r?\n/u).some((line) => line.trim() === NOTES_HEADER)) {
+      throw new PledgeError(`pledge ${field} must not contain the ${NOTES_HEADER} section header`);
+    }
+  }
   const evidence = input.evidence.map((quote) => quote.trim()).filter((quote) => quote.length > 0);
   if (evidence.length === 0) {
     throw new PledgeError(
@@ -257,6 +291,9 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
   if (source.length === 0 || source.startsWith("..")) {
     throw new PledgeError(`pledge source must name a vault page: ${JSON.stringify(input.source)}`);
   }
+  if (input.readable !== undefined && !input.readable(source)) {
+    throw new PledgeError(`pledge source page is not readable or absent: ${source}`);
+  }
   const sourceAbs = join(vault, source);
   if (!existsSync(sourceAbs)) {
     throw new PledgeError(
@@ -265,10 +302,9 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
   }
   const sourceText = readFileSync(sourceAbs, "utf8");
   assertEvidenceInSource(source, sourceText, evidence);
+  const [sourceMeta] = parseFrontmatterText(sourceText);
+  const visibility = strictestVisibilityOf([pageVisibility(sourceMeta)]);
   const slug = slugify(title);
-  if (existsSync(pledgePath(vault, slug))) {
-    throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
-  }
   const now = input.now ?? new Date();
   const page = {
     slug,
@@ -285,10 +321,17 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
     agent: input.agent,
     notes: (input.notes ?? "").trim(),
   };
-  mkdirSync(pledgesDir(vault), { recursive: true });
   const path = pledgePath(vault, slug);
-  atomicWriteFileSync(path, render(page));
-  return Object.freeze({ ...page, path });
+  const handle = acquireLockSyncWithRetry(path);
+  try {
+    if (existsSync(path)) {
+      throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
+    }
+    atomicWriteFileSync(path, render(page, visibility));
+    return Object.freeze({ ...page, path });
+  } finally {
+    handle.release();
+  }
 }
 
 /** Stamp a pledge fulfilled. A one-off stays stamped: a second stamp refuses. */
@@ -303,21 +346,13 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
   }
   const now = input.now ?? new Date();
   const date = input.date ? requireIsoDate(input.date, "date") : isoDate(now);
-  const page = {
-    slug: prior.slug,
-    title: prior.title,
-    text: prior.text,
-    due: prior.due,
-    createdAt: prior.createdAt,
-    source: prior.source,
-    evidence: prior.evidence,
-    counterparties: prior.counterparties,
-    fulfilled: date,
-    agent: prior.agent,
-    notes: prior.notes,
-  };
-  atomicWriteFileSync(prior.path, render(page));
-  return Object.freeze({ ...page, path: prior.path });
+  atomicWriteFileSync(
+    prior.path,
+    rewritePledgeFrontmatter(prior, (meta) => {
+      meta["fulfilled"] = date;
+    }),
+  );
+  return Object.freeze({ ...prior, fulfilled: date });
 }
 
 /** One pledge, or null. A page the caller's reach withholds answers null. */
@@ -337,28 +372,37 @@ export function pledgeExists(vault: string, slug: string): boolean {
 }
 
 /**
- * Pledges sorted by due (earliest first), then slug. Open pledges only
- * unless `includeFulfilled`. A page the `readable` predicate refuses is
- * dropped before anything counts it: identical-to-absent.
+ * Pledges sorted by due (earliest first), then slug; undated pages last.
+ * Open pledges only unless `includeFulfilled`. A page the `readable`
+ * predicate refuses is dropped before anything counts it: identical-to-absent.
  */
 export function listPledges(
   vault: string,
-  input: { now: Date; readable?: (rel: string) => boolean; includeFulfilled?: boolean },
+  input: {
+    now: Date;
+    readable?: (rel: string) => boolean;
+    includeFulfilled?: boolean;
+    /** Maximum readable pages to read in name order; omitted means unbounded. */
+    readonly readCap?: number;
+  },
 ): ReadonlyArray<PledgeListItem> {
   const dir = pledgesDir(vault);
   if (!existsSync(dir)) return [];
   const today = isoDate(input.now);
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   const out: PledgeListItem[] = [];
-  for (const name of readdirSync(dir)) {
+  let pagesRead = 0;
+  for (const name of readdirSync(dir).toSorted()) {
+    if (input.readCap !== undefined && pagesRead >= input.readCap) break;
     if (!name.endsWith(".md")) continue;
     const slug = name.replace(/\.md$/u, "");
     if (input.readable !== undefined && !input.readable(pledgeRel(slug))) continue;
     const page = parsePage(vault, slug);
     if (page === null) continue;
+    pagesRead += 1;
     if (page.fulfilled !== null && input.includeFulfilled !== true) continue;
     const dueMs = page.due === "" ? Number.NaN : Date.parse(`${page.due}T00:00:00Z`);
-    const daysUntilDue = Number.isNaN(dueMs) ? 0 : Math.round((dueMs - todayMs) / ONE_DAY_MS);
+    const daysUntilDue = Number.isNaN(dueMs) ? null : Math.round((dueMs - todayMs) / ONE_DAY_MS);
     const overdue = !Number.isNaN(dueMs) && dueMs < todayMs;
     out.push(
       Object.freeze({
@@ -375,6 +419,8 @@ export function listPledges(
     );
   }
   return out.toSorted((a, b) => {
+    if (a.due === "" && b.due !== "") return 1;
+    if (a.due !== "" && b.due === "") return -1;
     if (a.due !== b.due) return a.due < b.due ? -1 : 1;
     return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
   });
