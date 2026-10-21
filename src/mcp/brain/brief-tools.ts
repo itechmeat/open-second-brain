@@ -683,7 +683,7 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_brief",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain summary, one tool for every window: view=morning (session-start brief), daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
+      "Read-only Brain summary, one tool for every window: view=morning, daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
     inputSchema: {
       type: "object",
       properties: {

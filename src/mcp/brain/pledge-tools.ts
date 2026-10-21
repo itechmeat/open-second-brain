@@ -351,7 +351,7 @@ export const PLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: INTAKE_TOOL,
     description:
-      "Intake pledges the agent extracted from a vault page (this server runs no model). Supply the `source` page and the typed `pledges` (title, due, evidence quotes from that page, optional text and counterparty NAMES). Everything is validated before any write; counterparty names are anchored against the canonical entity registry server-side, and names that anchor nowhere are reported instead of stored. A repeat with the same payload is a reported no-op.",
+      "Intake pledges extracted from a vault page; this server runs no model. Supply `source` plus typed `pledges` (title, due, evidence quotes from it, counterparty NAMES). Validated whole before any write; counterparty names anchor server-side, unanchored names reported not stored, repeats are no-ops.",
     inputSchema: {
       type: "object",
       properties: {
