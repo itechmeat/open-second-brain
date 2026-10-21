@@ -1392,9 +1392,10 @@ function buildEntityFactsReport(
   }
   anchored.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const entities = anchored.slice(0, CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES).map((entity) => {
-    // The same gated forms the query anchored, so an item body is asked
-    // exactly the question the match was won with.
-    const forms = anchorEntityForms(trimmed, [entity.name, ...entity.aliases], { lexicon });
+    // The rollup asks whether a kept body anchors the ENTITY, through the
+    // entity's full form set - not only the forms the query happened to
+    // match - so the item ids are complete whichever name the query used.
+    const forms = [entity.name, ...entity.aliases];
     const itemIds: string[] = [];
     for (const item of items) {
       if (anchorEntityForms(item.body, forms, { lexicon }).length > 0) itemIds.push(item.id);

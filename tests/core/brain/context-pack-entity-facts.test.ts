@@ -98,6 +98,21 @@ describe("packContext entityFacts", () => {
     expect(r.entityFacts!.entities.map((e) => e.entityId)).toEqual(["ent-people-ada-lovelace"]);
   });
 
+  test("a body anchors the entity through any of its forms, not only the query's", () => {
+    seedPerson("Ada Lovelace", ["the Countess"]);
+    // The query names the alias; the kept body names the display name. The
+    // rollup asks whether the body anchors the ENTITY, so whichever name
+    // the query used must not decide the item ids.
+    writePref("notes", "Pair with Ada Lovelace on the engine");
+    const r = packContext(vault, {
+      maxTokens: 10_000,
+      query: "ask the Countess for the review notes",
+      queryMode: "ranked",
+      entityFacts: true,
+    });
+    expect(r.entityFacts!.entities[0]!.itemIds).toEqual(["pref-notes"]);
+  });
+
   test("substring mode: a query that keeps the candidates anchors the same way", () => {
     seedPerson("Grace Hopper");
     // Substring mode filters candidates on topic + principle, so the page
