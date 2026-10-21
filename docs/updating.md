@@ -48,6 +48,87 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.91.0
+
+No step is required. This release is additive: a new one-off pledge page
+family, two new MCP tools, a new section on the today dashboard, and three
+opt-in machine-local config keys whose defaults leave an unchanged install
+byte-identical. Two existing outputs gain members, and one opt-in hook joins
+the UserPromptSubmit row set; all four changes are written here rather than
+left to be discovered at the terminal.
+
+**A new page family: one-off pledges at `Brain/pledges/<slug>.md`.** A pledge
+is a promise read in prose: a title, a promise text, a due date, the source
+page it was read from, and evidence quotes the kernel verified against that
+source at write time, so a stored quote is one the source contained when the
+pledge was written. The frontmatter keys are `title`, `created_at`, `due`,
+`source`, `evidence`, `promised_to`, `fulfilled`, `agent`; the word
+`commitment` keeps meaning the epistemic tier and appears nowhere in this
+family. `promised_to` is a new relation token in the shared vocabulary, so the
+existing frontmatter-relations ingest projects counterparty edges with no new
+projection code. Search admission of the new directory is automatic. Removing
+a pledge archives it under `Brain/pledges/archive/` with a collision suffix.
+
+**Two new MCP tools, `brain_pledge` and `brain_intake_pledges`.** The first is
+direct CRUD over the family - `add`, `fulfill`, `list`, `show`, `remove` -
+mirroring the `brain_obligation` operation shape. The second is the extraction
+intake: the agent posts typed pledge extractions citing one source page, the
+kernel validates every item before writing anything (a batch with one invalid
+item writes no page), commits idempotently, anchors counterparty names
+server-side against canonical-scope entities, and reports names that anchor
+nowhere instead of storing them. The kernel never calls a model. Both tools
+answer at the caller's reach: below local reach a withheld pledge page reads
+exactly as an absent one.
+
+**A pledges section joins the today dashboard, and two existing outputs gain
+members.** `o2b brain today` and `brain_brief` `view="today"` now render a
+`## Pledges` section between obligations and open loops - due-sorted open
+pledges with an overdue flag and days-until-due - and the rendered totals gain
+the lines `Pledges:` and `Pledges overdue:`. The `--json` envelopes gain the
+same data additively: the `totals` object carries two new keys,
+`pledgesTotal` and `pledgesOverdue`, and the `brain_brief` `view="today"`
+response gains a `pledges` member beside `obligations`. Consumers that
+enumerate these objects see the new keys; nothing existing changed value or
+moved. A page the caller may not read drops from the section before totals are
+derived, identical to absent.
+
+**The counterparty brief hook is opt-in and off by default.** With
+`counterparty_brief_enabled: "true"` in the machine-local main config (or the
+env override `OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED`; the default is
+off), a UserPromptSubmit hook reads each submitted prompt and, when it fires,
+injects one `additionalContext` block: at most three dated, shareable items
+about a counterparty the prompt names - open pledges promised to that entity
+first, then recent non-private preference pages whose bodies anchor it - each
+carrying its source page. It fires only when ALL of the following hold: the
+prompt contains at least one token from the operator-declared
+`counterparty_brief_triggers` list (a comma-separated machine-local main
+config key in the operator's own language; nothing ships a built-in word
+list, and an absent or malformed list keeps the brief inert); exactly one
+canonical-scope entity matches the prompt by name or alias (zero or several
+matches abstain); and it is the first qualifying prompt of the session - the
+injection ledger suppresses repeats, so later turns in the same session emit
+nothing. A page whose visibility carries the reserved `private` token never
+surfaces whatever the caller's reach, and a prompt without a real session id
+never writes the ledger. The hook is registered for Claude Code and mirrored
+for Codex; flag off keeps its stdout byte-identical to an install without it.
+To turn the brief off, set `counterparty_brief_enabled: "false"` or clear the
+trigger list; per-hook detail lives in `hooks/README.md`. One limit stated
+plainly, the same one `brain_context_pack` already carries: a readable page
+may name a private page, and no per-page gate rewrites prose.
+
+**`brain_context_pack` gains an opt-in `entity_facts` section, off by
+default.** With `entity_facts_context_pack: "true"` in the machine-local main
+config (or the env override
+`OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK`; the default is off), the pack
+response gains a conditional `entity_facts` member: the canonical-scope
+entities anchored from the pack query, at most three, each listing only the
+ids of candidates the pack already kept whose bodies anchor it, so the
+section is a rollup over work the pack already did and never a second recall
+lane. An entity page the caller's view refuses reads as absent, so a
+withheld entity never surfaces its rollup. With the key off - the default -
+packs are byte-identical to the previous release, and the other consumers of
+the same core are untouched.
+
 ## Upgrading to 1.84.0
 
 No step is required. Hybrid search now starts its semantic lane before the
