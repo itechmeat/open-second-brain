@@ -98,10 +98,12 @@ export interface PledgeIntakeResult {
   /** Slugs whose `promised_to` edges this post added (the re-anchor arm). */
   readonly reanchored: ReadonlyArray<string>;
   /**
-   * Slugs whose stored `promised_to` edge the anchor can no longer
-   * reproduce (the entity left canonical scope, or became unreadable).
-   * Reported, never removed: the page is left byte-identical, because an
-   * edge that was valid when computed is not the caller's to delete.
+   * Slugs with a stored `promised_to` edge the readable canonical
+   * registry can no longer reproduce (the entity left canonical scope,
+   * or became unreadable). Reported, never removed: the page is left
+   * byte-identical, because an edge that was valid when computed is not
+   * the caller's to delete, and the re-anchor arm does not grow a new
+   * edge beside a dead one.
    */
   readonly staleEdges: ReadonlyArray<string>;
   /**
@@ -388,6 +390,7 @@ export function intakePledges(
       entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical) &&
       (opts.readable === undefined || opts.readable(vaultRel(vault, entity.path))),
   );
+  const canonicalIds = new Set(canonical.map((entity) => entity.id));
   const verdictByName = new Map<string, string | null>();
   const unanchoredCounterparties: string[] = [];
   for (const name of counterpartyNames) {
@@ -430,12 +433,14 @@ export function intakePledges(
       continue;
     }
     const storedIds = [...new Set(prep.existing.counterparties)].toSorted();
-    const storedSet = new Set(storedIds);
-    // Additive only: a stored edge the anchor can no longer reproduce
-    // (the entity left canonical scope, or became unreadable) is reported
-    // and the page is left byte-identical - an identical repost must
-    // never delete an edge that was valid when it was computed.
-    if (anchoredIds.length < storedIds.length && anchoredIds.every((id) => storedSet.has(id))) {
+    // Staleness is a fact about each STORED edge versus the readable
+    // canonical registry, never about the names this particular post
+    // carried: names are anchor requests, not part of the payload, so a
+    // repost that omits some (or all) of them asked for no anchoring and
+    // says nothing about the stored edges. A slug with a stale edge is
+    // reported and left byte-identical - no edge is removed, and the
+    // re-anchor arm does not grow a new edge beside a dead one.
+    if (storedIds.some((id) => !canonicalIds.has(id))) {
       staleEdges.push(prep.slug);
       continue;
     }

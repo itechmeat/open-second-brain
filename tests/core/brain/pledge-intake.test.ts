@@ -448,6 +448,49 @@ test("re-posting after the entity registers adds the edge (re-anchor arm)", () =
   expect(third.unanchoredCounterparties).toEqual([]);
 });
 
+test("a repost that omits the counterparty names reads as a duplicate, not a stale edge", () => {
+  registerAda();
+  intake([item({ counterparties: ["Ada Lovelace"] })]);
+  // Counterparty names are anchor requests, not part of the payload: a
+  // repost that names none of them asked for no anchoring, so the stored
+  // edges were never "no longer reproducible" - the identity-and-payload
+  // repeat is a plain duplicate.
+  const again = intake([item()]);
+  expect(again.staleEdges).toEqual([]);
+  expect(again.duplicates).toEqual(["send-ada-the-migration-recap"]);
+  expect(again.reanchored).toEqual([]);
+});
+
+test("a stale stored edge is reported even when the same post anchors a new name", () => {
+  const adaId = registerAda();
+  const graceId = upsertEntity(vault, {
+    category: "people",
+    name: "Grace Hopper",
+    agent: AGENT,
+    now: NOW,
+  }).entity.id;
+  intake([item({ counterparties: ["Ada Lovelace", "Grace Hopper"] })]);
+  const stored = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  const before = readFileSync(stored!.path, "utf8");
+  archiveEntity(vault, { query: "Grace Hopper", category: "people" }, { now: NOW });
+  upsertEntity(vault, {
+    category: "people",
+    name: "Boris Karloff",
+    agent: AGENT,
+    now: NOW,
+  });
+  const again = intake([item({ counterparties: ["Ada Lovelace", "Boris Karloff"] })]);
+  // The staleness comes from the stored edge versus the readable canonical
+  // registry, not from this post's names - and a slug with a stale edge is
+  // left byte-identical instead of growing a new edge beside it.
+  expect(again.staleEdges).toEqual(["send-ada-the-migration-recap"]);
+  expect(again.reanchored).toEqual([]);
+  expect(showPledge(vault, { slug: "send-ada-the-migration-recap" })!.counterparties).toEqual(
+    [adaId, graceId].toSorted(),
+  );
+  expect(readFileSync(stored!.path, "utf8")).toBe(before);
+});
+
 test("an entity leaving canonical scope never deletes a stored edge", () => {
   const adaId = registerAda();
   intake([item({ counterparties: ["Ada Lovelace"] })]);
