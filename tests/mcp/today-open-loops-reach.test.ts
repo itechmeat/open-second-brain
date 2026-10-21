@@ -42,7 +42,10 @@ const PRIVATE_PLEDGE = "Zzreservedpledge";
 const PUBLIC_LOOP = "call the plumber";
 const PUBLIC_PLEDGE = "Send the pledge report";
 const PLEDGE_SOURCE_REL = "Notes/promises-meeting.md";
-const PLEDGE_DUE = "2030-01-01";
+// A due date that stays ahead of the clock for the suite's whole life: the
+// test pins reach behavior, not overdue arithmetic, so a hardcoded date
+// would start failing - and change the rendered lines - once it passed.
+const PLEDGE_DUE = `${new Date().getUTCFullYear() + 5}-01-01`;
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 const AGENT = "claude";
 

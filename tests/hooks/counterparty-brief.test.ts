@@ -278,6 +278,15 @@ describe("counterparty-brief hook (UserPromptSubmit)", () => {
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe("");
+    // The empty vocabulary is its own decision, not an empty brief: the
+    // audit line names the reason, and the ledger stays untouched - so the
+    // test fails if the early exit is ever removed and the run falls
+    // through to the counterparty match instead.
+    const abstain = auditRecords().find((record) => record["ok"] === false);
+    const details = abstain?.["details"] as Record<string, unknown> | undefined;
+    expect(details?.["decision"]).toBe("abstain");
+    expect(details?.["reason"]).toBe("no_triggers");
+    expect(readBriefDelivered(vault, SESSION.session_id)).toBeNull();
   }, 20000);
 
   test("a prompt naming no counterparty emits nothing", async () => {

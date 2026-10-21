@@ -436,6 +436,18 @@ test("brain_intake_pledges refuses the whole intake when the source page is with
   );
   expect(failure.code).toBe(INVALID_PARAMS);
   expect(failure.message.startsWith("brain_intake_pledges: ")).toBe(true);
+  // Identical-to-absent, answer and all: the reach predicate answers an
+  // absent path false too, so the same post naming a genuinely absent
+  // source must produce the same refusal with only the caller's own path
+  // argument swapped - a withheld source never answers differently.
+  const absent = await mcpFailure(async () =>
+    intake.handler(remote, {
+      source: "notes/absent-source.md",
+      pledges: [{ title: "Secret-source pledge", due: day(4), evidence: [QUOTE] }],
+    }),
+  );
+  expect(absent.code).toBe(failure.code);
+  expect(failure.message).toBe(absent.message.replace("notes/absent-source.md", SOURCE_REL));
 });
 
 test("a brain_pledge failure that is not an input problem is the server's fault", async () => {

@@ -269,7 +269,10 @@ export function intakePledges(
     );
   }
   // The reach question comes first, before any stat or read, so a refused
-  // source never even has its existence on disk confirmed.
+  // source never even has its existence on disk confirmed. The reach
+  // predicate answers false for an absent path too, so a withheld and an
+  // absent source both refuse right here, under one message - identical to
+  // absent; the not-found arm below is the local reach's own diagnostic.
   if (opts.readable !== undefined && !opts.readable(source)) {
     throw new PledgeIntakeError(
       `pledge intake source page is not readable at the caller's reach: ${source}`,
