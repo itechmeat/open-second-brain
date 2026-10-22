@@ -44,7 +44,7 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
     ok(
       `privacy-marker-restamp: updated ${result.updated} of ${result.candidates.length} candidate(s)`,
     );
-    for (const s of result.skipped) info(`  refused ${s.path}: ${s.reason}`);
+    for (const s of result.skipped) process.stderr.write(`  refused ${s.path}: ${s.reason}\n`);
   } else {
     ok(
       `privacy-marker-restamp dry-run: ${result.candidates.length} candidate(s) ` +
