@@ -46,6 +46,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { EXCLUDED_DIRS, parseFrontmatterText } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { pageVisibility } from "../../graph/visibility.ts";
+import { readContentClass } from "../provenance/content-class.ts";
 import {
   PRIVATE_REGION_PLACEHOLDER,
   REDACTION_PLACEHOLDER,
@@ -207,7 +208,17 @@ export type KnowledgePackBlockReason =
   /** The entry carries an `owner:` claim - owner-private knowledge. */
   | "owner"
   /** The page is a staged import candidate nobody has reviewed. */
-  | "unreviewed";
+  | "unreviewed"
+  /**
+   * The page carries the reserved `content_class: prompt-derived` stamp -
+   * material an agent produced from a prompt, which the shared exports
+   * leave out by default (the guard seam in `src/core/egress/guard.ts`).
+   * A pack is handed to someone else, so it joins the block list beside
+   * `visibility` and `owner` rather than composing the page and redacting
+   * it after the fact; each block names the reason, so the omission is
+   * never a silently smaller pack.
+   */
+  | "prompt-derived";
 
 export interface KnowledgePackBlocked {
   readonly kind: KnowledgePackEntryKind;
@@ -351,6 +362,13 @@ function pageBlockReason(page: OkfPage): KnowledgePackBlockReason | null {
   if (pageVisibility(page.frontmatter).length > 0) return "visibility";
   const owner = page.frontmatter["owner"];
   if (typeof owner === "string" && owner.trim() !== "") return "owner";
+  // The reserved class joins the operator-set scopes: a page stamped
+  // `prompt-derived` is default-excluded from a shared export, and the
+  // exclusion is named. First match wins, so an operator's own scoping
+  // keeps its reason; a value this build does not know reads as unmarked
+  // (the read side of `readContentClass` never throws), so a hand-edited
+  // spelling cannot silently hide pages from every pack.
+  if (readContentClass(page.frontmatter) !== null) return "prompt-derived";
   if (page.frontmatter["okf_review"] !== undefined) return "unreviewed";
   if (page.path === OKF_REVIEW_REL || page.path.startsWith(`${OKF_REVIEW_REL}/`)) {
     return "unreviewed";
