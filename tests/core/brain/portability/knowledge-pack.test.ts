@@ -165,6 +165,26 @@ describe("export", () => {
     );
     expect(() => selectKnowledgePack(src, [])).toThrow(KnowledgePackError);
   });
+
+  test("an informal privacy marker blocks a page that declares no visibility", () => {
+    seedSource();
+    page(
+      src,
+      "Notes/marked.md",
+      "---\ntags: [ops]\naccess: private\n---\nThe informally marked incident notes.\n",
+    );
+    // A marker-only page resolves to no `visibility:` token at all, so a
+    // declaration-only gate would ship it, body included, to a shared
+    // export. The marker denies a remote read all the same.
+    const selected = selectKnowledgePack(src, ["tag:ops"]);
+    expect(selected.okfManifest.pages.map((p) => p.path)).toEqual(["Notes/runbook.md"]);
+    expect(selected.blocked).toContainEqual({
+      kind: "page",
+      id: "Notes/marked.md",
+      reason: "visibility",
+    });
+    expect(JSON.stringify(selected)).not.toContain("informally marked incident notes");
+  });
 });
 
 describe("preview", () => {

@@ -10,7 +10,7 @@
  * section (`## Parts` or `## Table`); for every other source nothing.
  */
 
-import { pageVisibility } from "../../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { FRONTMATTER_RE, parseFrontmatterText } from "../../vault.ts";
 import { isSourceHidden, readSourceOrigin, SourceTrustError } from "../intake/source-trust.ts";
@@ -276,8 +276,15 @@ export function deriveSourceSection(
  * construction) and decoded the way the reach predicate
  * (`isPathReadableAtReach`) decodes a page: leniently, through the vault's
  * frontmatter parser.
+ *
+ * The tokens are {@link remoteDenyVisibilityTokens}, not the declared
+ * `visibility:` alone: an informal privacy marker on the source
+ * (`access: private` and its siblings) is a claim about who may read the
+ * source, and a summary page that copies the source's rows or parts is at
+ * most as visible as the source. Reading the declaration alone would write
+ * those sections onto a default-visibility page - remotely served.
  */
 function sourceVisibility(bytes: Uint8Array): readonly string[] {
   const [meta] = parseFrontmatterText(UTF8_LENIENT.decode(bytes));
-  return pageVisibility(meta);
+  return [...remoteDenyVisibilityTokens(meta)];
 }

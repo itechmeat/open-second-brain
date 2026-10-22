@@ -29,7 +29,9 @@
  *
  * The values are token-matched through {@link normToken} - the same NFC +
  * trim + lower-case normalisation the visibility layer uses - rather than
- * through a second normaliser. A value that spells something else (a
+ * through a second normaliser, and the KEYS are matched through it too: a
+ * vault that spells the key `Access` or `CONFIDENTIALITY` makes the same
+ * claim as the lower-case spelling. A value that spells something else (a
  * phrase, a negation, a Markdown sentence) is not a deny marker: this
  * module recognises the three token spellings the design pins and does not
  * guess at prose.
@@ -68,15 +70,41 @@ function declaredValues(raw: unknown): string[] {
 }
 
 /**
+ * The marker keys in the normal form {@link normToken} produces. The values
+ * are matched after normalisation, so the KEYS are too: a vault that spells
+ * the key `Access`, `ACCESS` or with stray surrounding whitespace makes the
+ * same claim as the lower-case spelling, and a reader that matched keys by
+ * exact case would hand that claim to a remote reader.
+ */
+const PRIVACY_MARKER_KEY_TOKENS: ReadonlySet<string> = Object.freeze(
+  new Set(PRIVACY_MARKER_KEYS.map((key) => normToken(key))),
+);
+
+/**
+ * Does this frontmatter carry ANY key under a marker key spelling, whatever
+ * the value? The migration re-stamping the indexed visibility column gates
+ * on this, because a row whose frontmatter carries a marker key at all is a
+ * row the column's pre-marker stamp may understate.
+ */
+export function hasPrivacyMarkerKey(meta: FrontmatterMap): boolean {
+  for (const key of Object.keys(meta)) {
+    if (PRIVACY_MARKER_KEY_TOKENS.has(normToken(key))) return true;
+  }
+  return false;
+}
+
+/**
  * Does this frontmatter carry a privacy-denying informal marker value?
  *
- * True when any of {@link PRIVACY_MARKER_KEYS} declares a string (or an
- * array holding a string) whose {@link normToken} form is one of
+ * True when any key whose normalised spelling is one of
+ * {@link PRIVACY_MARKER_KEYS} declares a string (or an array holding a
+ * string) whose {@link normToken} form is one of
  * {@link PRIVACY_DENY_MARKER_VALUES}. Absent keys, non-string scalars,
  * empty values and every other token answer false.
  */
 export function hasPrivacyDenyMarker(meta: FrontmatterMap): boolean {
-  for (const key of PRIVACY_MARKER_KEYS) {
+  for (const key of Object.keys(meta)) {
+    if (!PRIVACY_MARKER_KEY_TOKENS.has(normToken(key))) continue;
     for (const value of declaredValues(meta[key])) {
       if (PRIVACY_DENY_MARKER_VALUES.includes(normToken(value))) return true;
     }

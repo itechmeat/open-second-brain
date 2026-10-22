@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 
 import { discoverConfig } from "../config.ts";
-import { pageVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { privateRegionTexts } from "../redactor.ts";
 import { parseFrontmatter } from "../vault.ts";
 import {
@@ -84,7 +84,12 @@ export function pageEgressFacts(absPath: string | null): PageEgressFacts {
   try {
     const [meta] = parseFrontmatter(absPath);
     const text = readFileSync(absPath, "utf8");
-    return { visibility: pageVisibility(meta), privateRegions: privateRegionTexts(text) };
+    // The tokens fold in an informal privacy marker's reservation
+    // (graph/privacy-markers.ts), so a marker-only page cannot leave.
+    return {
+      visibility: remoteDenyVisibilityTokens(meta),
+      privateRegions: privateRegionTexts(text),
+    };
   } catch {
     return UNREADABLE;
   }

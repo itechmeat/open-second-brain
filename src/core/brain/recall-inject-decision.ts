@@ -37,7 +37,7 @@ import type { DecisionProvider, DecisionResponse } from "../decision-model/contr
 import { RECALL_INJECT_QUESTIONS } from "../decision-model/questions.ts";
 import { runDecision } from "../decision-model/run.ts";
 import { buildCandidateState, mayLeaveMachine } from "../decision-model/state.ts";
-import { pageVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { privateRegionTexts, stripPrivateRegions } from "../redactor.ts";
 import { readCachedFrontmatterEntry, type FrontmatterCache } from "../search/result-filters.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
@@ -93,7 +93,11 @@ function defaultResolvePage(
   return (note) => {
     if (!isActiveVaultNote(note)) return { visibility: null, privateRegions: null };
     const entry = readCachedFrontmatterEntry(cache, vault, note.path);
-    const visibility = entry.unreadable ? null : pageVisibility(entry.meta);
+    // The tokens fold in an informal privacy marker's reservation
+    // (graph/privacy-markers.ts): a marker-only note resolves to no
+    // caller-scope token at all, and without the fold `mayLeaveMachine`
+    // would read it as public and send it.
+    const visibility = entry.unreadable ? null : remoteDenyVisibilityTokens(entry.meta);
     if (!mayLeaveMachine(visibility)) return { visibility, privateRegions: null };
     let privateRegions: ReadonlyArray<string> | null;
     try {

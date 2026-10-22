@@ -35,7 +35,7 @@ import type { DecisionAnswer, DecisionChoiceQuestion } from "../decision-model/c
 import { LABELS_QUESTIONS } from "../decision-model/questions.ts";
 import { runDecision } from "../decision-model/run.ts";
 import { estimateTokens, mayLeaveMachine } from "../decision-model/state.ts";
-import { pageVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { stripPrivateRegions } from "../redactor.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { LabelVocabularyError, readLabels } from "./labels.ts";
@@ -178,7 +178,12 @@ export async function suggestNoteLabels(
   const mode = decisionModelModeFor(cfg, "labels") as "shadow" | "enforce";
 
   const dimensions = requestedDimensions(opts.pack, opts.dimensions);
-  if (!mayLeaveMachine(pageVisibility(meta))) throw new LabelSuggestPrivateNoteError(relPath);
+  // The tokens fold in an informal privacy marker's reservation
+  // (graph/privacy-markers.ts): a marker-only note resolves to no
+  // caller-scope token at all, and without the fold `mayLeaveMachine`
+  // would read it as public and send it.
+  if (!mayLeaveMachine(remoteDenyVisibilityTokens(meta)))
+    throw new LabelSuggestPrivateNoteError(relPath);
 
   const labels = readLabels(meta);
   const asked: AskedDimension[] = [];

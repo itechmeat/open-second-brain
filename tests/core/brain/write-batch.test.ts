@@ -253,6 +253,111 @@ describe("applyWriteBatch note operations", () => {
     expect(readFileSync(join(vault, "Notes/Authored.md"), "utf8")).toContain("access: private");
   });
 
+  test("update_note writes a marker key whose deny status stands still", () => {
+    // The guard is about the note's deny status, not the key's presence:
+    // a value that denies nothing (`read-only`), or a move between two
+    // non-deny values, is note content like any other key's.
+    seedNote("Notes/ReadOnly.md", "body", "title: R\naccess: read-only");
+    const res = applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/ReadOnly.md", frontmatter: { access: "read-only" } },
+    ]);
+    expect(res.applied).toBe(1);
+    expect(readFileSync(join(vault, "Notes/ReadOnly.md"), "utf8")).toContain("access: read-only");
+
+    seedNote("Notes/Move.md", "body", "title: M\naccess: public");
+    const moved = applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Move.md", frontmatter: { access: "team" } },
+    ]);
+    expect(moved.applied).toBe(1);
+    expect(readFileSync(join(vault, "Notes/Move.md"), "utf8")).toContain("access: team");
+
+    // A marker note is otherwise a normal note: an update that leaves the
+    // deny status standing still writes its other content keys as usual.
+    seedNote("Notes/Marked.md", "body", "title: K\naccess: private");
+    const sideBySide = applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Marked.md", frontmatter: { status: "final" } },
+    ]);
+    expect(sideBySide.applied).toBe(1);
+    const marked = readFileSync(join(vault, "Notes/Marked.md"), "utf8");
+    expect(marked).toContain("access: private");
+    expect(marked).toContain("status: final");
+  });
+
+  test("update_note refuses a merge that clears or forges the note's deny value", () => {
+    // Clearing: `access: private` rewritten to a non-deny value would lift
+    // the reservation without the caller ever naming the boundary.
+    seedNote("Notes/Clear.md", "body", "title: C\naccess: private");
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Clear.md", frontmatter: { access: "public" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+      expect((err as WriteBatchError).message).toContain("access");
+      expect((err as WriteBatchError).message).toContain("edit the note directly");
+      expect((err as WriteBatchError).details).toMatchObject({
+        path: "Notes/Clear.md",
+        key: "access",
+      });
+    }
+    expect(readFileSync(join(vault, "Notes/Clear.md"), "utf8")).toContain("access: private");
+
+    // Forging: a deny value the note did not carry arrives the same way,
+    // silently, through the same merge.
+    seedNote("Notes/Forge.md", "body", "title: F\nsensitivity: internal");
+    try {
+      applyWriteBatch(vault, [
+        {
+          kind: "update_note",
+          path: "Notes/Forge.md",
+          frontmatter: { sensitivity: "confidential" },
+        },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+      expect((err as WriteBatchError).details).toMatchObject({
+        path: "Notes/Forge.md",
+        key: "sensitivity",
+      });
+    }
+    expect(readFileSync(join(vault, "Notes/Forge.md"), "utf8")).toContain("sensitivity: internal");
+  });
+
+  test("update_note matches reserved keys whatever their case", () => {
+    // The frontmatter parser keeps a key's spelling, so `Access:` is a
+    // different map key from `access:` - but it states the same boundary
+    // claim, and a guard reading only the lower-case form would wave it
+    // through the merge.
+    seedNote("Notes/Cased.md", "body", "title: X");
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Cased.md", frontmatter: { Access: "private" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+      expect((err as WriteBatchError).details).toMatchObject({
+        path: "Notes/Cased.md",
+        key: "Access",
+      });
+    }
+
+    seedNote("Notes/Privately.md", "body", "title: P\nvisibility: private");
+    expect(() =>
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Privately.md", frontmatter: { Visibility: "team" } },
+      ]),
+    ).toThrow(WriteBatchError);
+    expect(readFileSync(join(vault, "Notes/Privately.md"), "utf8")).toContain(
+      "visibility: private",
+    );
+  });
+
   test("create_note refuses to clobber an existing note", () => {
     seedNote("Notes/Dup.md", "original");
     try {

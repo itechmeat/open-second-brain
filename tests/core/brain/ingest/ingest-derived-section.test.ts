@@ -338,6 +338,22 @@ describe("visibility on a summary page", () => {
     expect(frontmatterLines(page(vault, res.summaryPath))).toContain("visibility: [private]");
   });
 
+  test("an informally marked source reserves the page its derived section rides on", () => {
+    // `access: private` declares no `visibility:` the reach predicate's
+    // `pageVisibility` would read. Reading the declaration alone stamped no
+    // tokens, and the page carrying the source's rows went out at default
+    // visibility - remotely served.
+    seed(vault, "Clips/parts.csv", `---\naccess: private\n---\n${PARTS_CSV}`);
+    const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
+    expect(res.table).toMatchObject({ rendered: true, rows: 2 });
+    const text = page(vault, res.summaryPath);
+    expect(frontmatterLines(text)).toContain("visibility: [private]");
+    // The copied source content rides a page that now carries the reserved
+    // token, not a default-visibility one.
+    expect(text).toContain("## Table");
+    expect(text).toContain("bolt | 4");
+  });
+
   test("a source moved to another audience withholds the page rather than widening it", () => {
     seed(vault, "Clips/parts.csv", `---\nvisibility: team-a\n---\n${PARTS_CSV}`);
     const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });

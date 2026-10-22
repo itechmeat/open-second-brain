@@ -48,6 +48,7 @@ const NOTE_TEXT = {
   b: "Grocery list with bread and milk, nothing about herons.",
   c: "Heron nesting sites along the river, used every spring.",
   s: "Secret heron counts kept for the landowner only.",
+  m: "Informally marked heron counts, reserved by an access key.",
 };
 
 const vaults: string[] = [];
@@ -67,6 +68,7 @@ function tempVault(): string {
   write("notes/b.md", `# Groceries\n\n${NOTE_TEXT.b}\n`);
   write("notes/c.md", `# Heron nests\n\n${NOTE_TEXT.c}\n`);
   write("notes/s.md", `---\nvisibility: private\n---\n# Counts\n\n${NOTE_TEXT.s}\n`);
+  write("notes/m.md", `---\naccess: private\n---\n# Marked\n\n${NOTE_TEXT.m}\n`);
   return vault;
 }
 
@@ -149,7 +151,7 @@ function expectNoText(value: unknown): void {
   expect(text).not.toContain("heron migration");
   expect(text).not.toContain(PROMPT);
   for (const t of Object.values(NOTE_TEXT)) expect(text).not.toContain(t);
-  for (const k of ["a", "b", "c", "s"]) expect(text).not.toContain(`Title ${k}`);
+  for (const k of ["a", "b", "c", "s", "m"]) expect(text).not.toContain(`Title ${k}`);
 }
 
 describe("recall_inject off: no filter, no request, no field", () => {
@@ -353,6 +355,28 @@ describe("recall_inject enforce", () => {
     if (decision.kind !== "inject") return;
     expect(decision.brief).toContain("notes/s.md");
     expect(decision.brief).not.toContain("notes/b.md");
+    const record = listDecisionModelCalls(vault)[0]!.payload;
+    expect(record["note_paths"]).toEqual(["notes/a.md", "(withheld)", "notes/b.md"]);
+    expect(record["withheld_count"]).toBe(1);
+  });
+
+  test("an informally marked note (access: private) is withheld like a formal one", async () => {
+    // `access: private` resolves to no caller-scope token, so a gate fed
+    // by `pageVisibility` alone read the note as public and sent it.
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider({ answer: answerBy({ b: 0.05 }, 0.05) });
+    const filter = createRecallInjectDecisionFilter({
+      config: config(vault, "enforce"),
+      vault,
+      provider,
+    });
+    const notes = [note("a", 0.9), note("m", 0.85), note("b", 0.8)];
+    const decision = await decide(notes, filter);
+    expect(allText(provider.requests)).not.toContain(NOTE_TEXT.m);
+    expect(Object.keys(provider.requests[0]!.questions)).toHaveLength(3); // two notes + inject_any
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    // The mask hides the withheld note from the model, as for a formal one.
     const record = listDecisionModelCalls(vault)[0]!.payload;
     expect(record["note_paths"]).toEqual(["notes/a.md", "(withheld)", "notes/b.md"]);
     expect(record["withheld_count"]).toBe(1);

@@ -46,6 +46,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { EXCLUDED_DIRS, parseFrontmatterText } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { pageVisibility } from "../../graph/visibility.ts";
+import { hasPrivacyDenyMarker } from "../../graph/privacy-markers.ts";
 import { readContentClass } from "../provenance/content-class.ts";
 import {
   PRIVATE_REGION_PLACEHOLDER,
@@ -360,6 +361,12 @@ function preferenceOwner(vault: string, id: string): string | null {
 
 function pageBlockReason(page: OkfPage): KnowledgePackBlockReason | null {
   if (pageVisibility(page.frontmatter).length > 0) return "visibility";
+  // An informal privacy marker (`access: private` and its siblings) denies
+  // a remote read just as the reserved token does
+  // (graph/privacy-markers.ts), so a marker-only page - which declares no
+  // `visibility:` at all - is blocked under the same reason rather than
+  // shipped with its body.
+  if (hasPrivacyDenyMarker(page.frontmatter)) return "visibility";
   const owner = page.frontmatter["owner"];
   if (typeof owner === "string" && owner.trim() !== "") return "owner";
   // The reserved class joins the operator-set scopes: a page stamped

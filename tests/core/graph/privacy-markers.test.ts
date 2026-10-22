@@ -23,6 +23,7 @@ import {
   PRIVACY_DENY_MARKER_VALUES,
   PRIVACY_MARKER_KEYS,
   hasPrivacyDenyMarker,
+  hasPrivacyMarkerKey,
   markerDenyTokens,
   remoteDenyVisibilityTokens,
 } from "../../../src/core/graph/privacy-markers.ts";
@@ -106,6 +107,32 @@ describe("normalisation is the visibility module's own", () => {
     expect(hasPrivacyDenyMarker({ access: "  PRIVATE  " })).toBe(true);
     expect(hasPrivacyDenyMarker({ confidentiality: "Secret" })).toBe(true);
     expect(hasPrivacyDenyMarker({ sensitivity: ["CONFIDENTIAL"] })).toBe(true);
+  });
+
+  test("a capitalised KEY spelling is the same marker key", () => {
+    // A vault that spells the key `Access` makes the same claim as the
+    // lower-case one; a reader matching keys by exact case would miss it
+    // and hand the page to a remote reader.
+    expect(hasPrivacyDenyMarker({ Access: "private" })).toBe(true);
+    expect(hasPrivacyDenyMarker({ ACCESS: "Private" })).toBe(true);
+    expect(hasPrivacyDenyMarker({ Confidentiality: "Secret" })).toBe(true);
+    expect(hasPrivacyDenyMarker({ "Sensitivity ": ["Confidential"] })).toBe(true);
+    expect(markerDenyTokens({ Access: "private" })).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
+    expect(remoteDenyVisibilityTokens({ ACCESS: "Private" })).toEqual([
+      REMOTE_DENY_VISIBILITY_TOKEN,
+    ]);
+  });
+
+  test("a capitalised key carrying a non-deny value is still no marker", () => {
+    expect(hasPrivacyDenyMarker({ Access: "public" })).toBe(false);
+    expect(hasPrivacyDenyMarker({ Topic: "private" })).toBe(false);
+  });
+
+  test("hasPrivacyMarkerKey answers for any marker key, deny value or not", () => {
+    expect(hasPrivacyMarkerKey({ access: "public" })).toBe(true);
+    expect(hasPrivacyMarkerKey({ Confidentiality: 42 })).toBe(true);
+    expect(hasPrivacyMarkerKey({ visibility: "private" })).toBe(false);
+    expect(hasPrivacyMarkerKey({})).toBe(false);
   });
 
   test("comparison happens after NFC composition, not by stripping marks", () => {

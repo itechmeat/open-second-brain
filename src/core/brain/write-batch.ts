@@ -46,7 +46,8 @@ import {
   type NoteWriteOp,
 } from "./notes/write-record.ts";
 import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
-import { PRIVACY_MARKER_KEYS } from "../graph/privacy-markers.ts";
+import { hasPrivacyDenyMarker, PRIVACY_MARKER_KEYS } from "../graph/privacy-markers.ts";
+import { normToken } from "../graph/visibility.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { writePathAdvisoryField, type WritePathAdvisoryField } from "./write-path-advisory.ts";
 import {
@@ -760,35 +761,53 @@ function projectCreateNote(
 }
 
 /**
- * Frontmatter keys a caller-named UPDATE may not set. The first three are
- * read as boundary state, not note content: `visibility` carries the
- * page's read-scope tokens (the reserved `private` among them), and
+ * Frontmatter keys a caller-named UPDATE may not set, whatever the value.
+ * They are read as boundary state, not note content: `visibility` carries
+ * the page's read-scope tokens (the reserved `private` among them), and
  * `origin_channel` and `content_class` are the server-derived stamps
- * creation writes once and mutation never rewrites. The marker keys
- * (`access`, `confidentiality`, `sensitivity`) are boundary state for the
- * same reason, one layer over: the read roots resolve a deny value under
- * any of them to the same reserved remote-deny token (`graph/privacy-
- * markers.ts`), so a merged `access: ""` would clear that reservation
- * without the caller ever naming the boundary - and a merged deny value
- * would forge one. The refusal posture is the visibility one: edit the
- * note directly. Creation needs no refusal - the server stamps are merged
- * last there and a caller-named class is dropped outright, and a marker a
- * caller authors at creation is the caller stating the claim about their
- * own new note - but the update merge inverts the order, so the guard
- * lives at the merge.
+ * creation writes once and mutation never rewrites. Keys are matched
+ * through {@link normToken}, so a capitalised spelling (`Visibility:`)
+ * meets the same refusal as the lower-case one.
  */
 const RESERVED_UPDATE_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "visibility",
   ORIGIN_CHANNEL_FIELD,
   CONTENT_CLASS_FIELD,
-  ...PRIVACY_MARKER_KEYS,
 ]);
 
-/** The first reserved key the caller's map names, or `null`. */
-function reservedFrontmatterKey(frontmatter: FrontmatterMap | undefined): string | null {
+/**
+ * The informal privacy marker keys (`access`, `confidentiality`,
+ * `sensitivity`). Unlike {@link RESERVED_UPDATE_FRONTMATTER_KEYS} these are
+ * boundary state one layer over: the read roots resolve a deny value under
+ * any of them to the same reserved remote-deny token
+ * (`graph/privacy-markers.ts`). A caller-named update may rewrite a
+ * marker's VALUE freely while the note's deny status stands still - an
+ * `access: read-only`, or a move from `access: public` to `access: team`,
+ * changes nothing the read roots act on - but a merge that would CLEAR the
+ * note's deny value (a merged `access: ""`) or FORGE one is refused, in
+ * the visibility posture: edit the note directly.
+ *
+ * Creation needs no refusal - the server stamps are merged last there and
+ * a caller-named class is dropped outright, and a marker a caller authors
+ * at creation is the caller stating the claim about their own new note -
+ * but the update merge inverts the order, so the guard lives at the merge.
+ */
+const PRIVACY_MARKER_UPDATE_KEYS: ReadonlySet<string> = new Set(PRIVACY_MARKER_KEYS);
+
+/**
+ * The first key of `frontmatter` whose normalised spelling is in
+ * `reserved`, or `null`. Keys are compared through {@link normToken} - the
+ * same NFC + trim + lower-case normalisation the visibility layer gives a
+ * token - so a spelling the parser keeps distinct (`Access:`, `VISIBILITY:`)
+ * cannot slip a boundary claim past a guard that reads the lower-case form.
+ */
+function reservedFrontmatterKey(
+  frontmatter: FrontmatterMap | undefined,
+  reserved: ReadonlySet<string>,
+): string | null {
   if (frontmatter === undefined) return null;
   for (const key of Object.keys(frontmatter)) {
-    if (RESERVED_UPDATE_FRONTMATTER_KEYS.has(key)) return key;
+    if (reserved.has(normToken(key))) return key;
   }
   return null;
 }
@@ -862,8 +881,12 @@ function projectUpdateNote(
   }
   // The reserved-key guard rides the same seam: the merge below lets the
   // caller's map win over the file's, so a boundary key arriving here
-  // would silently rewrite it.
-  const reservedKey = reservedFrontmatterKey(op.frontmatter);
+  // would silently rewrite it. The unconditional keys refuse on presence
+  // alone; a marker key refuses only when the merge would change the
+  // note's deny status (a marker the note's deny status does not move -
+  // `access: read-only`, or `access: public` becoming `access: team` -
+  // writes exactly as any other content key does).
+  const reservedKey = reservedFrontmatterKey(op.frontmatter, RESERVED_UPDATE_FRONTMATTER_KEYS);
   if (reservedKey !== null) {
     throw new WriteBatchError(
       "reserved_frontmatter_key",
@@ -872,6 +895,20 @@ function projectUpdateNote(
         `through an update of ${target.relPath}; edit the note directly`,
       { path: target.relPath, key: reservedKey },
     );
+  }
+  const markerKey = reservedFrontmatterKey(op.frontmatter, PRIVACY_MARKER_UPDATE_KEYS);
+  if (markerKey !== null) {
+    const merged: FrontmatterMap = { ...state.frontmatter, ...op.frontmatter };
+    if (hasPrivacyDenyMarker(merged) !== hasPrivacyDenyMarker(state.frontmatter)) {
+      throw new WriteBatchError(
+        "reserved_frontmatter_key",
+        index,
+        `operation ${index}: frontmatter key "${markerKey}" would change whether ` +
+          `${target.relPath} denies a remote read (a deny value under access / ` +
+          "confidentiality / sensitivity is boundary state); edit the note directly",
+        { path: target.relPath, key: markerKey },
+      );
+    }
   }
   const frontmatter =
     op.frontmatter !== undefined ? { ...state.frontmatter, ...op.frontmatter } : state.frontmatter;

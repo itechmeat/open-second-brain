@@ -29,6 +29,7 @@ import { collectTrustGateRefusals, trustGateAdjuster } from "../../brain/trust/r
 import { applyRelationPolarityPhase } from "../graph-phases.ts";
 import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../../graph/privacy-markers.ts";
 import { SUPERSEDED_BY_RELATION } from "../../graph/relation-vocab.ts";
 import { couplingVerdict, type CouplingVerdict } from "../correction-coupling.ts";
 import { SUCCESSOR_CARRY } from "../relation-polarity.ts";
@@ -551,10 +552,13 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
         });
       },
       // Decision-model kind only: a candidate leaves the machine only when
-      // its page's visibility resolves and does not carry `private`.
+      // its page's visibility resolves and does not carry `private`. The
+      // tokens fold in an informal privacy marker's reservation
+      // (graph/privacy-markers.ts), so a marker-only page - which resolves
+      // to no caller-scope token at all - is withheld like a formal one.
       resolveVisibility: (path) => {
         const entry = readCachedFrontmatterEntry(frontmatterCache, config.vault, path);
-        return entry.unreadable ? null : pageVisibility(entry.meta);
+        return entry.unreadable ? null : remoteDenyVisibilityTokens(entry.meta);
       },
       // The index keeps a page's text whole, and a long `<private>` region
       // can be split across chunks, so the page's own regions are read to
