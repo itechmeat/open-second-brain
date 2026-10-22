@@ -8,13 +8,20 @@
  * Thai, Lao, Khmer, CJK punctuation and fullwidth forms), where every
  * character is one token - a paragraph of Chinese has no whitespace, and
  * counting it as one "word" sent 9,000-character chunks to providers that
- * reject them (issue #186). Deterministic across Bun/Node,
- * dependency-free, machine-independent — so the same vault hashes the
- * same chunks on every Syncthing peer.
+ * reject them (issue #186). Long whitespace-free runs on the Latin side
+ * are the same trap with the sign flipped: a subword tokenizer spends
+ * roughly one token per two to four characters on a URL, a file path or a
+ * hash, so a run of sixteen or more such characters is charged one token
+ * per three characters instead of one (issue #272). Deterministic across
+ * Bun/Node, dependency-free, machine-independent — so the same vault
+ * hashes the same chunks on every Syncthing peer.
  *
  * Budget invariant: every chunk's `tokenCount`, overlap included, is at
  * most `maxTokens`. A block too large for one chunk is split by line, then
- * after sentence punctuation, then at a token boundary.
+ * after sentence punctuation, then at a token boundary - and inside a
+ * long whitespace-free run those token boundaries fall every few
+ * characters, so one giant line is still distributed across chunks
+ * without dropping or duplicating source text.
  */
 
 /**
@@ -26,8 +33,12 @@
  *   1 - whitespace word count, overlap outside the budget (through v1.57).
  *   2 - per-character count for unspaced scripts; overlap inside the
  *       budget; oversize blocks split (issue #186).
+ *   3 - whitespace-free runs of sixteen or more characters charged about
+ *       one token per three characters and split inside the run, so a
+ *       long URL or hash can no longer pass the budget as one "word"
+ *       (issue #272).
  */
-export const CHUNKER_VERSION = 2;
+export const CHUNKER_VERSION = 3;
 
 /**
  * Token budget of one chunk when the caller names none. Exported so a
@@ -96,19 +107,67 @@ const MARK_RE = /\p{M}/uy;
 /** Every unspaced-script code point is at or above Thai (U+0E00). */
 const FIRST_UNSPACED_CODE_POINT = 0x0e00;
 
+/**
+ * A whitespace-free run shorter than this many code units keeps the plain
+ * word count: ordinary prose words, however long, stay one estimated
+ * token, and the space-separated corpus hashes exactly as before. The
+ * threshold sits above any real word with its punctuation attached, where
+ * a run stops looking like prose and starts looking like a URL, a path or
+ * a hash - the shapes that hide hundreds of real tokens behind a
+ * one-"word" estimate.
+ */
+const DENSE_RUN_MIN_CHARS = 16;
+
+/**
+ * Code units charged per token inside a whitespace-free run of at least
+ * {@link DENSE_RUN_MIN_CHARS}. Subword tokenizers break such text into
+ * small fragments - about one token per two to four characters - so
+ * counting a 3,700-character URL as one "word" under-reported reality by
+ * three orders of magnitude and let a single chunk thousands of tokens
+ * past the model's input window through the budget (issue #272). Three is
+ * the conservative end of that range, chosen in the spirit of the
+ * unspaced scripts' one token per character: over-charging only splits a
+ * chunk earlier, while under-charging silently breaks the window.
+ */
+const DENSE_CHARS_PER_TOKEN = 3;
+
 function matchesAt(re: RegExp, text: string, i: number): boolean {
   re.lastIndex = i;
   return re.test(text);
 }
 
 /**
+ * End (exclusive) of the whitespace-free run of code points below
+ * {@link FIRST_UNSPACED_CODE_POINT} that starts at `from`: the run stops
+ * at whitespace or at the first character of an unspaced script - exactly
+ * the places the word walk stops, so the measured run is the same span
+ * the old code counted as one "word". Cyrillic, Greek and the other
+ * scripts below Thai take part, as they took part in the word they
+ * extended.
+ */
+function wordRunEnd(text: string, from: number): number {
+  let end = from;
+  while (end < text.length) {
+    const c = text.charCodeAt(end);
+    if (c >= FIRST_UNSPACED_CODE_POINT) break;
+    if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) break;
+    end++;
+  }
+  return end;
+}
+
+/**
  * Walk `text`'s tokens: a run of non-whitespace is one token, except that
  * each unspaced-script character is a token of its own (a combining mark
- * after one stays part of it). Pushes each token's start offset onto
- * `starts` when given; returns the count.
+ * after one stays part of it), and a whitespace-free run of at least
+ * {@link DENSE_RUN_MIN_CHARS} code units is charged one token per
+ * {@link DENSE_CHARS_PER_TOKEN} code units, with a token start every few
+ * characters so a cut can fall inside the run. Pushes each token's start
+ * offset onto `starts` when given; returns the count.
  *
  * Whitespace is exactly space, tab, LF and CR, as it always was: text
- * with no unspaced-script character counts exactly as before.
+ * with no unspaced-script character and no long unbroken run counts
+ * exactly as before.
  */
 function walkTokens(text: string, starts: number[] | null): number {
   let count = 0;
@@ -129,6 +188,20 @@ function walkTokens(text: string, starts: number[] | null): number {
         continue;
       }
       if (!inWord) {
+        const runEnd = wordRunEnd(text, i);
+        if (runEnd - i >= DENSE_RUN_MIN_CHARS) {
+          const runLen = runEnd - i;
+          count += Math.ceil(runLen / DENSE_CHARS_PER_TOKEN);
+          if (starts) {
+            for (let p = i; p < runEnd; p += DENSE_CHARS_PER_TOKEN) starts.push(p);
+          }
+          i = runEnd;
+          // The run stopped on whitespace or an unspaced-script
+          // character; both start a fresh token, so the word state resets.
+          inWord = false;
+          afterUnspaced = false;
+          continue;
+        }
         count++;
         starts?.push(i);
         inWord = true;
