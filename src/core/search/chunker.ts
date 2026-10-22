@@ -21,7 +21,12 @@
  * after sentence punctuation, then at a token boundary - and inside a
  * long whitespace-free run those token boundaries fall every few
  * characters, so one giant line is still distributed across chunks
- * without dropping or duplicating source text.
+ * without dropping or duplicating source text. A cut that would land
+ * inside a `[[...]]` wikilink moves out of the link whenever any
+ * alternative exists, and severs the link only when the link alone
+ * exceeds the whole budget: the indexer extracts links per chunk, so a
+ * span cut in half would vanish from the link index even though its text
+ * is still indexed.
  */
 
 /**
@@ -36,7 +41,9 @@
  *   3 - whitespace-free runs of sixteen or more characters charged about
  *       one token per three characters and split inside the run, so a
  *       long URL or hash can no longer pass the budget as one "word"
- *       (issue #272).
+ *       (issue #272). Cut placement keeps `[[...]]` wikilinks whole
+ *       whenever any alternative cut exists, because links are extracted
+ *       per chunk.
  */
 export const CHUNKER_VERSION = 3;
 
@@ -249,12 +256,44 @@ function tokenStarts(text: string): number[] {
   return starts;
 }
 
-/** The longest suffix of `text` holding at most `budget` tokens. */
+/**
+ * Half-open offsets of every `[[...]]` wikilink span in `text`, in order.
+ * Wikilinks do not nest, so the first `]]` closes a span, and an
+ * unterminated `[[` is no span at all - the link extractor cannot resolve
+ * one either. The indexer extracts links per chunk, so a span severed at
+ * a chunk boundary disappears from the index even though its text is
+ * still indexed.
+ */
+function wikilinkSpans(text: string): Array<{ readonly start: number; readonly end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf("[[", i);
+    if (open === -1) break;
+    const close = text.indexOf("]]", open + 2);
+    if (close === -1) break;
+    spans.push({ start: open, end: close + 2 });
+    i = close + 2;
+  }
+  return spans;
+}
+
+/**
+ * The longest suffix of `text` holding at most `budget` tokens. A cut
+ * that would open the suffix inside a wikilink retreats past the link's
+ * closing brackets: the link stays whole in the chunk it came from and
+ * the next chunk never opens with a severed fragment of it. The suffix
+ * only shrinks, so the budget holds.
+ */
 function tailTokens(text: string, budget: number): string {
   if (budget <= 0) return "";
   const starts = tokenStarts(text);
   if (starts.length <= budget) return text;
-  return text.slice(starts[starts.length - budget]);
+  const from = starts[starts.length - budget]!;
+  for (const span of wikilinkSpans(text)) {
+    if (from > span.start && from < span.end) return text.slice(span.end);
+  }
+  return text.slice(from);
 }
 
 function tokensOfLines(lines: ReadonlyArray<Line>): number {
@@ -542,17 +581,34 @@ function sentences(text: string): string[] {
 }
 
 /**
- * `text` cut into pieces of exactly `budget` tokens (the last may be
+ * `text` cut into pieces of about `budget` tokens (the last may be
  * shorter), at token starts: never inside a word, a surrogate pair, or
- * between a character and its combining mark. Concatenates back to `text`.
+ * between a character and its combining mark. A boundary that would fall
+ * inside a `[[...]]` wikilink moves out of the link whenever any
+ * alternative exists - the whole link is absorbed into the piece when it
+ * still fits the budget, else the cut retreats to before the link - and
+ * only a link too large for the budget on its own is severed. Piece
+ * boundaries advance monotonically, so pieces still concatenate back to
+ * `text`.
  */
 function hardCut(text: string, budget: number): string[] {
   const starts = tokenStarts(text);
+  const spans = wikilinkSpans(text);
   const out: string[] = [];
-  for (let k = 0; k < starts.length; k += budget) {
-    const from = k === 0 ? 0 : starts[k]!;
-    const to = k + budget < starts.length ? starts[k + budget]! : text.length;
+  let from = 0;
+  let ki = 0; // first token start at or after `from`; advances monotonically
+  while (from < text.length) {
+    while (ki < starts.length && starts[ki]! < from) ki++;
+    let to = ki + budget < starts.length ? starts[ki + budget]! : text.length;
+    for (const span of spans) {
+      if (to > span.start && to < span.end) {
+        if (countChunkTokens(text.slice(from, span.end)) <= budget) to = span.end;
+        else if (span.start > from) to = span.start;
+        break; // spans are ordered and disjoint: at most one holds `to`
+      }
+    }
     out.push(text.slice(from, to));
+    from = to;
   }
   return out;
 }

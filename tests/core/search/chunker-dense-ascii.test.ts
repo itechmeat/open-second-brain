@@ -18,6 +18,7 @@
 import { test, expect } from "bun:test";
 
 import { chunkMarkdown, countChunkTokens } from "../../../src/core/search/chunker.ts";
+import { extractLinks } from "../../../src/core/search/links.ts";
 
 const URL_LINE = "https://example.invalid/" + "alpha-beta-gamma-delta/".repeat(160);
 const DOC = `# Fictional link\n\n${URL_LINE}`;
@@ -75,6 +76,63 @@ test("splitting one run duplicates no more than the overlap budget", () => {
   // estimated token covers at most 15 characters before the dense-run
   // rule applies.
   expect(carried).toBeLessThanOrEqual(DOC.length + r.chunks.length * 5 * 15);
+});
+
+// ── wikilinks survive the split ──────────────────────────────────────────
+
+const WIKILINK = "[[pref-imperative-commit-messages|write commits that read well]]";
+
+/**
+ * The indexer extracts links per chunk, so a `[[...]]` span severed at a
+ * chunk boundary vanishes from the link index even though its text is
+ * still indexed - a dense slug is exactly the kind of run the estimator
+ * now charges and cuts inside. Both cut sites are pinned here: the body
+ * pieces of an over-budget line, and the overlap tail of the chunk
+ * before. A chunk that opens a wikilink must also close it, and the
+ * repo's own link extractor must still resolve the target from the
+ * chunks alone.
+ */
+function expectWikilinkIntact(options: {
+  maxTokens: number;
+  minTokens: number;
+  overlapTokens: number;
+  body: string;
+}): void {
+  const r = chunkMarkdown(`# Log\n\n${options.body}`, "log", options);
+  expect(r.chunks.length).toBeGreaterThan(1);
+  for (const c of r.chunks) {
+    expect(c.tokenCount).toBeLessThanOrEqual(options.maxTokens);
+    // No chunk opens or closes a wikilink it never completes.
+    expect(c.content.split("[[").length - 1).toBe(c.content.split("]]").length - 1);
+  }
+  expect(r.chunks.some((c) => c.content.includes(WIKILINK))).toBe(true);
+  const targets = r.chunks.flatMap((c) =>
+    extractLinks(c.content)
+      .filter((l) => l.linkType === "wikilink")
+      .map((l) => l.targetPath),
+  );
+  expect(targets).toContain("pref-imperative-commit-messages");
+}
+
+test("a budget boundary never severs a wikilink while an alternative cut exists", () => {
+  const filler = Array.from({ length: 14 }, (_, i) => `word${i}`).join(" ");
+  expectWikilinkIntact({
+    maxTokens: 40,
+    minTokens: 10,
+    overlapTokens: 10,
+    body: `${filler} ${WIKILINK} and then the sentence carries on with more ordinary prose until the budget boundary moves well past the link again.`,
+  });
+});
+
+test("an overlap tail never opens with a severed wikilink", () => {
+  const filler = Array.from({ length: 6 }, (_, i) => `word${i}`).join(" ");
+  const tail = Array.from({ length: 6 }, (_, i) => `tail${i}`).join(" ");
+  expectWikilinkIntact({
+    maxTokens: 30,
+    minTokens: 8,
+    overlapTokens: 5,
+    body: `${filler} ${WIKILINK} ${tail}`,
+  });
 });
 
 test("the estimator charges long runs per character and prose per word", () => {
