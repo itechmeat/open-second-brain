@@ -94,6 +94,7 @@ import {
 import { providerProducesVectors } from "./search/embeddings/contract.ts";
 import { makeProvider } from "./search/embeddings/provider.ts";
 import { resolveSearchConfig } from "./search/index.ts";
+import { providerConsentIsDeclined, resolveProviderConsent } from "./search/provider-consent.ts";
 import {
   COMMAND_PROBE_VERDICT,
   CommandProbeError,
@@ -125,6 +126,7 @@ export const DEFAULT_READINESS_TIMEOUT_MS = 5_000;
 export const READINESS_PROBE = {
   llmKey: "llm_key",
   embeddingProvider: "embedding_provider",
+  providerConsent: "provider_consent",
   runtimeAdapterWiring: "runtime_adapter_wiring",
   installedRuntimes: "installed_runtimes",
   registeredCommands: "registered_commands",
@@ -137,6 +139,59 @@ export const READINESS_PROBE = {
  * `disabled` need none, so the key probe reports `skipped` for them.
  */
 const PROVIDERS_REQUIRING_API_KEY: ReadonlySet<string> = new Set(["openai-compat", "zeroentropy"]);
+
+/**
+ * The environment-variable PREFIXES that name an embedding-provider
+ * setting.
+ *
+ * A prefix rather than a hand-written list, because a list would be a
+ * second copy of the resolver's spelling table and would drift: a new
+ * `OPEN_SECOND_BRAIN_EMBEDDING_*` key added to the resolver would not
+ * appear here, and the probe would then under-report what is present in
+ * the environment - which is the one thing this probe exists to say.
+ */
+const PROVIDER_ENV_PREFIXES: ReadonlyArray<string> = Object.freeze([
+  "OPEN_SECOND_BRAIN_EMBEDDING_",
+]);
+
+/**
+ * The provider environment variables that do NOT carry the prefix above.
+ * The switch is one of them: it is the environment twin of the decline
+ * record, and an operator who set it in the environment rather than in
+ * the config file is exactly the case this probe has to reach.
+ */
+const PROVIDER_ENV_NAMES: ReadonlyArray<string> = Object.freeze([
+  "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC",
+]);
+
+/**
+ * The NAMES of the provider environment variables present in `env`, in
+ * alphabetical order.
+ *
+ * NAMES ONLY, never values: a readiness detail travels into logs, into a
+ * JSON payload an operator pastes into a bug report and into the
+ * registry's own output, and a value that reached any of those would be
+ * a credential published by a diagnostic. The count-and-name form is the
+ * same one `probeLlmKey` already uses for a resolved key.
+ *
+ * An empty value is absent, which is this repository's rule for
+ * environment values everywhere else: an operator who exported
+ * `OPEN_SECOND_BRAIN_EMBEDDING_KEY=` set nothing.
+ */
+function presentProviderEnvNames(
+  env: Readonly<Record<string, string | undefined>>,
+): ReadonlyArray<string> {
+  const names: string[] = [];
+  for (const name of Object.keys(env).toSorted()) {
+    const value = env[name];
+    if (value === undefined || value === "") continue;
+    const isProviderEnv =
+      PROVIDER_ENV_NAMES.includes(name) ||
+      PROVIDER_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
+    if (isProviderEnv) names.push(name);
+  }
+  return Object.freeze(names);
+}
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -292,6 +347,25 @@ export async function probeLlmKey(opts: ReadinessOptions): Promise<ReadinessVerd
   const configPath = resolveConfigPath(opts);
   const { semantic } = resolveSearchConfig({ vault: opts.vault, configPath });
   if (!semantic.enabled || semantic.provider === "disabled") {
+    // The arm is SPLIT, because the two situations are not the same
+    // fact. A configuration the operator declined is a decision, and it
+    // is disclosed by the provider-consent probe beside this one - which
+    // names the keys that would re-enable the provider and the provider
+    // environment variables that are present. This probe answers the
+    // narrower question it was asked (is a model credential required?),
+    // and the answer is the same either way, so it says so without
+    // repeating the disclosure.
+    const consent = resolveProviderConsent({
+      configPath,
+      env: opts.env ?? process.env,
+      semantic,
+    });
+    if (providerConsentIsDeclined(consent)) {
+      return {
+        status: READINESS_STATUS.skipped,
+        detail: "provider consent declined; no model API key is required",
+      };
+    }
     return {
       status: READINESS_STATUS.skipped,
       detail: "semantic search disabled; no model API key required",
@@ -315,6 +389,46 @@ export async function probeLlmKey(opts: ReadinessOptions): Promise<ReadinessVerd
     detail:
       `provider '${semantic.provider}' requires an API key but none resolves ` +
       "from config or env (embedding_api_key / OPEN_SECOND_BRAIN_EMBEDDING_KEY)",
+  };
+}
+
+/**
+ * The provider consent: did the operator write down a decision about the
+ * embedding provider, and is it a decline?
+ *
+ * The probe answers the question the capability tier cannot: the tier
+ * says what the configuration can do, and a configuration that says
+ * `search_semantic_enabled: false` looks exactly like a configuration
+ * that never mentioned semantic search at all. An operator who declined
+ * and an operator who never configured anything are two different
+ * situations with two different repairs, and this probe is where the
+ * first one is named.
+ *
+ * `skipped`, not `fail`: a decline is a decision, and a decision is not
+ * a fault. The detail names the two spellings a decline is written in,
+ * so the operator can see which one is in force, and lists the provider
+ * environment variables that are PRESENT - by NAME. The names are the
+ * point: an operator who set `OPEN_SECOND_BRAIN_EMBEDDING_KEY` in their
+ * environment and then wrote a decline in the config file needs to know
+ * that the key is still there, and a readiness detail is the wrong
+ * place to publish a credential.
+ */
+export async function probeProviderConsent(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  const configPath = resolveConfigPath(opts);
+  const env = opts.env ?? process.env;
+  const consent = resolveProviderConsent({ configPath, env });
+  if (!providerConsentIsDeclined(consent)) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail: consent.detail,
+    };
+  }
+  const present = presentProviderEnvNames(env);
+  return {
+    status: READINESS_STATUS.skipped,
+    detail:
+      `${consent.detail} Present provider environment variables: ` +
+      `${present.length > 0 ? present.join(", ") : "none"}.`,
   };
 }
 
@@ -1200,6 +1314,7 @@ export interface NamedProbe {
 export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
   { name: READINESS_PROBE.llmKey, fn: probeLlmKey },
   { name: READINESS_PROBE.embeddingProvider, fn: probeEmbeddingProvider },
+  { name: READINESS_PROBE.providerConsent, fn: probeProviderConsent },
   { name: READINESS_PROBE.runtimeAdapterWiring, fn: probeRuntimeAdapterWiring },
   { name: READINESS_PROBE.installedRuntimes, fn: probeInstalledRuntimes },
   { name: READINESS_PROBE.registeredCommands, fn: probeRegisteredCommands },
