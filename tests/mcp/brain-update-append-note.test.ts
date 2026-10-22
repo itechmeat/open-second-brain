@@ -24,7 +24,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS, writeBatchErrorToMcp } from "../../src/mcp/brain/notes-tools.ts";
 import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
-import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
+import { PAGE_LINT_KEY, UNDATED_QUANTITY_CODE } from "../../src/core/brain/page-lint.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
@@ -621,5 +621,86 @@ describe("the lint attached to the update / append receipts", () => {
     const lint = res[PAGE_LINT_KEY] as Record<string, unknown>;
     expect(lint).toMatchObject({ total: 1, returned: 1, truncated: false, skipped: [] });
     expect(readFileSync(join(vault, "Notes/App.md"), "utf8")).toContain("[[pref-ghost]]");
+  });
+});
+
+/**
+ * Undated-quantity lint on update and append receipts (write-honesty, F4,
+ * t_fb442a24). Both writes succeed; the advisory rides the receipt with the
+ * new code. A page already declaring `valid_from` keeps the clean receipt,
+ * with no lint key at all.
+ */
+describe("the undated-quantity lint on update / append receipts", () => {
+  const call = async (
+    tool: typeof updateTool,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => (await tool.handler(ctx, args)) as Record<string, unknown>;
+
+  test("an undated numeric update succeeds and carries the finding", async () => {
+    seedNote("Notes/UndatedUpdate.md", "old body", "title: U");
+    const res = await call(updateTool, {
+      path: "Notes/UndatedUpdate.md",
+      content: "We onboarded 5,000 users.",
+    });
+    expect(res).toMatchObject({ updated: true, path: "Notes/UndatedUpdate.md" });
+    const lint = res[PAGE_LINT_KEY] as { findings: ReadonlyArray<Record<string, unknown>> };
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        code: UNDATED_QUANTITY_CODE,
+        page: "Notes/UndatedUpdate.md",
+        path: "body",
+      }),
+    ]);
+  });
+
+  test("an update onto a page with valid_from keeps the clean receipt", async () => {
+    seedNote("Notes/DatedUpdate.md", "old body", "title: D\nvalid_from: 2026-10-01");
+    const res = await call(updateTool, {
+      path: "Notes/DatedUpdate.md",
+      content: "We onboarded 5,000 users.",
+    });
+    expect(PAGE_LINT_KEY in res).toBe(false);
+    expect(Object.keys(res)).toEqual([
+      "updated",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
+  });
+
+  test("an undated numeric append succeeds and carries the finding", async () => {
+    seedNote("Notes/UndatedAppend.md", "first", "title: A");
+    const res = await call(appendTool, {
+      path: "Notes/UndatedAppend.md",
+      content: "We onboarded 5,000 users.",
+    });
+    expect(res).toMatchObject({ appended: true, path: "Notes/UndatedAppend.md" });
+    const lint = res[PAGE_LINT_KEY] as { findings: ReadonlyArray<Record<string, unknown>> };
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        code: UNDATED_QUANTITY_CODE,
+        page: "Notes/UndatedAppend.md",
+        path: "body",
+      }),
+    ]);
+  });
+
+  test("an append onto a page with valid_from keeps the clean receipt", async () => {
+    seedNote("Notes/DatedAppend.md", "first", "title: D\nvalid_from: 2026-10-01");
+    const res = await call(appendTool, {
+      path: "Notes/DatedAppend.md",
+      content: "We onboarded 5,000 users.",
+    });
+    expect(PAGE_LINT_KEY in res).toBe(false);
+    expect(Object.keys(res)).toEqual([
+      "appended",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
   });
 });

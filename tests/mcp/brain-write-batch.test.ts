@@ -39,7 +39,7 @@ import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
 import * as ledger from "../../src/core/brain/idempotency-ledger.ts";
-import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
+import { PAGE_LINT_KEY, UNDATED_QUANTITY_CODE } from "../../src/core/brain/page-lint.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -391,6 +391,40 @@ describe("brain_write_batch - the lint attached to the receipt", () => {
     ]);
     expect(second.results[0]).toMatchObject({ kind: "update_note", updated: false });
     expect(PAGE_LINT_KEY in second).toBe(false);
+  });
+
+  test("an undated numeric create reports the finding on the batch envelope", async () => {
+    const res = await runBatch([
+      {
+        op: "create_note",
+        path: "Notes/UndatedBatch.md",
+        frontmatter: { title: "Undated" },
+        content: "We onboarded 5,000 users.",
+      },
+    ]);
+    expect(res["applied"]).toBe(1);
+    const lint = res[PAGE_LINT_KEY]!;
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        code: UNDATED_QUANTITY_CODE,
+        page: "Notes/UndatedBatch.md",
+        path: "body",
+      }),
+    ]);
+  });
+
+  test("the same batch create with valid_from keeps the clean envelope", async () => {
+    const res = await runBatch([
+      {
+        op: "create_note",
+        path: "Notes/DatedBatch.md",
+        frontmatter: { title: "Dated", valid_from: "2026-10-01" },
+        content: "We onboarded 5,000 users.",
+      },
+    ]);
+    expect(Object.keys(res)).toEqual(["applied", "results", "done"]);
+    expect(PAGE_LINT_KEY in res).toBe(false);
   });
 });
 

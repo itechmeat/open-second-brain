@@ -16,7 +16,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
-import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
+import { PAGE_LINT_KEY, UNDATED_QUANTITY_CODE } from "../../src/core/brain/page-lint.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
@@ -475,6 +475,55 @@ describe("brain_create_note - the lint attached to the receipt", () => {
     });
     expect(res).toMatchObject({ created: false, outcome: "skipped" });
     expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+});
+
+/**
+ * Undated-quantity lint at the receipt boundary (write-honesty, F4,
+ * t_fb442a24). The write SUCCEEDS - the finding is advisory - and the
+ * receipt carries the new code. The same write on a page that declares
+ * `valid_from` is byte-identical to the clean receipt: no lint key at all.
+ */
+describe("brain_create_note - the undated-quantity lint", () => {
+  const call = async (args: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    (await handler(ctx, args)) as Record<string, unknown>;
+
+  test("an undated numeric write succeeds and carries the finding", async () => {
+    const res = await call({
+      path: "Notes/UndatedNumeric.md",
+      frontmatter: { title: "Undated" },
+      content: "We onboarded 5,000 users.",
+    });
+    expect(res).toMatchObject({ created: true, outcome: "created" });
+    expect(existsSync(join(vault, "Notes/UndatedNumeric.md"))).toBe(true);
+    const lint = res[PAGE_LINT_KEY] as { findings: ReadonlyArray<Record<string, unknown>> };
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        code: UNDATED_QUANTITY_CODE,
+        page: "Notes/UndatedNumeric.md",
+        path: "body",
+      }),
+    ]);
+    expect(typeof lint.findings[0]!["next_command"]).toBe("string");
+  });
+
+  test("the same write with valid_from keeps the byte-identical clean receipt", async () => {
+    const res = await call({
+      path: "Notes/DatedNumeric.md",
+      frontmatter: { title: "Dated", valid_from: "2026-10-01" },
+      content: "We onboarded 5,000 users.",
+    });
+    expect(res).toMatchObject({ created: true, outcome: "created" });
+    expect(PAGE_LINT_KEY in res).toBe(false);
+    expect(Object.keys(res)).toEqual([
+      "created",
+      "outcome",
+      "path",
+      "write_id",
+      "index_refresh",
+      "index_refresh_reason",
+    ]);
   });
 });
 
