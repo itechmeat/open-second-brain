@@ -1053,6 +1053,15 @@ codex plugin add open-second-brain@open-second-brain   # re-stage local marketpl
 hermes plugins update open-second-brain
 ```
 
+A Codex marketplace add or upgrade replaces the clone wholesale, so the
+clone arrives without `node_modules`. No step follows: the first `o2b`
+call notices the missing dependency tree and runs
+`bun install --frozen-lockfile` inside the clone once, announced by a
+one-line notice on stderr. If that install cannot run - no network, or a
+clone the launcher cannot write - the launcher exits nonzero and names the
+manual command; running `bun install --frozen-lockfile` inside the clone
+yourself is the fallback. See [`install/codex.md`](../install/codex.md).
+
 You do **not** need to delete or re-create any `~/.local/bin` symlink by hand.
 The hooks resolve the current version on their own, and the global
 `o2b`/`o2b-hook`/`vault-log` symlinks self-heal on the next session start. If
@@ -1168,6 +1177,10 @@ These properties are locked by tests; do not weaken them:
 - `tests/hooks/o2b-hook.test.ts` — fail-soft + `$CLAUDE_PLUGIN_ROOT`-first resolution.
 - `tests/hooks/hooks-json-shape.test.ts` — every command is version-current, has a PATH fallback, and ends with `exit 0`.
 - `tests/cli/install-cli.test.ts` — idempotent reclaim and conservative self-heal.
+- `tests/scripts/launcher-bootstrap.test.ts` — the launchers re-install the
+  dependency tree a marketplace replacement removed, degrade to a named
+  manual command when the install cannot run, and add nothing when the tree
+  is present.
 - `tests/core/search/self-heal.test.ts` — search rebuilds a stale/missing index on read.
 - `tests/core/maintenance/ensure-current.test.ts` — state-driven migration, idempotent, never throws.
 - `tests/core/maintenance/self-heal-reindex.test.ts` — the herd is thinned against the writer lock, and a detached rebuild's outcome is readable.
