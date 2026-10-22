@@ -224,12 +224,22 @@ const PERCENT_RUN = /(?<![0-9A-Za-z_.])\d[\d,]*(?:\.\d+)?\s?%/u;
 
 /** Number followed by a unit from {@link QUANTITY_UNITS}. */
 const NUMBER_UNIT_RUN = new RegExp(
-  `(?<![0-9A-Za-z_.])\\d[\\d,]*(?:\\.\\d+)?\\s?(?:${alternation(QUANTITY_UNITS)})(?![0-9A-Za-z_])`,
+  // The year guard: a bare four-digit 19xx/20xx number is a YEAR far
+  // more often than a count ("In 2024 users doubled"), and the lint is
+  // precision-first. A thousands separator (`2,024 users`) or a longer
+  // digit run is a number, not a year shape, and still fires.
+  `(?<![0-9A-Za-z_.])(?!(?:19|20)\\d{2}\\b)\\d[\\d,]*(?:\\.\\d+)?\\s?(?:${alternation(QUANTITY_UNITS)})(?![0-9A-Za-z_])`,
   "iu",
 );
 
-/** Bare thousands-separated count, optionally with a decimal part. */
-const THOUSANDS_RUN = /(?<![0-9A-Za-z_,])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![0-9,])/u;
+/**
+ * Bare thousands-separated count, optionally with a decimal part. The
+ * trailing lookahead rejects a following DIGIT (the run must end) and a
+ * comma that ANOTHER DIGIT follows (still inside the count), but not a
+ * prose comma - "the counter reads 12,400, then stops" states a count,
+ * and rejecting every comma made the common shape invisible.
+ */
+const THOUSANDS_RUN = /(?<![0-9A-Za-z_,])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![0-9]|,\d)/u;
 
 /** Every trigger, in the order an equal-span tie prefers. */
 const TRIGGER_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([

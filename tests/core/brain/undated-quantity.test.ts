@@ -77,6 +77,16 @@ const POSITIVE: ReadonlyArray<PositiveCase> = [
     body: "35% of 5,000 users",
     lexemes: ["35%", "5,000 users"],
   },
+  {
+    name: "a thousands-separated count followed by a prose comma",
+    body: "the counter reads 12,400, then stops",
+    lexemes: ["12,400"],
+  },
+  {
+    name: "a year-shaped number with a thousands separator is still a quantity",
+    body: "2,024 users were migrated",
+    lexemes: ["2,024 users"],
+  },
 ];
 
 const NEGATIVE: ReadonlyArray<PositiveCase> = [
@@ -153,6 +163,11 @@ const NEGATIVE: ReadonlyArray<PositiveCase> = [
   {
     name: "a version token overlapping a quantity trigger",
     body: "release 1.2.3 USD shipped",
+    lexemes: [],
+  },
+  {
+    name: "a four-digit year followed by a count unit is not a quantity",
+    body: "In 2024 users doubled",
     lexemes: [],
   },
 ];
