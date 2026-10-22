@@ -71,10 +71,12 @@ describe("the egress consent stamp", () => {
 
   test("the kill switch is a presence switch: no value re-enables it", () => {
     // Every non-empty value keeps the refusal in force, including the
-    // ones that would read as "off" to a boolean parser. An operator who
-    // has set the variable has said no, and the next variable in the
-    // environment does not get to say otherwise.
-    for (const value of ["1", "true", "0", "false", "off", "please"]) {
+    // ones that would read as "off" to a boolean parser and the ones
+    // that are only whitespace - the raw value is what the operator set,
+    // and nothing trims it away. An operator who has set the variable
+    // has said no, and the next variable in the environment does not get
+    // to say otherwise.
+    for (const value of ["1", "true", "0", "false", "off", "please", " "]) {
       const verdict = stampEgressConsent({
         site: SITE,
         payloadClass: PAYLOAD_CLASS,
@@ -83,6 +85,21 @@ describe("the egress consent stamp", () => {
       });
       expect(`${value}: ${verdict.outcome}`).toBe(`${value}: ${CONSENT_STAMP_OUTCOME.withheld}`);
     }
+  });
+
+  test("a whitespace-only kill-switch value still refuses", () => {
+    // Presence, not parse: the value is non-empty, so the switch is in
+    // force even though trimming it would read as unset - the same
+    // untrimmed presence rule the grant check applies to its own value.
+    const verdict = stampEgressConsent({
+      site: SITE,
+      payloadClass: PAYLOAD_CLASS,
+      payload: { body: "a page body" },
+      env: { [CONSENT_STAMP_ENV]: "true", [CONSENT_STAMP_KILL_ENV]: "  " },
+    });
+    expect(verdict.outcome).toBe(CONSENT_STAMP_OUTCOME.withheld);
+    if (verdict.outcome !== CONSENT_STAMP_OUTCOME.withheld) return;
+    expect(verdict.reason).toContain("kill switch");
   });
 
   test("a refusal discloses the payload class", () => {

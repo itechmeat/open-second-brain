@@ -145,12 +145,14 @@ export interface ConsentStampRequest<T> {
 
 /**
  * Whether the kill switch is set. A presence check over a non-empty
- * value: an empty value is the absence of a value, which is this
- * repository's rule for environment values everywhere else.
+ * value, RAW: an empty value is the absence of a value, which is this
+ * repository's rule for environment values everywhere else, and the
+ * whitespace a value carries is part of the value the operator set -
+ * the switch is never disarmed by trimming it.
  */
 function killSwitchIsSet(env: NodeJS.ProcessEnv): boolean {
   const value = env[CONSENT_STAMP_KILL_ENV];
-  return value !== undefined && value.trim() !== "";
+  return value !== undefined && value !== "";
 }
 
 /**
