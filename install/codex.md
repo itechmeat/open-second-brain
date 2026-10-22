@@ -33,6 +33,16 @@ O2B_SCRIPT="$(find "${CODEX_HOME:-$HOME/.codex}/.tmp/marketplaces" -path '*open-
 "$O2B_SCRIPT" install-cli
 ```
 
+The clone arrives without `node_modules`, and the launcher heals that
+itself: the first time it runs, it notices the missing dependency tree and
+executes `bun install --frozen-lockfile` inside the clone once, announced
+by a one-line notice on stderr. Every later run finds the tree present and
+boots straight into the CLI. If that install cannot run - no network, or a
+clone the launcher cannot write - the launcher exits nonzero and names the
+manual command instead of dying with a module-not-found trace. Running
+`bun install --frozen-lockfile` inside the clone yourself repairs the same
+state.
+
 ## 3. Initialize the vault
 
 ```bash
@@ -126,6 +136,12 @@ what was added; `unprotect` removes the same.
 ```bash
 codex plugin marketplace upgrade open-second-brain
 ```
+
+An upgrade replaces the clone, so its `node_modules` is gone afterwards.
+No extra step is needed: the next launcher run notices the missing
+dependency tree and reinstalls it, exactly as in step 2 (the same one-line
+notice on stderr, and the same manual `bun install --frozen-lockfile`
+fallback if the automatic install cannot run).
 
 ## Uninstall
 
