@@ -15,7 +15,7 @@ import { effectiveActivation, halfLifeDays, resolveActivationKind } from "../act
 import { CO_ACCESS_MIN_COUNT, readActivationState } from "../activation/store.ts";
 import type { ActivationPathState, CoAccessPair } from "../activation/types.ts";
 import { extractEntities } from "../entities.ts";
-import { expandQueryEntities } from "../entity-alias.ts";
+import { expandQueryEntities, type DerivedPersonAmbiguity } from "../entity-alias.ts";
 import { readCachedFrontmatter, type FrontmatterCache } from "../result-filters.ts";
 import type { HydratedChunk, Store } from "../store.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
@@ -53,6 +53,14 @@ export interface CandidateSignals {
    * score and breakdown shape is byte-identical.
    */
   readonly derivedEntityMatchByChunk: ReadonlyMap<number, number> | undefined;
+  /**
+   * The query person forms that reached more than one person ONLY
+   * through derivation (F3): the expansion added nothing for them, and
+   * the trail says so instead of the silence a healthy answer carries -
+   * reported rather than guessed. Undefined when the expansion reported
+   * no ambiguity, per the module-wide omit-when-empty rule.
+   */
+  readonly derivedAmbiguities: ReadonlyArray<DerivedPersonAmbiguity> | undefined;
   readonly activationByChunk: ReadonlyMap<number, number> | undefined;
   readonly coAccessByChunk: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined;
   readonly trendByDoc: ReadonlyMap<number, string> | undefined;
@@ -130,6 +138,10 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     canonicalMatchByChunk,
     canonicalSourceIds: entityExpansion.sourceIds,
     derivedEntityMatchByChunk,
+    derivedAmbiguities:
+      entityExpansion.derivedAmbiguities.length > 0
+        ? entityExpansion.derivedAmbiguities
+        : undefined,
     activationByChunk: activation.activationByChunk,
     coAccessByChunk: activation.coAccessByChunk,
     trendByDoc: collectFreshnessTrend(input),

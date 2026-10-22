@@ -153,6 +153,19 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   hybridDeadlineExceeded: "hybrid-deadline-exceeded",
   /**
+   * A person form in the query reached more than one person ONLY through
+   * derivation - an initial, a word order or an operator nickname - so the
+   * registry expansion added nothing for it: the design reports derived
+   * ambiguity rather than guessing one person (write-honesty-egress-consent,
+   * F3). Produced by the pipeline's candidate-signal collection, emitted in
+   * assembly. One entry per ambiguous form; `detail` maps that form to the
+   * competing person ids, dot-joined - entity ids never carry a dot, so the
+   * join is exact. The form is the detail KEY, not a value, because a name
+   * form is not an identifier and the value lane carries identifiers and
+   * integers only.
+   */
+  personDerivedAmbiguity: "person-derived-ambiguity",
+  /**
    * The rank cap truncated the candidate pool: matches existed below the
    * cut and were never ranked. `detail.cap` is the cap that bit.
    */
@@ -233,6 +246,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.semanticEmbeddingAbiDrift,
   RETRIEVAL_DEGRADATION.hybridDegraded,
   RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
+  RETRIEVAL_DEGRADATION.personDerivedAmbiguity,
   RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
   RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
   RETRIEVAL_DEGRADATION.rerankModelSunset,
@@ -445,6 +459,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the semantic lane did not run, so this answer is keyword-only";
     case RETRIEVAL_DEGRADATION.hybridDeadlineExceeded:
       return "the composite search outlived its wall-clock deadline, so the phases past the budget were cut and this answer is keyword-only";
+    case RETRIEVAL_DEGRADATION.personDerivedAmbiguity:
+      return "a person name in the query matched several people only through a derived form - an initial, a word order or a nickname - so nothing was expanded for it rather than guess one person";
     case RETRIEVAL_DEGRADATION.rankCapTruncatedPool:
       return "the rank cap truncated the candidate pool, so lower-ranked matches were never considered";
     case RETRIEVAL_DEGRADATION.rerankProviderUnavailable:
