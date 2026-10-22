@@ -120,6 +120,28 @@ test("path nodes unreadable at the caller's reach are omitted, never named and n
   }
 });
 
+test("a page whose live file lost its reserved token but whose indexed column still carries it is not named by the relational arm at remote reach", async () => {
+  await buildPathVault();
+  writeMd(vault, "mid.md", '---\nvisibility: ["private"]\nextends: "[[far]]"\n---\n\nbeta mid.');
+  await indexVault(makeConfig({ vault, dbPath }));
+  // Remove the private reservation from the live file, without reindexing.
+  writeMd(vault, "mid.md", '---\nextends: "[[far]]"\n---\n\nbeta mid.');
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  try {
+    const remote = runRelationalArm(store, vault, "[[seed]] related extends", {
+      reach: TRANSPORT_REACH.remote,
+    });
+    const farEntry = [...remote.reachByChunk].find(([, reach]) => reach.hops === 2);
+    expect(farEntry).toBeDefined();
+    // The middle node is still withheld because its indexed column carries the reserved token;
+    // it must not be named in the path provenance at remote reach.
+    const pathSteps = farEntry ? farEntry[1].path : [];
+    expect(pathSteps).toEqual([{ documentId: farEntry ? farEntry[0] : 0, relation: "extends" }]);
+  } finally {
+    await store.close();
+  }
+});
+
 test("an absent reach behaves like remote: provenance never names a page the row gate withholds", async () => {
   // The row-level filters resolve an absent reach to remote
   // (`resolvedTransportReach`), so the arm's per-node provenance gate
