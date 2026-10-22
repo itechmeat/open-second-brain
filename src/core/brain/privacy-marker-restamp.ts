@@ -25,7 +25,11 @@
  *     The re-parse is the notice-carrying one: a page whose frontmatter
  *     carries a line the scanner drops would lose that line in a
  *     rewrite, so the apply pass refuses it by name (reported in
- *     `skipped`, with the reason) and leaves its bytes untouched.
+ *     `skipped`, with the reason) and leaves its bytes untouched. The
+ *     raw block is checked too, for the losses the scanner does not
+ *     report: a `#` comment line and an indented nested mapping are
+ *     skipped or flattened without a notice, and a rewrite would lose
+ *     them all the same.
  *   - IDEMPOTENT. A re-run over a restamped vault reports no candidates
  *     and writes nothing, byte for byte.
  *   - WRITE-GUARDED AT THE ENTRY POINT, ONLY WHEN THE CALL WILL WRITE.
@@ -42,15 +46,25 @@
  * `/` separators, so a preview reads the same on every platform.
  */
 
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { listVaultPages, parseFrontmatterWithNotices, writeFrontmatterAtomic } from "../vault.ts";
+import {
+  FRONTMATTER_RE,
+  listVaultPages,
+  parseFrontmatterWithNotices,
+  writeFrontmatterAtomic,
+} from "../vault.ts";
+import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { vaultRelative } from "../path-safety.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../graph/visibility.ts";
 import { hasPrivacyDenyMarker } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+/** U+FEFF, which may precede a page's opening fence (see vault.ts). */
+const BYTE_ORDER_MARK = 0xfeff;
 
 /** One page whose informal marker is not yet a formal reservation. */
 export interface PrivacyMarkerRestampCandidate {
@@ -145,6 +159,33 @@ function absolutePath(vault: string, relPath: string): string {
 }
 
 /**
+ * The first line of the raw frontmatter block that a rewrite through the
+ * writer cannot round-trip even though the scanner raised NO notice - so
+ * the refuse-on-notice guard cannot see it. The scanner skips a `#`
+ * comment line silently (the format documents comments as content it
+ * discards) and trims each line before matching key/value, so an indented
+ * nested mapping is silently flattened into top-level keys. Either way a
+ * rewrite re-serialises the parsed map and the original bytes are gone:
+ * a comment is deleted, a nested map is flattened. Spelled from the raw
+ * text, not from the parsed map, because the loss is in the bytes the
+ * parse throws away.
+ */
+function unroundtrippableFrontmatterLine(raw: string): string | null {
+  const text = raw.charCodeAt(0) === BYTE_ORDER_MARK ? raw.slice(1) : raw;
+  const match = FRONTMATTER_RE.exec(text);
+  if (match === null) return null;
+  const lines = match[1]!.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    if (trimmed.startsWith("#")) return `frontmatter line ${i + 1} is a comment`;
+    if (/^\s/.test(line)) return `frontmatter line ${i + 1} is indented`;
+  }
+  return null;
+}
+
+/**
  * Scan the vault for informal privacy markers that are not formally
  * reserved. When `apply` is set, union the reserved token into each
  * candidate's `visibility:` through {@link writeFrontmatterAtomic};
@@ -208,13 +249,51 @@ export function planPrivacyMarkerRestamp(
       // the refusal is reported, never silent.
       const [meta, body, parseNotices] = parseFrontmatterWithNotices(absolute);
       if (parseNotices.length > 0) {
+        // The reason names the failure the page actually has: a notice
+        // whose code is `frontmatter-unreadable` is a READ failure (the
+        // file was deleted or moved between the scan and the write), not
+        // a YAML problem, and saying "dropped line" would send the
+        // operator looking at frontmatter the page does not have.
+        const first = parseNotices[0]!;
         skipped.push(
           Object.freeze({
             path: candidate.path,
             reason:
-              parseNotices.length === 1
-                ? `frontmatter parse dropped 1 line; rewriting would lose it (${parseNotices[0]!.code})`
-                : `frontmatter parse dropped ${parseNotices.length} lines; rewriting would lose them (${parseNotices[0]!.code})`,
+              first.code === DEGRADATION_CODE.frontmatterUnreadable
+                ? `page could not be re-read before the write (${first.detail})`
+                : parseNotices.length === 1
+                  ? `frontmatter parse dropped 1 line; rewriting would lose it (${first.code})`
+                  : `frontmatter parse dropped ${parseNotices.length} lines; rewriting would lose them (${first.code})`,
+          }),
+        );
+        continue;
+      }
+      // The notice guard above covers the lines the scanner REPORTS. A
+      // comment line and an indented nested mapping are lost silently -
+      // the scanner skips or flattens them without a notice - so the raw
+      // block is checked for them here, before any write. The re-read is
+      // guarded on its own: a page that vanished between the parse above
+      // and this read is refused as unreadable rather than crashing the
+      // apply pass.
+      let raw: string;
+      try {
+        raw = readFileSync(absolute, "utf8");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? String(err);
+        skipped.push(
+          Object.freeze({
+            path: candidate.path,
+            reason: `page could not be re-read before the write (${code})`,
+          }),
+        );
+        continue;
+      }
+      const loss = unroundtrippableFrontmatterLine(raw);
+      if (loss !== null) {
+        skipped.push(
+          Object.freeze({
+            path: candidate.path,
+            reason: `${loss}; the writer cannot round-trip it, so rewriting would lose it`,
           }),
         );
         continue;

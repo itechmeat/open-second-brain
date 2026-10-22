@@ -26,6 +26,11 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
       dry_run: !apply,
       scanned: result.scanned,
       updated: result.updated,
+      // The refusals travel with the result: a candidate the apply pass
+      // refused (a frontmatter the writer cannot round-trip, a page that
+      // could not be re-read) is reported by name with its reason, never
+      // folded into a lower `updated` count.
+      skipped: result.skipped.map((s) => ({ path: s.path, reason: s.reason })),
       candidates: result.candidates.map((c) => ({
         path: c.path,
         visibility: [...c.visibility],
@@ -39,6 +44,7 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
     ok(
       `privacy-marker-restamp: updated ${result.updated} of ${result.candidates.length} candidate(s)`,
     );
+    for (const s of result.skipped) info(`  refused ${s.path}: ${s.reason}`);
   } else {
     ok(
       `privacy-marker-restamp dry-run: ${result.candidates.length} candidate(s) ` +

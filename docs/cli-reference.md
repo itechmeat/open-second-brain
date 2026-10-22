@@ -2822,8 +2822,18 @@ o2b search query --visibility <token>...   narrow results to pages declaring one
 o2b search check                           reports how many indexed documents reserve themselves against remote
                                            reads, how many enumerated note-returning surfaces still do not consult
                                            the field, and how many documents hold no frontmatter the index measured
+```
+
+```text
 o2b brain privacy-marker-restamp  [--apply] [--json] - stamp the reserved visibility token onto pages that declare their audience only through an informal privacy marker (access / confidentiality / sensitivity); dry-run default, additive, idempotent, never removes a token, never re-embeds
 ```
+
+With `--apply`, a candidate whose frontmatter cannot be rewritten losslessly
+is REFUSED, not stamped: a page whose frontmatter carries a line the
+scanner drops, a comment line, an indented nested mapping, or a file that
+cannot be re-read is reported in the verb's `skipped` list (JSON) and on
+stderr with the reason, and its bytes stay untouched - `updated N of M`
+never silently absorbs a refused page.
 
 A vault page's `visibility:` frontmatter carries opaque, language-neutral
 tokens, and ONE of them is reserved: a page declaring it is not readable

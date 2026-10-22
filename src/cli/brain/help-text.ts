@@ -351,10 +351,12 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain privacy-marker-restamp [--apply] [--vault <path>] [--json]\n" +
     "Make an informal privacy marker formal. A page that declares its audience only\n" +
     "through an informal marker (access / confidentiality / sensitivity) is a\n" +
-    "candidate; dry-run is the default and writes nothing. --apply stamps the\n" +
-    "reserved visibility token (`private`) onto every candidate by unioning it into\n" +
-    "`visibility:`. Additive and idempotent: no key is removed, no declared token is\n" +
-    "dropped, and a re-run writes nothing; it never removes a token.\n",
+    "candidate; dry-run is the default and writes nothing. --apply unions the\n" +
+    "reserved visibility token (`private`) into each candidate's `visibility:`.\n" +
+    "A page whose frontmatter cannot be rewritten losslessly is refused by name\n" +
+    "(reported in `skipped` with the reason) and left untouched. Additive and\n" +
+    "idempotent: no key is removed, no declared token is dropped, and a re-run\n" +
+    "writes nothing; it never removes a token.\n",
   "scaffold-stub":
     "usage: o2b brain scaffold-stub list [--limit <n>] [--vault <path>] [--json]\n" +
     "   or: o2b brain scaffold-stub write <target> [--path <rel>] [--source <rel>]...\n" +

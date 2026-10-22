@@ -187,6 +187,52 @@ describe("apply refuses pages the scanner cannot round-trip", () => {
     expect(result.skipped).toEqual([]);
     expect(result.updated).toBe(0);
   });
+
+  test("a candidate whose frontmatter carries a comment is skipped by name and left byte-identical", () => {
+    // A `#` line inside the block is skipped by the scanner WITHOUT a
+    // notice (the format documents comments as content it discards), so
+    // the refuse-on-notice guard above cannot see it - and a rewrite
+    // through the writer would still delete it. The apply pass must
+    // refuse the page the same way, by name.
+    page("commented.md", "title: Commented\n# review before sharing\naccess: private");
+    const before = readFileSync(join(vault, "commented.md"), "utf8");
+    const result = planPrivacyMarkerRestamp(vault, { apply: true });
+    expect(result.candidates.map((c) => c.path)).toContain("commented.md");
+    const skip = result.skipped.find((s) => s.path === "commented.md");
+    expect(skip).toBeDefined();
+    expect(skip!.reason).toContain("comment");
+    expect(result.updated).toBe(5);
+    expect(readFileSync(join(vault, "commented.md"), "utf8")).toBe(before);
+  });
+
+  test("a candidate whose frontmatter carries an indented mapping is skipped by name and left byte-identical", () => {
+    // The scanner trims each line before matching key/value, so an
+    // indented nested mapping is flattened into top-level keys with no
+    // notice; re-serialising the parsed map would write the flattening.
+    page("nested-map.md", "title: Nested\naccess: private\nowner:\n  team: core");
+    const before = readFileSync(join(vault, "nested-map.md"), "utf8");
+    const result = planPrivacyMarkerRestamp(vault, { apply: true });
+    expect(result.candidates.map((c) => c.path)).toContain("nested-map.md");
+    const skip = result.skipped.find((s) => s.path === "nested-map.md");
+    expect(skip).toBeDefined();
+    expect(skip!.reason).toContain("indented");
+    expect(result.updated).toBe(5);
+    expect(readFileSync(join(vault, "nested-map.md"), "utf8")).toBe(before);
+  });
+
+  test("a candidate that cannot be re-read is skipped as unreadable, not as a dropped line", () => {
+    // A file that disappears (or becomes unreadable) between the scan and
+    // the write surfaces as one `frontmatter-unreadable` notice; the
+    // refusal must name the read failure, not point the operator at a
+    // YAML problem the page does not have.
+    withUnreadableAtWriteTime("access.md", () => {
+      const result = planPrivacyMarkerRestamp(vault, { apply: true });
+      const skip = result.skipped.find((s) => s.path === "access.md");
+      expect(skip).toBeDefined();
+      expect(skip!.reason).toContain("could not be re-read");
+      expect(result.updated).toBe(4);
+    });
+  });
 });
 
 // --- The write reads the page it is about to rewrite ------------------------
@@ -199,8 +245,13 @@ describe("apply refuses pages the scanner cannot round-trip", () => {
  * operator edit on disk the instant the page is parsed for the SECOND time -
  * the scan has seen the old bytes, the apply loop sees the new ones.
  */
+// Captured at module load, before any `mock.module` call can replace the
+// namespace's function: a capture inside the helper would pick up the
+// previous test's mock and chain the mocks instead of restoring.
+const realParseFrontmatterWithNotices = vaultModule.parseFrontmatterWithNotices;
+
 function withEditAtWriteTime(rel: string, nextFrontmatter: string, run: () => void): void {
-  const realParse = vaultModule.parseFrontmatterWithNotices;
+  const realParse = realParseFrontmatterWithNotices;
   const target = join(vault, rel);
   let parses = 0;
   mock.module("../../../src/core/vault.ts", () => ({
@@ -210,6 +261,47 @@ function withEditAtWriteTime(rel: string, nextFrontmatter: string, run: () => vo
         parses += 1;
         if (parses === 2) {
           writeFileSync(target, `---\n${nextFrontmatter}\n---\n\nbody text\n`);
+        }
+      }
+      return realParse(path);
+    },
+  }));
+  try {
+    run();
+  } finally {
+    mock.module("../../../src/core/vault.ts", () => vaultModule);
+  }
+}
+
+/**
+ * Same seam, the read-failure arm: the apply loop's re-parse reports the
+ * page as unreadable, the way a file deleted (or moved to a failing
+ * mount) between the scan and the write answers. The notice is built in
+ * the shape `parseFrontmatterWithNotices` emits for a failed read, so the
+ * core module's reason selection runs against real data.
+ */
+function withUnreadableAtWriteTime(rel: string, run: () => void): void {
+  const realParse = realParseFrontmatterWithNotices;
+  const target = join(vault, rel);
+  let parses = 0;
+  mock.module("../../../src/core/vault.ts", () => ({
+    ...vaultModule,
+    parseFrontmatterWithNotices(path: string) {
+      if (path === target) {
+        parses += 1;
+        if (parses === 2) {
+          return [
+            {},
+            "",
+            [
+              {
+                code: "frontmatter-unreadable",
+                site: "vault.parseFrontmatter",
+                path,
+                detail: "frontmatter read failed: ENOENT simulated by the test",
+              },
+            ],
+          ];
         }
       }
       return realParse(path);
