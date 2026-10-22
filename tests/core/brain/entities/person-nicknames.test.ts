@@ -92,4 +92,29 @@ describe("resolvePersonNicknameMap", () => {
     writeArtifact(JSON.stringify({ bob: "Robert Smith" }));
     expect(() => resolvePersonNicknameMap(vault)).toThrow(PersonNicknameConfigError);
   });
+
+  test("a shape-error detail is position-only: the operator key never travels", () => {
+    // The key of a nickname entry is a person's name - the same kind of
+    // data the parse-error path keeps out of doctor output and logs - so
+    // the shape detail names the entry's POSITION, not the key's text.
+    writeArtifact(JSON.stringify({ "Bobby Tables": "Robert" }));
+    let err: unknown;
+    try {
+      resolvePersonNicknameMap(vault);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(PersonNicknameConfigError);
+    const detail = (err as PersonNicknameConfigError).detail;
+    expect(detail).not.toContain("Bobby Tables");
+    expect(detail).toMatch(/^value of entry #1 must be an array of names$/);
+  });
+
+  test("two raw keys that normalize alike merge instead of the last one winning", () => {
+    // "Bob" and "bob " normalize to the same key; a silent replace makes
+    // the expansion depend on the JSON key order. The value lists merge.
+    writeArtifact(JSON.stringify({ Bob: ["Robert Smith"], "bob ": ["Bobby"] }));
+    const map = resolvePersonNicknameMap(vault);
+    expect(map.get("bob")).toEqual(["robert smith", "bobby"]);
+  });
 });

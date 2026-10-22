@@ -97,21 +97,32 @@ function parsePersonNicknameDocument(text: string, path: string): PersonNickname
     throw new PersonNicknameConfigError(path, "expected a JSON object mapping nickname to names");
   }
   const out = new Map<string, string[]>();
+  let entryIndex = 0;
   for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+    entryIndex += 1;
     const key = normalizeEntityName(rawKey);
     if (!key) continue;
+    // The detail names the entry's POSITION, never the key's text: a key
+    // is a person's nickname, and this detail reaches doctor output and
+    // logs - the same channel the parse-error path keeps position-only.
+    const shapeDetail = `value of entry #${entryIndex} must be an array of names`;
     if (!Array.isArray(rawValue)) {
-      throw new PersonNicknameConfigError(path, `value of '${rawKey}' must be an array of names`);
+      throw new PersonNicknameConfigError(path, shapeDetail);
     }
     const values: string[] = [];
     for (const entry of rawValue) {
       if (typeof entry !== "string") {
-        throw new PersonNicknameConfigError(path, `value of '${rawKey}' must be an array of names`);
+        throw new PersonNicknameConfigError(path, shapeDetail);
       }
       const normalized = normalizeEntityName(entry);
       if (normalized && !values.includes(normalized)) values.push(normalized);
     }
-    if (values.length > 0) out.set(key, values);
+    if (values.length === 0) continue;
+    // Two raw keys that normalize alike ("Bob" and "bob ") are one
+    // nickname: the value lists MERGE, because a silent replace would
+    // make the expansion depend on the JSON key order.
+    const prior = out.get(key) ?? [];
+    out.set(key, [...prior, ...values.filter((v) => !prior.includes(v))]);
   }
   return Object.freeze(
     new Map([...out].map(([key, values]) => [key, Object.freeze(values)] as const)),
