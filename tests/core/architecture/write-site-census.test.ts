@@ -1506,8 +1506,18 @@ const DIRECT_WRITE_ROWS = 85;
  * commit `Brain/pledges/` pages through the shared atomic writer
  * (note-shaped pages by design; pledges.ts also carries the archive move
  * the direct-fs record excused, needing no exclusion for its write half).
+ *
+ * 128 -> 130, from the write-honesty wave and nothing else: the
+ * content-class stamp's line insert
+ * (`src/core/brain/provenance/content-class.ts`, commit dca029dd) rewrites
+ * a just-written page through `atomicWriteFileSync` so the stamp cannot
+ * lose the rest of the document, and the privacy-marker restamp verb
+ * (`src/core/brain/privacy-marker-restamp.ts`, commit 571081ff) rewrites a
+ * page's `visibility:` line through the same helper on its apply arm - a
+ * dry-run-by-default repair pass over existing pages, writing no page of
+ * its own.
  */
-const SHARED_HELPER_ROWS = 128;
+const SHARED_HELPER_ROWS = 130;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1661,8 +1671,16 @@ const UNSTAMPED_DIRECT_ROWS = 84;
  * `src/core/brain/pledge-intake.ts` and `src/core/brain/pledges.ts` both
  * commit pledge pages through the shared atomic writer (vault note pages,
  * and no origin stamp on the pledge lane).
+ * 125 -> 127, from the write-honesty wave and nothing else: the
+ * content-class stamp's line insert
+ * (`src/core/brain/provenance/content-class.ts`, commit dca029dd) and the
+ * privacy-marker restamp verb
+ * (`src/core/brain/privacy-marker-restamp.ts`, commit 571081ff) both
+ * rewrite existing pages through the shared atomic writer, and neither
+ * stamps an origin channel - one writes a class the writer derives, the
+ * other a visibility token the page's own informal marker declares.
  */
-const UNSTAMPED_SHARED_ROWS = 125;
+const UNSTAMPED_SHARED_ROWS = 127;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

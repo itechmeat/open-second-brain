@@ -541,6 +541,11 @@ import {
   BENCH_REFUSAL_KINDS,
   isBenchRefusalKind,
 } from "../../../src/core/bench/guards.ts";
+import {
+  CONTENT_CLASSES,
+  CONTENT_CLASS,
+  isContentClass,
+} from "../../../src/core/brain/provenance/content-class.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1701,6 +1706,21 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: BENCH_REFUSAL_KINDS,
     guard: isBenchRefusalKind,
   },
+  {
+    // The write-honesty wave (F5, task E1, commit dca029dd). What kind of
+    // process produced a page's text, stamped into `content_class`
+    // frontmatter and read back by the egress filter at every shared
+    // export - the value is an on-disk spelling an operator can query on
+    // and hand-edit, so the guard is the boundary between this build's
+    // one member and a spelling a later release or a text editor writes.
+    // One member, because the stamp exists for exactly one decision
+    // (shared exports leave such pages out by default); the vocabulary
+    // grows the day a second decision ships.
+    name: "CONTENT_CLASS",
+    values: CONTENT_CLASS,
+    members: CONTENT_CLASSES,
+    guard: isContentClass,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1976,7 +1996,11 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // carry and so entering the scanned population.
 // 104: BENCH_REFUSAL (cycle 20261020, Lane E) - the bench guards'
 // closed refusal vocabulary, rendered by name in every bench refusal.
-const VOCABULARY_POPULATION = 104;
+// 105: CONTENT_CLASS (write-honesty wave, task E1, commit dca029dd) -
+// the content-class stamp's one-member vocabulary, complete with its
+// membership list and `unknown` guard from the start, enrolled here when
+// the egress census that reads it landed (task E4).
+const VOCABULARY_POPULATION = 105;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
