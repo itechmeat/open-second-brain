@@ -192,6 +192,18 @@ describe("lintWrittenPages - undated-quantity findings", () => {
     expect(pageLintField(report)).toEqual({});
   });
 
+  test("a valid_from that names no date does not silence the finding", () => {
+    // The hatch is structural: a value that places nothing in time (TBD,
+    // unknown, soon) is not a date, and treating any non-empty string as
+    // one let a placeholder boundary quiet the lint.
+    const rel = writeNote(
+      "Notes/UndatedFrontmatter.md",
+      `---\ntitle: D\nvalid_from: TBD\n---\n\n${BODY}\n`,
+    );
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(report.findings.map((f) => f.code)).toContain(UNDATED_QUANTITY_CODE);
+  });
+
   test("an ISO date in the body silences the finding", () => {
     const rel = writeNote(
       "Notes/DatedBody.md",

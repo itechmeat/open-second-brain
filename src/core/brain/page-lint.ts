@@ -583,7 +583,10 @@ function hasReadableArtifact(vault: string, ctx: LintContext, target: string): b
  */
 function hasDatedQuantityContext(meta: FrontmatterMap, body: string): boolean {
   const declared = meta[VALID_FROM_KEY];
-  if (typeof declared === "string" && declared.trim() !== "") return true;
+  // The boundary hatch is structural like the other two: the value must
+  // NAME a date. Any non-empty string ("TBD", "unknown", "soon") places
+  // nothing in time, and accepting it let a placeholder quiet the lint.
+  if (typeof declared === "string" && containsIsoDate(declared)) return true;
   if (containsIsoDate(body)) return true;
   return parseCitations(body).markers.length > 0;
 }
