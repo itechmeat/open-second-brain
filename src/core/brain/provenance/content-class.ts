@@ -49,6 +49,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { FrontmatterMap } from "../../types.ts";
@@ -175,4 +176,49 @@ export function stampPromptDerivedLine(abs: string): void {
   if (readContentClass(parseFrontmatterText(text)[0]) !== null) return;
   const line = `${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}\n`;
   atomicWriteFileSync(abs, `${text.slice(0, close + 1)}${line}${text.slice(close + 1)}`);
+}
+
+/**
+ * Whether the page at `vault`-relative `relPath` carries the reserved
+ * class. The predicate the export verbs hand to the guard's
+ * `egressContentClassSplit`: one page, one frontmatter read. A page that
+ * cannot be read (deleted between collection and the split, or never a
+ * page at all) reads as unmarked - the split omits what it can PROVE is
+ * marked, and everything else stays on the export path it was on.
+ */
+export function isPromptDerivedPage(vault: string, relPath: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(join(vault, relPath), "utf8");
+  } catch {
+    return false;
+  }
+  return readContentClass(parseFrontmatterText(text)[0]) === CONTENT_CLASS.promptDerived;
+}
+
+/** How deep {@link treeCarriesPromptDerived} descends before it stops. */
+const TREE_SEARCH_DEPTH = 8;
+
+/**
+ * Whether a JSON-shaped tree carries the reserved class anywhere - the
+ * tripwire the transcript export walks each streamed record through.
+ * Transcript records have no frontmatter and carry no class today, and
+ * the day a producer adds one this is what keeps the corpus from
+ * silently shipping (or silently emptying): the record is omitted and
+ * named, or the export refuses. Depth-bounded so a pathological tree
+ * cannot turn the check into a walk of unbounded cost; a class marker
+ * deeper than that is not a record shape, it is data.
+ */
+export function treeCarriesPromptDerived(value: unknown, depth = 0): boolean {
+  if (depth > TREE_SEARCH_DEPTH) return false;
+  if (Array.isArray(value))
+    return value.some((entry) => treeCarriesPromptDerived(entry, depth + 1));
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    // The key names the field; a bare string elsewhere in the tree is
+    // content, not a claim about itself.
+    if (readContentClass(record as FrontmatterMap) !== null) return true;
+    return Object.values(record).some((entry) => treeCarriesPromptDerived(entry, depth + 1));
+  }
+  return false;
 }

@@ -156,6 +156,95 @@ export const EGRESS_REDACTION_NOTICE =
   "note: secret-shaped content was redacted; this export no longer matches the vault byte for byte\n";
 
 /**
+ * Emitted on stderr by a verb run with the content-class override, so an
+ * operator who passes `--include-prompt-derived` is told, on the run,
+ * that the copy carries material the default leaves out. Like the
+ * redaction notice it goes to stderr, so stdout stays parseable.
+ */
+export const EGRESS_CONTENT_CLASS_INCLUDE_NOTICE =
+  "note: prompt-derived content is INCLUDED by override; this export carries material the default leaves out\n";
+
+/**
+ * The sentence naming every item the default content-class policy left
+ * out of an export, in the shape the knowledge pack's `blocked` list
+ * established: each omission named, with the reason beside it. An
+ * omission that is not named is a silently smaller export - the exact
+ * dishonesty the class policy exists to remove - so every verb that
+ * omits writes this line to stderr.
+ */
+export function contentClassOmissionNotice(omitted: ReadonlyArray<string>): string {
+  const list = omitted.map((name) => `${name} (content_class: prompt-derived)`).join(", ");
+  return (
+    `note: ${omitted.length} item(s) left out as prompt-derived: ${list}; ` +
+    "pass --include-prompt-derived to export them\n"
+  );
+}
+
+/**
+ * The operator-overridable half of the egress policy: what happens to
+ * pages whose `content_class` frontmatter carries the reserved
+ * `prompt-derived` value.
+ *
+ * The DEFAULT is exclusion, and it is not represented as a field here -
+ * an absent `contentClass` means the default applies, the same way an
+ * absent `foreignIdentifiers` means the default identifier rule does.
+ * Setting `include` is the per-verb operator override: the flag is
+ * spelled `--include-prompt-derived` on every export verb that offers
+ * it, and a run that sets it emits
+ * {@link EGRESS_CONTENT_CLASS_INCLUDE_NOTICE} on stderr.
+ */
+export interface EgressContentClassPolicy {
+  /** Carry class-marked items; the default leaves them out and names them. */
+  readonly include?: boolean;
+}
+
+/**
+ * What the default content-class policy did to one collection of items a
+ * payload was composed from. `kept` is what the payload should carry;
+ * `omitted` holds each excluded item's operator-facing name, ready for
+ * {@link contentClassOmissionNotice}. Under the override the split is the
+ * identity and `omitted` is empty - an override run has nothing to name.
+ */
+export interface EgressContentClassSplit<T> {
+  readonly kept: ReadonlyArray<T>;
+  readonly omitted: ReadonlyArray<string>;
+}
+
+/**
+ * Apply the content-class policy to the items a shared export's payload
+ * is composed from. This is the exclusion seam: every export that
+ * carries pages splits its page collection through here BEFORE the
+ * payload is composed and redacted, so a class-marked page is not in the
+ * bytes the guard scans rather than redacted inside them. The census
+ * (`egress-census.test.ts`) pins the page-carrying sites to this call by
+ * name, in both directions.
+ *
+ * The predicate comes from the caller because the guard is shape-blind
+ * by design - it cannot know whether a payload's items are pages, nodes
+ * or contracts, and pretending otherwise would put a vault walk inside
+ * the one module that stays pure of the filesystem.
+ */
+export function egressContentClassSplit<T>(
+  items: ReadonlyArray<T>,
+  policy: EgressPolicy,
+  item: {
+    /** The operator-facing name an omission is disclosed under. */
+    readonly name: (entry: T) => string;
+    /** Whether this item carries the reserved class. */
+    readonly isPromptDerived: (entry: T) => boolean;
+  },
+): EgressContentClassSplit<T> {
+  if (policy.contentClass?.include === true) return { kept: [...items], omitted: [] };
+  const kept: T[] = [];
+  const omitted: string[] = [];
+  for (const entry of items) {
+    if (item.isPromptDerived(entry)) omitted.push(item.name(entry));
+    else kept.push(entry);
+  }
+  return { kept, omitted };
+}
+
+/**
  * What a call site may vary about the one policy above.
  *
  * Deliberately not a second policy constant: the redaction options stay
@@ -191,6 +280,17 @@ export interface EgressPolicy {
    * option stays absent, which is the named decision, not an omission.
    */
   readonly resolvedLiterals?: ReadonlyArray<string>;
+  /**
+   * What happens to pages carrying the reserved `prompt-derived` content
+   * class. Absent, the default applies: such pages are left out of the
+   * payload a shared export composes - split out at
+   * {@link egressContentClassSplit} BEFORE composition, so they are
+   * absent rather than redacted - and every omission is named on stderr.
+   * `include: true` is the per-verb `--include-prompt-derived` override
+   * and turns the split into the identity, with
+   * {@link EGRESS_CONTENT_CLASS_INCLUDE_NOTICE} on stderr.
+   */
+  readonly contentClass?: EgressContentClassPolicy;
 }
 
 /**

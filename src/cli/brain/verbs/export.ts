@@ -19,10 +19,13 @@ import {
 } from "../../../core/brain/export-transcripts.ts";
 import {
   EGRESS_OUTCOME,
+  EGRESS_CONTENT_CLASS_INCLUDE_NOTICE,
   EGRESS_REDACTION_NOTICE,
+  contentClassOmissionNotice,
   redactForEgress,
   type EgressRefused,
 } from "../../../core/egress/guard.ts";
+import { treeCarriesPromptDerived } from "../../../core/brain/provenance/content-class.ts";
 import {
   brainVerbContext,
   fail,
@@ -197,6 +200,7 @@ async function exportTranscripts(flags: BrainVerbFlags): Promise<FormatOutcome> 
   const window = windowOf(flags);
   if (typeof window === "string") return { kind: "usage", detail: window };
 
+  const includePromptDerived = flags["include-prompt-derived"] === true;
   const options: TranscriptExportOptions = {
     source,
     ...window,
@@ -209,9 +213,13 @@ async function exportTranscripts(flags: BrainVerbFlags): Promise<FormatOutcome> 
   const handle = openSync(spool, "wx");
   let outcome: SpoolOutcome;
   try {
-    outcome = await spoolTranscriptCorpus(streamTranscriptConversations(options), (line) => {
-      writeSync(handle, line);
-    });
+    outcome = await spoolTranscriptCorpus(
+      streamTranscriptConversations(options),
+      (line) => {
+        writeSync(handle, line);
+      },
+      { includePromptDerived },
+    );
   } finally {
     closeSync(handle);
   }
@@ -220,6 +228,12 @@ async function exportTranscripts(flags: BrainVerbFlags): Promise<FormatOutcome> 
     // file that exists, it was never named, and it goes now.
     unlinkSync(spool);
     return { kind: "refused", detail: outcome.detail };
+  }
+  if (outcome.promptDerivedOmitted.length > 0) {
+    process.stderr.write(contentClassOmissionNotice(outcome.promptDerivedOmitted));
+  }
+  if (includePromptDerived && outcome.written > 0) {
+    process.stderr.write(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
   }
   if (outcome.written === 0) reportEmptyCorpus(outcome.summary);
   return { kind: "spooled", spool, redacted: outcome.redacted };
@@ -232,8 +246,28 @@ export type SpoolOutcome =
       readonly written: number;
       readonly redacted: boolean;
       readonly summary: TranscriptExportSummary;
+      /**
+       * The conversations the default content-class policy left out,
+       * named for the stderr disclosure. Empty under the override and
+       * when nothing carried the class.
+       */
+      readonly promptDerivedOmitted: ReadonlyArray<string>;
     }
   | { readonly kind: "refused"; readonly detail: string };
+
+/** Options the spooling loop takes from the verb's flags. */
+export interface SpoolTranscriptOptions {
+  /**
+   * The per-verb `--include-prompt-derived` override. Default (false):
+   * a conversation whose record carries the reserved `prompt-derived`
+   * content class anywhere in its tree is left out of the corpus and
+   * named - the transcript format has a contract to export session
+   * material, so it never applies the class default SILENTLY: each
+   * omission is disclosed, and a corpus the policy would empty entirely
+   * is a refusal, never an empty file.
+   */
+  readonly includePromptDerived?: boolean;
+}
 
 /**
  * Guard each conversation and hand the released one straight to `write`.
@@ -261,15 +295,42 @@ export type SpoolOutcome =
 export async function spoolTranscriptCorpus(
   records: AsyncGenerator<TranscriptConversation, TranscriptExportSummary>,
   write: (line: string) => void,
+  opts: SpoolTranscriptOptions = {},
 ): Promise<SpoolOutcome> {
   let written = 0;
   let redacted = false;
+  const promptDerivedOmitted: string[] = [];
   for (;;) {
     // The corpus is read one conversation at a time, and the summary rides
     // out as the generator's return value - `for await` would discard it.
     // oxlint-disable-next-line no-await-in-loop
     const step = await records.next();
-    if (step.done === true) return { kind: "written", written, redacted, summary: step.value };
+    if (step.done === true) {
+      // A corpus the class policy would empty entirely is a REFUSAL, not
+      // an empty file: the transcript format exists to export session
+      // material, and an empty export under exit 0 reads as a machine
+      // that recorded nothing. The refusal names what was held back.
+      if (written === 0 && promptDerivedOmitted.length > 0) {
+        return {
+          kind: "refused",
+          detail:
+            `every conversation in the corpus carries content_class: prompt-derived, and the ` +
+            `transcript export leaves such records out by default (${promptDerivedOmitted.length} ` +
+            "conversation(s): " +
+            `${promptDerivedOmitted.join(", ")}). Re-run with --include-prompt-derived to export them.`,
+        };
+      }
+      return { kind: "written", written, redacted, summary: step.value, promptDerivedOmitted };
+    }
+    // The content-class tripwire (F5): a record carrying the reserved
+    // class anywhere in its tree is left out and named under the default
+    // policy. No record carries one today; this is the seam that keeps
+    // the day one does from emptying the corpus quietly.
+    if (opts.includePromptDerived !== true && treeCarriesPromptDerived(step.value)) {
+      promptDerivedOmitted.push(step.value.session_id);
+      // oxlint-disable-next-line no-await-in-loop
+      continue;
+    }
     // `foreignIdentifiers`: this record's `session_id` and `turn_id` were
     // named by whichever harness wrote the transcript, so the guard's
     // default "an id is a long mixed run by construction" narrowing - an
@@ -327,6 +388,7 @@ export async function cmdBrainExport(argv: string[]): Promise<number> {
     until: { type: "string" },
     out: { type: "string" },
     force: { type: "boolean" },
+    "include-prompt-derived": { type: "boolean" },
   });
   const format = flags["format"];
   if (!isExportFormat(format)) {

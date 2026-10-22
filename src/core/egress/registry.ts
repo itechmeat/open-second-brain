@@ -115,7 +115,11 @@ export const EGRESS_SITES = Object.freeze({
       "the widest export in the tree: preferences, the page graph, page contracts and " +
       "the sources dashboard composed into one file. Redaction runs over the bundle " +
       "TREE and the JSON is serialised afterwards, so a note whose text happens to " +
-      "contain a credential assignment cannot mangle the document's own quoting.",
+      "contain a credential assignment cannot mangle the document's own quoting. A page " +
+      "whose content_class carries the reserved prompt-derived value is left out of both " +
+      "page sections - graph node and contract - and the omission is named on stderr; " +
+      "--include-prompt-derived carries it back in. The sources dashboard is an aggregate " +
+      "over signal records, carries no page text, and is not class-filtered.",
   },
   "brain-graph-export": {
     id: "brain-graph-export",
@@ -124,7 +128,11 @@ export const EGRESS_SITES = Object.freeze({
     redaction: R.sharedRedactor,
     reason:
       "carries no page body, but does carry every page title, path and typed-relation " +
-      "target - a credential pasted into a title left through here verbatim.",
+      "target - a credential pasted into a title left through here verbatim. A page whose " +
+      "content_class carries the reserved prompt-derived value has no node in the graph - " +
+      "title, path and relations go with it - and the omission is named on stderr; " +
+      "--include-prompt-derived carries it back in. Link and relation targets inside a " +
+      "kept node are that page's own declared citations and are not rewritten.",
   },
   "brain-okf-export": {
     id: "brain-okf-export",
@@ -137,9 +145,13 @@ export const EGRESS_SITES = Object.freeze({
       "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " +
       "as text. A bundle whose secrets were removed is no longer a lossless round-trip " +
       "of the vault, and the verb says so rather than implying otherwise. What it does NOT " +
-      "do is filter by label: a page carrying `private: true` in its frontmatter exports in " +
-      "full, because the `<private>` region marker is this product's only content-derived " +
-      "privacy primitive and these composers are content composers, not visibility filters.",
+      "do is filter by the informal privacy labels: a page carrying `private: true` in its " +
+      "frontmatter exports in full, because the `<private>` region marker is this product's " +
+      "only content-derived privacy primitive and these composers are content composers, " +
+      "not visibility filters. What it DOES filter, since the content class shipped, is the " +
+      "server-derived class itself: a page stamped content_class: prompt-derived is absent " +
+      "from the manifest and no file is written for it, every omission is named on stderr, " +
+      "and --include-prompt-derived carries the pages back in.",
   },
   "brain-export": {
     id: "brain-export",
@@ -166,7 +178,13 @@ export const EGRESS_SITES = Object.freeze({
       "one caller that passes `foreignIdentifiers`, because its `session_id` and " +
       "`turn_id` were named by the harness that wrote the transcript rather than by " +
       "this vault, so the guard's vendor-prefix-only rule for identifiers - an " +
-      "argument about ids this build constructs - does not cover them.",
+      "argument about ids this build constructs - does not cover them. The formats " +
+      "carry no page-classed material - the two preference forms serialise preference " +
+      "rows, which never take the content-class stamp, and the transcript corpus is " +
+      "runtime session logs, not vault pages - so the default content-class exclusion " +
+      "has nothing to remove here; the transcript branch still does not apply it " +
+      "SILENTLY: a record that carries the reserved class is omitted and named, and a " +
+      "corpus the policy would empty is a refusal, never an empty file.",
   },
   "config-export": {
     id: "config-export",
@@ -192,7 +210,9 @@ export const EGRESS_SITES = Object.freeze({
       "the two flags the export boundary exists to turn on. Write-time coverage also " +
       "says nothing about a record already on disk or appended by another writer, since " +
       "the read model never re-scans. The verb now scans what it READ, which answers " +
-      "both, and gains the truncation refusal the other five already had.",
+      "both, and gains the truncation refusal the other five already had. Continuity " +
+      "records are structured events, not pages, and never take the content-class " +
+      "stamp, so the default class exclusion removes nothing here.",
   },
   "brain-explorer-export": {
     id: "brain-explorer-export",
@@ -208,7 +228,10 @@ export const EGRESS_SITES = Object.freeze({
       "substitution, so a principle whose text contains a quote cannot disturb the " +
       "document. The label rule holds here too: a preference is not withheld for carrying " +
       "a `private` tag, because the `<private>` region marker is the only content-derived " +
-      "privacy primitive in this product.",
+      "privacy primitive in this product. The content-class default removes nothing here " +
+      "either: preferences and retired principles are operator-curated rows and never " +
+      "take the prompt-derived stamp, which is written by note creation, the session " +
+      "import and the report writers only.",
   },
   "brain-knowledge-pack-export": {
     id: "brain-knowledge-pack-export",
@@ -218,8 +241,9 @@ export const EGRESS_SITES = Object.freeze({
     reason:
       "a selected subset - preference principles and page bodies verbatim - built to be " +
       "handed to someone else, so it is the one export that also filters by LABEL before " +
-      "it scans: a page declaring `visibility:`, an entry carrying `owner:`, and an " +
-      "unreviewed `OKF Review/` candidate are blocked and named, never written. What is " +
+      "it scans: a page declaring `visibility:`, an entry carrying `owner:`, an " +
+      "unreviewed `OKF Review/` candidate, and - since the content class shipped - a page " +
+      "stamped content_class: prompt-derived are blocked and named, never written. What is " +
       "carried is redacted as a tree (OKF manifest, preference rows) and as text (pages) " +
       "BEFORE the pack is sealed, so the sha256 table hashes the bytes that left and a " +
       "recipient's integrity check verifies the redacted copy, not the vault. Preference " +
