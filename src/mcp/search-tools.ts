@@ -2000,8 +2000,17 @@ export async function buildSearchStatusBlock(ctx: ServerContext): Promise<Record
       warnings,
       ...rest
     } = serializeIndexStatus(snap);
+    // Held chunks travel as a COUNT, never as the item list: the items'
+    // paths are an operator diagnostic (`o2b search status`, the doctor),
+    // while this block reaches callers a transport may serve at `remote`
+    // reach, and a held chunk's path is exactly the location a reservation
+    // may want kept off the wire. The total is what an agent needs to
+    // know - work is waiting that the active configuration will not spend.
+    const heldChunks = rest["held_chunks"] as { total: number } | undefined;
+    const trimmed =
+      heldChunks === undefined ? rest : { ...rest, held_chunks: { total: heldChunks.total } };
     const reportable = Array.isArray(warnings) ? warnings : [];
-    return reportable.length > 0 ? { ...rest, warnings: reportable } : rest;
+    return reportable.length > 0 ? { ...trimmed, warnings: reportable } : trimmed;
   } catch (e) {
     return { exists: false, error: e instanceof Error ? e.message : String(e) };
   }
