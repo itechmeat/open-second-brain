@@ -16,8 +16,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
   containsIsoDate,
+  containsProseIsoDate,
   findUndatedQuantities,
 } from "../../../src/core/brain/undated-quantity.ts";
+import { LINEAR_CEILING_MS } from "../../helpers/linear-time.ts";
 
 interface PositiveCase {
   readonly name: string;
@@ -86,6 +88,11 @@ const POSITIVE: ReadonlyArray<PositiveCase> = [
     name: "a year-shaped number with a thousands separator is still a quantity",
     body: "2,024 users were migrated",
     lexemes: ["2,024 users"],
+  },
+  {
+    name: "a single-letter unit after whitespace",
+    body: "the job ran 3 d",
+    lexemes: ["3 d"],
   },
 ];
 
@@ -170,6 +177,31 @@ const NEGATIVE: ReadonlyArray<PositiveCase> = [
     body: "In 2024 users doubled",
     lexemes: [],
   },
+  {
+    name: "a dimension letter glued to a number",
+    body: "a 3D printer outputs 2D jigs",
+    lexemes: [],
+  },
+  {
+    name: "a plan letter glued to a number",
+    body: "plan 2b covers the rollout",
+    lexemes: [],
+  },
+  {
+    name: "a count inside a wikilink target",
+    body: "see [[Pricing 12,400 plan]] for details",
+    lexemes: [],
+  },
+  {
+    name: "numbers in a URL run",
+    body: "fetched https://x.com/item/5000users?q=50% just now",
+    lexemes: [],
+  },
+  {
+    name: "a markdown link destination",
+    body: "the rows live in [quarterly export](12,400-rows.csv) here",
+    lexemes: [],
+  },
 ];
 
 describe("findUndatedQuantities - the trigger classes", () => {
@@ -231,5 +263,66 @@ describe("containsIsoDate", () => {
 
   test("does not read a version token as a date", () => {
     expect(containsIsoDate("upgraded to v1.73.0")).toBe(false);
+  });
+});
+
+describe("containsProseIsoDate - the escape hatch reads the masked view", () => {
+  test("a prose date hatches", () => {
+    expect(containsProseIsoDate("published 2026-10-22 by the team")).toBe(true);
+  });
+
+  test("an instant in prose hatches", () => {
+    expect(containsProseIsoDate("ended 2026-10-22T10:30:00Z on the dot")).toBe(true);
+  });
+
+  test("a date inside a fenced block is not prose", () => {
+    expect(containsProseIsoDate("```\n2026-10-22\n```\n\n5,000 users\n")).toBe(false);
+  });
+
+  test("a date inside an inline code span is not prose", () => {
+    expect(containsProseIsoDate("the stamp `2026-10-22` is quoted")).toBe(false);
+  });
+
+  test("a date inside a table row is not prose", () => {
+    expect(containsProseIsoDate("| 2026-10-22 | 35% |")).toBe(false);
+  });
+
+  test("a date inside a URL is not prose", () => {
+    expect(containsProseIsoDate("see https://x.com/posts/2026-10-22 today")).toBe(false);
+  });
+
+  test("a date inside a wikilink target is not prose", () => {
+    expect(containsProseIsoDate("see [[Report 2026-10-22]] today")).toBe(false);
+  });
+
+  test("text with no date anywhere does not hatch", () => {
+    expect(containsProseIsoDate("no date in here at all")).toBe(false);
+  });
+});
+
+/**
+ * The run shapes admit no comma or dot before the first digit. Without
+ * that guard, in a comma-joined digit run every position after a comma
+ * was a legal match start, each running `[\d,]*` to the end and
+ * backtracking through the tail: 45 s on 50,000 chars, in the
+ * synchronous write receipt. A quadratic pass over a 256 KiB body takes
+ * minutes, the fixed scan takes milliseconds, and the ceiling is the
+ * shared guard sized for a loaded CI runner.
+ */
+describe("findUndatedQuantities - bounded scan time", () => {
+  const QUARTER_MIB_CHARS = 256 * 1024;
+
+  test("a comma-joined digit run the size of the artifact cap stays linear", () => {
+    const body = "1,".repeat(QUARTER_MIB_CHARS / 2);
+    const started = performance.now();
+    expect(findUndatedQuantities(body)).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
+  });
+
+  test("a dotted version-like run the size of the artifact cap stays linear", () => {
+    const body = "1.1.".repeat(QUARTER_MIB_CHARS / 4);
+    const started = performance.now();
+    expect(findUndatedQuantities(body)).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
   });
 });
