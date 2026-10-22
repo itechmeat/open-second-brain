@@ -84,6 +84,7 @@ import type {
 } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
+import { logShardWikilink } from "./log.ts";
 import {
   OPERATION,
   progressCounter,
@@ -253,7 +254,12 @@ function dreamRun(
   // nothing writes the decision back to `_brain.yaml`.
   const healEnrichEnabled = opts.gates?.heal_enrich ?? cfg.dream.heal_enrich_enabled === true;
   let runId = formatRunId(now);
-  const wikilinkToRun = `[[Brain/log/${isoDate(now)}]]`;
+  // The retired_by stamp every retire in this pass carries. Built
+  // through the shared helper so it names the log shard the pass's own
+  // events land in - with a configured device id, the bare-date shape
+  // names a file this device never writes, and the doctor reads the
+  // provenance as a broken link.
+  const wikilinkToRun = logShardWikilink(isoDate(now));
 
   const callerAgent = opts.agentName?.trim() ?? "";
   const isNonPrimary =
