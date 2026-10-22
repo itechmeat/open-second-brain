@@ -349,7 +349,6 @@ function exclusionRanges(text: string): Range[] {
 /** True when `[start, end)` overlaps any excluded span. */
 function isExcluded(ranges: ReadonlyArray<Range>, start: number, end: number): boolean {
   for (const range of ranges) {
-    if (range.start >= end) return false;
     if (start < range.end && range.start < end) return true;
   }
   return false;

@@ -145,6 +145,16 @@ const NEGATIVE: ReadonlyArray<PositiveCase> = [
     body: "42 boxes arrived",
     lexemes: [],
   },
+  {
+    name: "a candidate span inside an ISO date with a later table row",
+    body: "Date: 2026-10-22 days\n\n| table | column |\n",
+    lexemes: [],
+  },
+  {
+    name: "a version token overlapping a quantity trigger",
+    body: "release 1.2.3 USD shipped",
+    lexemes: [],
+  },
 ];
 
 describe("findUndatedQuantities - the trigger classes", () => {
