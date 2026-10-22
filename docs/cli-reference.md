@@ -2815,6 +2815,7 @@ o2b search query --visibility <token>...   narrow results to pages declaring one
 o2b search check                           reports how many indexed documents reserve themselves against remote
                                            reads, how many enumerated note-returning surfaces still do not consult
                                            the field, and how many documents hold no frontmatter the index measured
+o2b brain privacy-marker-restamp  [--apply] [--json] - stamp the reserved visibility token onto pages that declare their audience only through an informal privacy marker (access / confidentiality / sensitivity); dry-run default, additive, idempotent, never removes a token, never re-embeds
 ```
 
 A vault page's `visibility:` frontmatter carries opaque, language-neutral
@@ -2866,6 +2867,48 @@ distinct: the page's tokens, an empty list for a page that declares none,
 and unmeasured for a document the index holds no frontmatter chunk for.
 `o2b search check` reports the unmeasured population rather than counting
 it as declaring nothing.
+
+### The content class (since v1.92.0)
+
+```text
+o2b brain bank-export --out <file>   [--include-prompt-derived]
+o2b brain graph-export --out <file>  [--include-prompt-derived]
+o2b brain okf-export --out <dir>     [--include-prompt-derived]
+o2b brain export --out <file>        [--include-prompt-derived]
+```
+
+Pages carry a `content_class:` frontmatter key that the server writes, the
+same way the channel a record arrived on is written by the process that
+received it and never named by the caller. The vocabulary is closed and
+holds one member today: `prompt-derived`, stamped at creation on the write
+paths that are definitionally material an agent produced from a prompt -
+note writes that arrive over the MCP transport, the session import, and the
+in-process report writers. A caller that sends the key has it dropped; an
+operator-authored CLI write is never stamped.
+
+Every shared export leaves class-marked pages out by default. The four
+verbs above split them out of the payload BEFORE it is composed, so a
+marked page is absent from the export rather than redacted inside it, and
+each omission is named on stderr with the page's path and its class, so a
+smaller export is never a silent one. Passing `--include-prompt-derived`
+carries the pages back in; the run says so on stderr, because an operator
+who opted in deserves to see the opt-in acknowledged where the copy is
+made. The knowledge pack goes one step earlier: a marked page is blocked
+by the selection step beside the `visibility` and `owner` blocks and named
+in the pack's `blocked` list, since a pack is a curated subset by design.
+The transcript format has a contract to export session material, so it
+never applies the default quietly: a record that carries the class is
+omitted and named, and a corpus the policy would empty is a refusal, never
+an empty file.
+
+Pages written before this shipped carry no `content_class` key, and
+nothing rewrites them to add one - a stamp applied by a later pass would
+describe the pass, not the writer. Absence of the mark is the documented
+pre-stamp era: such a page is unmarked and keeps exporting exactly as it
+did before this release. The vocabulary is closed on the write side and
+forgiving on the read side: a hand-edited value this build does not know
+reads as unmarked, because inventing an exclusion for it would let one
+typo silently hide pages from every shared export.
 
 ## What leaves the machine unscanned (network egress)
 

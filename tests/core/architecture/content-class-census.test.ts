@@ -333,3 +333,28 @@ describe("the content-class census cannot pass by finding nothing", () => {
     expect(isPageCarryingRedactor(text)).toBe(false);
   });
 });
+
+describe("the class policy is disclosed where an operator reads", () => {
+  // The registry reasons and the guard's stderr notices are source and
+  // runtime surfaces. An operator deciding whether to hand an export to
+  // someone else reads the CLI reference and the security policy, so the
+  // default exclusion, the per-verb override and the era boundary must
+  // appear there. Keyed on the stable spellings, the way the egress
+  // census keys its network disclosures on the entry id: a disclosure
+  // that stops naming the surface is a named failure here, and a new
+  // export surface is undisclosed until someone writes it down.
+  for (const doc of OPERATOR_DOCS) {
+    test(`${doc} discloses the default, the override and the era`, () => {
+      const text = readFileSync(join(REPO_ROOT, doc), "utf8");
+      // The default-excluded class, named as the field and as the value.
+      expect(text).toContain("content_class");
+      expect(text).toContain("prompt-derived");
+      // The per-verb operator override, spelled as the flag it is.
+      expect(text).toContain("--include-prompt-derived");
+      // The era boundary: absence of the mark is documented rather than
+      // migrated, and a pre-stamp page keeps exporting.
+      expect(text).toMatch(/pre-stamp era/);
+      expect(text).toMatch(/never\s+rewritten|nothing\s+rewrites/);
+    });
+  }
+});
