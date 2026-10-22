@@ -459,6 +459,21 @@ export async function probeEmbeddingProvider(opts: ReadinessOptions): Promise<Re
       detail: `config failed to resolve: ${(err as Error).message}`,
     };
   }
+  // The consent is read BEFORE the provider is constructed: an operator
+  // who deliberately declined is reported as skipped with the decline
+  // sentence (the consent probe's wording is the precedent) rather than
+  // reporting a failure that contradicts their choice.
+  const consent = resolveProviderConsent({
+    configPath,
+    env: opts.env ?? process.env,
+    semantic,
+  });
+  if (providerConsentIsDeclined(consent)) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail: consent.detail,
+    };
+  }
   // The tier is read BEFORE the provider is constructed: a provider whose
   // credential is missing refuses at construction, and reporting that as
   // "failed to load" described the wrong thing entirely.
@@ -471,7 +486,7 @@ export async function probeEmbeddingProvider(opts: ReadinessOptions): Promise<Re
   }
   let provider;
   try {
-    provider = makeProvider(semantic);
+    provider = makeProvider(semantic, consent);
   } catch (err) {
     return {
       status: READINESS_STATUS.fail,

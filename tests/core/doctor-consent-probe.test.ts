@@ -27,6 +27,7 @@ import { join } from "node:path";
 import {
   DEFAULT_PROBES,
   READINESS_PROBE,
+  probeEmbeddingProvider,
   probeLlmKey,
   probeProviderConsent,
   runReadinessProbes,
@@ -130,5 +131,25 @@ describe("the skipped arm of the key probe is split", () => {
     expect(verdict.status).toBe("skipped");
     // Byte-identical to the sentence this probe has always reported.
     expect(verdict.detail).toBe("semantic search disabled; no model API key required");
+  });
+});
+
+describe("the embedding probe reports a decline as skipped", () => {
+  test("a declined vault reports skipped with the decline sentence", async () => {
+    writeConfig("search_semantic_enabled: false\n");
+    const verdict = await probeEmbeddingProvider(probeOpts());
+    expect(verdict.status).toBe("skipped");
+    expect(verdict.detail).toContain("provider consent declined");
+    expect(verdict.detail).toContain("search_semantic_enabled=false");
+  });
+
+  test("a genuine provider load failure still reports fail", async () => {
+    writeConfig(
+      "search_semantic_enabled: true\nembedding_provider: openai-compat\nembedding_api_key: fake-key\n",
+    );
+    const verdict = await probeEmbeddingProvider(probeOpts());
+    expect(verdict.status).toBe("fail");
+    expect(verdict.detail).toContain("provider failed to load");
+    expect(verdict.detail).toContain("embedding_base_url is required");
   });
 });

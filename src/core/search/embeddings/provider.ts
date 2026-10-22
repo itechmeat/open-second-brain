@@ -37,7 +37,7 @@ import {
 } from "../provider-consent.ts";
 
 export function makeProvider(
-  config: ResolvedEmbeddingConfig,
+  config: ResolvedEmbeddingConfig & { readonly configPath?: string | null },
   /**
    * The provider consent, already resolved by the caller. Absent means
    * "resolve it here", which reads the record from the configuration this
@@ -48,7 +48,12 @@ export function makeProvider(
   // The refusal comes FIRST, before the lazy provider imports below: a
   // declined vault must not even load the module that would have talked
   // to an endpoint.
-  const resolved = consent ?? resolveProviderConsent({ semantic: config });
+  const resolved =
+    consent ??
+    resolveProviderConsent({
+      ...(config.configPath !== undefined ? { configPath: config.configPath } : {}),
+      semantic: config,
+    });
   if (providerConsentIsDeclined(resolved)) {
     throw new SearchError("EMBEDDING_DISABLED", resolved.detail);
   }

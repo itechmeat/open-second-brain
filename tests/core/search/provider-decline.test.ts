@@ -180,6 +180,44 @@ describe("the decline at provider construction", () => {
     }
   });
 
+  test("a decline in a named config file is honored when in force and ignored for another file", async () => {
+    const server: FakeHttp = await startFakeHttp();
+    const fDeclined = fixture("named-decline");
+    const fActive = fixture("named-active");
+    const saved = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    try {
+      writeFileSync(fDeclined.configPath, "search_semantic_enabled: false\n");
+      writeFileSync(fActive.configPath, 'vault: "/tmp/v"\n');
+
+      // Set ambient config to the declined file. A run pointed at fActive
+      // must ignore the ambient decline and build the provider.
+      process.env["OPEN_SECOND_BRAIN_CONFIG"] = fDeclined.configPath;
+      const activeSemantic = { ...liveSemantic(server.url), configPath: fActive.configPath };
+      const activeProvider = makeProvider(activeSemantic);
+      expect(providerProducesVectors(activeProvider)).toBe(true);
+
+      // Now set ambient config to the active file. A run pointed at fDeclined
+      // must honor the decline in that named file and refuse.
+      process.env["OPEN_SECOND_BRAIN_CONFIG"] = fActive.configPath;
+      const declinedSemantic = { ...liveSemantic(server.url), configPath: fDeclined.configPath };
+      let thrown: unknown;
+      try {
+        makeProvider(declinedSemantic);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown instanceof SearchError).toBe(true);
+      expect((thrown as SearchError).code).toBe("EMBEDDING_DISABLED");
+      expect(server.callCount()).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved;
+      fDeclined.cleanup();
+      fActive.cleanup();
+      await server.close();
+    }
+  });
+
   test("a configuration that records no decision builds the provider exactly as before", async () => {
     const server: FakeHttp = await startFakeHttp();
     const f = fixture("decline-unset");

@@ -49,6 +49,7 @@ import {
 import { embeddingPriceRecommendations } from "./price-recommendations.ts";
 import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { resolveProviderConsent } from "./provider-consent.ts";
 import {
   embeddingSignature,
   isStaleSignature,
@@ -1229,7 +1230,12 @@ export async function runEmbeddingPhase(
   const pending = initialPlan.pending;
   if (pending.length === 0) return;
 
-  const provider = makeProvider(config.semantic);
+  const consent = resolveProviderConsent({
+    configPath: config.configPath ?? null,
+    env: process.env,
+    semantic: config.semantic,
+  });
+  const provider = makeProvider(config.semantic, consent);
   const model = config.semantic.model ?? provider.model;
 
   // Skip-and-hold (F2): chunks provably over the declared window leave
@@ -2292,11 +2298,16 @@ export async function indexCheck(
   //     A probe that did not complete goes to `warnings`, because it
   //     proved nothing, and the CLI gives it an exit code of its own so
   //     it is not read as either verdict.
+  const consent = resolveProviderConsent({
+    configPath: config.configPath ?? null,
+    env: process.env,
+    semantic: config.semantic,
+  });
   const probe = !embeddingKeyResolved
     ? PROVIDER_PROBE_NOT_CONFIGURED
     : opts?.probeProvider === false
       ? PROVIDER_PROBE_SKIPPED
-      : await probeProvider(() => makeProvider(config.semantic));
+      : await probeProvider(() => makeProvider(config.semantic, consent));
   const providerProbe = probe.state;
   const providerReason = probe.reason;
   if (providerProbe === PROVIDER_PROBE.unreachable) {
