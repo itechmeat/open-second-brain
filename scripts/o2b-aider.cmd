@@ -21,5 +21,24 @@ if errorlevel 1 (
     exit /b 127
   )
 )
+rem Dependency bootstrap. A marketplace add/upgrade replaces this checkout
+rem wholesale, so node_modules can arrive missing even though package.json and
+rem bun.lock ship with the tree, and the CLI then cannot start. One file stat
+rem when the tree is present; one frozen install when it is not. Mirrors the
+rem block in scripts/o2b; O2B_SKIP_DEP_BOOTSTRAP opts out.
+if not exist "%O2B_ROOT%\node_modules\proper-lockfile\package.json" (
+  if not defined O2B_SKIP_DEP_BOOTSTRAP (
+    >&2 echo o2b-aider: dependency tree missing in this checkout; running 'bun install --frozen-lockfile'...
+    pushd "%O2B_ROOT%"
+    "%O2B_BUN%" install --frozen-lockfile 1>&2
+    if errorlevel 1 (
+      >&2 echo error: the automatic 'bun install --frozen-lockfile' failed in "%O2B_ROOT%".
+      >&2 echo Run that command inside the checkout yourself, then retry. See install/codex.md and docs/updating.md.
+      popd
+      exit /b 1
+    )
+    popd
+  )
+)
 "%O2B_BUN%" run "%O2B_ROOT%\src\cli\main.ts" aider wrap %*
 exit /b %ERRORLEVEL%

@@ -372,6 +372,22 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
       "merely puts that use back in shadow until the eval promotes it again.",
     sources: ["src/core/decision-model/eval/mark.ts", "src/core/platform-dirs.ts"],
   },
+  {
+    id: "decision_model_thresholds",
+    label: "decision-model thresholds",
+    location: WINDOWS
+      ? `the directory %OPEN_SECOND_BRAIN_CONFIG% names, else (${describeBaseDir("config", "win32")})\\open-second-brain\\decision-thresholds.json`
+      : "beside $OPEN_SECOND_BRAIN_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/open-second-brain/decision-thresholds.json",
+    carries_memory: false,
+    created_by: "`o2b decision-model thresholds fit`, or `thresholds set` by hand",
+    removed_by: "deleting the file yourself; the kept history in it goes with it",
+    note:
+      "Per-use enforce thresholds keyed by the model id the server reports, so a self-hosted " +
+      "server that swaps models never inherits the previous model's numbers. Entries of every " +
+      "model ever tuned are kept across switches, with an optional per-vault override. It " +
+      "carries numbers, names and timestamps - never vault text.",
+    sources: ["src/core/decision-model/thresholds.ts", "src/core/decision-model/config.ts"],
+  },
 ]);
 
 /**
@@ -635,6 +651,20 @@ export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new M
     "the registry is written beside whatever config file it was handed - `dirname(configPath)` - " +
       "so the root arrives as an argument and no home or XDG token appears in the source. The " +
       "config path itself is built by src/core/config.ts, which IS swept",
+  ],
+  [
+    "src/core/decision-model/thresholds.ts",
+    "the thresholds file is `join(dirname(configPath), DECISION_THRESHOLDS_FILE)` - the root " +
+      "arrives as an argument and no home or XDG token appears in the source. The config path " +
+      "itself is built by src/core/config.ts, which IS swept; the location this file writes is " +
+      "the decision_model_thresholds row",
+  ],
+  [
+    "src/core/decision-model/config.ts",
+    "the store path arrives from the resolved config path - `decisionThresholdsPath(configPath)` " +
+      "derives `dirname(configPath)` for the store in src/core/decision-model/thresholds.ts - so " +
+      "no home or XDG token appears in this file's own source; the location it gates on is the " +
+      "decision_model_thresholds row",
   ],
   [
     "hooks/active-inject.ts",

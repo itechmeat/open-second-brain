@@ -63,7 +63,6 @@ import {
 import {
   decisionThresholdsPath,
   parseThresholdsStore,
-  storedThresholdEntry,
   writeThresholdEntry,
 } from "../core/decision-model/thresholds.ts";
 import { runThresholdFit } from "../core/decision-model/thresholds-fit.ts";
