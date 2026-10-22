@@ -1,4 +1,5 @@
 import { planPrivacyMarkerRestamp } from "../../../core/brain/privacy-marker-restamp.ts";
+import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, info, ok, okJson, parse } from "../helpers.ts";
 
 /**
@@ -18,6 +19,7 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
   });
   const { vault } = brainVerbContext(flags);
   const apply = flags["apply"] === true;
+  const jsonRequested = flags["json"] === true;
 
   const result = planPrivacyMarkerRestamp(vault, { apply });
 
@@ -44,10 +46,6 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
     ok(
       `privacy-marker-restamp: updated ${result.updated} of ${result.candidates.length} candidate(s)`,
     );
-    info(
-      "note: each stamped page is now also excluded from default-scope local search; " +
-        "reach it again with `o2b search --visibility private`",
-    );
     for (const s of result.skipped) process.stderr.write(`  refused ${s.path}: ${s.reason}\n`);
   } else {
     ok(
@@ -55,10 +53,20 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
         `(scanned ${result.scanned})`,
     );
     info("re-run with --apply to union the reserved token into visibility:");
+  }
+  // The consequence of the stamp, for the pages this run would touch: the
+  // formal token dominates the scope rule, so a page found by default-scope
+  // local search before the stamp is found by neither scope after it. The
+  // sentence states what happens; the how-to travels through the advisory
+  // rail (`restamp-local-visibility`), the one mechanism that names a
+  // forward command.
+  if (result.candidates.length > 0) {
     info(
-      "note: after --apply each stamped page is also excluded from default-scope local search; " +
-        "reach it again with `o2b search --visibility private`",
+      apply
+        ? "note: each stamped page is now also excluded from default-scope local search"
+        : "note: after --apply each stamped page is also excluded from default-scope local search",
     );
+    emitNextStep("restamp-local-visibility", { command: "brain", argv, jsonRequested });
   }
   for (const c of result.candidates) info(`  ${c.path}: ${c.visibilityLine}`);
   return 0;

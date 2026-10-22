@@ -826,6 +826,19 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain tiers accept <path>",
         autoRepairable: false,
       },
+      // The restamp's local-search consequence, named once: unioning the
+      // reserved token into `visibility:` moves a marker page out of
+      // default-scope local search too, because the formal token dominates
+      // the scope rule. The command is fully structural - the reserved deny
+      // token is a fixed vocabulary identifier, not a runtime parameter -
+      // so the rail carries what a hand-written pointer beside it could
+      // only retype.
+      {
+        code: "restamp-local-visibility",
+        issueClass: "a restamped page is also reserved against default-scope local search",
+        nextCommand: "o2b search --visibility private",
+        autoRepairable: false,
+      },
       // --- Doctor classes the exit census found unregistered ---
       // The census (`tests/core/brain/doctor-exit-census.test.ts`) forced
       // every doctor code into one of two buckets. These three turned out
