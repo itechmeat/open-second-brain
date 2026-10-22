@@ -16,7 +16,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +71,21 @@ async function bootstrap(): Promise<void> {
 }
 
 const MARKED = "Agent Page.md";
+
+/**
+ * A log day the bundle can fold into `log.md`; the export reads the
+ * markdown shards of `Brain/log/` raw, so the block is written in the
+ * shape `renderLogEntryBlock` produces.
+ */
+function seedLogDay(): void {
+  const logDir = join(vault, "Brain", "log");
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(
+    join(logDir, "2026-06-13.md"),
+    "## 12:00:00Z — note\n- text: bundle fixture day\n- agent: test\n",
+    "utf8",
+  );
+}
 
 describe("the guard seam", () => {
   const items = ["a.md", "b.md", "c.md"];
@@ -126,6 +149,53 @@ describe("okf-export applies the default and the override", () => {
       "Synthesised from a prompt.",
     );
     expect(r.stderr).toContain(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
+  });
+});
+
+describe("okf-export writes the reserved bundle files", () => {
+  test("a vault with zero prompt-derived pages still exports okf.json, index.md and log.md", async () => {
+    await bootstrap();
+    rmSync(join(vault, "Agent Page.md"));
+    seedLogDay();
+    const out = join(tmp, "bundle-plain");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    // The reserved bundle-root files ride every bundle: the manifest, the
+    // version-declaring index and the change log are the three files an
+    // OKF reader expects at the root before it reads any page.
+    expect(existsSync(join(out, "okf.json"))).toBe(true);
+    expect(existsSync(join(out, "index.md"))).toBe(true);
+    expect(existsSync(join(out, "log.md"))).toBe(true);
+    expect(readFileSync(join(out, "log.md"), "utf8")).toContain("bundle fixture day");
+    // The stdout page/log-day line stays truthful.
+    expect(r.stdout).toContain("1 page(s), 1 log day(s)");
+  });
+
+  test("a vault with some prompt-derived pages exports them too, and the index lists only carried pages", async () => {
+    await bootstrap();
+    seedLogDay();
+    const omitted = join(tmp, "bundle-default");
+    const r = await runCli(["brain", "okf-export", "--out", omitted], { env: env() });
+    expect(r.returncode).toBe(0);
+    expect(existsSync(join(omitted, "okf.json"))).toBe(true);
+    expect(existsSync(join(omitted, "index.md"))).toBe(true);
+    expect(existsSync(join(omitted, "log.md"))).toBe(true);
+    const index = readFileSync(join(omitted, "index.md"), "utf8");
+    expect(index).toContain("concepts/Operator Page.md");
+    expect(index).not.toContain("Agent");
+    expect(r.stderr).toContain(contentClassOmissionNotice([MARKED]));
+
+    const carried = join(tmp, "bundle-override");
+    const ro = await runCli(["brain", "okf-export", "--out", carried, "--include-prompt-derived"], {
+      env: env(),
+    });
+    expect(ro.returncode).toBe(0);
+    expect(existsSync(join(carried, "okf.json"))).toBe(true);
+    expect(existsSync(join(carried, "index.md"))).toBe(true);
+    expect(existsSync(join(carried, "log.md"))).toBe(true);
+    const indexBoth = readFileSync(join(carried, "index.md"), "utf8");
+    expect(indexBoth).toContain("concepts/Operator Page.md");
+    expect(indexBoth).toContain("concepts/Agent Page.md");
   });
 });
 

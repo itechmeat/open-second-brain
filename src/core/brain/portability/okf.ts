@@ -104,6 +104,15 @@ const OKF_GENERATED_BY = `${OKF_PRODUCER}/${OPEN_SECOND_BRAIN_VERSION}`;
  */
 export const OKF_MANIFEST_FILENAME = "okf.json";
 
+/**
+ * Bundle-relative filename of the human-readable index. Named for the
+ * same reason as {@link OKF_MANIFEST_FILENAME}: the export verb
+ * re-renders this one file from the REDACTED manifest after the guard
+ * runs, and a reserved name spelled as a literal in a second module is
+ * a name that can drift away from the writer that reserves it.
+ */
+export const OKF_INDEX_FILENAME = "index.md";
+
 /** Vault-relative root the default (untrusted) import stages pages under. */
 export const OKF_REVIEW_REL = "OKF Review";
 
@@ -532,7 +541,14 @@ function buildLog(vault: string): { contents: string; days: number } {
   return { contents: sections.join("\n\n"), days: bodiesByDate.size };
 }
 
-function renderIndex(manifest: OkfManifest): string {
+/**
+ * Render the bundle-root `index.md` from a manifest. Exported because
+ * the export verb re-renders the index from the REDACTED manifest after
+ * the guard runs - an index naming a value the shipped `okf.json` no
+ * longer carries (a redacted foreign type, an omitted page) would make
+ * the bundle disagree with itself in the file a human reads first.
+ */
+export function renderIndex(manifest: OkfManifest): string {
   const lines: string[] = [
     "---",
     // OKF v0.2's version declaration. Per the spec it is a MAY in the
@@ -766,6 +782,25 @@ export function buildOkfSubsetBundle(vault: string, pages: ReadonlyArray<OkfPage
   return assembleOkfBundle(vault, pages, null);
 }
 
+/**
+ * Build a full OKF bundle write-plan - change log included - over
+ * caller-collected pages, composing from the array as given instead of
+ * walking the vault again. {@link buildOkfSubsetBundle} is the existing
+ * page-input entry point, but a subset bundle carries no `log.md` by
+ * contract, so a caller that has ALREADY walked the vault (the shared
+ * export verbs, which split the collected pages through the egress
+ * content-class policy before composition) had no way to keep the
+ * change log without a second walk. Composing from the caller's page
+ * array closes that double-walk window: between the caller's walk and a
+ * re-walk here, a page can change or appear, and the bundle would mix
+ * the two reads - or, with the class policy applied to the first walk
+ * only, re-admit a page the policy had just left out. The pages are
+ * written as given; only the log is read from the vault here.
+ */
+export function buildOkfBundleFromPages(vault: string, pages: ReadonlyArray<OkfPage>): OkfBundle {
+  return assembleOkfBundle(vault, pages, buildLog(vault));
+}
+
 function assembleOkfBundle(
   vault: string,
   pages: ReadonlyArray<OkfPage>,
@@ -801,7 +836,7 @@ function assembleOkfBundle(
 
   const files: OkfBundleFile[] = [
     { path: OKF_MANIFEST_FILENAME, contents: renderOkfManifest(manifest) },
-    { path: "index.md", contents: renderIndex(manifest) },
+    { path: OKF_INDEX_FILENAME, contents: renderIndex(manifest) },
   ];
   if (log !== null) files.push({ path: "log.md", contents: log.contents });
   for (const { page, sources } of derived) {
@@ -947,7 +982,7 @@ const SPEC_DIR_CLASS: Readonly<Record<string, OkfPageClass>> = Object.freeze(
  * page's full bundle-relative path, lowercased - never the basename,
  * which would skip real pages at any depth.
  */
-const SPEC_RESERVED_PATHS: ReadonlySet<string> = new Set(["index.md", "log.md"]);
+const SPEC_RESERVED_PATHS: ReadonlySet<string> = new Set([OKF_INDEX_FILENAME, "log.md"]);
 
 /**
  * The producer label a manifest-less spec bundle reports: there is no
