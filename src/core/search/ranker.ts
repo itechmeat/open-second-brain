@@ -907,18 +907,25 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const aRelationalOnly = relationalOnlyIds.has(a.chunkId);
     const bRelationalOnly = relationalOnlyIds.has(b.chunkId);
     if (aRelationalOnly !== bRelationalOnly) return aRelationalOnly ? 1 : -1;
-    // Structural declared-before-derived entity precedence: we partition candidates
-    // so any chunk with a declared-form match ranks above any derived-only chunk
-    // (stable secondary ordering within each partition), enforcing the invariant
-    // that declared forms always outrank derived-variant forms regardless of entityMul.
+    // Structural declared-before-derived entity precedence: candidates
+    // are partitioned into TIERS - declared, then neutral, then
+    // derived-only - and the tiers compare before scores, so a declared
+    // match always outranks a derived-only one regardless of entityMul.
+    // A tier, not a pairwise rule: declared-beats-derived-only answered
+    // pairwise while neutral candidates fell through to the score, which
+    // is not a strict weak ordering (declared A < derived B, derived B <
+    // neutral C, neutral C < declared A) and made the sort output depend
+    // on the input order.
     const aDeclared = (inputs.entityMatchByChunk?.get(a.chunkId) ?? 0) > 0;
     const bDeclared = (inputs.entityMatchByChunk?.get(b.chunkId) ?? 0) > 0;
     const aDerivedOnly =
       aDeclared === false && (inputs.derivedEntityMatchByChunk?.get(a.chunkId) ?? 0) > 0;
     const bDerivedOnly =
       bDeclared === false && (inputs.derivedEntityMatchByChunk?.get(b.chunkId) ?? 0) > 0;
-    if (aDeclared && bDerivedOnly) return -1;
-    if (bDeclared && aDerivedOnly) return 1;
+    const tierOf = (declared: boolean, derivedOnly: boolean): number =>
+      declared ? 0 : derivedOnly ? 2 : 1;
+    const tierDelta = tierOf(aDeclared, aDerivedOnly) - tierOf(bDeclared, bDerivedOnly);
+    if (tierDelta !== 0) return tierDelta;
     if (b.score !== a.score) return b.score - a.score;
     if (temporalIntent !== null) {
       const aTemporal = a.breakdown?.temporal ?? 0;

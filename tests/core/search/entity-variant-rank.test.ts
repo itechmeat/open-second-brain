@@ -75,6 +75,37 @@ describe("derived entity ranking lane (unit)", () => {
     expect(derived.reasons).toContain("entity_variant: 0.010");
   });
 
+  test("declared, neutral and derived-only candidates sort transitively", () => {
+    // A declared chunk with a tiny base score, a derived-only chunk with
+    // a large one, and a neutral chunk in between: a comparator that
+    // answers declared-before-derived BEFORE comparing scores is not a
+    // strict weak ordering (A<B, B<C, C<A), so the sorted output depends
+    // on the input order. The ranking must be a total order - declared,
+    // then neutral, then derived-only, score within each tier - the same
+    // for every input permutation.
+    const inputsFor = (ids: number[]) => {
+      const bm25 = new Map([
+        [1, -1],
+        [2, -9],
+        [3, -5],
+      ]);
+      return {
+        ...baseInputs(),
+        keyword: ids.map(
+          (id) => ({ chunkId: id, documentId: id * 10, bm25: bm25.get(id)! }) as KeywordHit,
+        ),
+        hydrated: new Map(ids.map((id) => [id, hyd(id, id * 10)])),
+        entityMatchByChunk: new Map([[1, 1]]),
+        derivedEntityMatchByChunk: new Map([[2, 1]]),
+      };
+    };
+    const idsOf = (ranked: ReadonlyArray<{ chunkId: number }>) => ranked.map((r) => r.chunkId);
+    const forward = idsOf(rankResults(inputsFor([1, 2, 3]), RANK_OPTS));
+    const backward = idsOf(rankResults(inputsFor([3, 2, 1]), RANK_OPTS));
+    expect(forward).toEqual(backward);
+    expect(forward).toEqual([1, 3, 2]);
+  });
+
   test("the derived lane is capped strictly below the declared cap", () => {
     const ranked = rankResults(
       {
