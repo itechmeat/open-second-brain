@@ -11,8 +11,12 @@
 
 import { CHOICE_MAX_OPTIONS } from "./answers.ts";
 import { DECISION_MODEL_USES, isDecisionModelUse, type DecisionModelUse } from "./contract.ts";
-import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
-import { makeDecisionProvider } from "./provider.ts";
+import {
+  resolveDecisionModelConfig,
+  resolvedProviderEntries,
+  type ResolvedDecisionModelConfig,
+} from "./config.ts";
+import { makeEntryDecisionProvider } from "./provider.ts";
 import { DECISION_MODEL_UNPRICED_ADAPTERS } from "./presets.ts";
 import type { DecisionProvider } from "./contract.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
@@ -29,7 +33,7 @@ import {
   type DecisionEvalGrade,
 } from "./record.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
-import { DECISION_THRESHOLD_PROFILES, isDecisionThresholdProfile } from "./questions.ts";
+import { DECISION_THRESHOLD_PROFILES } from "./questions.ts";
 import { decisionEvalSpecFor, decisionEvalSpecHash, type DecisionEvalSpec } from "./eval-spec.ts";
 import { validatedTuningMark } from "./eval/mark.ts";
 import { processDirsEnv, type PlatformDirsEnv } from "../platform-dirs.ts";
@@ -66,6 +70,12 @@ export interface DecisionModelCheckReport {
   readonly adapter: string;
   readonly base_url: string | null;
   readonly model: string | null;
+  /**
+   * The ordered provider chain (`decision_model_providers`), first entry
+   * first; the top-level provider fields are the FIRST entry's. With
+   * `--ping`, each entry also carries its own live `ping` result.
+   */
+  readonly provider_order: ReadonlyArray<DecisionProviderCheck>;
   /** NAME of the key variable, never its value. */
   readonly env_key: string | null;
   readonly key_set: boolean;
@@ -144,6 +154,35 @@ export interface DecisionModelCheckOptions {
    * running process's platform dirs; tests inject a state root.
    */
   readonly markSource?: PlatformDirsEnv | null;
+  /**
+   * Where the local thresholds store is read from. Undefined reads the
+   * file beside the default config path (the caller's `env` decides
+   * where that is); null disables the store, which is what the tests
+   * that pin the shadow hold use.
+   */
+  readonly thresholdsPath?: string | null;
+}
+
+/** One chain entry as `check` reports it, in configured order. */
+export interface DecisionProviderCheck {
+  readonly name: string;
+  readonly adapter: string;
+  readonly base_url: string | null;
+  readonly model: string | null;
+  /** NAME of the entry's key variable, never its value. */
+  readonly env_key: string | null;
+  readonly key_set: boolean;
+  readonly key_required: boolean;
+  /** Whether the entry would be tried: it has its key, or needs none. */
+  readonly configured: boolean;
+  readonly calibrated: boolean;
+  /** Present only for a `check --ping` of a configured entry. */
+  readonly ping?: {
+    readonly ok: boolean;
+    readonly model?: string;
+    readonly latency_ms?: number;
+    readonly reason?: string;
+  };
 }
 
 const RERANK_ENDPOINT_KEYS = [
@@ -198,7 +237,10 @@ export function measuredTuning(
   source: PlatformDirsEnv = processDirsEnv(),
 ): MeasuredTuning {
   const profile = cfg.thresholdProfile ?? null;
-  if (profile === null || !isDecisionThresholdProfile(profile)) {
+  // A profile name the source table does not carry (a self-hosted family
+  // the code never registered, issue #264) is not "none": its marks are
+  // keyed by the same string, so the measured states still apply to it.
+  if (profile === null) {
     return { profile, state: "none", marked_uses: [], elsewhere_uses: [] };
   }
   const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned ?? [];
@@ -274,7 +316,8 @@ export function measuredTuningSummary(measured: MeasuredTuning): string {
     case "untuned":
       return (
         `profile '${measured.profile}' is untuned; enforce holds as shadow ` +
-        "(o2b decision-model eval run can measure a use)"
+        "(o2b decision-model eval run can measure a use, or " +
+        "o2b decision-model thresholds fit can tune one from shadow data)"
       );
   }
 }
@@ -323,6 +366,7 @@ export async function buildDecisionModelCheck(
     config: opts.config,
     vault: opts.vault,
     secretsVault: opts.vault ?? undefined,
+    ...(opts.thresholdsPath !== undefined ? { thresholdsPath: opts.thresholdsPath } : {}),
   });
   const warnings: string[] = [];
   const notes: string[] = [];
@@ -352,13 +396,17 @@ export async function buildDecisionModelCheck(
   // stay silent. Printed once per check.
   const shadowOnly = cfg.shadowOnlyUses ?? [];
   if (cfg.enabled && shadowOnly.length > 0) {
+    const profileNote =
+      cfg.thresholdProfile === null || cfg.thresholdProfile === undefined
+        ? ""
+        : ` (profile '${cfg.thresholdProfile}')`;
     warnings.push(
-      `enforce runs as shadow for ${shadowOnly.join(", ")}: threshold profile ` +
-        `'${cfg.thresholdProfile ?? "unknown"}' has no tuned thresholds for ` +
+      `enforce runs as shadow for ${shadowOnly.join(", ")}: model ` +
+        `'${cfg.model ?? "unknown"}'${profileNote} has no tuned thresholds for ` +
         (shadowOnly.length === 1 ? "it" : "them") +
-        (cfg.thresholdProfile === null || cfg.thresholdProfile === undefined
-          ? "; for a compatible server of a known family set decision_model_threshold_profile"
-          : ""),
+        `; tune with \`o2b decision-model thresholds fit --use ${shadowOnly[0]!}\` against ` +
+        "this model's shadow data, or set values by hand with " +
+        "`o2b decision-model thresholds set`",
     );
   }
   if (cfg.enabled && !cfg.calibrated) {
@@ -466,6 +514,17 @@ export async function buildDecisionModelCheck(
     adapter: cfg.adapter,
     base_url: cfg.baseUrl,
     model: cfg.model,
+    provider_order: resolvedProviderEntries(cfg).map((entry): DecisionProviderCheck => ({
+      name: entry.name,
+      adapter: entry.adapter,
+      base_url: entry.baseUrl,
+      model: entry.model,
+      env_key: entry.envKey,
+      key_set: entry.keyPresent,
+      key_required: entry.keyRequired,
+      configured: entry.keyPresent || !entry.keyRequired,
+      calibrated: entry.calibrated,
+    })),
     env_key: cfg.envKey,
     key_set: cfg.keyPresent,
     key_required: cfg.keyRequired !== false,
@@ -495,64 +554,95 @@ export async function buildDecisionModelCheck(
   };
 
   if (opts.ping !== true) return report;
-  // The ping resolves the key the way the real request path does (the
+  // The ping resolves each key the way the real request path does (the
   // factory re-resolves at call time). A store that locks between the
   // config probe and here - or whose keyfile is missing while entries
-  // survive - raises the named refusal, degraded into the ping's reason,
-  // never sent as a Bearer key and never left to escape the check as an
-  // exception.
-  let provider: DecisionProvider | null;
-  try {
-    provider = makeDecisionProvider(cfg, env, opts.vault ?? undefined);
-  } catch (err) {
-    if (
-      err instanceof SecretStoreLockedError ||
-      err instanceof SecretStoreKeyfileMissingError ||
-      err instanceof SecretReferenceError
-    ) {
-      return { ...report, ping: { ok: false, reason: `not sent: ${err.message}` } };
+  // survive - raises the named refusal, degraded into that entry's ping
+  // reason, never sent as a Bearer key and never left to escape the
+  // check as an exception.
+  const order = [...report.provider_order];
+  const entries = resolvedProviderEntries(cfg);
+  let firstPing: DecisionModelCheckReport["ping"] | undefined;
+  let anyConfigured = false;
+  for (const [index, entry] of entries.entries()) {
+    const slot = order[index];
+    if (slot === undefined || !slot.configured) continue;
+    anyConfigured = true;
+    let adapter: DecisionProvider | null;
+    try {
+      adapter = makeEntryDecisionProvider(
+        entry,
+        { allowInsecureHttp: cfg.allowInsecureHttp, timeoutMs: cfg.timeoutMs },
+        env,
+        opts.vault ?? undefined,
+      );
+    } catch (err) {
+      if (
+        err instanceof SecretStoreLockedError ||
+        err instanceof SecretStoreKeyfileMissingError ||
+        err instanceof SecretReferenceError
+      ) {
+        const ping = { ok: false, reason: `not sent: ${err.message}` };
+        order[index] = { ...slot, ping };
+        if (firstPing === undefined) firstPing = ping;
+        continue;
+      }
+      throw err;
     }
-    throw err;
-  }
-  if (provider === null) {
-    return { ...report, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
-  }
-  const pong = await provider.ping();
-  // A ping is a real request: record it (origin `ping`), so it counts
-  // toward the daily gate and shows in the report.
-  emitDecisionModelCall(cfg.vault, {
-    use: "ping",
-    mode: "shadow",
-    provider: provider.name,
-    model: pong.model ?? provider.model,
-    calibrated: provider.calibrated,
-    questionCount: 1,
-    candidateCount: 0,
-    ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
-    inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
-    ...(cfg.outputPriceUsdPerMtok !== undefined && cfg.outputPriceUsdPerMtok !== null
-      ? { outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok }
-      : {}),
-    latencyMs: pong.latencyMs ?? 0,
-    outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
-    origin: "ping",
-    ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
-  });
-  return {
-    ...report,
-    ping: {
+    if (adapter === null) continue;
+    // eslint-disable-next-line no-await-in-loop -- the order is the point: one ping per entry, in order
+    const pong = await adapter.ping();
+    // A ping is a real request: record it (origin `ping`), so it counts
+    // toward the daily gate and shows in the report. Each entry's ping
+    // names its own provider and answering model, so the records never
+    // pool two routes.
+    emitDecisionModelCall(cfg.vault, {
+      use: "ping",
+      mode: "shadow",
+      provider: adapter.name,
+      model: pong.model ?? adapter.model,
+      calibrated: adapter.calibrated,
+      questionCount: 1,
+      candidateCount: 0,
+      ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
+      inputPriceUsdPerMtok: entry.inputPriceUsdPerMtok,
+      ...(entry.outputPriceUsdPerMtok !== undefined && entry.outputPriceUsdPerMtok !== null
+        ? { outputPriceUsdPerMtok: entry.outputPriceUsdPerMtok }
+        : {}),
+      latencyMs: pong.latencyMs ?? 0,
+      outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
+      origin: "ping",
+      ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
+    });
+    const ping: DecisionModelCheckReport["ping"] = {
       ok: pong.ok,
       ...(pong.model !== undefined ? { model: pong.model } : {}),
       ...(pong.latencyMs !== undefined ? { latency_ms: pong.latencyMs } : {}),
       ...(pong.reason !== undefined ? { reason: pong.reason } : {}),
-    },
-  };
+    };
+    order[index] = { ...slot, ping };
+    if (firstPing === undefined) firstPing = ping;
+  }
+  const withOrder: DecisionModelCheckReport = { ...report, provider_order: order };
+  if (!anyConfigured) {
+    return { ...withOrder, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
+  }
+  return { ...withOrder, ping: firstPing };
 }
 
 /** Non-zero only for a broken configured provider. */
 export function decisionModelCheckExitCode(report: DecisionModelCheckReport): number {
   if (report.status === "invalid") return 1;
-  if (report.ping !== undefined && report.status === "active" && !report.ping.ok) return 1;
+  if (
+    report.ping !== undefined &&
+    report.status === "active" &&
+    !report.ping.ok &&
+    // With a chain, a dead FIRST entry is the situation the fallback
+    // exists for: the check fails only when no configured entry answers.
+    !report.provider_order.some((entry) => entry.ping?.ok === true)
+  ) {
+    return 1;
+  }
   return 0;
 }
 
@@ -566,6 +656,25 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
   );
   lines.push(`  base url: ${report.base_url ?? "(not set)"}`);
   lines.push(`  model: ${report.model ?? "(not set)"}`);
+  const order = report.provider_order;
+  if (order.length > 1) {
+    lines.push(`  providers (in order): ${order.map((p) => p.name).join(", ")}`);
+    for (const [i, p] of order.entries()) {
+      const key = p.env_key === null ? "" : `, key ${p.env_key} ${p.key_set ? "set" : "not set"}`;
+      lines.push(
+        `    ${i + 1}. ${p.name} (${p.adapter}): ${p.base_url ?? "(no base url)"}, ` +
+          `model ${p.model ?? "?"}${key}` +
+          `${p.configured ? "" : ", not configured (no key)"}`,
+      );
+      if (p.ping !== undefined) {
+        lines.push(
+          p.ping.ok
+            ? `       ping: ok, answered by ${p.ping.model ?? "?"} in ${p.ping.latency_ms ?? 0}ms`
+            : `       ping: failed (${p.ping.reason ?? "unknown"})`,
+        );
+      }
+    }
+  }
   const optional = report.key_required ? "" : ", optional on this loopback server";
   lines.push(
     report.env_key === null
@@ -657,6 +766,17 @@ export interface DecisionModelReport {
    */
   readonly use_report?: { readonly use: DecisionModelUse; readonly report: unknown };
   /**
+   * Present when the caller supplied the resolved config and a use
+   * configured `enforce` runs as `shadow` for want of tuned thresholds
+   * for the model: says so explicitly and names the tuning command.
+   */
+  readonly shadow?: {
+    readonly model: string | null;
+    readonly uses: ReadonlyArray<DecisionModelUse>;
+    /** The command that tunes the first shadow use. */
+    readonly command: string;
+  };
+  /**
    * The cached verdict sets of the preregistered evaluation
    * (`eval/grade.ts`), oldest first, with the named skip notes. Present
    * whenever the vault holds at least one, so a vault with none renders
@@ -735,6 +855,8 @@ export function buildDecisionModelReport(
     readonly origin?: string;
     /** Attach the use's own report when `use` names one (default true). */
     readonly useReport?: boolean;
+    /** The resolved config, for the shadow section; absent on record-only callers. */
+    readonly config?: ResolvedDecisionModelConfig;
   } = {},
 ): DecisionModelReport {
   const records = listDecisionModelCalls(vault, opts.since).filter(
@@ -782,7 +904,21 @@ export function buildDecisionModelReport(
       ...(agreement !== undefined ? { agreement } : {}),
     });
   }
-  const summary: DecisionModelReport = { since: opts.since ?? null, total: records.length, uses };
+  const shadowOnly = opts.config?.shadowOnlyUses ?? [];
+  const shadow =
+    opts.config !== undefined && shadowOnly.length > 0
+      ? {
+          model: opts.config.model,
+          uses: shadowOnly,
+          command: `o2b decision-model thresholds fit --use ${shadowOnly[0]!}`,
+        }
+      : undefined;
+  const summary: DecisionModelReport = {
+    since: opts.since ?? null,
+    total: records.length,
+    uses,
+    ...(shadow !== undefined ? { shadow } : {}),
+  };
   // The eval section is built for every report: `o2b decision-model
   // report` is the audit surface for the grades a mark was written from.
   const { grades, skipped } = listDecisionModelEvalGrades(vault, opts.since);
@@ -841,6 +977,16 @@ export function renderDecisionModelReport(report: DecisionModelReport): string {
           `${(u.agreement.top5_overlap * 100).toFixed(1)}%`,
       );
     }
+  }
+  if (report.shadow !== undefined) {
+    lines.push(
+      `  shadow (no tuned thresholds for model '${report.shadow.model ?? "unknown"}'): ` +
+        `${report.shadow.uses.join(", ")}`,
+    );
+    lines.push(
+      `    tune with \`${report.shadow.command}\`, or set values by hand with ` +
+        "`o2b decision-model thresholds set`",
+    );
   }
   if (report.eval !== undefined) {
     lines.push(

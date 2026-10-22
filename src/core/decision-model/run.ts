@@ -8,9 +8,14 @@
  *     no state is built, nothing is sent, nothing is recorded.
  *   - the daily cost gate, checked before the state is built;
  *   - the state builder's own budget refusal;
- *   - the request itself, with the configured timeout;
- *   - exactly one `decision_model_call` record per attempted request, with
- *     the outcome (`ok` or the degrade reason);
+ *   - the request itself, over the configured provider chain in order:
+ *     an entry that is not configured is skipped, a connection error or
+ *     timeout falls through to the next entry, and the whole chain
+ *     shares the caller's one timeout budget (each attempt gets an even
+ *     slice of what remains, so a dead first server can never stretch
+ *     the call);
+ *   - exactly one `decision_model_call` record per attempted request,
+ *     each naming the provider and model that attempted or answered it;
  *   - the per-route latency component for MCP route metrics.
  *
  * It never throws. A degrade is returned as a typed reason and the use
@@ -28,9 +33,14 @@ import {
   type DecisionResponse,
   type DecisionState,
 } from "./contract.ts";
-import { decisionModelModeFor, type ResolvedDecisionModelConfig } from "./config.ts";
+import {
+  decisionModelModeFor,
+  resolvedProviderEntries,
+  type ResolvedDecisionModelConfig,
+} from "./config.ts";
+import type { ResolvedDecisionProvider } from "./config-types.ts";
 import { noteDecisionLatency } from "./latency.ts";
-import { makeDecisionProvider } from "./provider.ts";
+import { makeEntryDecisionProvider } from "./provider.ts";
 import { emitDecisionModelCall, todaySpendUsd } from "./record.ts";
 import { estimateTokens } from "./state.ts";
 
@@ -84,7 +94,10 @@ export type DecisionRunResult<C> =
 
 export interface RunDecisionOptions<C> {
   readonly config: ResolvedDecisionModelConfig | null | undefined;
-  /** Injected provider (tests). Defaults to the configured adapter. */
+  /**
+   * Injected provider (tests): replaces the whole chain with this one
+   * adapter. Defaults to the configured chain, first entry first.
+   */
   readonly provider?: DecisionProvider;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /**
@@ -114,6 +127,65 @@ export interface RunDecisionOptions<C> {
   ) => Readonly<Record<string, unknown>> | undefined;
 }
 
+/** One attempt of the chain: an adapter plus the mode it answers under. */
+interface ChainAttempt {
+  readonly adapter: DecisionProvider;
+  readonly entry: ResolvedDecisionProvider;
+  readonly mode: Exclude<DecisionModelMode, "off">;
+}
+
+/** The chain options `buildChain` reads; a subset of {@link RunDecisionOptions}. */
+interface ChainOptions {
+  readonly provider?: DecisionProvider;
+  readonly modeOverride?: Exclude<DecisionModelMode, "off">;
+}
+
+/**
+ * The chain of attempts for one call, in configured order. An entry the
+ * factory cannot build (no endpoint, a missing key) is skipped: it is
+ * not configured, exactly as the resolver's status rules say. An
+ * injected provider (tests) is the whole chain.
+ */
+function buildChain(
+  cfg: ResolvedDecisionModelConfig,
+  use: DecisionModelUse,
+  mode: Exclude<DecisionModelMode, "off">,
+  opts: ChainOptions,
+  env: Readonly<Record<string, string | undefined>>,
+  secretsVault: string | null | undefined,
+): ReadonlyArray<ChainAttempt> {
+  if (opts.provider !== undefined) {
+    const entry = resolvedProviderEntries(cfg)[0];
+    if (entry === undefined) return [];
+    return [{ adapter: opts.provider, entry, mode }];
+  }
+  const attempts: ChainAttempt[] = [];
+  for (const [index, entry] of resolvedProviderEntries(cfg).entries()) {
+    const adapter = makeEntryDecisionProvider(
+      entry,
+      { allowInsecureHttp: cfg.allowInsecureHttp, timeoutMs: cfg.timeoutMs },
+      env,
+      secretsVault,
+    );
+    if (adapter === null) continue;
+    // The first entry answers for the config as written: the top-level
+    // modes are its held modes, and a caller that overrode them (the
+    // eval gate forces enforce) means it for the primary. A later entry
+    // is judged by its own thresholds - a fallback model without tuned
+    // thresholds answers as shadow even when the primary enforces. A
+    // held mode is never off (off-ness is the global config's decision);
+    // anything but enforce is shadow.
+    const held = opts.modeOverride ?? (index === 0 ? cfg.uses[use] : (entry.uses[use] ?? "shadow"));
+    attempts.push({ adapter, entry, mode: held === "enforce" ? "enforce" : "shadow" });
+  }
+  return attempts;
+}
+
+/** The degrade reasons that mean "this route could not answer": fall through. */
+function isFailoverReason(reason: DecisionDegradeReason): boolean {
+  return reason === "network" || reason === "timeout";
+}
+
 export async function runDecision<C>(
   use: DecisionModelUse,
   buildState: () => BuiltDecisionState<C>,
@@ -126,12 +198,14 @@ export async function runDecision<C>(
   const configured = decisionModelModeFor(cfg, use);
   if (configured === "off" || cfg === null || cfg === undefined) return { status: "off" };
   const mode = opts.modeOverride ?? configured;
-  const provider =
-    opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env, opts.secretsVault);
-  if (provider === null) return { status: "off" };
+  const env = opts.env ?? process.env;
+  const chain = buildChain(cfg, use, mode, opts, env, opts.secretsVault);
+  if (chain.length === 0 || chain[0] === undefined) return { status: "off" };
+  const primary = chain[0];
   const now = opts.now ?? (() => new Date());
 
   const record = (
+    attempt: ChainAttempt,
     outcome: string,
     extra: {
       readonly questionCount?: number;
@@ -149,16 +223,17 @@ export async function runDecision<C>(
     }
     emitDecisionModelCall(cfg.vault, {
       use,
-      mode,
-      provider: provider.name,
-      model: extra.response?.model ?? provider.model,
-      calibrated: extra.response?.calibrated ?? provider.calibrated,
+      mode: attempt.mode,
+      provider: attempt.adapter.name,
+      model: extra.response?.model ?? attempt.adapter.model,
+      calibrated: extra.response?.calibrated ?? attempt.adapter.calibrated,
       questionCount: extra.questionCount ?? 0,
       candidateCount: extra.candidateCount ?? 0,
       ...(extra.response !== undefined ? { usage: extra.response.usage } : {}),
-      inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
-      ...(cfg.outputPriceUsdPerMtok !== undefined && cfg.outputPriceUsdPerMtok !== null
-        ? { outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok }
+      inputPriceUsdPerMtok: attempt.entry.inputPriceUsdPerMtok,
+      ...(attempt.entry.outputPriceUsdPerMtok !== undefined &&
+      attempt.entry.outputPriceUsdPerMtok !== null
+        ? { outputPriceUsdPerMtok: attempt.entry.outputPriceUsdPerMtok }
         : {}),
       latencyMs: extra.latencyMs ?? 0,
       outcome,
@@ -176,6 +251,8 @@ export async function runDecision<C>(
   // requests cannot all pass against the same recorded spend. Separate
   // processes still share only the recorded spend, so the gate is a
   // soft limit that can be passed by the requests in flight elsewhere.
+  // The estimate uses the FIRST entry's price; a fallback attempt is
+  // judged by its own price only in its own record.
   const gated = cfg.dailyCostGateUsd > 0 && cfg.vault !== null;
   if (gated) {
     let spend: number;
@@ -185,7 +262,7 @@ export async function runDecision<C>(
       spend = Number.POSITIVE_INFINITY;
     }
     if (spend >= cfg.dailyCostGateUsd) {
-      record("cost_gate");
+      record(primary, "cost_gate");
       return { status: "degraded", mode, reason: "cost_gate" };
     }
   }
@@ -198,7 +275,7 @@ export async function runDecision<C>(
   }
   if (built.kind === "empty") return { status: "empty", mode };
   if (built.kind === "budget") {
-    record("budget");
+    record(primary, "budget");
     return { status: "degraded", mode, reason: "budget" };
   }
 
@@ -210,40 +287,69 @@ export async function runDecision<C>(
       ? (estimateTokens({ state: ready.state, questions: qs }) * cfg.inputPriceUsdPerMtok) /
         1_000_000
       : 0;
+
+  // The whole chain shares the caller's one budget (`timeout_ms`, or the
+  // hook sub-budget): each attempt gets an even slice of what remains, so
+  // a dead first server can never stretch the call past the budget, and
+  // the last entry always keeps a real slice to answer in.
+  const budgetMs = opts.timeoutMs ?? cfg.timeoutMs;
   const send = async (): Promise<DecisionRunResult<C>> => {
-    const started = Date.now();
-    let response: DecisionResponse;
-    try {
-      response = await provider.decide(
-        { use, state: ready.state, questions: qs },
-        {
-          timeoutMs: opts.timeoutMs ?? cfg.timeoutMs,
-          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        },
-      );
-    } catch (e) {
+    const deadline = Date.now() + budgetMs;
+    let last: {
+      readonly reason: DecisionDegradeReason;
+      readonly mode: Exclude<DecisionModelMode, "off">;
+    } | null = null;
+    for (const [index, attempt] of chain.entries()) {
+      const remaining = chain.length - index;
+      const slice = Math.max(1, Math.floor((deadline - Date.now()) / remaining));
+      const started = Date.now();
+      let response: DecisionResponse;
+      try {
+        // eslint-disable-next-line no-await-in-loop -- the fallback is sequential by design: an attempt must settle before the next starts
+        response = await attempt.adapter.decide(
+          { use, state: ready.state, questions: qs },
+          {
+            timeoutMs: slice,
+            ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+          },
+        );
+      } catch (e) {
+        const latencyMs = Date.now() - started;
+        noteDecisionLatency(latencyMs);
+        const reason: DecisionDegradeReason =
+          e instanceof DecisionProviderError ? e.reason : "network";
+        record(attempt, reason, {
+          questionCount,
+          candidateCount: ready.candidateCount,
+          context: ready.context,
+          latencyMs,
+        });
+        // Only a route that could not answer falls through; an HTTP or
+        // reply-shape failure is the endpoint's answer about THIS
+        // request, and retrying it elsewhere would multiply the same
+        // refusal.
+        if (!isFailoverReason(reason)) {
+          return { status: "degraded", mode: attempt.mode, reason };
+        }
+        last = { reason, mode: attempt.mode };
+        continue;
+      }
       const latencyMs = Date.now() - started;
       noteDecisionLatency(latencyMs);
-      const reason: DecisionDegradeReason =
-        e instanceof DecisionProviderError ? e.reason : "network";
-      record(reason, {
+      record(attempt, "ok", {
         questionCount,
         candidateCount: ready.candidateCount,
+        response,
         context: ready.context,
         latencyMs,
       });
-      return { status: "degraded", mode, reason };
+      return { status: "ok", mode: attempt.mode, response, context: ready.context, latencyMs };
     }
-    const latencyMs = Date.now() - started;
-    noteDecisionLatency(latencyMs);
-    record("ok", {
-      questionCount,
-      candidateCount: ready.candidateCount,
-      response,
-      context: ready.context,
-      latencyMs,
-    });
-    return { status: "ok", mode, response, context: ready.context, latencyMs };
+    return {
+      status: "degraded",
+      mode: last?.mode ?? mode,
+      reason: last?.reason ?? "network",
+    };
   };
   const release = reserveInFlight(gated ? cfg.vault : null, reservation);
   try {

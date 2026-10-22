@@ -57,6 +57,8 @@ interface RecordedPair {
   readonly b: string;
   readonly verdict: string;
   readonly probability: number;
+  /** The answering model of the record the verdict came from. */
+  readonly model: string;
 }
 
 function band(verdict: string, p: number): string {
@@ -90,6 +92,7 @@ function recordedPairs(record: ContinuityRecord): RecordedPair[] {
       b: r["b"],
       verdict: r["verdict"],
       probability: r["probability"],
+      model: typeof record.payload["model"] === "string" ? record.payload["model"] : "unknown",
     });
   }
   return out;
@@ -143,12 +146,25 @@ function emptyOutcomes(): Record<PairOutcome, number> {
   return { merged: 0, resolved: 0, dismissed: 0, confirmed: 0, open: 0, missing: 0 };
 }
 
-/** Per-band operator outcomes for the `dedup` or `tension` use. */
-export function buildPairVerdictReport(
+/** One verdicted pair joined to what the operator did with it afterwards. */
+export interface PairVerdictSample {
+  readonly probability: number;
+  readonly verdict: string;
+  readonly outcome: PairOutcome;
+  /** The answering model of the record the verdict came from. */
+  readonly model: string;
+}
+
+/**
+ * Every latest-verdict pair of the use, joined to its later outcome -
+ * the data both the band report and the threshold fit derive from.
+ * Read-only.
+ */
+export function buildPairVerdictSamples(
   vault: string,
   use: "dedup" | "tension",
   opts: { readonly since?: string } = {},
-): PairVerdictUseReport {
+): { readonly samples: ReadonlyArray<PairVerdictSample> } {
   const latest = new Map<string, RecordedPair>();
   for (const record of listDecisionModelCalls(vault, opts.since)) {
     if (record.payload["use"] !== use) continue;
@@ -161,7 +177,7 @@ export function buildPairVerdictReport(
     }
   }
   let entities: Map<string, BrainEntity> | null = null;
-  const bands = new Map<string, Record<PairOutcome, number>>();
+  const samples: PairVerdictSample[] = [];
   for (const pair of latest.values()) {
     let outcome: PairOutcome;
     if (pair.kind === "tension") outcome = tensionOutcome(vault, pair);
@@ -169,14 +185,33 @@ export function buildPairVerdictReport(
       entities ??= new Map(buildEntityIndex(vault).entities.map((e) => [e.id, e]));
       outcome = entityOutcome(entities, pair);
     } else outcome = preferenceOutcome(vault, pair);
-    const key = band(pair.verdict, pair.probability);
+    samples.push({
+      probability: pair.probability,
+      verdict: pair.verdict,
+      outcome,
+      model: pair.model,
+    });
+  }
+  return { samples };
+}
+
+/** Per-band operator outcomes for the `dedup` or `tension` use. */
+export function buildPairVerdictReport(
+  vault: string,
+  use: "dedup" | "tension",
+  opts: { readonly since?: string } = {},
+): PairVerdictUseReport {
+  const { samples } = buildPairVerdictSamples(vault, use, opts);
+  const bands = new Map<string, Record<PairOutcome, number>>();
+  for (const sample of samples) {
+    const key = band(sample.verdict, sample.probability);
     const counts = bands.get(key) ?? emptyOutcomes();
-    counts[outcome]++;
+    counts[sample.outcome]++;
     bands.set(key, counts);
   }
   return {
     use,
-    pairs: latest.size,
+    pairs: samples.length,
     bands: [...bands]
       .toSorted((x, y) => x[0].localeCompare(y[0]))
       .map(([name, outcomes]) => ({

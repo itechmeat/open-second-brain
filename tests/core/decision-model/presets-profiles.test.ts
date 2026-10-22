@@ -206,6 +206,7 @@ describe("threshold profiles", () => {
       env: {},
       config: preset("laya", { decision_model_uses: "rerank:enforce,skills:shadow" }),
       vault: null,
+      thresholdsPath: null,
     });
     expect(cfg.status).toBe("active");
     expect(cfg.errors).toEqual([]);
@@ -249,6 +250,7 @@ describe("threshold profiles", () => {
         decision_model_threshold_profile: "jev-1.13",
       }),
       vault: null,
+      thresholdsPath: null,
     });
     expect(cfg.thresholdProfile).toBe("laya");
     expect(decisionModelModeFor(cfg, "rerank")).toBe("shadow");

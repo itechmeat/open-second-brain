@@ -53,6 +53,10 @@ interface Suggested {
   readonly dimension: string;
   readonly current: string | null;
   readonly suggested: string | null;
+  /** The model's confidence in the suggestion, as the record carries it. */
+  readonly confidence: number | null;
+  /** The answering model of the record the suggestion came from. */
+  readonly model: string;
 }
 
 function emptyOutcomes(): Record<LabelOutcome, number> {
@@ -79,10 +83,28 @@ function nowValue(
   return { value: token === undefined ? null : token.slice(dimension.length + 1) };
 }
 
-export function buildLabelsReport(
+/** One suggestion joined to its later outcome, with the model's confidence. */
+export interface LabelSample {
+  readonly mode: string;
+  /** Whether the model made a suggestion at all (`none` or below threshold otherwise). */
+  readonly suggested: boolean;
+  readonly confidence: number | null;
+  readonly outcome: LabelOutcome;
+  /** The answering model of the record the suggestion came from. */
+  readonly model: string;
+}
+
+/**
+ * Every latest suggestion per note and dimension joined to its outcome -
+ * the data both the acceptance report and the threshold fit derive from.
+ * A suggestion without one (`none` or below the threshold) carries
+ * `suggested: false` and outcome `missing` (there is nothing the note
+ * could accept or override). Read-only.
+ */
+export function buildLabelSamples(
   vault: string,
   opts: { readonly since?: string } = {},
-): LabelsReport {
+): { readonly samples: ReadonlyArray<LabelSample> } {
   const latest = new Map<string, Suggested>();
   for (const record of listDecisionModelCalls(vault, opts.since)) {
     const p = record.payload;
@@ -105,19 +127,27 @@ export function buildLabelsReport(
         dimension: d["dimension"],
         current: typeof d["current"] === "string" ? d["current"] : null,
         suggested: typeof d["suggested"] === "string" ? d["suggested"] : null,
+        confidence:
+          typeof d["confidence"] === "number" && Number.isFinite(d["confidence"])
+            ? d["confidence"]
+            : null,
+        model: typeof p["model"] === "string" ? p["model"] : "unknown",
       });
     }
   }
   const cache = new Map<string, ReadonlyArray<string> | null>();
-  const byMode = new Map<string, Record<LabelOutcome, number>>();
-  let suggestions = 0;
-  let none = 0;
+  const samples: LabelSample[] = [];
   for (const s of latest.values()) {
     if (s.suggested === null) {
-      none++;
+      samples.push({
+        mode: s.mode,
+        suggested: false,
+        confidence: s.confidence,
+        outcome: "missing",
+        model: s.model,
+      });
       continue;
     }
-    suggestions++;
     const now = nowValue(vault, s.path, s.dimension, cache);
     let outcome: LabelOutcome;
     if (now === null) outcome = "missing";
@@ -125,8 +155,33 @@ export function buildLabelsReport(
     else if (now.value === s.current) outcome = "unchanged";
     else if (now.value === s.suggested) outcome = "accepted";
     else outcome = "overridden";
+    samples.push({
+      mode: s.mode,
+      suggested: true,
+      confidence: s.confidence,
+      outcome,
+      model: s.model,
+    });
+  }
+  return { samples };
+}
+
+export function buildLabelsReport(
+  vault: string,
+  opts: { readonly since?: string } = {},
+): LabelsReport {
+  const { samples } = buildLabelSamples(vault, opts);
+  const byMode = new Map<string, Record<LabelOutcome, number>>();
+  let suggestions = 0;
+  let none = 0;
+  for (const s of samples) {
+    if (!s.suggested) {
+      none++;
+      continue;
+    }
+    suggestions++;
     const counts = byMode.get(s.mode) ?? emptyOutcomes();
-    counts[outcome]++;
+    counts[s.outcome]++;
     byMode.set(s.mode, counts);
   }
   return {
@@ -134,7 +189,7 @@ export function buildLabelsReport(
     suggestions,
     no_suggestion: none,
     by_mode: [...byMode]
-      .toSorted((x, y) => x[0].localeCompare(y[0]))
+      .toSorted((a, b) => a[0].localeCompare(b[0]))
       .map(([mode, outcomes]) => {
         const decided = outcomes.accepted + outcomes.overridden;
         return {

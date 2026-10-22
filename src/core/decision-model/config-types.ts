@@ -27,6 +27,44 @@ export type DecisionModelStatus =
 
 export type DecisionModelUses = Readonly<Record<DecisionModelUse, DecisionModelMode>>;
 
+/**
+ * One entry of the provider chain (`decision_model_providers`, issue
+ * #264): a preset resolved against its own defaults, with the endpoint
+ * override keys applied to the first entry only. The top-level fields of
+ * {@link ResolvedDecisionModelConfig} mirror the FIRST entry, so readers
+ * written for the single-provider era keep working unchanged.
+ */
+export interface ResolvedDecisionProvider {
+  /** The preset name, as configured. */
+  readonly name: string;
+  readonly adapter: DecisionModelAdapter;
+  readonly baseUrl: string | null;
+  readonly model: string | null;
+  /** NAME of the env var holding this entry's key; never the value. */
+  readonly envKey: string | null;
+  readonly keyPresent: boolean;
+  /** False only for a loopback server whose preset makes the key optional. */
+  readonly keyRequired: boolean;
+  readonly maxStateTokens: number;
+  readonly maxChoiceOptions: number;
+  readonly calibrated: boolean;
+  readonly inputPriceUsdPerMtok: number | null;
+  readonly outputPriceUsdPerMtok: number | null;
+  /** The threshold profile this entry's answers are held to; null when unknown. */
+  readonly thresholdProfile: string | null;
+  readonly licenceNote: string | null;
+  /** Who processes the data; null when no preset resolves. */
+  readonly processor: string | null;
+  /**
+   * The effective per-use modes held to THIS entry's thresholds: an
+   * `enforce` setting without tuned thresholds for this entry's model is
+   * `shadow` here.
+   */
+  readonly uses: DecisionModelUses;
+  /** Uses configured `enforce` that run as `shadow` on this entry. */
+  readonly shadowOnlyUses: ReadonlyArray<DecisionModelUse>;
+}
+
 export interface ResolvedDecisionModelConfig {
   readonly status: DecisionModelStatus;
   /** Config errors, each naming its key. Non-empty only when `invalid`. */
@@ -38,6 +76,13 @@ export interface ResolvedDecisionModelConfig {
   readonly adapter: DecisionModelAdapter;
   readonly baseUrl: string | null;
   readonly model: string | null;
+  /**
+   * The ordered provider chain (`decision_model_providers`), first entry
+   * first. Absent on configs built before the chain existed (hand-built
+   * test configs); {@link resolvedProviderEntries} then derives the
+   * single implied entry from the top-level fields.
+   */
+  readonly providers?: ReadonlyArray<ResolvedDecisionProvider>;
   /** NAME of the env var holding the key; never the key. */
   readonly envKey: string | null;
   readonly keyPresent: boolean;

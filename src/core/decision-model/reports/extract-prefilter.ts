@@ -71,17 +71,73 @@ interface PlanAgg {
   readonly scores: Map<string, number>;
   readonly chars: Map<string, number>;
   readonly threshold: number;
+  /** The answering model of the record the plan came from. */
+  readonly model: string;
 }
 
 function share(part: number, whole: number): number | null {
   return whole === 0 ? null : part / whole;
 }
 
-export function buildExtractPrefilterReport(
+/** One scored turn of a shadow plan, joined to whether a commit cited it. */
+export interface ExtractRegretSample {
+  readonly probability: number;
+  readonly cited: boolean;
+  /** The answering model of the plan the score came from. */
+  readonly model: string;
+}
+
+/**
+ * Every scored turn of every shadow plan, joined to whether a later
+ * extract commit cited it - the regret data both the report and the
+ * threshold fit derive from. A turn cited before its newest prior plan
+ * exists is not evaluable and appears with `cited: false`, exactly as
+ * the report's regret join leaves it out. Read-only.
+ */
+export function buildExtractRegretSamples(
   vault: string,
   opts: { readonly since?: string } = {},
-): ExtractPrefilterReport {
-  const calls = listDecisionModelCalls(vault, opts.since).filter(
+): { readonly samples: ReadonlyArray<ExtractRegretSample> } {
+  const plans = collectPlans(vault, opts.since);
+  // Regret: each cited turn against the latest shadow plan of its session
+  // created at or before the commit.
+  const shadowBySession = new Map<string, PlanAgg[]>();
+  for (const plan of plans.values()) {
+    if (plan.mode !== "shadow") continue;
+    const list = shadowBySession.get(plan.sessionId) ?? [];
+    list.push(plan);
+    shadowBySession.set(plan.sessionId, list);
+  }
+  for (const list of shadowBySession.values()) {
+    list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  const cited = new Set<PlanAgg>();
+  for (const commit of listDecisionModelExtractCommits(vault, opts.since)) {
+    const sessionId = commit.payload["session_id"];
+    const turns = strings(commit.payload["source_turns"]);
+    if (typeof sessionId !== "string" || turns === null) continue;
+    const candidates = (shadowBySession.get(sessionId) ?? []).filter(
+      (plan) => plan.createdAt <= commit.createdAt,
+    );
+    for (const turn of turns) {
+      const plan = candidates.find((c) => c.scores.has(turn));
+      if (plan === undefined) continue;
+      cited.add(plan);
+    }
+  }
+  const samples: ExtractRegretSample[] = [];
+  for (const list of shadowBySession.values()) {
+    for (const plan of list) {
+      for (const probability of plan.scores.values()) {
+        samples.push({ probability, cited: cited.has(plan), model: plan.model });
+      }
+    }
+  }
+  return { samples };
+}
+
+function collectPlans(vault: string, since?: string): Map<string, PlanAgg> {
+  const calls = listDecisionModelCalls(vault, since).filter(
     (r) =>
       r.payload["use"] === USE &&
       r.payload["outcome"] === "ok" &&
@@ -104,6 +160,7 @@ export function buildExtractPrefilterReport(
       scores: new Map(),
       chars: new Map(),
       threshold: typeof p["threshold"] === "number" ? p["threshold"] : EXTRACT_PREFILTER_DROP_BELOW,
+      model: typeof p["model"] === "string" ? p["model"] : "unknown",
     };
     ids.forEach((id, k) => {
       const prob = probs[k];
@@ -113,6 +170,14 @@ export function buildExtractPrefilterReport(
     });
     plans.set(planId, plan);
   }
+  return plans;
+}
+
+export function buildExtractPrefilterReport(
+  vault: string,
+  opts: { readonly since?: string } = {},
+): ExtractPrefilterReport {
+  const plans = collectPlans(vault, opts.since);
 
   let scored = 0;
   let dropped = 0;

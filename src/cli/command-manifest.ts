@@ -939,6 +939,41 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ),
           ],
         ),
+        command(
+          "thresholds",
+          "The local per-model thresholds store next to config.yaml (issue #264)",
+          [],
+          [
+            command(
+              "fit",
+              "Derive a use's threshold from its labelled report data against a false-action target and write it for the answering model",
+              [
+                flag("use", "string"),
+                flag("target", "string"),
+                flag("since", "string"),
+                flag("vault", "string"),
+                flag("config", "string"),
+              ],
+            ),
+            command(
+              "list",
+              "List the stored thresholds by model and use, with per-vault overrides and kept history",
+              [flag("vault", "string"), flag("config", "string")],
+            ),
+            command(
+              "set",
+              "Write one threshold by hand for a model and use; existing entries keep their history",
+              [
+                flag("model", "string"),
+                flag("use", "string"),
+                flag("value", "string"),
+                flag("name", "string"),
+                flag("vault", "string"),
+                flag("config", "string"),
+              ],
+            ),
+          ],
+        ),
       ],
     ),
     command(

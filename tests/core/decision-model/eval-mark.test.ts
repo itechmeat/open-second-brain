@@ -92,11 +92,11 @@ function evalConfig(profile: string | null = "laya"): ResolvedDecisionModelConfi
     errors: [],
     notes: [],
     enabled: true,
-    provider: "compatible",
+    provider: "laya",
     adapter: "systemone",
-    baseUrl: "http://127.0.0.1:9",
-    model: "fake-model-1",
-    envKey: "FAKE_DECISION_KEY_UNUSED",
+    baseUrl: "http://127.0.0.1:8000",
+    model: "english",
+    envKey: null,
     keyPresent: true,
     allowInsecureHttp: false,
     timeoutMs: 3000,
@@ -155,15 +155,15 @@ describe("the machine-side mark file", () => {
       baseline_error: 0.5,
       verdict: "promote",
       created_at: "2026-10-20T00:00:00.000Z",
-      provider: "compatible",
-      model: "fake-model-1",
-      base_url_hash: sha256Hex("http://127.0.0.1:9"),
+      provider: "laya",
+      model: "english",
+      base_url_hash: sha256Hex("http://127.0.0.1:8000"),
     });
     const mark = readTuningMark(path);
     expect(mark?.profile).toBe("laya");
     expect(mark?.verdict).toBe("promote");
-    expect(mark?.model).toBe("fake-model-1");
-    expect(mark?.base_url_hash).toBe(sha256Hex("http://127.0.0.1:9"));
+    expect(mark?.model).toBe("english");
+    expect(mark?.base_url_hash).toBe(sha256Hex("http://127.0.0.1:8000"));
     const broken = join(tmp, "broken.json");
     writeFileSync(broken, "{not json", "utf8");
     expect(readTuningMark(broken)).toBeNull();
@@ -183,9 +183,9 @@ describe("the machine-side mark file", () => {
       counted_error: 0,
       baseline_error: 0.5,
       verdict: "promote" as const,
-      provider: "compatible",
-      model: "fake-model-1",
-      base_url_hash: sha256Hex("http://127.0.0.1:9"),
+      provider: "laya",
+      model: "english",
+      base_url_hash: sha256Hex("http://127.0.0.1:8000"),
     };
     writeTuningMark(path, { ...base, created_at: "2026-10-20T00:00:00.000Z" });
     expect(readTuningMark(path)?.created_at).toBe("2026-10-20T00:00:00.000Z");
@@ -216,9 +216,9 @@ describe("retractTuningMark", () => {
       baseline_error: 0.5,
       verdict: "promote",
       created_at: "2026-10-20T00:00:00.000Z",
-      provider: "compatible",
-      model: "fake-model-1",
-      base_url_hash: sha256Hex("http://127.0.0.1:9"),
+      provider: "laya",
+      model: "english",
+      base_url_hash: sha256Hex("http://127.0.0.1:8000"),
     });
   }
 
@@ -369,10 +369,10 @@ describe("the eval runner writes the mark only on a promote", () => {
     const raw = JSON.parse(
       readFileSync(decisionModelTuningMarkPath(stateEnv, "laya", "rerank"), "utf8"),
     ) as Record<string, unknown>;
-    expect(raw["provider"]).toBe("compatible");
-    expect(raw["model"]).toBe("fake-model-1");
+    expect(raw["provider"]).toBe("laya");
+    expect(raw["model"]).toBe("english");
     // A hash, never the URL itself.
-    expect(raw["base_url_hash"]).toBe(sha256Hex("http://127.0.0.1:9"));
+    expect(raw["base_url_hash"]).toBe(sha256Hex("http://127.0.0.1:8000"));
     expect(JSON.stringify(raw)).not.toContain("127.0.0.1");
   });
 
@@ -415,28 +415,25 @@ describe("the eval runner writes the mark only on a promote", () => {
 describe("the measured gate", () => {
   /** The endpoint `evalConfig` measures on - what a mark gets bound to. */
   const ENDPOINT = {
-    provider: "compatible",
-    model: "fake-model-1",
-    baseUrl: "http://127.0.0.1:9",
+    provider: "laya",
+    model: "english",
+    baseUrl: "http://127.0.0.1:8000",
   };
-  const ENV = { O2B_TEST_EVAL_MARK_KEY: "unused" };
-  // Resolves to exactly the endpoint the measurement ran on (and a key,
-  // since the compatible provider always needs one).
+  // Resolves to exactly the endpoint the measurement ran on: the laya
+  // preset, whose threshold profile the preset itself names (a
+  // non-baseline family is never registered in the source table).
   const CONFIG = {
     decision_model_enabled: "true",
-    decision_model_provider: "compatible",
-    decision_model_base_url: "http://127.0.0.1:9",
-    decision_model_id: "fake-model-1",
-    decision_model_env_key: "O2B_TEST_EVAL_MARK_KEY",
-    decision_model_threshold_profile: "laya",
+    decision_model_provider: "laya",
     decision_model_uses: "rerank:enforce",
   };
 
   test("with no mark the use stays shadow exactly as today", () => {
     const cfg = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: CONFIG,
       vault,
+      thresholdsPath: null,
       measuredTunedMark: machineTunedMarkReader(ENDPOINT, stateEnv),
     });
     expect(cfg.status).toBe("active");
@@ -453,9 +450,10 @@ describe("the measured gate", () => {
     });
     const reader = machineTunedMarkReader(ENDPOINT, stateEnv);
     const cfg = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: CONFIG,
       vault,
+      thresholdsPath: null,
       measuredTunedMark: reader,
     });
     expect(cfg.shadowOnlyUses).toEqual([]);
@@ -464,7 +462,7 @@ describe("the measured gate", () => {
     // Only the marked use is measured: an untuned use without a mark
     // stays shadow.
     const both = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: { ...CONFIG, decision_model_uses: "rerank:enforce,dedup:enforce" },
       vault,
       measuredTunedMark: reader,
@@ -487,7 +485,7 @@ describe("the measured gate", () => {
     process.env["XDG_STATE_HOME"] = stateEnv.env["XDG_STATE_HOME"]!;
     try {
       const resolve = (config: Record<string, string>) =>
-        resolveDecisionModelConfig({ env: ENV, config, vault });
+        resolveDecisionModelConfig({ env: {}, config, vault, thresholdsPath: null });
       expect(resolve(CONFIG).uses["rerank"]).toBe("enforce");
 
       // A model that was never measured runs shadow.
@@ -499,7 +497,9 @@ describe("the measured gate", () => {
         resolve({ ...CONFIG, decision_model_base_url: "http://127.0.0.1:10" }).uses["rerank"],
       ).toBe("shadow");
       // And another provider id is a different decision surface outright.
-      expect(resolve({ ...CONFIG, decision_model_provider: "laya" }).uses["rerank"]).toBe("shadow");
+      expect(resolve({ ...CONFIG, decision_model_provider: "openjev" }).uses["rerank"]).toBe(
+        "shadow",
+      );
 
       // Switching back to the measured endpoint re-arms enforce.
       expect(resolve(CONFIG).uses["rerank"]).toBe("enforce");
@@ -526,9 +526,10 @@ describe("the measured gate", () => {
     resetTuningMarkCache();
     expect(validatedTuningMark("laya", "rerank", stateEnv)).toBeNull();
     const cfg = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: CONFIG,
       vault,
+      thresholdsPath: null,
       measuredTunedMark: machineTunedMarkReader(ENDPOINT, stateEnv),
     });
     expect(cfg.uses["rerank"]).toBe("shadow");
@@ -544,7 +545,13 @@ describe("the measured gate", () => {
       });
     const reader = machineTunedMarkReader(ENDPOINT, stateEnv);
     const gated = () =>
-      resolveDecisionModelConfig({ env: ENV, config: CONFIG, vault, measuredTunedMark: reader });
+      resolveDecisionModelConfig({
+        env: {},
+        config: CONFIG,
+        vault,
+        measuredTunedMark: reader,
+        thresholdsPath: null,
+      });
 
     // Run 1 promotes: the gate arms enforce.
     const first = await run(new FakeDecisionProvider({ answer: byLabelRule }));
@@ -587,9 +594,10 @@ describe("the measured gate", () => {
     writeFileSync(path, JSON.stringify({ ...valid, spec_hash: "0".repeat(64) }), "utf8");
     resetTuningMarkCache();
     const cfg = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: CONFIG,
       vault,
+      thresholdsPath: null,
       measuredTunedMark: machineTunedMarkReader(ENDPOINT, stateEnv),
     });
     expect(cfg.shadowOnlyUses).toEqual(["rerank"]);
@@ -600,7 +608,7 @@ describe("the measured gate", () => {
     const previous = process.env["XDG_STATE_HOME"];
     process.env["XDG_STATE_HOME"] = stateEnv.env["XDG_STATE_HOME"]!;
     try {
-      const before = resolveDecisionModelConfig({ env: ENV, config: CONFIG, vault });
+      const before = resolveDecisionModelConfig({ env: {}, config: CONFIG, vault });
       expect(before.shadowOnlyUses).toEqual(["rerank"]);
       await runDecisionModelEval("rerank", {
         config: evalConfig(),
@@ -608,12 +616,12 @@ describe("the measured gate", () => {
         markSource: stateEnv,
       });
       resetTuningMarkCache();
-      const after = resolveDecisionModelConfig({ env: ENV, config: CONFIG, vault });
+      const after = resolveDecisionModelConfig({ env: {}, config: CONFIG, vault });
       expect(after.shadowOnlyUses).toEqual([]);
       expect(after.uses["rerank"]).toBe("enforce");
       // An explicit null reader is today's hand-edit behavior.
       const disabled = resolveDecisionModelConfig({
-        env: ENV,
+        env: {},
         config: CONFIG,
         vault,
         measuredTunedMark: null,
@@ -632,7 +640,7 @@ describe("the measured gate", () => {
       markSource: stateEnv,
     });
     const cfg = resolveDecisionModelConfig({
-      env: ENV,
+      env: {},
       config: {
         decision_model_enabled: "true",
         decision_model_provider: "llm-emulation",
