@@ -13,7 +13,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { pageVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import type {
@@ -105,11 +105,20 @@ function markdownFilesIn(dir: string): string[] {
 }
 
 /**
- * A record's `visibility:` tokens as a spreadable slice: `{}` for default
- * visibility, so a record from an untagged page keeps its exact shape.
+ * A record's `visibility:` tokens plus any informal privacy marker's
+ * reservation (`remoteDenyVisibilityTokens`), as a spreadable slice: `{}`
+ * for default visibility, so a record from an untagged page keeps its
+ * exact shape.
+ *
+ * The scan is the one place the pass holds a page's raw frontmatter, so
+ * the marker union rides in here: the planner modules are pure folds over
+ * the records' token lists (`strictestVisibilityOf` in the topic plan and
+ * the cross-topic promotion), and a page saying `access: private` under
+ * the informal key must reserve every page drafted from it exactly as a
+ * formal `visibility: private` does.
  */
 function visibilitySlice(meta: FrontmatterMap): { visibility?: ReadonlyArray<string> } {
-  const tokens = pageVisibility(meta);
+  const tokens = remoteDenyVisibilityTokens(meta);
   return tokens.length > 0 ? { visibility: Object.freeze(tokens) } : {};
 }
 

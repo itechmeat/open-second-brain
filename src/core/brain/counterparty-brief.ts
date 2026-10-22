@@ -81,6 +81,7 @@ import {
   pageVisibility,
   strictestVisibilityOf,
 } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import {
   DEGRADATION_CODE,
   emitDegradationNotice,
@@ -437,7 +438,12 @@ function pledgeItem(
   // be shareable, so the item is withheld - the same discipline the
   // cited-source gate applies.
   if (pledgeNotices.length > 0) return null;
-  const tagLists: ReadonlyArray<string>[] = [[...pageVisibility(meta)]];
+  // Each tag list is the page's declared tokens plus any informal marker's
+  // reservation (`remoteDenyVisibilityTokens`), so a page saying
+  // `access: private` under the informal key folds exactly as a formally
+  // reserved one would - the brief leaves the machine, and the marker is
+  // the same claim in an older spelling.
+  const tagLists: ReadonlyArray<string>[] = [[...remoteDenyVisibilityTokens(meta)]];
   let sourceRel = pledgeRel(pledge.slug);
   if (pledge.source.length > 0) {
     const source = pledgeSourceWithinVault(pledge.source);
@@ -451,7 +457,7 @@ function pledgeItem(
     if (!isRegularFile(sourceAbs)) return null;
     const [sourceMeta, , sourceNotices] = parseFrontmatterWithNotices(sourceAbs);
     if (sourceNotices.length > 0) return null;
-    tagLists.push([...pageVisibility(sourceMeta)]);
+    tagLists.push([...remoteDenyVisibilityTokens(sourceMeta)]);
     sourceRel = source;
   }
   const folded = strictestVisibilityOf(tagLists);
