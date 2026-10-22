@@ -2,12 +2,16 @@
 
 Every route Open Second Brain can send a decision request to, how each one is
 configured, and what each one means for your data. The feature itself, its
-config keys and the privacy rules that apply to every route are in
+config keys, the provider order, the local thresholds store and the privacy
+rules that apply to every route are in
 [`docs/decision-models.md`](../decision-models.md).
 
 Nothing here is used unless you set `decision_model_enabled: "true"` and name
-one of these presets in `decision_model_provider`. No preset is ever picked
-for you, and no route is ever a fallback for another one.
+one of these presets in `decision_model_provider` (or several, in order, in
+`decision_model_providers`). No preset is ever picked for you. With a single
+`decision_model_provider` no route is ever a fallback for another one; an
+explicit `decision_model_providers` list is the one way to name an order,
+and then the first entry that is configured and answers wins.
 
 ## Presets
 
@@ -34,11 +38,11 @@ Other per-route limits:
 | Preset                                                                | Key                  | Most `choice` options | Threshold profile                                         | Input price (USD / M tokens)           |
 | --------------------------------------------------------------------- | -------------------- | --------------------- | --------------------------------------------------------- | -------------------------------------- |
 | `typesafe`, `openrouter`, `vercel`, `vercel-evaluate`, `opencode-zen` | required             | 255                   | `jev-1.13`                                                | 0.042                                  |
-| `laya`                                                                | optional on loopback | 100                   | `laya`                                                    | 0                                      |
-| `openjev`                                                             | optional on loopback | 52                    | `openjev`                                                 | 0                                      |
-| `compatible`                                                          | required             | 255                   | none, unless `decision_model_threshold_profile` names one | unknown                                |
-| `llm-emulation`                                                       | required             | 255                   | `llm-emulation`                                           | unknown unless both price keys are set |
-| `converse`                                                            | required             | 255                   | `converse`                                                | unknown unless both price keys are set |
+| `laya`                                                                | optional on loopback | 100                   | the server's model id, via the local store                | 0                                      |
+| `openjev`                                                             | optional on loopback | 52                    | the server's model id, via the local store                | 0                                      |
+| `compatible`                                                          | required             | 255                   | the server's model id, via the local store, or `jev-1.13` if named | unknown                       |
+| `llm-emulation`                                                       | required             | 255                   | the endpoint's model id, via the local store              | unknown unless both price keys are set |
+| `converse`                                                            | required             | 255                   | the gateway's model id, via the local store               | unknown unless both price keys are set |
 
 A `choice` question above the route's option limit is never sent: a use that
 can split it does, and otherwise that request degrades with `budget`, like an
@@ -101,8 +105,10 @@ route. Open Second Brain does not download, install or start these servers.
   permission, and `o2b decision-model check` prints that note.
 
 A self-hosted model has its own calibration: its probabilities are not Jev's.
-Each has its own threshold profile, and no use is tuned for either yet, so an
-`enforce` setting runs as `shadow` there (see "Threshold profiles").
+Its thresholds come from the local store, keyed by the model id the server
+reports; until `o2b decision-model thresholds fit` (or `set`) writes an
+entry for a use, an `enforce` setting runs as `shadow` there (see
+"Thresholds").
 
 ```yaml
 decision_model_enabled: "true"
@@ -120,15 +126,17 @@ key is required again.
 
 Any other server that speaks `POST /v1/systemone`. The base URL, the model id
 and the key variable must be set. Open Second Brain cannot know which model
-family answers, so a `compatible` route has no threshold profile and never
-enforces, unless you name the family it serves:
+family answers, so a `compatible` route has no built-in thresholds and its
+uses run as `shadow` until the store carries entries for its model id
+(`o2b decision-model thresholds fit --use <use>`); if the server serves the
+hosted Jev 1.13 family, naming it arms the shipped thresholds:
 
 ```yaml
 decision_model_provider: compatible
 decision_model_base_url: https://decisions.example.com
 decision_model_id: jev-1.13.0
 decision_model_env_key: EXAMPLE_DECISION_KEY
-decision_model_threshold_profile: jev-1.13
+decision_model_threshold_profile: jev-1.13 # the one built-in family
 ```
 
 ## `llm-emulation` (uncalibrated)
@@ -156,8 +164,8 @@ compare routes in `shadow` when only a chat endpoint is available.
   `calibrated: false`, so reports keep these runs apart.
 - `enforce` is refused as a config error unless
   `decision_model_allow_uncalibrated: "true"` is set; `shadow` is allowed.
-  Even with the override, no use has tuned thresholds on the `llm-emulation`
-  profile yet, so `enforce` runs as `shadow`.
+  Even with the override, the model needs tuned thresholds in the local
+  store before a use enforces; until then `enforce` runs as `shadow`.
 - A chat model bills output tokens and costs far more than a decision model.
   The cost is recorded as `unknown` unless both
   `decision_model_input_price_usd_per_mtok` and
@@ -199,9 +207,10 @@ validated item by item by the same rules as every route.
   fails that validation is invalid while the rest of the batch stands.
   Records carry `calibrated: false`, and an `enforce` setting additionally
   needs `decision_model_allow_uncalibrated: "true"`.
-- It carries its own threshold profile, `converse`, and no use is tuned for
-  it yet: an `enforce` setting runs as `shadow` until the profile is tuned
-  from this route's own shadow data. It never borrows `jev-1.13`.
+- Its thresholds are its own: an `enforce` setting runs as `shadow` until
+  the store carries entries for the gateway model's id, tuned from this
+  route's own shadow data (`o2b decision-model thresholds fit`). It never
+  borrows `jev-1.13`.
 - The state is vault content travelling inside a generated-text request, so
   it is fenced as untrusted content and passes the same redaction as every
   route (registry id `decision-model-converse`).
@@ -224,21 +233,37 @@ decision_model_env_key: GATEWAY_DECISION_KEY # the variable's name, not the key
 decision_model_uses: "rerank:shadow"
 ```
 
-## Threshold profiles
+## Thresholds
 
 Probabilities from different model families are not comparable, so every
-threshold a use applies is held to the family it was tuned against. Each
-preset names a threshold profile:
+threshold a use applies is held to the model it was tuned against. What is
+tuned comes from three places, in this order:
 
-- `jev-1.13`: every threshold Open Second Brain ships was set against this
-  family, so every use may enforce on it;
-- `laya`, `openjev`, `llm-emulation`, `converse`: no use is tuned yet;
-- none (`compatible` without `decision_model_threshold_profile`).
+1. The built-in baseline: the hosted Jev 1.13 family (`jev-1.13`). Every
+   threshold Open Second Brain ships was set against this family, so every
+   use may enforce on it. It is the only profile the code carries.
+2. The local thresholds store (`decision-thresholds.json` next to
+   `config.yaml`), keyed by `(model id, use)` - the model id the server
+   reports, never the preset. An entry for a pair lets that use enforce on
+   that model; a `vaults` section overrides an entry for one vault; entries
+   are never deleted, so switching models and switching back needs no
+   re-tuning. `o2b decision-model thresholds fit` derives an entry from the
+   use's labelled report data against a false-action target, and
+   `thresholds set` writes one by hand.
+3. A valid machine-side eval mark (below), for the endpoint that earned it.
 
-A use set to `enforce` on a profile without tuned thresholds for it runs as
+A use set to `enforce` whose model has no tuned thresholds for it runs as
 `shadow`: the request is sent and recorded, and the deterministic result is
 returned. Nothing on a hot path warns about it; `o2b decision-model check`
-prints one warning naming the uses concerned.
+prints one warning naming the model and the tuning command, and
+`o2b decision-model report` says the same. On an ordered chain the hold is
+per entry: the primary model and the fallback model are each judged by
+their own tuning, and the record names whichever answered.
+
+The `decision_model_threshold_profile` key names the built-in family a
+`compatible` server serves; `jev-1.13` is the only valid value. Every other
+model is tuned through the store, keyed by model id, so the key has nothing
+to say about them.
 
 ## Measuring a profile: the preregistered eval
 
@@ -277,6 +302,9 @@ fail-closed direction. Deleting the mark does the same; nothing breaks.
 `o2b decision-model check` names the measured state (untuned, baseline,
 measured under a spec hash, or measured under a spec hash on another
 endpoint - provider, model or base-url mismatch) and lists the cached
-grades, and the doctor readiness line carries the same summary. Tuning a
-profile by hand-editing the source table stays possible and still wins
-over a mark; the mark only ever carries pairs the table leaves untuned.
+grades, and the doctor readiness line carries the same summary. The local
+thresholds store ("Thresholds" above) is the other tuning path: it needs
+no eval run and no mark, only the use's labelled report data, and it keys
+on the model id instead of the profile. Tuning a profile by hand-editing
+the source table stays possible and still wins over a mark; the mark only
+ever carries pairs the table leaves untuned.

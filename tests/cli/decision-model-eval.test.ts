@@ -67,15 +67,12 @@ function childEnv(extra: Record<string, string> = {}): Record<string, string> {
 /** The active eval config; the loopback base URL is added at call time. */
 const ENABLED = {
   decision_model_enabled: "true",
-  decision_model_provider: "compatible",
-  decision_model_id: "fake-model-1",
-  decision_model_env_key: KEY_VAR,
-  decision_model_threshold_profile: "laya",
+  decision_model_provider: "laya",
   decision_model_uses: "rerank:shadow",
 };
 
 function writeEnabledConfig(): void {
-  writeConfig({ ...ENABLED, decision_model_base_url: server.url });
+  writeConfig({ ...ENABLED, decision_model_base_url: server.url, decision_model_id: "english" });
 }
 
 /**
@@ -135,7 +132,16 @@ describe("o2b decision-model eval", () => {
     expect(specless.returncode).toBe(2);
     expect(specless.stderr).toContain("no preregistered spec");
 
-    writeEnabledConfig();
+    // An inactive config is a refusal: a keyed preset without its key is
+    // no_key (the keyless laya loopback above cannot produce one).
+    writeConfig({
+      decision_model_enabled: "true",
+      decision_model_provider: "compatible",
+      decision_model_base_url: server.url,
+      decision_model_id: "fake-model-1",
+      decision_model_env_key: KEY_VAR,
+      decision_model_uses: "rerank:shadow",
+    });
     const noKey = await runCli(
       ["decision-model", "eval", "run", "--use", "rerank", "--config", configPath],
       { env: { OPEN_SECOND_BRAIN_CONFIG: configPath, XDG_STATE_HOME: stateDir } },

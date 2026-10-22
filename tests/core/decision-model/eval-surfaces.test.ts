@@ -85,11 +85,11 @@ function evalConfig(): ResolvedDecisionModelConfig {
     errors: [],
     notes: [],
     enabled: true,
-    provider: "compatible",
+    provider: "laya",
     adapter: "systemone",
-    baseUrl: "http://127.0.0.1:9",
-    model: "fake-model-1",
-    envKey: "FAKE_DECISION_KEY_UNUSED",
+    baseUrl: "http://127.0.0.1:8000",
+    model: "english",
+    envKey: null,
     keyPresent: true,
     allowInsecureHttp: false,
     timeoutMs: 3000,
@@ -110,15 +110,17 @@ function evalConfig(): ResolvedDecisionModelConfig {
 
 const CHECK_CONFIG = {
   decision_model_enabled: "true",
-  decision_model_provider: "compatible",
-  decision_model_base_url: "http://127.0.0.1:9",
-  decision_model_id: "fake-model-1",
-  decision_model_threshold_profile: "laya",
+  decision_model_provider: "laya",
   decision_model_uses: "rerank:shadow",
 } as const;
 
 function checkWith(markSource: PlatformDirsEnv | null) {
-  return buildDecisionModelCheck({ config: { ...CHECK_CONFIG }, vault, markSource });
+  return buildDecisionModelCheck({
+    config: { ...CHECK_CONFIG },
+    vault,
+    markSource,
+    thresholdsPath: null,
+  });
 }
 
 describe("the check's measured tuning state", () => {
@@ -163,6 +165,7 @@ describe("the check's measured tuning state", () => {
       config: { ...CHECK_CONFIG, decision_model_id: "fake-model-2" },
       vault,
       markSource: stateEnv,
+      thresholdsPath: null,
     });
     expect(elsewhere.tuning.state).toBe("measured_elsewhere");
     expect(elsewhere.tuning.marked_uses).toEqual([]);
@@ -177,6 +180,7 @@ describe("the check's measured tuning state", () => {
       config: { ...CHECK_CONFIG, decision_model_base_url: "http://127.0.0.1:10" },
       vault,
       markSource: stateEnv,
+      thresholdsPath: null,
     });
     expect(movedUrl.tuning.state).toBe("measured_elsewhere");
     expect(renderDecisionModelCheck(movedUrl)).toContain("on another endpoint");

@@ -64,7 +64,12 @@ const ENV = { [KEY_VAR]: FAKE_DECISION_KEY };
 describe("enforce on an untuned threshold profile runs as shadow for every use", () => {
   for (const profile of Object.keys(PROFILES)) {
     test(profile, async () => {
-      const cfg = resolveDecisionModelConfig({ env: ENV, config: config(profile), vault });
+      const cfg = resolveDecisionModelConfig({
+        env: ENV,
+        config: config(profile),
+        vault,
+        thresholdsPath: null,
+      });
       expect(cfg.status).toBe("active");
       expect(cfg.thresholdProfile).toBe(profile);
       expect(cfg.shadowOnlyUses).toEqual([...DECISION_MODEL_USES]);

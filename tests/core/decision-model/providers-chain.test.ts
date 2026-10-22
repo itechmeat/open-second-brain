@@ -187,7 +187,12 @@ describe("decision_model_providers resolution", () => {
   });
 
   test("enforce is held per entry: the baseline fallback enforces where an unknown model cannot", () => {
-    const cfg = resolveDecisionModelConfig({ env: CHAIN_ENV, config: chainConfig(), vault: null });
+    const cfg = resolveDecisionModelConfig({
+      env: CHAIN_ENV,
+      config: chainConfig(),
+      vault: null,
+      thresholdsPath: null,
+    });
     expect(cfg.status).toBe("active");
     const first = cfg.providers?.[0];
     const second = cfg.providers?.[1];

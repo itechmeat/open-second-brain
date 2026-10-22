@@ -33,7 +33,7 @@ import {
   type DecisionEvalGrade,
 } from "./record.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
-import { DECISION_THRESHOLD_PROFILES, isDecisionThresholdProfile } from "./questions.ts";
+import { DECISION_THRESHOLD_PROFILES } from "./questions.ts";
 import { decisionEvalSpecFor, decisionEvalSpecHash, type DecisionEvalSpec } from "./eval-spec.ts";
 import { validatedTuningMark } from "./eval/mark.ts";
 import { processDirsEnv, type PlatformDirsEnv } from "../platform-dirs.ts";
@@ -154,6 +154,13 @@ export interface DecisionModelCheckOptions {
    * running process's platform dirs; tests inject a state root.
    */
   readonly markSource?: PlatformDirsEnv | null;
+  /**
+   * Where the local thresholds store is read from. Undefined reads the
+   * file beside the default config path (the caller's `env` decides
+   * where that is); null disables the store, which is what the tests
+   * that pin the shadow hold use.
+   */
+  readonly thresholdsPath?: string | null;
 }
 
 /** One chain entry as `check` reports it, in configured order. */
@@ -230,7 +237,10 @@ export function measuredTuning(
   source: PlatformDirsEnv = processDirsEnv(),
 ): MeasuredTuning {
   const profile = cfg.thresholdProfile ?? null;
-  if (profile === null || !isDecisionThresholdProfile(profile)) {
+  // A profile name the source table does not carry (a self-hosted family
+  // the code never registered, issue #264) is not "none": its marks are
+  // keyed by the same string, so the measured states still apply to it.
+  if (profile === null) {
     return { profile, state: "none", marked_uses: [], elsewhere_uses: [] };
   }
   const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned ?? [];
@@ -306,7 +316,8 @@ export function measuredTuningSummary(measured: MeasuredTuning): string {
     case "untuned":
       return (
         `profile '${measured.profile}' is untuned; enforce holds as shadow ` +
-        "(o2b decision-model eval run can measure a use)"
+        "(o2b decision-model eval run can measure a use, or " +
+        "o2b decision-model thresholds fit can tune one from shadow data)"
       );
   }
 }
@@ -355,6 +366,7 @@ export async function buildDecisionModelCheck(
     config: opts.config,
     vault: opts.vault,
     secretsVault: opts.vault ?? undefined,
+    ...(opts.thresholdsPath !== undefined ? { thresholdsPath: opts.thresholdsPath } : {}),
   });
   const warnings: string[] = [];
   const notes: string[] = [];
@@ -384,13 +396,17 @@ export async function buildDecisionModelCheck(
   // stay silent. Printed once per check.
   const shadowOnly = cfg.shadowOnlyUses ?? [];
   if (cfg.enabled && shadowOnly.length > 0) {
+    const profileNote =
+      cfg.thresholdProfile === null || cfg.thresholdProfile === undefined
+        ? ""
+        : ` (profile '${cfg.thresholdProfile}')`;
     warnings.push(
-      `enforce runs as shadow for ${shadowOnly.join(", ")}: threshold profile ` +
-        `'${cfg.thresholdProfile ?? "unknown"}' has no tuned thresholds for ` +
+      `enforce runs as shadow for ${shadowOnly.join(", ")}: model ` +
+        `'${cfg.model ?? "unknown"}'${profileNote} has no tuned thresholds for ` +
         (shadowOnly.length === 1 ? "it" : "them") +
-        (cfg.thresholdProfile === null || cfg.thresholdProfile === undefined
-          ? "; for a compatible server of a known family set decision_model_threshold_profile"
-          : ""),
+        `; tune with \`o2b decision-model thresholds fit --use ${shadowOnly[0]!}\` against ` +
+        "this model's shadow data, or set values by hand with " +
+        "`o2b decision-model thresholds set`",
     );
   }
   if (cfg.enabled && !cfg.calibrated) {
@@ -750,6 +766,17 @@ export interface DecisionModelReport {
    */
   readonly use_report?: { readonly use: DecisionModelUse; readonly report: unknown };
   /**
+   * Present when the caller supplied the resolved config and a use
+   * configured `enforce` runs as `shadow` for want of tuned thresholds
+   * for the model: says so explicitly and names the tuning command.
+   */
+  readonly shadow?: {
+    readonly model: string | null;
+    readonly uses: ReadonlyArray<DecisionModelUse>;
+    /** The command that tunes the first shadow use. */
+    readonly command: string;
+  };
+  /**
    * The cached verdict sets of the preregistered evaluation
    * (`eval/grade.ts`), oldest first, with the named skip notes. Present
    * whenever the vault holds at least one, so a vault with none renders
@@ -828,6 +855,8 @@ export function buildDecisionModelReport(
     readonly origin?: string;
     /** Attach the use's own report when `use` names one (default true). */
     readonly useReport?: boolean;
+    /** The resolved config, for the shadow section; absent on record-only callers. */
+    readonly config?: ResolvedDecisionModelConfig;
   } = {},
 ): DecisionModelReport {
   const records = listDecisionModelCalls(vault, opts.since).filter(
@@ -875,7 +904,21 @@ export function buildDecisionModelReport(
       ...(agreement !== undefined ? { agreement } : {}),
     });
   }
-  const summary: DecisionModelReport = { since: opts.since ?? null, total: records.length, uses };
+  const shadowOnly = opts.config?.shadowOnlyUses ?? [];
+  const shadow =
+    opts.config !== undefined && shadowOnly.length > 0
+      ? {
+          model: opts.config.model,
+          uses: shadowOnly,
+          command: `o2b decision-model thresholds fit --use ${shadowOnly[0]!}`,
+        }
+      : undefined;
+  const summary: DecisionModelReport = {
+    since: opts.since ?? null,
+    total: records.length,
+    uses,
+    ...(shadow !== undefined ? { shadow } : {}),
+  };
   // The eval section is built for every report: `o2b decision-model
   // report` is the audit surface for the grades a mark was written from.
   const { grades, skipped } = listDecisionModelEvalGrades(vault, opts.since);
@@ -934,6 +977,16 @@ export function renderDecisionModelReport(report: DecisionModelReport): string {
           `${(u.agreement.top5_overlap * 100).toFixed(1)}%`,
       );
     }
+  }
+  if (report.shadow !== undefined) {
+    lines.push(
+      `  shadow (no tuned thresholds for model '${report.shadow.model ?? "unknown"}'): ` +
+        `${report.shadow.uses.join(", ")}`,
+    );
+    lines.push(
+      `    tune with \`${report.shadow.command}\`, or set values by hand with ` +
+        "`o2b decision-model thresholds set`",
+    );
   }
   if (report.eval !== undefined) {
     lines.push(

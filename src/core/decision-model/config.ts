@@ -29,6 +29,8 @@
  * path treats as off and the diagnostics report with a non-zero exit.
  */
 
+import { homedir } from "node:os";
+
 import { assertHttpEgressEndpoint } from "../search/embeddings/http-util.ts";
 import {
   SecretStoreKeyfileMissingError,
@@ -58,6 +60,13 @@ import {
   isDecisionThresholdProfile,
   thresholdsTunedFor,
 } from "./questions.ts";
+import {
+  decisionThresholdsPath,
+  EMPTY_THRESHOLD_STORE,
+  readThresholdsStore,
+  storedThresholdEntry,
+  type DecisionThresholdsStore,
+} from "./thresholds.ts";
 
 export const DECISION_MODEL_DEFAULTS = Object.freeze({
   timeoutMs: 3000,
@@ -121,20 +130,16 @@ function isLoopbackUrl(raw: string | null): boolean {
 
 /**
  * The modes the uses actually run in: `enforce` becomes `shadow` for every
- * use whose thresholds are not tuned for `profile` - unless the
- * injected measured reader says the preregistered eval has marked the
- * pair tuned (the machine-side tuning mark, `eval/mark.ts`).
+ * use the `tunedFor` gate refuses. The gate (see {@link entryTunedGate})
+ * is the source table, the local thresholds store and the injected
+ * measured reader (the machine-side tuning mark, `eval/mark.ts`) OR-ed
+ * per use.
  */
 function holdToProfile(
   uses: DecisionModelUses,
-  profile: string | null,
-  measuredTuned?: ((use: DecisionModelUse) => boolean) | null,
+  tunedFor: (use: DecisionModelUse) => boolean,
 ): { readonly uses: DecisionModelUses; readonly shadowOnly: ReadonlyArray<DecisionModelUse> } {
-  const shadowOnly = DECISION_MODEL_USES.filter(
-    (use) =>
-      uses[use] === "enforce" &&
-      !thresholdsTunedFor(profile, use, measuredTuned ? () => measuredTuned(use) : null),
-  );
+  const shadowOnly = DECISION_MODEL_USES.filter((use) => uses[use] === "enforce" && !tunedFor(use));
   if (shadowOnly.length === 0) return { uses, shadowOnly: Object.freeze([]) };
   const out: Record<DecisionModelUse, DecisionModelMode> = { ...uses };
   for (const use of shadowOnly) out[use] = "shadow";
@@ -289,6 +294,57 @@ export interface ResolveDecisionModelOptions {
    * test pins.
    */
   readonly measuredTunedMark?: ((profile: string | null, use: DecisionModelUse) => boolean) | null;
+  /**
+   * Where the local thresholds store (`decision-thresholds.json`,
+   * `thresholds.ts`) lives. Undefined reads the file beside the default
+   * config path - the production behavior; a path reads that file (the
+   * CLI passes the `--config` sibling); null disables the store, which
+   * is the behavior the hand-edit tests pin.
+   */
+  readonly thresholdsPath?: string | null;
+}
+
+/**
+ * The thresholds store this resolution gates against, read lazily (only
+ * an enforce hold that the table refuses consults it) and TTL-cached
+ * inside the store module. `null` (the option set to null) disables the
+ * store: the empty store tunes nothing.
+ */
+function thresholdsStoreFor(opts: ResolveDecisionModelOptions): DecisionThresholdsStore {
+  if (opts.thresholdsPath === null) return EMPTY_THRESHOLD_STORE;
+  if (opts.thresholdsPath !== undefined) return readThresholdsStore(opts.thresholdsPath);
+  // The file beside the default config path, discovered from the SAME
+  // environment the rest of this resolution reads (an injected `env`
+  // moves the config file, so it must move the store with it). Lazy, as
+  // in the policy require above: core/config is a large module and only
+  // this store read needs its discovery chain (env, XDG, home).
+  const env = opts.env ?? process.env;
+  const home = typeof env["HOME"] === "string" && env["HOME"] !== "" ? env["HOME"] : homedir();
+  const coreConfig = require("../config.ts") as typeof import("../config.ts");
+  return readThresholdsStore(
+    decisionThresholdsPath(
+      coreConfig.resolveDefaultConfigPath({ platform: process.platform, home, env }),
+    ),
+  );
+}
+
+/**
+ * The tuned gate for one chain entry: the source table (baseline or a
+ * hand-registered list) OR the local store entry for THIS entry's model
+ * id, keyed by the model the server reports - never the preset - OR the
+ * measured mark. The store is consulted only when the table refuses, so
+ * a baseline model pays no store read.
+ */
+function entryTunedGate(
+  store: DecisionThresholdsStore,
+  profile: string | null,
+  model: string | null,
+  vault: string | null,
+  measuredTuned: ((use: DecisionModelUse) => boolean) | null,
+): (use: DecisionModelUse) => boolean {
+  return (use) =>
+    thresholdsTunedFor(profile, use, measuredTuned === null ? null : () => measuredTuned(use)) ||
+    storedThresholdEntry(store, model, use, vault) !== null;
 }
 
 function defaultVaultOptOut(vault: string): boolean {
@@ -637,10 +693,25 @@ export function resolveDecisionModelConfig(
     };
   };
 
+  // The store is read only when a use is configured enforce: shadow and
+  // off installs pay no file read at all.
+  const needsGate = DECISION_MODEL_USES.some((use) => configured[use] === "enforce");
+  let storeCache: DecisionThresholdsStore | null = null;
+  const store = (): DecisionThresholdsStore => {
+    if (storeCache === null) storeCache = thresholdsStoreFor(opts);
+    return storeCache;
+  };
   const held = holdToProfile(
     configured,
-    thresholdProfile,
-    markReaderFor({ provider: primaryName, model, baseUrl }, thresholdProfile),
+    needsGate
+      ? entryTunedGate(
+          store(),
+          thresholdProfile,
+          model,
+          opts.vault,
+          markReaderFor({ provider: primaryName, model, baseUrl }, thresholdProfile),
+        )
+      : () => true,
   );
   const uses = held.uses;
 
@@ -741,10 +812,15 @@ export function resolveDecisionModelConfig(
     );
     const laterHeld = holdToProfile(
       configured,
-      laterPreset.thresholdProfile,
-      markReaderFor(
-        { provider: laterPreset.name, model: laterModel, baseUrl: laterCleaned.url },
+      entryTunedGate(
+        store(),
         laterPreset.thresholdProfile,
+        laterModel,
+        opts.vault,
+        markReaderFor(
+          { provider: laterPreset.name, model: laterModel, baseUrl: laterCleaned.url },
+          laterPreset.thresholdProfile,
+        ),
       ),
     );
     laterEntries.push({

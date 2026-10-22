@@ -1,15 +1,17 @@
 /**
  * `o2b decision-model` subcommand dispatcher (issue #213, Part 1).
  *
- *   check [--ping]   the configured state: enabled or not, provider, base
- *                    URL, pinned model, the key variable's NAME and whether
- *                    it is set (never the value), per-use modes, vault
- *                    opt-out, cost gate and today's spend, processor terms,
- *                    the measured tuning state and the cached eval grades.
- *                    `--ping` sends one request over a synthetic state that
- *                    carries no vault content. Exit 1 only for a broken
- *                    configured provider (invalid config, or a failed ping
- *                    of an active one); a missing key is exit 0.
+ *   check [--ping]   the configured state: enabled or not, the provider
+ *                    chain in order, base URL, pinned model, the key
+ *                    variable's NAME and whether it is set (never the
+ *                    value), per-use modes, vault opt-out, cost gate and
+ *                    today's spend, processor terms, the measured tuning
+ *                    state and the cached eval grades. `--ping` sends one
+ *                    request per configured provider over a synthetic
+ *                    state that carries no vault content and reports each
+ *                    one. Exit 1 only for a broken configured provider
+ *                    (invalid config, or no configured provider answering
+ *                    the ping); a missing key is exit 0.
  *   report           per use: calls, outcome mix, latency, tokens, cost,
  *                    rerank shadow agreement and the cached eval grades,
  *                    from `decision_model_call` and
@@ -25,11 +27,21 @@
  *   eval list        the cached grade records, oldest first, in prose or
  *                    `--json`; malformed records are skipped with a named
  *                    note, never silently.
+ *   thresholds fit   derive one use's threshold from the use's labelled
+ *                    report data against a false-action target
+ *                    (`--target`, default 0.05) and write it for the
+ *                    answering model, in the local thresholds store next
+ *                    to config.yaml.
+ *   thresholds list  the stored thresholds, global and per-vault.
+ *   thresholds set   write one threshold by hand for a model.
  *
  * check and list are read-only. eval run writes only the grade record in
  * the vault's continuity log and, on a promote, the mark under the
- * platform state root.
+ * platform state root. thresholds fit and set write only the thresholds
+ * store; nothing here deletes an entry.
  */
+
+import { readFileSync } from "node:fs";
 
 import { CliError, parseFlags } from "./argparse.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../core/config.ts";
@@ -44,6 +56,17 @@ import {
 } from "../core/decision-model/diagnostics.ts";
 import { isDecisionModelUse, type DecisionModelUse } from "../core/decision-model/contract.ts";
 import { resolveDecisionModelConfig } from "../core/decision-model/config.ts";
+import {
+  BUILTIN_USE_THRESHOLDS,
+  PRIMARY_THRESHOLD_NAME,
+} from "../core/decision-model/questions.ts";
+import {
+  decisionThresholdsPath,
+  parseThresholdsStore,
+  storedThresholdEntry,
+  writeThresholdEntry,
+} from "../core/decision-model/thresholds.ts";
+import { runThresholdFit } from "../core/decision-model/thresholds-fit.ts";
 import { decisionEvalSpecFor } from "../core/decision-model/eval-spec.ts";
 import { runDecisionModelEval } from "../core/decision-model/eval/grade.ts";
 import { listDecisionModelEvalGrades } from "../core/decision-model/record.ts";
@@ -55,16 +78,22 @@ const USAGE =
   "[--config <path>] [--json]\n" +
   "       o2b decision-model eval run --use <use> [--vault <path>] [--config <path>] [--json]\n" +
   "       o2b decision-model eval list [--use <use>] [--since <date>] [--vault <path>] " +
-  "[--config <path>] [--json]\n";
+  "[--config <path>] [--json]\n" +
+  "       o2b decision-model thresholds fit --use <use> [--target <n>] [--since <date>] " +
+  "[--vault <path>] [--config <path>] [--json]\n" +
+  "       o2b decision-model thresholds list [--vault <path>] [--config <path>] [--json]\n" +
+  "       o2b decision-model thresholds set --model <id> --use <use> --value <n> " +
+  "[--name <name>] [--vault <path>] [--config <path>] [--json]\n";
 
 function resolveTargets(flags: Record<string, unknown>): {
+  readonly configPath: string;
   readonly config: Readonly<Record<string, string>>;
   readonly vault: string | null;
 } {
   const configPath = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const config = discoverConfig(configPath).data;
   const vault = (flags["vault"] as string | undefined) ?? resolveVault(configPath) ?? null;
-  return { config, vault };
+  return { configPath, config, vault };
 }
 
 async function checkVerb(argv: ReadonlyArray<string>): Promise<number> {
@@ -115,13 +144,18 @@ function reportVerb(argv: ReadonlyArray<string>): number {
   if (use !== undefined && !isDecisionModelUse(use)) {
     throw new CliError(`--use must be a decision-model use, got '${use}'`);
   }
-  const { vault } = resolveTargets(flags);
+  const { config, vault } = resolveTargets(flags);
   if (vault === null) {
     throw new CliError("no vault configured. Pass --vault <path>.");
   }
   const report = buildDecisionModelReport(vault, {
     ...(since !== undefined ? { since } : {}),
     ...(use !== undefined ? { use } : {}),
+    config: resolveDecisionModelConfig({
+      config,
+      vault,
+      secretsVault: vault ?? undefined,
+    }),
   });
   if (flags["json"] === true) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
@@ -296,6 +330,248 @@ function evalVerb(argv: ReadonlyArray<string>): number | Promise<number> {
   }
 }
 
+// ----- thresholds (the local per-model store, issue #264) ----------------
+
+function useFlagRequired(flags: Record<string, unknown>): DecisionModelUse {
+  const use = useFlag(flags);
+  if (use === undefined) throw new CliError("decision-model thresholds needs --use <use>");
+  return use;
+}
+
+function thresholdsFitVerb(argv: ReadonlyArray<string>): number {
+  const { flags, positional } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    use: { type: "string" },
+    target: { type: "string" },
+    since: { type: "string" },
+  });
+  if (positional.length > 0) {
+    throw new CliError(
+      `decision-model thresholds fit takes no positional arguments: ${positional.join(" ")}`,
+    );
+  }
+  const use = useFlagRequired(flags);
+  const { configPath, vault } = resolveTargets(flags);
+  if (vault === null) {
+    throw new CliError("no vault configured. Pass --vault <path>.");
+  }
+  const targetRaw = flags["target"] as string | undefined;
+  let target: number | undefined;
+  if (targetRaw !== undefined) {
+    target = Number(targetRaw);
+    if (!Number.isFinite(target) || target <= 0 || target >= 1) {
+      throw new CliError(`--target must be a share between 0 and 1, got '${targetRaw}'`);
+    }
+  }
+  const since = sinceFlag(flags);
+  const result = runThresholdFit(decisionThresholdsPath(configPath), {
+    vault,
+    use,
+    ...(target !== undefined ? { target } : {}),
+    ...(since !== undefined ? { since } : {}),
+  });
+  if (!result.ok) {
+    throw new CliError(`decision-model thresholds fit: ${result.note}; nothing was written`);
+  }
+  if (flags["json"] === true) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          model: result.model,
+          use: result.use,
+          name: result.name,
+          value: result.entry.values[result.name],
+          target: result.entry.target ?? null,
+          samples: result.entry.samples ?? null,
+          updated_at: result.entry.updated_at,
+          already_tuned: result.alreadyTuned,
+          store_path: decisionThresholdsPath(configPath),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+  const share =
+    result.entry.samples !== undefined && result.entry.samples > 0
+      ? `over ${result.entry.samples} action(s)`
+      : "over no actions";
+  const lines = [
+    `thresholds fit ${result.use}: wrote ${result.name} = ` +
+      `${result.entry.values[result.name]} for model '${result.model}'`,
+    `  false actions at most ${((result.entry.target ?? 0) * 100).toFixed(1)}% (${share})`,
+    `  store: ${decisionThresholdsPath(configPath)}` +
+      (result.alreadyTuned
+        ? " (entry updated; the previous value is kept in its history)"
+        : " (new entry; switching models never deletes one)"),
+  ];
+  process.stdout.write(lines.join("\n") + "\n");
+  return 0;
+}
+
+function renderThresholdEntry(
+  model: string,
+  use: string,
+  entry: {
+    values: Readonly<Record<string, number>>;
+    source: string;
+    updated_at: string;
+    target?: number;
+    samples?: number;
+    history?: ReadonlyArray<{ value: number; source: string; updated_at: string }>;
+  },
+): string[] {
+  const values = Object.entries(entry.values)
+    .map(([name, value]) => `${name}=${value}`)
+    .join(", ");
+  const facts = [
+    entry.source,
+    entry.target !== undefined ? `target ${entry.target}` : null,
+    entry.samples !== undefined ? `${entry.samples} action(s)` : null,
+    entry.updated_at,
+  ]
+    .filter((v) => v !== null)
+    .join(", ");
+  const lines = [`    ${model} / ${use}: ${values} (${facts})`];
+  for (const h of entry.history ?? []) {
+    lines.push(`      was ${h.value} (${h.source}, ${h.updated_at})`);
+  }
+  return lines;
+}
+
+function thresholdsListVerb(argv: ReadonlyArray<string>): number {
+  const { flags, positional } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+  });
+  if (positional.length > 0) {
+    throw new CliError(
+      `decision-model thresholds list takes no positional arguments: ${positional.join(" ")}`,
+    );
+  }
+  const { configPath } = resolveTargets(flags);
+  const storePath = decisionThresholdsPath(configPath);
+  let store;
+  try {
+    store = parseThresholdsStore(readFileSync(storePath, "utf8"));
+  } catch {
+    store = parseThresholdsStore("");
+  }
+  if (flags["json"] === true) {
+    process.stdout.write(JSON.stringify({ path: storePath, store }, null, 2) + "\n");
+    return 0;
+  }
+  const lines: string[] = [`thresholds: ${storePath}`];
+  const models = Object.entries(store.models).toSorted((a, b) => a[0].localeCompare(b[0]));
+  if (models.length === 0) lines.push("models: none stored");
+  else {
+    lines.push("models:");
+    for (const [model, uses] of models) {
+      for (const use of Object.keys(uses).toSorted()) {
+        lines.push(...renderThresholdEntry(model, use, uses[use as never]!));
+      }
+    }
+  }
+  const vaults = Object.entries(store.vaults).toSorted((a, b) => a[0].localeCompare(b[0]));
+  if (vaults.length > 0) {
+    lines.push("vault overrides:");
+    for (const [vaultPath, section] of vaults) {
+      lines.push(`  ${vaultPath}`);
+      for (const [model, uses] of Object.entries(section).toSorted((a, b) =>
+        a[0].localeCompare(b[0]),
+      )) {
+        for (const use of Object.keys(uses).toSorted()) {
+          lines.push(...renderThresholdEntry(model, use, uses[use as never]!));
+        }
+      }
+    }
+  }
+  process.stdout.write(lines.join("\n") + "\n");
+  return 0;
+}
+
+function thresholdsSetVerb(argv: ReadonlyArray<string>): number {
+  const { flags, positional } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    model: { type: "string" },
+    use: { type: "string" },
+    value: { type: "string" },
+    name: { type: "string" },
+  });
+  if (positional.length > 0) {
+    throw new CliError(
+      `decision-model thresholds set takes no positional arguments: ${positional.join(" ")}`,
+    );
+  }
+  const model = flags["model"] as string | undefined;
+  if (model === undefined || model.trim() === "") {
+    throw new CliError("decision-model thresholds set needs --model <id>");
+  }
+  const use = useFlagRequired(flags);
+  const valueRaw = flags["value"] as string | undefined;
+  const value = Number(valueRaw);
+  if (valueRaw === undefined || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new CliError(`--value must be a probability between 0 and 1, got '${valueRaw}'`);
+  }
+  const names = Object.keys(BUILTIN_USE_THRESHOLDS[use]!);
+  const name = (flags["name"] as string | undefined) ?? PRIMARY_THRESHOLD_NAME[use];
+  if (!names.includes(name)) {
+    throw new CliError(`--name must be one of ${names.join(", ")} for use '${use}', got '${name}'`);
+  }
+  const { configPath } = resolveTargets(flags);
+  const storePath = decisionThresholdsPath(configPath);
+  const vaultOverride = flags["vault"] as string | undefined;
+  const entry = writeThresholdEntry(
+    storePath,
+    model.trim(),
+    use,
+    { values: { [name]: value }, source: "set" },
+    vaultOverride ?? null,
+  );
+  if (flags["json"] === true) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          model: model.trim(),
+          use,
+          name,
+          value: entry.values[name],
+          updated_at: entry.updated_at,
+          vault: vaultOverride ?? null,
+          store_path: storePath,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+  const lines = [
+    `thresholds set: wrote ${name} = ${entry.values[name]} for model '${model.trim()}' (use ${use})`,
+    `  store: ${storePath}` +
+      (vaultOverride !== undefined ? ` (override for vault ${vaultOverride})` : ""),
+  ];
+  process.stdout.write(lines.join("\n") + "\n");
+  return 0;
+}
+
+function thresholdsVerb(argv: ReadonlyArray<string>): number {
+  switch (argv[0]) {
+    case "fit":
+      return thresholdsFitVerb(argv.slice(1));
+    case "list":
+      return thresholdsListVerb(argv.slice(1));
+    case "set":
+      return thresholdsSetVerb(argv.slice(1));
+    default:
+      process.stderr.write(USAGE);
+      return 2;
+  }
+}
+
 export async function handleDecisionModelSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   const verb = argv[0];
   const rest = argv.slice(1);
@@ -306,6 +582,8 @@ export async function handleDecisionModelSubcommand(argv: ReadonlyArray<string>)
       return reportVerb(rest);
     case "eval":
       return await evalVerb(rest);
+    case "thresholds":
+      return thresholdsVerb(rest);
     default:
       process.stderr.write(USAGE);
       return 2;

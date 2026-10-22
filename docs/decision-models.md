@@ -109,12 +109,16 @@ All keys live in the machine config file outside the vault. Each has an
 | Key | Meaning | Default |
 |---|---|---|
 | `decision_model_enabled` | master switch | `false` |
-| `decision_model_provider` | preset name (table below) | none |
-| `decision_model_base_url` | overrides the preset's base URL | from preset |
+| `decision_model_provider` | one preset name (the one-element form) | none |
+| `decision_model_providers` | ordered preset names, tried in order (see "Ordered providers" below) | none |
+| `decision_model_providers_<preset>_base_url` | base URL override for one chain entry | from preset |
+| `decision_model_providers_<preset>_id` | pinned model id override for one chain entry | from preset |
+| `decision_model_providers_<preset>_env_key` | key variable name override for one chain entry | from preset |
+| `decision_model_base_url` | overrides the preset's base URL (the first provider's; a chain entry overrides with its own key above) | from preset |
 | `decision_model_id` | pinned model id; overrides the preset. A moving alias such as `jev-latest` is refused. It plays the part `search_rerank_model` and `embedding_model` play for those features; the key is named `_id` because the value must pin a version | from preset |
 | `decision_model_env_key` | **name** of the env var holding the key (`A-Z`, `0-9`, `_`); anything else, such as the key itself, makes the config invalid and is never printed | from preset |
 | `decision_model_allow_insecure_http` | allow plain `http://` to a non-loopback host; config or env only | `false` |
-| `decision_model_timeout_ms` | per-request timeout for MCP and CLI paths | `3000` |
+| `decision_model_timeout_ms` | per-request timeout for MCP and CLI paths, shared by the whole provider chain | `3000` |
 | `decision_model_hook_budget_ms` | sub-budget for the `recall_inject` hook use: the request gets `min(this, remaining retrieval budget)` and never extends the hook's 2,500 ms total (see [the recall-inject hook filter](decision-models/recall-inject.md)) | `700` |
 | `decision_model_max_state_tokens` | client-side state cap, clamped to the preset maximum | preset, at most `32000` |
 | `decision_model_uses` | `use:mode` comma list, mode `off`, `shadow` or `enforce` | every use `off` |
@@ -122,7 +126,7 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_input_price_usd_per_mtok` | price for routes that do not report cost | from preset |
 | `decision_model_output_price_usd_per_mtok` | output price, read only for the chat-shaped routes (`llm-emulation`, `converse`), whose cost is `unknown` unless both prices are set | none |
 | `decision_model_allow_uncalibrated` | allow an uncalibrated provider in `enforce` | `false` |
-| `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`, `converse`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
+| `decision_model_threshold_profile` | the built-in model family a `compatible` server serves (`jev-1.13` is the only one), so its uses may enforce on the shipped thresholds; every other model is tuned through the local thresholds store instead (see "Thresholds") | from preset |
 
 Uses: `rerank`, `answerable`, `skills`, `extract_prefilter`, `dedup`,
 `tension`, `labels`, `recall_inject`. Every use is implemented; each one is
@@ -157,12 +161,59 @@ licence and data handling in [providers](decision-models/providers.md)):
 `decision_model_base_url` must not carry `user:password@` credentials: the key
 travels in a header, and a URL with credentials is an invalid config.
 
-Each preset names a threshold profile. Every threshold is tuned against the
-Jev 1.13 family (`jev-1.13`), which the hosted presets use; on any other
-profile, and on a `compatible` server without
-`decision_model_threshold_profile`, a use set to `enforce` runs as `shadow`,
-and `check` says so. Measure a `compatible` model with the eval gate before
-naming its family.
+## Ordered providers
+
+`decision_model_providers` names an ordered chain, tried per call from the
+front:
+
+```yaml
+decision_model_enabled: "true"
+decision_model_providers: compatible,typesafe
+decision_model_base_url: http://127.0.0.1:8080
+decision_model_id: my-local-decision-model
+decision_model_env_key: LOCAL_DECISION_KEY
+decision_model_uses: "rerank:shadow"
+```
+
+With the server up, every call goes local; with the server down, the call
+falls through to the hosted preset with no failed hook. The rules:
+
+- The first entry that is **configured** (its key variable set, or its
+  preset needs none) **and answers** wins. An entry without its key is
+  skipped, and the feature is off only when no entry is configured.
+- A connection error or timeout falls through to the next entry. Any other
+  failure (an HTTP status, an invalid reply) is the endpoint's answer about
+  this request and ends the chain; retrying it elsewhere would multiply the
+  same refusal.
+- The whole chain shares the one budget: `decision_model_timeout_ms`, or
+  `decision_model_hook_budget_ms` for the hook use. Each attempt gets an
+  even slice of what remains, so a dead first server can never stretch a
+  call past the budget.
+- Every attempt writes its own `decision_model_call` record naming the
+  provider and the model that attempted or answered it, so reports never
+  pool two models.
+- `enforce` is held to thresholds per entry (see "Thresholds"): a use may
+  enforce on the answering model only when that model is tuned, whatever
+  the other entries can do.
+
+`decision_model_provider` stays as the one-element form and keeps working
+unchanged; when both keys are set the list decides the order and a note in
+`check` says so. Each entry runs on its preset's defaults. The first entry
+additionally reads the global endpoint keys (`decision_model_base_url`,
+`decision_model_id`, `decision_model_env_key`); any entry can override its
+own endpoint with `decision_model_providers_<preset>_base_url`,
+`_id` and `_env_key` (config only, no environment override):
+
+```yaml
+decision_model_providers: laya,typesafe
+decision_model_providers_laya_base_url: http://127.0.0.1:8100
+```
+
+`o2b decision-model check` lists the order and each entry's key state;
+`check --ping` sends one synthetic request per configured entry and shows
+which answer. It exits 1 only when no configured entry answers - a dead
+first entry with a live second is exactly the situation the chain exists
+for.
 
 Example, a hosted route with the reranker in shadow:
 
@@ -190,6 +241,87 @@ decision_model_max_state_tokens: "4000"
 decision_model_uses: "rerank:shadow"
 ```
 
+## Thresholds: the local store
+
+Thresholds are a property of the installation, not of the code. Every
+threshold Open Second Brain ships was tuned against the hosted Jev 1.13
+family, and those built-in values stay as the fallback for that family
+only. Every other model takes its thresholds from a local store,
+`decision-thresholds.json`, next to `config.yaml` in the user config
+directory:
+
+```json
+{
+  "version": 1,
+  "models": {
+    "my-local-decision-model": {
+      "dedup": {
+        "values": { "low_priority_min": 0.9 },
+        "source": "fit",
+        "target": 0.05,
+        "samples": 96,
+        "updated_at": "2026-10-22T09:00:00.000Z",
+        "history": [{ "value": 0.8, "source": "set", "updated_at": "2026-10-21T09:00:00.000Z" }]
+      }
+    }
+  },
+  "vaults": {}
+}
+```
+
+- Entries are keyed by `(model id, use)`, and the model id is the one the
+  server reports, never the provider preset: a self-hosted server that
+  swaps models inherits nothing, and the store file can tell the two
+  apart.
+- A use may run `enforce` on a model exactly when the store carries an
+  entry for `(model, use)` - or when the model answers on the built-in
+  `jev-1.13` baseline, or carries a valid machine-side eval mark. A model
+  with no entry for a use runs that use as `shadow`, and `check` and
+  `report` say so explicitly and name the tuning command. Before this
+  store existed, such a use simply ran as shadow with no way to tune it
+  short of a release.
+- Entries are never deleted. Switching to another model leaves every
+  existing entry in place, so switching back restores `enforce` without
+  re-tuning; rewriting an entry keeps the previous value in the entry's
+  `history`.
+- A `vaults` section overrides the global entry for one vault, keyed by
+  the vault's absolute path.
+- The threshold `values` are named per use (`low_priority_min` for `dedup`
+  and `tension`, `drop_below` for `extract_prefilter`, `suggest_min` for
+  `labels`, and so on; `o2b decision-model thresholds set` names the
+  valid ones). They are what a later tune converge against; the enforce
+  gate reads the entry's presence.
+
+### Tuning a model
+
+```sh
+o2b decision-model thresholds fit --use dedup
+```
+
+`fit` reads the use's labelled report data from the vault's records -
+`dedup` and `tension` verdicts joined to the operator's later status,
+`label` suggestions joined to later acceptance, `extract_prefilter` plans
+joined to later citations - sweeps the threshold, and keeps the value that
+acts on the most samples while holding the share of false actions at or
+under `--target` (default 0.05). It writes the entry for the model that
+answered, refuses to pool several models into one threshold, and writes
+nothing when too few samples decide or no threshold meets the target -
+the refusal names the closest the data came. Only the four uses with
+labelled reports fit: `dedup`, `tension`, `labels`, `extract_prefilter`.
+
+`thresholds set` writes a value by hand for a model and use; `thresholds
+list` prints everything stored, per model and per vault, with the kept
+history. All three are local operations: no request is sent.
+
+```sh
+o2b decision-model thresholds list
+o2b decision-model thresholds set --model my-local-decision-model --use dedup --value 0.9
+```
+
+The other tuning path stays: the preregistered eval gate (below) measures
+a use and, on a promote verdict, writes a machine-side mark that arms
+`enforce` for the measured endpoint.
+
 ## Uses
 
 Each use has its own mode in `decision_model_uses`, its own failure policy
@@ -212,8 +344,9 @@ blocks a write or an answer, and no use writes to the vault.
 
 In `shadow` every use sends and records its request and returns today's
 result; for `labels` the suggestions are null and for `dedup` and `tension`
-the listings are unchanged. `enforce` on a threshold profile without tuned
-thresholds for the use runs as `shadow` (see [providers](decision-models/providers.md#threshold-profiles)).
+the listings are unchanged. `enforce` on a model without tuned thresholds
+for the use runs as `shadow` (see "Thresholds" above and
+[providers](decision-models/providers.md#thresholds)).
 
 Moving a use to `enforce` needs evidence from that use's report: a gain
 against the deterministic baseline without a regression, and for
@@ -407,16 +540,19 @@ timeout. A reply body larger than 1 MiB is an `invalid_reply`.
 
 ## Operator commands
 
-- `o2b decision-model check [--ping] [--json]`: enabled state, provider, base
-  URL, pinned model, the key variable's name and whether it is set (never the
-  value), per-use modes as configured (with a warning when the feature is
-  disabled, since every use then runs `off`), vault opt-out and any ignored
-  `decision_model:` field in the vault's `_brain.yaml`, cost gate and today's
-  spend, the processor. The hint names only what is missing. `--ping` sends
-  one request over a synthetic state with no vault content, prints the
-  answering model and latency, and records the request. Exit 1 only for a
-  broken configured provider (invalid config, or a failed ping of an active
-  one).
+- `o2b decision-model check [--ping] [--json]`: enabled state, the provider
+  chain in order (with `--ping`, each configured entry's live answer), base
+  URL, pinned model, the key variable's name and whether it is set (never
+  the value), per-use modes as configured (with a warning when the feature
+  is disabled, since every use then runs `off`), vault opt-out and any
+  ignored `decision_model:` field in the vault's `_brain.yaml`, cost gate
+  and today's spend, the processor. An `enforce` use that runs as `shadow`
+  for want of tuned thresholds is warned about once, naming the model and
+  the tuning command. The hint names only what is missing. `--ping` sends
+  one request per configured provider over a synthetic state with no vault
+  content, prints the answering model and latency per entry, and records
+  each request. Exit 1 only for a broken configured provider (invalid
+  config, or no configured entry answering the ping).
 - `o2b decision-model report [--since <date>] [--use <use>] [--json]`: per
   use, calls, outcome mix, p50/p95 latency, input tokens, cost, and for the
   reranker the shadow agreement (top-1 agreement and top-5 overlap between the
@@ -426,7 +562,19 @@ timeout. A reply body larger than 1 MiB is an `invalid_reply`.
   shares for `extract_prefilter`, verdict bands against the operator's later
   decisions for `dedup` and `tension`, acceptance for `labels`, level against
   advisory band and outcomes for `answerable`, and added latency and hook
-  timeouts for `recall_inject`. Each use's page describes its metric.
+  timeouts for `recall_inject`. Each use's page describes its metric. When a
+  use configured `enforce` runs as `shadow` for want of tuned thresholds,
+  the report says so and names the tuning command.
+- `o2b decision-model thresholds fit --use <use> [--target <n>] [--json]`:
+  derive the use's threshold from its labelled report data against the
+  false-action target and write it for the answering model (see
+  "Thresholds"). Writes nothing and says why when the data cannot decide.
+- `o2b decision-model thresholds list [--json]`: the stored thresholds by
+  model and use, with per-vault overrides and kept history.
+- `o2b decision-model thresholds set --model <id> --use <use> --value <n>
+  [--name <name>] [--vault <path>] [--json]`: write one threshold by hand;
+  a `--vault` scopes it to that vault as an override. Nothing is ever
+  deleted by these commands.
 - `o2b doctor --readiness` has a `decision_model` line for every install:
   `skipped` when off, without a key, or opted out (with how to proceed),
   `fail` for an invalid config, `pass` when active. It also names an ignored

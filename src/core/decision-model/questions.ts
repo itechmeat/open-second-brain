@@ -13,6 +13,7 @@
  */
 
 import type { DecisionChoiceQuestion, DecisionModelUse, DecisionNoulQuestion } from "./contract.ts";
+import { SKILLS_FINAL_MIN, SKILLS_NEEDS_ANY_MIN } from "./questions-skills.ts";
 
 /** Default per-candidate clip for any use that does not set its own. */
 export const DEFAULT_CANDIDATE_CLIP_CHARS = 900;
@@ -89,18 +90,15 @@ export const RERANK_QUESTIONS = Object.freeze({
 // ----- threshold profiles ------------------------------------------------------
 
 /**
- * Threshold profiles, one per provider family. Probabilities from
- * different models are not comparable, so a threshold tuned against one
- * family says nothing about another. A use runs `enforce` only on a
- * profile that lists it as tuned; on any other profile (or on none, as
- * with a `compatible` server of unknown family) an `enforce` setting runs
- * as `shadow`, and `o2b decision-model check` says so. Hot paths never
- * warn.
- *
- * `baseline` marks the profile every threshold in this file was set
- * against: every use is tuned for it, so no use needs to be registered
- * here twice. Any other profile lists the
- * uses tuned for it explicitly, from its own shadow data.
+ * The built-in threshold profile: the hosted Jev 1.13 family, the family
+ * every threshold constant in this file was set against. It is the only
+ * entry the code carries (issue #264): every other model takes its
+ * thresholds from the local store (`thresholds.ts`, keyed by the model id
+ * the server reports), so supporting a model never needs a release. A use
+ * runs `enforce` when the profile is this baseline, or when the store
+ * carries an entry for the answering model, or when the preregistered
+ * eval's machine-side mark says the pair is measured; otherwise it runs
+ * as `shadow`, and `check`/`report` say so and name the tuning command.
  */
 export interface DecisionThresholdProfile {
   readonly name: string;
@@ -112,15 +110,6 @@ export const DECISION_THRESHOLD_PROFILES: Readonly<Record<string, DecisionThresh
   Object.freeze({
     // Every threshold above was set against the hosted Jev 1.13 family.
     "jev-1.13": { name: "jev-1.13", tuned: "baseline" },
-    // Self-hosted open-weight models: their own calibration, none tuned yet.
-    laya: { name: "laya", tuned: Object.freeze([]) },
-    openjev: { name: "openjev", tuned: Object.freeze([]) },
-    // Self-reported probabilities of a generative model: none tuned.
-    "llm-emulation": { name: "llm-emulation", tuned: Object.freeze([]) },
-    // A Converse-protocol gateway fronting the operator's own judgment
-    // model family: calibrated per that deployment, none tuned here, so an
-    // `enforce` setting runs as `shadow` until tuned from shadow data.
-    converse: { name: "converse", tuned: Object.freeze([]) },
   });
 
 export const DECISION_THRESHOLD_PROFILE_NAMES: ReadonlyArray<string> = Object.freeze(
@@ -132,23 +121,28 @@ export function isDecisionThresholdProfile(name: string): boolean {
 }
 
 /**
- * Whether `use` has tuned thresholds on `profile`; false for an unknown or absent profile.
+ * Whether `use` has tuned thresholds on `profile`.
  *
- * The source table decides first. Only when it says untuned is the
- * optional {@link measuredTuned} reader consulted - the machine-side
- * tuning mark of the preregistered evaluation (`eval/mark.ts`), whose read is
- * therefore never paid for a hand-registered or baseline use, and never
- * paid at all when no reader is injected (today's behavior, which the
- * hand-edit tests pin).
+ * The source table decides first: the baseline profile ships tuned for
+ * every use, a hand-registered list carries its own. An unknown profile
+ * name (a self-hosted family the code does not carry) has no table entry,
+ * so the measured mark decides, exactly as for a known-but-untuned one -
+ * the store gate (`thresholds.ts`, keyed by model id) is applied beside
+ * this by the config resolver.
+ *
+ * The measured reader is consulted only when the table leaves the pair
+ * untuned, so its read is never paid for a hand-registered or baseline
+ * use, and never paid at all when no reader is injected.
  */
 export function thresholdsTunedFor(
   profile: string | null,
   use: DecisionModelUse,
   measuredTuned?: (() => boolean) | null,
 ): boolean {
-  if (profile === null || !isDecisionThresholdProfile(profile)) return false;
-  const tuned = DECISION_THRESHOLD_PROFILES[profile]!.tuned;
-  if (tuned === "baseline" || tuned.includes(use)) return true;
+  if (profile === null) return false;
+  const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned;
+  if (tuned === "baseline") return true;
+  if (tuned !== undefined && tuned.includes(use)) return true;
   return measuredTuned !== null && measuredTuned !== undefined && measuredTuned();
 }
 
@@ -341,4 +335,38 @@ export const RECALL_INJECT_QUESTIONS = Object.freeze({
       },
     };
   },
+});
+
+/**
+ * The threshold values each use applies, by name, when nothing is stored
+ * for the model: the hosted baseline family's compiled constants, the
+ * fallback {@link effectiveThresholds} merges stored values over. Derived
+ * from the constants above, never re-declared, so the two cannot drift.
+ */
+export const BUILTIN_USE_THRESHOLDS: Readonly<
+  Record<DecisionModelUse, Readonly<Record<string, number>>>
+> = Object.freeze({
+  rerank: Object.freeze({ injection_flag_min: RERANK_QUESTIONS.injectionFlagMin }),
+  answerable: Object.freeze({ low: ANSWERABLE_LOW, high: ANSWERABLE_HIGH }),
+  skills: Object.freeze({ needs_any_min: SKILLS_NEEDS_ANY_MIN, final_min: SKILLS_FINAL_MIN }),
+  extract_prefilter: Object.freeze({ drop_below: EXTRACT_PREFILTER_DROP_BELOW }),
+  dedup: Object.freeze({ low_priority_min: PAIR_VERDICT_LIMITS.lowPriorityMin }),
+  tension: Object.freeze({ low_priority_min: PAIR_VERDICT_LIMITS.lowPriorityMin }),
+  labels: Object.freeze({ suggest_min: LABELS_QUESTIONS.suggestMin }),
+  recall_inject: Object.freeze({
+    any_min: RECALL_INJECT_ANY_MIN,
+    note_min: RECALL_INJECT_NOTE_MIN,
+  }),
+});
+
+/** The one value a threshold `fit` derives for a use: the action threshold. */
+export const PRIMARY_THRESHOLD_NAME: Readonly<Record<DecisionModelUse, string>> = Object.freeze({
+  rerank: "injection_flag_min",
+  answerable: "low",
+  skills: "needs_any_min",
+  extract_prefilter: "drop_below",
+  dedup: "low_priority_min",
+  tension: "low_priority_min",
+  labels: "suggest_min",
+  recall_inject: "any_min",
 });
