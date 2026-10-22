@@ -95,6 +95,37 @@ export interface AppendLogEventResult {
   readonly logPath: string;
 }
 
+/**
+ * The wikilink a retirement record stamps as `retired_by`, naming the
+ * log shard THIS device appends to for `date`.
+ *
+ * The link and the event it cites must land on the same file. The
+ * appender resolves its shard with {@link resolveAppendShardId}; a link
+ * built from the bare date (the pre-shard shape) names a file this
+ * device never writes once a device id is configured, and the doctor
+ * reads the retirement's provenance as a broken link. This helper is
+ * the one place that spelling exists, so a writer cannot drift from the
+ * appender: with the empty shard id it emits the exact historical
+ * `[[Brain/log/<date>]]`, with a device id `[[Brain/log/<date>.<id>]]`
+ * - the Obsidian basename of the file {@link logShardPath} writes.
+ *
+ * Pass `deviceId` explicitly when the caller already resolved the shard
+ * for its own `appendLogEvent` call (merge does), so one resolution
+ * feeds both writes. Omitted, the helper resolves the same way the
+ * appender defaults to. Historical records are never rewritten: only
+ * links written after this ship carry the shard segment.
+ */
+export function logShardWikilink(date: string, deviceId?: string): string {
+  const shardId = deviceId ?? resolveAppendShardId();
+  if (shardId !== "" && !isValidDeviceId(shardId)) {
+    throw new Error(
+      `logShardWikilink: invalid deviceId ${JSON.stringify(shardId)} - ` +
+        "expected a lowercase slug matching the device_id config shape",
+    );
+  }
+  return shardId === "" ? `[[Brain/log/${date}]]` : `[[Brain/log/${date}.${shardId}]]`;
+}
+
 // ----- Constants ------------------------------------------------------------
 
 // `## HH:MM:SSZ — <kind>` — both the em dash (—) and the hyphen are

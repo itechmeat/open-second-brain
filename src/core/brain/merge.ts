@@ -29,7 +29,8 @@ import { regenerateActiveQuiet } from "./active.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { guardEntityMerge, type GuardEntityLike } from "./truth/merge-guard.ts";
-import { appendLogEvent } from "./log.ts";
+import { resolveAppendShardId } from "./ledger-shards.ts";
+import { appendLogEvent, logShardWikilink } from "./log.ts";
 import { brainDirs, preferencePath } from "./paths.ts";
 import { appendPrefAudit } from "./pref-audit.ts";
 import { moveToRetired, parsePreference, writePreference } from "./preference.ts";
@@ -243,9 +244,14 @@ export function mergePreferences(
     id: keep.id,
     principle: keep.principle,
   });
+  // The retired_by link names the log shard the `merge` event below is
+  // about to land in, so the retirement's provenance always resolves.
+  // Resolved once here and handed to both writes: two independent
+  // resolutions are two chances to disagree about the shard.
+  const shardId = resolveAppendShardId();
   moveToRetired(vault, dropPath, BRAIN_RETIRED_REASON.mergedInto, {
     now,
-    retired_by: `[[Brain/log/${isoDate(now)}]]`,
+    retired_by: logShardWikilink(isoDate(now), shardId),
     superseded_by: supersededBy,
     audit: { agent: opts.agentName ?? "merge" },
   });
@@ -273,19 +279,25 @@ export function mergePreferences(
     );
   }
 
-  // 3. Append a `merge` log event with audit-grade payload.
-  appendLogEvent(vault, {
-    timestamp: isoSecond(now),
-    eventType: BRAIN_LOG_EVENT_KIND.merge,
-    body: {
-      keep: renderPrefLink({ id: keep.id, principle: keep.principle }),
-      drop: renderPrefLink({ id: drop.id, principle: drop.principle }),
-      signal_union: `${merged_evidenced_by.length} (was ${keep.evidenced_by.length}, ${drop.evidenced_by.length})`,
-      applied_sum: `${applied_sum} (was ${keep.applied_count}, ${drop.applied_count})`,
-      violated_sum: `${violated_sum} (was ${keep.violated_count}, ${drop.violated_count})`,
-      agent: opts.agentName ?? "unknown",
+  // 3. Append a `merge` log event with audit-grade payload. The same
+  //    shard id the retired_by link above names, so the event is where
+  //    the link says it is.
+  appendLogEvent(
+    vault,
+    {
+      timestamp: isoSecond(now),
+      eventType: BRAIN_LOG_EVENT_KIND.merge,
+      body: {
+        keep: renderPrefLink({ id: keep.id, principle: keep.principle }),
+        drop: renderPrefLink({ id: drop.id, principle: drop.principle }),
+        signal_union: `${merged_evidenced_by.length} (was ${keep.evidenced_by.length}, ${drop.evidenced_by.length})`,
+        applied_sum: `${applied_sum} (was ${keep.applied_count}, ${drop.applied_count})`,
+        violated_sum: `${violated_sum} (was ${keep.violated_count}, ${drop.violated_count})`,
+        agent: opts.agentName ?? "unknown",
+      },
     },
-  });
+    { deviceId: shardId },
+  );
 
   // 4. Regenerate active.md so the operator sees the new state on
   //    their next session start.
