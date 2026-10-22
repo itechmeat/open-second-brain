@@ -56,6 +56,20 @@ export interface RankerInputs {
    */
   readonly entityMatchByChunk?: ReadonlyMap<number, number>;
   /**
+   * Optional per-chunk count of DERIVED person-variant forms the chunk
+   * also carries (write-honesty-egress-consent, F3): forms the query
+   * expansion DERIVED (first-initial-plus-surname, reversed word order,
+   * operator nicknames) rather than forms the registry declares. Kept
+   * in a lane of its own so a declared-form match always outranks a
+   * derived-variant match between otherwise-equal candidates: per-match
+   * 0.01, capped at 0.02 - each strictly below the declared lane above.
+   * Missing entries (and the absent map) leave the layer unwired: no
+   * reason entry, no breakdown key, byte-identical scores. Never a
+   * retrieval mechanism - the candidate set arrives fixed and this lane
+   * only reorders it.
+   */
+  readonly derivedEntityMatchByChunk?: ReadonlyMap<number, number>;
+  /**
    * Optional per-chunk effective activation in [0, 1] (Time-Aware
    * Recall & Activation Suite): access-reinforced strength already
    * decayed by the content-type half-life. Missing entries (and the
@@ -135,6 +149,13 @@ const LINK_ONLY_BOOST_CAP = 0.03;
 const TAG_ONLY_BOOST_CAP = 0.02;
 /** Query entities the chunk also carries. */
 export const ENTITY_BOOST_CAP = 0.04;
+/**
+ * Derived person-variant matches (write-honesty-egress-consent, F3):
+ * half the declared per-match rate and half the declared cap, so a
+ * declared-form match always outranks a derived-variant match between
+ * otherwise-equal candidates.
+ */
+export const DERIVED_ENTITY_BOOST_CAP = 0.02;
 /** Access-reinforced, type-decayed activation. */
 export const ACTIVATION_BOOST_CAP = 0.04;
 /** Habitual co-retrieval companions inside the candidate pool. */
@@ -339,6 +360,7 @@ function buildReasons(parts: {
   recency: number;
   tierMul: number;
   entityBoost?: number;
+  derivedEntityBoost?: number;
   activationBoost?: number;
   coAccessBoost?: number;
   reuseBoost?: number;
@@ -357,6 +379,11 @@ function buildReasons(parts: {
   if (parts.rrf && parts.rrf > 0) reasons.push(`rrf: ${fmt(parts.rrf)}`);
   if (parts.entityBoost && parts.entityBoost > 0) {
     reasons.push(`entity_match: ${fmt(parts.entityBoost)}`);
+  }
+  // Derived person-variant lane (F3), named apart from the declared
+  // entity_match so attribution can tell the two tiers apart.
+  if (parts.derivedEntityBoost !== undefined && parts.derivedEntityBoost > 0) {
+    reasons.push(`entity_variant: ${fmt(parts.derivedEntityBoost)}`);
   }
   if (parts.activationBoost && parts.activationBoost > 0) {
     reasons.push(`activation: ${fmt(parts.activationBoost)}`);
@@ -413,6 +440,7 @@ function buildBreakdown(parts: {
   recency: number;
   tierMul: number;
   entityBoost?: number;
+  derivedEntityBoost?: number;
   activationBoost?: number;
   coAccessBoost?: number;
   reuseBoost?: number;
@@ -428,6 +456,10 @@ function buildBreakdown(parts: {
     semantic: parts.semanticScore,
     rrf: parts.rrf ?? 0,
     entity: parts.entityBoost ?? 0,
+    // Derived person-variant lane (F3): present only when the chunk
+    // actually matched a derived form - absent, not zero, otherwise -
+    // so a result without derived matches keeps the pre-feature shape.
+    ...(parts.derivedEntityBoost !== undefined ? { entityDerived: parts.derivedEntityBoost } : {}),
     activation: parts.activationBoost ?? 0,
     coAccess: parts.coAccessBoost ?? 0,
     reuse: parts.reuseBoost ?? 0,
@@ -653,6 +685,15 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
     const entityBoost = Math.min(ENTITY_BOOST_CAP, entityMatches * 0.02 * entMul);
+    // Derived person-variant lane (F3): strictly below the declared
+    // lane above, capped, and reported by ABSENCE when it does not
+    // fire (undefined, not zero) so a result without derived matches
+    // keeps its pre-feature breakdown shape.
+    const derivedEntityMatches = inputs.derivedEntityMatchByChunk?.get(c.chunkId) ?? 0;
+    const derivedEntityBoost =
+      derivedEntityMatches > 0
+        ? Math.min(DERIVED_ENTITY_BOOST_CAP, derivedEntityMatches * 0.01 * entMul)
+        : undefined;
     // Activation boost (Time-Aware Recall & Activation Suite): the
     // effective (type-decayed) activation scales into a capped 0.04
     // contribution - a re-ranker for habitually-recalled memories,
@@ -712,6 +753,10 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const linkBoostVoted = zeroWithoutVote("link", linkBoost);
     const recencyVoted = zeroWithoutVote("recency", recency);
     const entityBoostVoted = zeroWithoutVote("entity", entityBoost);
+    const derivedEntityBoostVoted =
+      derivedEntityBoost === undefined
+        ? undefined
+        : zeroWithoutVote("entityDerived", derivedEntityBoost);
     const activationBoostVoted = zeroWithoutVote("activation", activationBoost);
     const coAccessBoostVoted = zeroWithoutVote("coAccess", coAccessBoost);
     const reuseBoostVoted = zeroWithoutVote("reuse", reuseBoost);
@@ -731,6 +776,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         linkBoostVoted +
         recencyVoted +
         entityBoostVoted +
+        (derivedEntityBoostVoted ?? 0) +
         activationBoostVoted +
         coAccessBoostVoted +
         reuseBoostVoted +
@@ -777,6 +823,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           recency: recencyVoted,
           tierMul,
           entityBoost: entityBoostVoted,
+          derivedEntityBoost: derivedEntityBoostVoted,
           activationBoost: activationBoostVoted,
           coAccessBoost: coAccessBoostVoted,
           ...(trend !== undefined ? { trend, trendMul } : {}),
@@ -798,6 +845,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           recency: recencyVoted,
           tierMul,
           entityBoost: entityBoostVoted,
+          derivedEntityBoost: derivedEntityBoostVoted,
           activationBoost: activationBoostVoted,
           coAccessBoost: coAccessBoostVoted,
           trendMul,

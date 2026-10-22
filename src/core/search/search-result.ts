@@ -27,6 +27,15 @@ export interface ScoreBreakdown {
   readonly semantic: number;
   readonly rrf: number;
   readonly entity: number;
+  /**
+   * Derived person-variant entity boost (write-honesty-egress-consent,
+   * F3): the strictly smaller capped lane under `entity`, fed by forms
+   * the query expansion DERIVED (initials, word order, operator
+   * nicknames) rather than declared registry forms. Absent - not zero -
+   * when the chunk matched no derived form, so a result without derived
+   * matches keeps the pre-feature breakdown shape byte for byte.
+   */
+  readonly entityDerived?: number;
   readonly activation: number;
   readonly coAccess: number;
   /** Observed-reuse boost (t_65588d8b); 0 when no verdicts apply. */

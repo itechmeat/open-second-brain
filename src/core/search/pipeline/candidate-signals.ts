@@ -46,6 +46,13 @@ export interface CandidateSignals {
   readonly canonicalMatchByChunk: ReadonlyMap<number, number> | undefined;
   /** Canonical entity ids the expansion hopped through. */
   readonly canonicalSourceIds: ReadonlyArray<string>;
+  /**
+   * Chunks matching a DERIVED person-variant form (F3), fed to the
+   * ranker's strictly-smaller derived lane. Undefined when the
+   * expansion derived nothing, so the layer stays unwired and every
+   * score and breakdown shape is byte-identical.
+   */
+  readonly derivedEntityMatchByChunk: ReadonlyMap<number, number> | undefined;
   readonly activationByChunk: ReadonlyMap<number, number> | undefined;
   readonly coAccessByChunk: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined;
   readonly trendByDoc: ReadonlyMap<number, string> | undefined;
@@ -82,9 +89,19 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
   // bit-identical to pre-registry behaviour.
   const queryEntities = extractEntities(input.query);
   const entityExpansion = expandQueryEntities(config.vault, queryEntities);
+  // The DECLARED lane counts the query's own entities plus the forms
+  // the registry declared (name and aliases). A person-variant query
+  // expansion also emits DERIVED forms (initials, word order,
+  // nicknames); those ride their own strictly-smaller lane below, so a
+  // declared-form match always outranks a derived-variant match. When
+  // nothing was derived this is exactly the pre-variant `expanded` set,
+  // byte for byte.
+  const declaredForms: ReadonlyArray<string> = [...queryEntities, ...entityExpansion.added];
   const entityMatchByChunk =
-    entityExpansion.expanded.length > 0
-      ? store.chunkEntityMatches(ids, entityExpansion.expanded)
+    declaredForms.length > 0 ? store.chunkEntityMatches(ids, declaredForms) : undefined;
+  const derivedEntityMatchByChunk =
+    entityExpansion.derived.length > 0
+      ? store.chunkEntityMatches(ids, entityExpansion.derived)
       : undefined;
   const canonicalMatchByChunk =
     entityExpansion.added.length > 0
@@ -112,6 +129,7 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     entityMatchByChunk,
     canonicalMatchByChunk,
     canonicalSourceIds: entityExpansion.sourceIds,
+    derivedEntityMatchByChunk,
     activationByChunk: activation.activationByChunk,
     coAccessByChunk: activation.coAccessByChunk,
     trendByDoc: collectFreshnessTrend(input),

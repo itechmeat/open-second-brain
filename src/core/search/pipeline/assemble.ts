@@ -540,6 +540,9 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
       ...(signals.entityMatchByChunk !== undefined
         ? { entityMatchByChunk: signals.entityMatchByChunk }
         : {}),
+      ...(signals.derivedEntityMatchByChunk !== undefined
+        ? { derivedEntityMatchByChunk: signals.derivedEntityMatchByChunk }
+        : {}),
       ...(signals.activationByChunk !== undefined
         ? { activationByChunk: signals.activationByChunk }
         : {}),
