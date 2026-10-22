@@ -57,6 +57,11 @@ import {
   originChannelStamp,
   type OriginChannelStamp,
 } from "../../origin-channel.ts";
+import {
+  CONTENT_CLASS_FIELD,
+  contentClassCreationStamp,
+  withoutCallerContentClass,
+} from "../provenance/content-class.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { formatFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import {
@@ -771,17 +776,24 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // exists.
   if (input.strict === true) assertValidDocument(vault, callerFrontmatter, body);
 
-  // The server-derived stamp (Unit C) goes on LAST, so a caller that
-  // supplied a key of the same name loses to the process that actually
-  // wrote the note.
+  // The server-derived stamps (Unit C, and the content class beside it)
+  // go on LAST, so a caller that supplied a key of either name loses to
+  // the process that actually wrote the note. A caller-named
+  // `content_class` is not merely outranked but dropped: on an unmarked
+  // write the honest byte is NO key, and letting the caller's through
+  // would let an mcp-transport caller forge an exclusion that ripples
+  // all the way to the export boundary.
   //
   // Stamped on CREATION only. `update_note` and `append_note` rewrite a
   // note this call did not author, and re-stamping there would overwrite
   // the creating channel with the mutating one - the same objection that
   // refuses backfilling the field onto existing records.
+  const callerFrontmatterWithoutClass = withoutCallerContentClass(callerFrontmatter);
+  const contentClass = contentClassCreationStamp(originChannel);
   const frontmatter: FrontmatterMap = {
-    ...callerFrontmatter,
+    ...callerFrontmatterWithoutClass,
     [ORIGIN_CHANNEL_FIELD]: originChannel,
+    ...(contentClass !== null ? { [CONTENT_CLASS_FIELD]: contentClass } : {}),
   };
 
   const skipOccupied = input.ifExists === "skip";

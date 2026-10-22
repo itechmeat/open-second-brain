@@ -56,6 +56,7 @@ import {
 } from "./apply-evidence.ts";
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
+import { CONTENT_CLASS_FIELD } from "./provenance/content-class.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
@@ -758,17 +759,19 @@ function projectCreateNote(
 }
 
 /**
- * Frontmatter keys a caller-named UPDATE may not set. Both are read as
- * boundary state, not note content: `visibility` carries the page's
+ * Frontmatter keys a caller-named UPDATE may not set. All three are read
+ * as boundary state, not note content: `visibility` carries the page's
  * read-scope tokens (the reserved `private` among them), and
- * `origin_channel` is the server-derived stamp creation writes once and
- * mutation never rewrites. Creation needs no guard - the server stamp is
- * merged last there and wins - but the update merge inverts the order,
- * so the guard lives at the merge.
+ * `origin_channel` and `content_class` are the server-derived stamps
+ * creation writes once and mutation never rewrites. Creation needs no
+ * refusal - the server stamps are merged last there and a caller-named
+ * class is dropped outright - but the update merge inverts the order, so
+ * the guard lives at the merge.
  */
 const RESERVED_UPDATE_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "visibility",
   ORIGIN_CHANNEL_FIELD,
+  CONTENT_CLASS_FIELD,
 ]);
 
 /** The first reserved key the caller's map names, or `null`. */
