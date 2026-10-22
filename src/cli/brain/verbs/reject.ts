@@ -14,7 +14,7 @@ import {
 import { preferencePath } from "../../../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
-import { appendLogEvent } from "../../../core/brain/log.ts";
+import { appendLogEvent, logShardWikilink } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "../../../core/brain/types.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
@@ -58,7 +58,7 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
 
   const now = new Date();
   const todayDate = isoDate(now);
-  const retiredBy = `[[Brain/log/${todayDate}]]`;
+  const retiredBy = logShardWikilink(todayDate);
   const reasonText = String(flags["reason"]).trim();
 
   try {
