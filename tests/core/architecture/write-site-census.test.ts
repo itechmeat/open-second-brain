@@ -1543,6 +1543,7 @@ const SHARED_HELPER_ROWS = 130;
  */
 const ORIGIN_CHANNEL_STAMPED: ReadonlyArray<string> = Object.freeze([
   "src/core/brain/continuity/store.ts",
+  "src/core/brain/ingest/ingest.ts",
   "src/core/brain/log.ts",
   "src/core/brain/notes/create-note.ts",
   "src/core/brain/signal.ts",
@@ -1680,7 +1681,7 @@ const UNSTAMPED_DIRECT_ROWS = 84;
  * stamps an origin channel - one writes a class the writer derives, the
  * other a visibility token the page's own informal marker declares.
  */
-const UNSTAMPED_SHARED_ROWS = 127;
+const UNSTAMPED_SHARED_ROWS = 126;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
@@ -1772,6 +1773,7 @@ describe("origin-channel coverage boundary", () => {
       .filter((row) => STAMPED_PATHS.has(row.path))
       .map((row) => row.path);
     expect(stampedShared.toSorted()).toEqual([
+      "src/core/brain/ingest/ingest.ts",
       "src/core/brain/log.ts",
       "src/core/brain/notes/create-note.ts",
       "src/core/brain/signal.ts",
