@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,6 +96,81 @@ describe("the provider-consent readiness probe", () => {
     expect(verdict.status).toBe("skipped");
     expect(verdict.detail).not.toContain("search_semantic_enabled=false");
     expect(verdict.detail).not.toContain("embedding_provider=disabled");
+  });
+
+  test("the present provider environment variables are listed on the no-decision arm too", async () => {
+    // The env census travels with every arm: an operator who set the key
+    // in the environment and never wrote a decision needs to see that
+    // the key is there all the same.
+    writeConfig("");
+    const verdict = await probeProviderConsent(probeOpts({ [PROVIDER_KEY_ENV]: PRIVATE_BODY }));
+    expect(verdict.status).toBe("skipped");
+    expect(verdict.detail).toContain(PROVIDER_KEY_ENV);
+    expect(verdict.detail).not.toContain(PRIVATE_BODY);
+  });
+
+  test("a registered profile's env-key name is listed when a variable of that name is present", async () => {
+    // A registry profile keeps its credential in an OPERATOR-NAMED
+    // variable (envKey in Brain/search/embedding-providers.json), which
+    // no OPEN_SECOND_BRAIN_* prefix reaches. The probe reads the NAMES
+    // out of the registry and reports the ones present - never values.
+    const profileEnv = "OPENROUTER_API_KEY";
+    mkdirSync(join(tmp, "Brain", "search"), { recursive: true });
+    writeFileSync(
+      join(tmp, "Brain", "search", "embedding-providers.json"),
+      JSON.stringify([
+        {
+          name: "openrouter",
+          baseUrl: "https://openrouter.invalid/v1",
+          defaultModel: "acme/embed-1",
+          envKey: profileEnv,
+        },
+      ]),
+    );
+    writeConfig("search_semantic_enabled: false\n");
+    const verdict = await probeProviderConsent(probeOpts({ [profileEnv]: PRIVATE_BODY }));
+    expect(verdict.status).toBe("skipped");
+    expect(verdict.detail).toContain(profileEnv);
+    expect(verdict.detail).not.toContain(PRIVATE_BODY);
+    // A profile name whose variable is absent lists nothing.
+    const without = await probeProviderConsent(probeOpts());
+    expect(without.detail).not.toContain(profileEnv);
+  });
+
+  test("the rerank environment is part of the census", async () => {
+    // The rerank resolver spells its settings with their own prefix, and
+    // its credential lives in the variable `search_rerank_env_key`
+    // NAMES - both were invisible to a probe that read the embedding
+    // prefix alone.
+    const rerankCredentialEnv = "MY_RERANK_KEY";
+    writeConfig(`search_semantic_enabled: false\nsearch_rerank_env_key: ${rerankCredentialEnv}\n`);
+    const verdict = await probeProviderConsent(
+      probeOpts({
+        OPEN_SECOND_BRAIN_SEARCH_RERANK_MODEL: "acme/rerank-1",
+        [rerankCredentialEnv]: PRIVATE_BODY,
+      }),
+    );
+    expect(verdict.status).toBe("skipped");
+    expect(verdict.detail).toContain("OPEN_SECOND_BRAIN_SEARCH_RERANK_MODEL");
+    expect(verdict.detail).toContain(rerankCredentialEnv);
+    expect(verdict.detail).not.toContain(PRIVATE_BODY);
+  });
+
+  test("a record that cannot be read is unknown, not a skipped decision", async () => {
+    // A DIRECTORY in the config's place: the resolver fails that arm
+    // closed to declined, but the probe could not measure whether a
+    // decision exists, which is the `unknown` vocabulary - the CLI's
+    // own "could not measure" - and never a clean skip.
+    mkdirSync(configPath, { recursive: true });
+    const verdict = await probeProviderConsent(probeOpts());
+    expect(verdict.status).toBe("unknown");
+    expect(verdict.detail).toContain("could not be read");
+    // The counts follow the verdict: a broken machine configuration is
+    // 0 failed but also 0 skipped-for-this-probe and 1 unknown.
+    const report = await runReadinessProbes(probeOpts());
+    expect(report.unknown).toBeGreaterThan(0);
+    const consent = report.probes.find((p) => p.name === READINESS_PROBE.providerConsent);
+    expect(consent?.status).toBe("unknown");
   });
 
   test("the value of a present environment variable never reaches the JSON output", async () => {

@@ -1,16 +1,19 @@
 /**
  * F2 chunk skip-and-hold (Lane B, task B1): the embedding phase holds
- * chunks whose token estimate PROVABLY exceeds the model's effective
+ * chunks whose token count PROVABLY exceeds the model's effective
  * declared input window.
  *
- * "Provably" is the whole unit. The estimator is two-sided (floor
- * `ceil(codePoints/4)`, ceiling charging every non-ASCII code point a
- * full token), and only the floor clearing the window is a fact - the
- * undecided band between the two bounds stays embedded exactly as before
- * this feature existed, because holding there would act on a guess. A
+ * "Provably" is the whole unit. The hold acts on the conservative bound
+ * (`tokenHoldFloor`: a code point charged at no more than a twelfth of a
+ * token), because the chars-over-four average is an average, not a bound
+ * - real tokenizers absorb 4.5-9 code points per token on prose, tables
+ * and code, so the average read whole English chunks that fit the window
+ * as over it and held them from embedding for nothing. Everything between
+ * that bound and the average estimate is the undecided band: reported by
+ * the window census, still embedded, exactly as before this feature. A
  * model with no declared window (outside the curated preset table and no
- * operator `embedding_input_window_tokens`) proves nothing, so nothing
- * is held for it; declaring the window is what arms the hold.
+ * operator `embedding_input_window_tokens`) proves nothing, so nothing is
+ * held for it; declaring the window is what arms the hold.
  *
  * The hold is a FILTER before batching, so whatever the provider does
  * receive still answers 1:1 (the batch invariant in `runEmbeddingPhase`
@@ -31,7 +34,11 @@ import {
   RECOMMENDED_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/presets.ts";
 import { chunkHoldExclusion } from "../../../src/core/search/embedding-spend.ts";
-import { signatureIdentityKnown } from "../../../src/core/search/embeddings/signature.ts";
+import {
+  signatureIdentityKnown,
+  textExtent,
+  tokenHoldFloor,
+} from "../../../src/core/search/embeddings/signature.ts";
 import {
   charLengthOverTokenBudget,
   estimateTokens,
@@ -55,14 +62,43 @@ const UNCURATED_MODEL = "acme/custom-embed-9000";
 /** Comfortably under any window. */
 const FITTING = "small chunk of ordinary prose";
 
-/** The LOW estimate already exceeds the window: provably over. */
-const OVER_CONTENT = "b".repeat(charLengthOverTokenBudget(WINDOW) + 1);
-const OVER_FLOOR = Math.ceil(OVER_CONTENT.length / 4);
+/**
+ * An ordinary English sentence, assembled into fixtures of an exact
+ * code-point size. Prose, not a padded run: the hold's proof reads code
+ * points, and a fixture shaped like the text the phase actually sees is
+ * what keeps these tests honest about which chunks fit a real tokenizer.
+ */
+const PROSE_SENTENCE =
+  "The survey team recorded every measurement in the ledger before the storm reached the harbour wall. ";
+
+function proseOfCodePoints(codePoints: number): string {
+  return PROSE_SENTENCE.repeat(Math.ceil(codePoints / PROSE_SENTENCE.length)).slice(0, codePoints);
+}
 
 /**
- * The undecided band: floor `ceil(2048/4)` equals the window (fits), the
- * ceiling charges each Cyrillic code point a full token (far over). The
- * census reports this band; the hold must never act on it.
+ * The held fixture: even at the conservative bound - one token per
+ * twelve code points, far below what this prose costs a real tokenizer -
+ * it cannot fit the window. A run of dense ASCII would prove the same
+ * thing about the estimator and nothing about prose; this proves the
+ * hold on text shaped like the corpus.
+ */
+const OVER_CONTENT = proseOfCodePoints(WINDOW * 12 + 1);
+const HELD_TOKENS = tokenHoldFloor(textExtent(OVER_CONTENT));
+
+/**
+ * The undecided band, Latin half: ordinary English prose whose average
+ * estimate (`ceil(codePoints / 4)`) reads over the window while the
+ * conservative bound clears it comfortably. The estimator this feature
+ * shipped with HELD this chunk; real tokenizers cost it far fewer tokens
+ * than the average claims, and it is embedded.
+ */
+const BAND_CONTENT = proseOfCodePoints(WINDOW * 6);
+
+/**
+ * The undecided band, non-Latin half: the conservative bound fits (the
+ * hold never acts on it) while the ceiling charges each Cyrillic code
+ * point a full token (far over). The census reports this band; the hold
+ * must never act on it.
  */
 const UNDECIDED_CONTENT = "е".repeat(charLengthOverTokenBudget(WINDOW));
 
@@ -181,7 +217,7 @@ const EMPTY_TALLY = (): EmbeddingPhaseTally => ({ embeddingsComputed: 0, embeddi
 
 test("a provably-over chunk is never sent while fitting and undecided-band chunks are", async () => {
   const sent = await captureProvider();
-  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, UNDECIDED_CONTENT]);
+  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, BAND_CONTENT, UNDECIDED_CONTENT]);
   const tally = EMPTY_TALLY();
   try {
     await runEmbeddingPhase(store, cfg(), tally, {});
@@ -189,18 +225,19 @@ test("a provably-over chunk is never sent while fitting and undecided-band chunk
     await store.close();
   }
   expect(sent).toContain(FITTING);
+  expect(sent).toContain(BAND_CONTENT);
   expect(sent).toContain(UNDECIDED_CONTENT);
   expect(sent).not.toContain(OVER_CONTENT);
   // One vector per input survived the filter: the phase would have thrown
-  // on a count mismatch, and the two texts it did send are stored.
-  expect(tally.embeddingsComputed).toBe(2);
+  // on a count mismatch, and the three texts it did send are stored.
+  expect(tally.embeddingsComputed).toBe(3);
   const heldId = chunkIdByLength(OVER_CONTENT.length);
   expect(embeddedChunkIds()).not.toContain(heldId);
 });
 
-test("the held content reaches no vector store: embeddings rows exactly match what was sent", async () => {
+test("held prose reaches no vector store: embeddings rows exactly match what was sent", async () => {
   await captureProvider();
-  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, UNDECIDED_CONTENT]);
+  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, BAND_CONTENT, UNDECIDED_CONTENT]);
   try {
     await runEmbeddingPhase(store, cfg(), EMPTY_TALLY(), {});
   } finally {
@@ -208,15 +245,41 @@ test("the held content reaches no vector store: embeddings rows exactly match wh
   }
   const ids = embeddedChunkIds().toSorted();
   expect(ids).toEqual(
-    [chunkIdByLength(FITTING.length), chunkIdByLength(UNDECIDED_CONTENT.length)].toSorted(),
+    [
+      chunkIdByLength(FITTING.length),
+      chunkIdByLength(BAND_CONTENT.length),
+      chunkIdByLength(UNDECIDED_CONTENT.length),
+    ].toSorted(),
   );
+});
+
+test("English prose the average estimate would hold fits the window and is embedded", async () => {
+  // The defect that moved the hold to a conservative bound: this chunk's
+  // chars-over-four estimate reads over the window - the old trigger -
+  // while the conservative bound clears it, and real tokenizers cost
+  // prose far fewer tokens than the average claims. Holding it was
+  // semantic recall lost on an arithmetic guess.
+  expect(estimateTokens([BAND_CONTENT])).toBeGreaterThan(WINDOW);
+  expect(tokenHoldFloor(textExtent(BAND_CONTENT))).toBeLessThanOrEqual(WINDOW);
+
+  const sent = await captureProvider();
+  const store = await openSeeded(cfg(), [BAND_CONTENT]);
+  const tally = EMPTY_TALLY();
+  try {
+    await runEmbeddingPhase(store, cfg(), tally, {});
+  } finally {
+    await store.close();
+  }
+  expect(sent).toContain(BAND_CONTENT);
+  expect(tally.embeddingsHeld).toBeUndefined();
+  expect(tally.embeddingsComputed).toBe(1);
 });
 
 // ── the tally ────────────────────────────────────────────────────────────────
 
-test("the phase records each held chunk with its floor estimate, the window and the reason", async () => {
+test("the phase records each held chunk with its bound, the window and the reason", async () => {
   await captureProvider();
-  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, UNDECIDED_CONTENT]);
+  const store = await openSeeded(cfg(), [FITTING, OVER_CONTENT, BAND_CONTENT]);
   const tally = EMPTY_TALLY();
   try {
     await runEmbeddingPhase(store, cfg(), tally, {});
@@ -227,7 +290,7 @@ test("the phase records each held chunk with its floor estimate, the window and 
   expect(tally.heldChunks).toEqual([
     {
       chunkId: chunkIdByLength(OVER_CONTENT.length),
-      estimatedTokens: OVER_FLOOR,
+      estimatedTokens: HELD_TOKENS,
       windowTokens: WINDOW,
       reason: CHUNK_HOLD_REASON.overDeclaredWindow,
     },

@@ -53,10 +53,12 @@
  */
 
 import { resolveSearchConfig } from "../../search/index.ts";
+import { chunkHoldExclusion } from "../../search/embedding-spend.ts";
 import { readPendingVectorCensus } from "../../search/indexer.ts";
 import { staleBaseline } from "../../search/store/counts.ts";
 import { LAST_INDEXED_AT_STATE_KEY, withReadonlyIndex } from "../../search/store/state.ts";
 import { staleEmbeddings } from "../../search/store/vectors.ts";
+import type { ChunkHoldExclusion } from "../../search/store/chunks.ts";
 import type { PendingVectorCensus, ResolvedEmbeddingConfig } from "../../search/types.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
@@ -98,15 +100,19 @@ export type EmbeddingsHealthSemantic = Pick<
 /**
  * The seam the check reads its facts through.
  *
- * Receives the resolved index path and the embedding configuration so
- * the default probe below can resolve the pair stored vectors are
- * compared against (`staleBaseline`: an unset dimension falls back to
- * the stored one, and with none the comparison is by model alone); a
- * test injects any snapshot it wants without building an index.
+ * Receives the resolved index path, the embedding configuration, and the
+ * configuration's chunk-hold exclusion key (`null` when this config can
+ * hold nothing), so the default probe below can resolve the pair stored
+ * vectors are compared against (`staleBaseline`: an unset dimension falls
+ * back to the stored one, and with none the comparison is by model alone)
+ * and keep held chunks out of the pending count - the backfill they would
+ * otherwise recommend finds nothing to do and never clears. A test
+ * injects any snapshot it wants without building an index.
  */
 export type EmbeddingsHealthProbe = (
   dbPath: string,
   semantic: EmbeddingsHealthSemantic,
+  hold: ChunkHoldExclusion | null,
 ) => EmbeddingsHealthProbeSnapshot;
 
 /**
@@ -115,15 +121,19 @@ export type EmbeddingsHealthProbe = (
  *
  * Two peeks over one file, not one, because the census's unrecorded
  * contract is folded in `readPendingVectorCensus` and re-deriving it
- * here is exactly the drift the reuse exists to prevent. A file that
- * vanishes between the two peeks is a half read, and the check answers
- * that with uncertainty rather than a health claim.
+ * here is exactly the drift the reuse exists to prevent. The hold
+ * exclusion threads into that census, so a chunk held out of embedding
+ * under the active key stops reading as backlog here just as it stops
+ * being priced everywhere else. A file that vanishes between the two
+ * peeks is a half read, and the check answers that with uncertainty
+ * rather than a health claim.
  */
 function indexProbe(
   dbPath: string,
   semantic: EmbeddingsHealthSemantic,
+  hold: ChunkHoldExclusion | null,
 ): EmbeddingsHealthProbeSnapshot {
-  const census = readPendingVectorCensus(dbPath);
+  const census = readPendingVectorCensus(dbPath, hold ?? undefined);
   if (census.verdict !== "measured") {
     return { census, staleEmbeddings: null, lastIndexedAt: null };
   }
@@ -242,7 +252,7 @@ export function makeEmbeddingsHealthCheck(probe: EmbeddingsHealthProbe = indexPr
       }
       let snap;
       try {
-        snap = probe(dbPath, search.semantic);
+        snap = probe(dbPath, search.semantic, chunkHoldExclusion(search));
       } catch (err) {
         pushUncertain(out.uncertain, {
           code: EMBEDDINGS_HEALTH_UNMEASURED_CODE,

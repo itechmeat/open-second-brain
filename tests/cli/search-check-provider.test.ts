@@ -94,8 +94,13 @@ async function writeConfiguredProvider(extra: ReadonlyArray<string> = []): Promi
   );
 }
 
-/** A config with no embedding provider at all. */
+/** A config with no embedding provider at all, and no decision about one. */
 async function writeUnconfiguredProvider(): Promise<void> {
+  await Bun.write(configPath, [`vault: "${vault}"`, ""].join("\n"));
+}
+
+/** A config that records a decline of the embedding provider. */
+async function writeDeclinedProvider(): Promise<void> {
   await Bun.write(
     configPath,
     [`vault: "${vault}"`, "search_semantic_enabled: false", ""].join("\n"),
@@ -167,6 +172,27 @@ test("a provider that is not configured is unchanged, exits 0, and is never aske
   expect(run.returncode).toBe(SEARCH_CHECK_EXIT.ok);
   expect(run.payload["fatal"]).toEqual([]);
   // Absent is not broken - and absent costs no network call.
+  expect(server.callCount()).toBe(0);
+});
+
+test("a declined vault is skipped with the decline named, exits 0, and is never asked", async () => {
+  // A decline is a decision, not an absence: reporting it as
+  // not-configured merged the two and read a decided configuration as
+  // one that was never finished. The verdict is the skipped state - a
+  // decision is not a fault, so the exit stays 0 - and the reason is the
+  // consent's own sentence naming the keys that would re-enable it.
+  await writeDeclinedProvider();
+
+  const run = await runCheck("--json");
+
+  expect(run.payload["provider_probe"]).toBe(PROVIDER_PROBE.skipped);
+  const reason = run.payload["provider_reason"];
+  expect(typeof reason).toBe("string");
+  expect(reason).toContain("provider consent declined");
+  expect(reason).toContain("search_semantic_enabled=true");
+  expect(run.returncode).toBe(SEARCH_CHECK_EXIT.ok);
+  expect(run.payload["fatal"]).toEqual([]);
+  // The decline is honoured before any network call.
   expect(server.callCount()).toBe(0);
 });
 

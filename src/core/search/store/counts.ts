@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { SearchError } from "../search-error.ts";
 import { EVENT_TIME_MAX_COLUMN, EVENT_TIME_MIN_COLUMN } from "../schema.ts";
 import { countChunks, countChunksWithoutEmbeddings } from "./chunks.ts";
+import type { ChunkHoldExclusion } from "./chunks.ts";
 import { countDocuments } from "./documents.ts";
 import {
   EMBEDDING_DIMENSION_STATE_KEY,
@@ -19,6 +20,7 @@ import {
 import { countEmbeddings, staleEmbeddings } from "./vectors.ts";
 import {
   charLengthOverTokenBudget,
+  MAX_CODE_POINTS_PER_TOKEN,
   NON_ASCII_CEILING_COEFFICIENT,
   textExtent,
   utf8ByteFloorUnderTokenBudget,
@@ -184,16 +186,24 @@ export function eventTimeWindowCensus(
 
 /** Chunks that carry no vector, against the chunks there are. */
 export interface PendingVectorTally {
-  /** Chunks with no row in `embeddings`. */
+  /** Chunks with no row in `embeddings`, held chunks excluded when asked. */
   readonly pending: number;
   /** Chunks in the index at all, so the pending count has a denominator. */
   readonly chunks: number;
 }
 
-/** Both counts from one connection, so they describe one instant. */
-export function pendingVectorTally(db: Database): PendingVectorTally {
+/**
+ * Both counts from one connection, so they describe one instant.
+ *
+ * `hold` is the config's chunk-hold exclusion key: a chunk held out of
+ * embedding under that key is not work the index owes a vector for, so a
+ * tally that counted it as pending would recommend a backfill that finds
+ * nothing to do and never clears. Callers that have no configuration in
+ * hand (the key-free diagnostic reads) omit it and see the raw count.
+ */
+export function pendingVectorTally(db: Database, hold?: ChunkHoldExclusion): PendingVectorTally {
   return Object.freeze({
-    pending: countChunksWithoutEmbeddings(db),
+    pending: countChunksWithoutEmbeddings(db, undefined, hold),
     chunks: countChunks(db),
   });
 }
@@ -202,22 +212,26 @@ export function pendingVectorTally(db: Database): PendingVectorTally {
  * {@link pendingVectorTally} taken WITHOUT opening a `Store`, for
  * `indexCheck` - which deliberately probes an in-memory database and
  * never touches the real index, so anything it reports about stored
- * state has to be read explicitly.
+ * state has to be read explicitly. `hold` threads the config's chunk-hold
+ * exclusion through, exactly as {@link pendingVectorTally} takes it.
  *
  * The peek keeps its three outcomes rather than collapsing to a number:
  * "no index here" and "an index that will not open" are not a pending
  * count of zero, and zero is exactly what a caller would read as a
  * fully-embedded vault.
  */
-export function peekPendingVectorsSync(dbPath: string): IndexPeek<PendingVectorTally> {
-  return peekReadonlyIndex(dbPath, (_read, db) => pendingVectorTally(db));
+export function peekPendingVectorsSync(
+  dbPath: string,
+  hold?: ChunkHoldExclusion,
+): IndexPeek<PendingVectorTally> {
+  return peekReadonlyIndex(dbPath, (_read, db) => pendingVectorTally(db, hold));
 }
 
 /** Split of the chunk table by what the census can decide about it. */
 export interface ChunkWindowTally {
-  /** Chunks whose LOW estimate already exceeds the window. */
+  /** Chunks over the window even at the conservative hold bound. */
   readonly overWindow: number;
-  /** Chunks the low estimate clears and the high estimate does not. */
+  /** Chunks the hold bound does not prove over, whose estimates still read over. */
   readonly undecided: number;
 }
 
@@ -243,34 +257,38 @@ export const NO_REQUEST_PREFIX = "";
  * different unit from a model's token window, and comparing the two as
  * though they matched is the arithmetic this census exists to stop.
  *
- * ## Why two aggregates and not one
+ * ## Why two aggregates, and where the boundary sits
  *
- * Characters-over-four is a Latin-script heuristic. Two populations
- * break it in the same direction - the estimate reads LOW, so a single
- * count reports a clean census over chunks the provider truncates:
+ * `overWindow` is the HOLD population, so it uses the hold's own bound:
+ * code points charged at no more than one token per
+ * {@link MAX_CODE_POINTS_PER_TOKEN}. Only that conservative bound proves a
+ * chunk over the window - the chars-over-four average is not a bound, and
+ * the phase that embeds must never hold on it.
  *
+ * The undecided band is everything the proof cannot settle: chunks whose
+ * conservative bound still fits the window but whose HIGH estimate - the
+ * average rate for Latin text, a near-character-level charge for Han and
+ * supplementary-plane text - reads over it. Three populations land there:
+ *
+ *   - Latin chunks between the average estimate and the sound bound. The
+ *     average reads HIGH on real prose (real tokenizers absorb more than
+ *     four code points per token), so acting on it would hold work on a
+ *     guess - exactly the defect that moved the hold to the conservative
+ *     bound;
  *   - Han text, where a BERT-family tokenizer is roughly
  *     character-level. `BAAI/bge-small-zh-v1.5` declares a 512-token
  *     window, and a Chinese chunk that estimates at 512 costs about four
  *     times that;
  *   - supplementary-plane text, where SQLite's `length()` counts one per
  *     character and `String.length` counts two, so the database reads
- *     half the estimated size and a chunk estimated at twice the window
- *     lands under a threshold expressed in code points.
+ *     half the estimated size.
  *
- * Neither is fixable by a tighter constant, and neither is observable in
- * SQL as a script test - bun:sqlite exposes no user-defined-function
- * hook, and materialising every chunk body costs more than the answer is
- * worth. What IS available in SQL is `octet_length()`, and UTF-8 makes
- * the byte count a structural script signal: every non-ASCII code point
- * costs at least one extra byte, so `octet_length - length` bounds the
- * non-ASCII code points exactly. Charging those at
+ * None of the three is fixable by a tighter constant on its own, and all
+ * are observable in SQL through the same two measurements: `length()`
+ * (code points) and `octet_length()` (UTF-8 bytes), whose difference
+ * bounds the non-ASCII code points exactly. Charging those at
  * `MAX_TOKENS_PER_NON_ASCII_CODE_POINT` gives the high estimate, and the
- * gap between the two is reported as undecided rather than passed.
- *
- * For pure ASCII the two estimates coincide - `octet_length` equals
- * `length`, the band is empty - so an all-Latin index is counted exactly
- * as it was before the high estimate existed.
+ * gap between the two arms is reported as undecided rather than passed.
  *
  * ## Cost
  *
@@ -294,6 +312,7 @@ export function chunkWindowTally(
       { over_window: number; undecided: number },
       {
         $budget: number;
+        $holdBudget: number;
         $byteFloor: number;
         $coefficient: number;
         $prefixCodePoints: number;
@@ -310,15 +329,16 @@ export function chunkWindowTally(
          WHERE octet_length(content) + $prefixUtf8Bytes > $byteFloor
        )
        SELECT
-         COUNT(*) FILTER (WHERE code_points > $budget) AS over_window,
+         COUNT(*) FILTER (WHERE code_points > $holdBudget) AS over_window,
          COUNT(*) FILTER (
-           WHERE code_points <= $budget
+           WHERE code_points <= $holdBudget
              AND code_points + $coefficient * min(code_points, utf8_bytes - code_points) > $budget
          ) AS undecided
        FROM extents`,
     )
     .get({
       $budget: charLengthOverTokenBudget(windowTokens),
+      $holdBudget: windowTokens * MAX_CODE_POINTS_PER_TOKEN,
       $byteFloor: utf8ByteFloorUnderTokenBudget(windowTokens),
       $coefficient: NON_ASCII_CEILING_COEFFICIENT,
       $prefixCodePoints: prefix.codePoints,

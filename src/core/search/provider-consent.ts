@@ -41,7 +41,12 @@
  * default `search_semantic_enabled` is `false`, so "unset" and "off" are
  * the same configuration; a record that cannot be read must not be allowed
  * to look like a record that says nothing, because only one of those two
- * is a decision the operator made.
+ * is a decision the operator made. The fail-closed decline is for SPEND
+ * surfaces - nothing may be sent on a record nobody read - while
+ * {@link ProviderConsent.unreadableReason} lets a diagnostic report the
+ * same arm as unmeasured rather than as the operator's decision, and the
+ * refusal names the file to repair instead of keys to flip, because a
+ * record nobody has read has named no key to clear.
  *
  * ## The two witnesses of a decline
  *
@@ -70,7 +75,7 @@
  * place - the frozen object and the derived union - are what ship.
  */
 
-import { discoverConfig } from "../config.ts";
+import { discoverConfig, defaultConfigPath, ConfigReadError } from "../config.ts";
 import { envOrConfig, parseBool } from "../validate.ts";
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
 import type { ResolvedEmbeddingConfig } from "./types.ts";
@@ -165,20 +170,55 @@ export interface ProviderConsent {
   readonly declineKeys: ReadonlyArray<string>;
   /** The keys that would re-enable a declined provider. */
   readonly reenableKeys: ReadonlyArray<string>;
+  /**
+   * Why the record could not be read, on the arm where it could not.
+   * The resolver still fails closed to {@link PROVIDER_CONSENT_STATE.declined}
+   * - an unreadable record is not consent - but a diagnostic that renders
+   * that arm as a DECISION would pass a broken machine configuration as
+   * one the operator chose. Null on every arm whose record was read.
+   */
+  readonly unreadableReason: string | null;
   /** The operator-facing sentence. Never empty. */
   readonly detail: string;
 }
 
 /**
- * The sentence a refusal carries. Named in the message as a KEY, so an
+ * The value that clears each decline key, keyed the way
+ * {@link PROVIDER_CONSENT_KEY} is. The two keys decline INDEPENDENTLY -
+ * clearing one leaves the other's decline in force - which is why the
+ * re-enable sentence is built from the keys this record actually used
+ * rather than naming both spellings and letting an operator clear only
+ * one of them.
+ */
+const DECLINE_CLEARING_VALUE: Readonly<Record<string, string>> = Object.freeze({
+  [PROVIDER_CONSENT_KEY.semantic]: "true",
+  [PROVIDER_CONSENT_KEY.provider]: "<provider>",
+});
+
+/**
+ * The sentence a refusal carries. Built from `declineKeys`, naming every
+ * key that recorded THIS decline and the value that clears it, so the
+ * advice is one the operator can follow to the end: following it must
+ * never leave them refused by the other key. Named as a KEY, so an
  * operator reading it can search the configuration file for the spelling
  * rather than for a phrase.
  */
-function reenableSentence(): string {
-  return (
-    `re-enable it with ${PROVIDER_CONSENT_KEY.semantic}=true ` +
-    `or ${PROVIDER_CONSENT_KEY.provider}=<provider>`
-  );
+function reenableSentence(declineKeys: ReadonlyArray<string>): string {
+  const clears = declineKeys.flatMap((key) => {
+    const value = DECLINE_CLEARING_VALUE[key];
+    return value === undefined ? [] : [`${key}=${value}`];
+  });
+  return `re-enable it with ${clears.join(" or ")}`;
+}
+
+/**
+ * The advice an UNREADABLE record carries instead of a re-enable
+ * sentence: an unreadable record named no key, so there is no key to
+ * clear. The repair is the record itself, and the sentence names the
+ * file it lives in.
+ */
+function repairRecordSentence(configPath: string): string {
+  return `repair the configuration file at ${configPath}`;
 }
 
 /**
@@ -194,7 +234,7 @@ function declineSpellingsSentence(): string {
   );
 }
 
-/** A declined consent, with the reason it was read that way. */
+/** A declined consent whose record was read, with the keys that did it. */
 function declined(
   capability: SemanticCapability | null,
   declineKeys: ReadonlyArray<string>,
@@ -207,10 +247,38 @@ function declined(
     capability,
     declineKeys: Object.freeze([...declineKeys]),
     reenableKeys: PROVIDER_CONSENT_REENABLE_KEYS,
+    unreadableReason: null,
     detail:
       `provider consent declined: no embedding provider will be contacted. ` +
       `${reason}${declineSpellingsSentence()}${recorded}. ` +
-      `${reenableSentence()}.`,
+      `${reenableSentence(declineKeys)}.`,
+  });
+}
+
+/**
+ * A declined consent whose record could not be READ. Same fail-closed
+ * state as {@link declined}, but no key is named - the record named none
+ * - and the advice is a repair of the file, not a key to flip: a
+ * re-enable sentence would be advice about a record nobody has read.
+ * `unreadableReason` is what lets a diagnostic report this arm as
+ * unmeasured rather than as an operator's decision.
+ */
+function declinedUnreadable(
+  capability: SemanticCapability | null,
+  unreadableReason: string,
+  configPath: string,
+): ProviderConsent {
+  return Object.freeze({
+    state: PROVIDER_CONSENT_STATE.declined,
+    capability,
+    declineKeys: Object.freeze([]),
+    reenableKeys: PROVIDER_CONSENT_REENABLE_KEYS,
+    unreadableReason,
+    detail:
+      `provider consent declined: no embedding provider will be contacted. ` +
+      `The provider-consent record could not be read (${unreadableReason}), and an ` +
+      `unreadable record is not consent. ${declineSpellingsSentence()}. ` +
+      `${repairRecordSentence(configPath)}.`,
   });
 }
 
@@ -230,16 +298,20 @@ export function resolveProviderConsent(request: ProviderConsentRequest): Provide
 
   // The record. An unreadable one is a decline, never an absence: the
   // operator's settings exist and are not the ones in force, which is
-  // exactly what the configuration reader refuses to paper over.
+  // exactly what the configuration reader refuses to paper over. The
+  // reason rides on the verdict, so a diagnostic can report this arm as
+  // unmeasured rather than as a decision the operator made.
   let config: Readonly<Record<string, string>>;
   try {
     config = request.configPath === null ? {} : discoverConfig(request.configPath).data;
-  } catch {
-    return declined(
-      capability,
-      [],
-      "The provider-consent record could not be read, and an unreadable record is not consent. ",
-    );
+  } catch (e) {
+    const reason =
+      e instanceof ConfigReadError
+        ? "the config file exists but could not be read"
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    return declinedUnreadable(capability, reason, request.configPath ?? defaultConfigPath());
   }
 
   const declineKeys: string[] = [];
@@ -291,6 +363,7 @@ export function resolveProviderConsent(request: ProviderConsentRequest): Provide
     capability,
     declineKeys: Object.freeze([]),
     reenableKeys: PROVIDER_CONSENT_REENABLE_KEYS,
+    unreadableReason: null,
     detail: "no provider-consent decision is recorded: the embedding provider was never declined.",
   });
 }
