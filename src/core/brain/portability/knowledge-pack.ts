@@ -47,7 +47,7 @@ import { EXCLUDED_DIRS, parseFrontmatterText } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { pageVisibility } from "../../graph/visibility.ts";
 import { hasPrivacyDenyMarker } from "../../graph/privacy-markers.ts";
-import { readContentClass } from "../provenance/content-class.ts";
+import { omittedPageReferenceMatcher, readContentClass } from "../provenance/content-class.ts";
 import {
   PRIVATE_REGION_PLACEHOLDER,
   REDACTION_PLACEHOLDER,
@@ -240,6 +240,11 @@ export const PRIVATE_REGION_WARNING = "privacy.private_region_stripped";
 export const REDACTED_CONTENT_WARNING = "privacy.redacted_content";
 /** The text carries secret-shaped content the export scan would redact. */
 export const SECRET_SHAPED_WARNING = "privacy.secret_shaped_content";
+/**
+ * The entry's structured citations named a blocked page and were dropped
+ * from the manifest metadata; the entry's own prose is untouched.
+ */
+export const BLOCKED_PAGE_CITATION_WARNING = "scope.blocked_page_citation_dropped";
 
 export interface KnowledgePackSelection {
   readonly selection: ReadonlyArray<string>;
@@ -250,6 +255,11 @@ export interface KnowledgePackSelection {
   readonly preferences: ReadonlyArray<ExportedPreferenceRow>;
   /** Entries a selector matched but the privacy rules kept out. Never written. */
   readonly blocked: ReadonlyArray<KnowledgePackBlocked>;
+  /**
+   * One carried entry's findings, as closed codes: the privacy scan's
+   * codes, and {@link BLOCKED_PAGE_CITATION_WARNING} once per entry whose
+   * manifest citations named a blocked page and were dropped.
+   */
   readonly warnings: ReadonlyArray<KnowledgePackWarning>;
 }
 
@@ -278,10 +288,33 @@ function exportWarnings(text: string, id: string): string[] {
  * `warnings`. Carried preference rows drop the source vault's evidence
  * links and rendered body; carried pages drop this vault's machinery
  * frontmatter.
+ *
+ * A carried page's structured citations are not prose: a citation naming
+ * a BLOCKED page is the blocked page's name leaving through the carried
+ * page's manifest metadata, so such citations are dropped - the same
+ * shared matcher the okf, graph and bank exports apply to their own
+ * structured references - and the drop is named per carried entry in
+ * `warnings`. The page body that carries the link stays exactly as
+ * written, and the manifest's `sources` need no second pass: they are
+ * re-translated from the citations here, so a dropped citation resolves
+ * to nothing there either.
  */
+export interface SelectKnowledgePackOptions {
+  /**
+   * The pack's `--include-prompt-derived` override: a page the selection
+   * would block ONLY for the reserved `prompt-derived` class is carried.
+   * The operator-set scopes (`visibility`, `owner`) and the unreviewed
+   * lane are blocks in their own right, not class decisions, and stay
+   * blocks under the override - so a citation naming such a page is
+   * dropped under both paths.
+   */
+  readonly includePromptDerived?: boolean;
+}
+
 export function selectKnowledgePack(
   vault: string,
   selectors: ReadonlyArray<string>,
+  opts: SelectKnowledgePackOptions = {},
 ): KnowledgePackSelection {
   const selection = parseKnowledgePackSelectors(selectors);
   if (selection.length === 0) {
@@ -318,7 +351,11 @@ export function selectKnowledgePack(
     if (hits.length === 0) continue;
     for (const sel of hits) matched.add(sel.raw);
     const reason = pageBlockReason(page);
-    if (reason !== null) {
+    // The override carries back ONLY the class block: the check itself
+    // stays in `pageBlockReason`, and the decision to keep a page the
+    // block scan marked `prompt-derived` is made here, the same way the
+    // guard's split turns into the identity when the policy includes.
+    if (reason !== null && !(reason === "prompt-derived" && opts.includePromptDerived === true)) {
       blocked.push({ kind: "page", id: page.path, reason });
       continue;
     }
@@ -337,7 +374,28 @@ export function selectKnowledgePack(
     );
   }
 
-  const okf = buildOkfSubsetBundle(vault, pages);
+  // The block scan is complete, so the blocked page paths are the omitted
+  // list the shared matcher judges citation targets against. A target
+  // that names a blocked page leaves the carried page's citations - the
+  // manifest is where the pack names its references - and each carried
+  // page that lost one is named in `warnings`.
+  const namesBlocked = omittedPageReferenceMatcher(
+    blocked.filter((entry) => entry.kind === "page").map((entry) => entry.id),
+  );
+  const packed: OkfPage[] = [];
+  for (const page of pages) {
+    const citations = page.citations.filter((target) => !namesBlocked(target));
+    if (citations.length !== page.citations.length) {
+      warnings.push({
+        kind: "page",
+        id: page.path,
+        reasons: [BLOCKED_PAGE_CITATION_WARNING],
+      });
+    }
+    packed.push({ ...page, citations });
+  }
+
+  const okf = buildOkfSubsetBundle(vault, packed);
   return {
     selection,
     okfManifest: okf.manifest,

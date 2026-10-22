@@ -25,7 +25,10 @@ import {
   CONTENT_CLASS_FIELD,
   stampPromptDerivedLine,
 } from "../../src/core/brain/provenance/content-class.ts";
-import { selectKnowledgePack } from "../../src/core/brain/portability/knowledge-pack.ts";
+import {
+  BLOCKED_PAGE_CITATION_WARNING,
+  selectKnowledgePack,
+} from "../../src/core/brain/portability/knowledge-pack.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 
 let src: string;
@@ -98,6 +101,68 @@ describe("the knowledge-pack block list", () => {
     const selected = selectKnowledgePack(src, ["tag:ops"]);
     expect(selected.blocked).toEqual([
       { kind: "page", id: "Notes/scoped.md", reason: "visibility" },
+    ]);
+  });
+});
+
+describe("kept pages' citations to blocked pages", () => {
+  test("citations naming a blocked page leave the manifest, named; the prose is untouched", () => {
+    page(
+      "Notes/handbook.md",
+      ["tags: [ops]"],
+      "See [[agent-draft]] and [[scoped]] plus [[https://example.org/guide]].\n",
+    );
+    page(
+      "Notes/agent-draft.md",
+      ["tags: [ops]", `${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}`],
+      "Synthesised from a prompt.\n",
+    );
+    page("Notes/scoped.md", ["tags: [ops]", "visibility: private"], "Operator-scoped.\n");
+
+    const selected = selectKnowledgePack(src, ["tag:ops"]);
+    expect(selected.blocked).toEqual([
+      { kind: "page", id: "Notes/agent-draft.md", reason: "prompt-derived" },
+      { kind: "page", id: "Notes/scoped.md", reason: "visibility" },
+    ]);
+    // The carried page's manifest metadata names neither blocked page;
+    // the URL target never names a vault page and rides.
+    const handbook = selected.okfManifest.pages.find((p) => p.path === "Notes/handbook.md");
+    expect(handbook?.citations).toEqual(["https://example.org/guide"]);
+    expect(handbook?.sources).toEqual([{ resource: "https://example.org/guide" }]);
+    // The page body is not prose-edited: the links the operator wrote stay.
+    const packed = selected.pageFiles.find((f) => f.path.endsWith("handbook.md"))!;
+    expect(packed.contents).toContain(
+      "See [[agent-draft]] and [[scoped]] plus [[https://example.org/guide]].",
+    );
+    // The drops are named on the carried page, in the report the export
+    // already renders entry by entry.
+    expect(selected.warnings).toEqual([
+      { kind: "page", id: "Notes/handbook.md", reasons: [BLOCKED_PAGE_CITATION_WARNING] },
+    ]);
+  });
+
+  test("the override carries the prompt-derived page and its citation back", () => {
+    page("Notes/handbook.md", ["tags: [ops]"], "See [[agent-draft]] and [[scoped]].\n");
+    page(
+      "Notes/agent-draft.md",
+      ["tags: [ops]", `${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}`],
+      "Synthesised from a prompt.\n",
+    );
+    page("Notes/scoped.md", ["tags: [ops]", "visibility: private"], "Operator-scoped.\n");
+
+    const selected = selectKnowledgePack(src, ["tag:ops"], { includePromptDerived: true });
+    // Only the operator-set scope still blocks: the class block is the
+    // one the override carries back.
+    expect(selected.blocked).toEqual([
+      { kind: "page", id: "Notes/scoped.md", reason: "visibility" },
+    ]);
+    expect(selected.pageFiles.some((f) => f.path.endsWith("agent-draft.md"))).toBe(true);
+    const handbook = selected.okfManifest.pages.find((p) => p.path === "Notes/handbook.md");
+    expect(handbook?.citations).toEqual(["agent-draft"]);
+    // The visibility-scoped page stays blocked under the override, so its
+    // citation is still a drop and still named.
+    expect(selected.warnings).toEqual([
+      { kind: "page", id: "Notes/handbook.md", reasons: [BLOCKED_PAGE_CITATION_WARNING] },
     ]);
   });
 });
