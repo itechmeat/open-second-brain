@@ -208,6 +208,79 @@ describe("person-variant expansion", () => {
     expect(out.added).toEqual([]);
     expect(out.derived).toEqual([]);
   });
+
+  test("a form two people share only through derivation expands nothing and is reported", () => {
+    // The design's rule for derived ambiguity: reported, never guessed.
+    // Neither Robert joins the expansion - adding both people's declared
+    // names would be a guess that the query means all of them.
+    const smith = seedPerson("Robert Smith");
+    const jones = seedPerson("Robert Jones");
+    writeNicknames({ bob: ["Robert Smith", "Robert Jones"] });
+    const out = expandQueryEntities(tmp.vault, ["bob"]);
+    expect(out.expanded).toEqual(["bob"]);
+    expect(out.added).toEqual([]);
+    expect(out.derived).toEqual([]);
+    expect(out.sourceIds).toEqual([]);
+    expect(out.derivedAmbiguities).toEqual([{ form: "bob", ids: [smith, jones].toSorted() }]);
+  });
+
+  test("an initial form two people share is not a guess either", () => {
+    // "r smith" is derived by BOTH persons (initial-plus-surname), with
+    // no declared claimant anywhere: ambiguity, not expansion.
+    seedPerson("Robert Smith");
+    seedPerson("Richard Smith");
+    const out = expandQueryEntities(tmp.vault, ["r smith"]);
+    expect(out.added).toEqual([]);
+    expect(out.derived).toEqual([]);
+    expect(out.derivedAmbiguities.map((a) => a.form)).toEqual(["r smith"]);
+    expect(out.derivedAmbiguities[0]!.ids).toHaveLength(2);
+  });
+
+  test("a unique form expands beside a reported ambiguity", () => {
+    // Robert and Richard share "r smith" only through derivation - that
+    // form is reported and expands nothing - while "bob" is uniquely
+    // Robert Smith's: the unique form still expands Robert's declared
+    // name, and Richard (reachable only through the ambiguous form)
+    // contributes nothing.
+    const smith = seedPerson("Robert Smith");
+    seedPerson("Richard Smith");
+    writeNicknames({ bob: ["Robert Smith"] });
+    const out = expandQueryEntities(tmp.vault, ["bob", "r smith"]);
+    expect(out.derivedAmbiguities.map((a) => a.form)).toEqual(["r smith"]);
+    expect(out.derivedAmbiguities[0]!.ids).toHaveLength(2);
+    expect(out.added).toEqual(["robert smith"]);
+    expect(out.sourceIds).toEqual([smith]);
+  });
+
+  test("the dotted-initial spelling expands the plain-named person", () => {
+    const id = seedPerson("Ada Lovelace");
+    const out = expandQueryEntities(tmp.vault, ["A. Lovelace"]);
+    expect(out.added).toEqual(["ada lovelace"]);
+    // The query's dot survives in its own raw form, so the plain
+    // initial spelling is a derived addition here, not a query form.
+    expect(out.derived).toEqual(["a lovelace", "lovelace ada"]);
+    expect(out.sourceIds).toEqual([id]);
+  });
+
+  test("the comma spelling expands through the declared word order", () => {
+    const id = seedPerson("Ada Lovelace");
+    const out = expandQueryEntities(tmp.vault, ["Lovelace, Ada"]);
+    // The canonical word order is new query content (the raw query only
+    // carried the comma spelling), so it joins `added`; the derivation's
+    // structural forms follow in `derived`.
+    expect(out.added).toEqual(["ada lovelace"]);
+    expect(out.derived).toEqual(["a lovelace", "lovelace ada"]);
+    expect(out.sourceIds).toEqual([id]);
+  });
+
+  test("a two-letter operator nickname expands the person it stands for", () => {
+    seedPerson("Alan Lovelace");
+    writeNicknames({ al: ["Alan Lovelace"] });
+    const out = expandQueryEntities(tmp.vault, ["al"]);
+    expect(out.added).toEqual(["alan lovelace"]);
+    expect(out.derived).toEqual(["a lovelace", "lovelace alan"]);
+    expect(out.derivedAmbiguities).toEqual([]);
+  });
 });
 
 describe("alias-aware search boost", () => {

@@ -907,15 +907,21 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const aRelationalOnly = relationalOnlyIds.has(a.chunkId);
     const bRelationalOnly = relationalOnlyIds.has(b.chunkId);
     if (aRelationalOnly !== bRelationalOnly) return aRelationalOnly ? 1 : -1;
-    // Structural declared-before-derived entity precedence: candidates
-    // are partitioned into TIERS - declared, then neutral, then
-    // derived-only - and the tiers compare before scores, so a declared
-    // match always outranks a derived-only one regardless of entityMul.
-    // A tier, not a pairwise rule: declared-beats-derived-only answered
-    // pairwise while neutral candidates fell through to the score, which
-    // is not a strict weak ordering (declared A < derived B, derived B <
-    // neutral C, neutral C < declared A) and made the sort output depend
-    // on the input order.
+    if (b.score !== a.score) return b.score - a.score;
+    // Structural declared-before-derived entity precedence, as a TIE-BREAK
+    // on exact score ties only: candidates are partitioned into TIERS -
+    // declared, then neutral, then derived-only - and the tiers compare
+    // only after the composite scores have had their say, so the capped
+    // boost lanes stay the ranking mechanism and a single entity match can
+    // never float a low-scoring chunk above a higher-scoring one (nor sink
+    // a derived-only direct hit below the cut). The lane sizes (declared
+    // 0.02 per match capped at 0.04, derived 0.01 capped at 0.02) already
+    // rank declared above derived among otherwise-equal candidates; the
+    // tier orders what the lanes could not separate - ties left by a zeroed
+    // boost or a saturated cap. A tier, not a pairwise rule: within one
+    // score value the partition is a strict weak ordering, and across
+    // values the score decides, so the sort never depends on the input
+    // order.
     const aDeclared = (inputs.entityMatchByChunk?.get(a.chunkId) ?? 0) > 0;
     const bDeclared = (inputs.entityMatchByChunk?.get(b.chunkId) ?? 0) > 0;
     const aDerivedOnly =
@@ -926,7 +932,6 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       declared ? 0 : derivedOnly ? 2 : 1;
     const tierDelta = tierOf(aDeclared, aDerivedOnly) - tierOf(bDeclared, bDerivedOnly);
     if (tierDelta !== 0) return tierDelta;
-    if (b.score !== a.score) return b.score - a.score;
     if (temporalIntent !== null) {
       const aTemporal = a.breakdown?.temporal ?? 0;
       const bTemporal = b.breakdown?.temporal ?? 0;

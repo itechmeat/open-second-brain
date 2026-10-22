@@ -255,4 +255,50 @@ describe("doctor derived-variant collisions (write-honesty-egress-consent F3/C5)
       runDoctor(vault).warnings.filter((i) => i.code === "person-nicknames-unreadable"),
     ).toEqual([]);
   });
+
+  test("a two-letter nickname never reads as a skip: declared nicknames are exempt from the floor", () => {
+    person("Alan Lovelace");
+    atomicWriteFileSync(
+      join(vault, PERSON_NICKNAMES_ARTIFACT_REL),
+      JSON.stringify({ al: ["Alan Lovelace"] }),
+    );
+    expect(
+      runDoctor(vault).warnings.filter((i) => i.code === "person-nicknames-entry-skipped"),
+    ).toEqual([]);
+  });
+
+  test("an entry the parser folds away surfaces once, by position", () => {
+    person("Ada Lovelace");
+    atomicWriteFileSync(
+      join(vault, PERSON_NICKNAMES_ARTIFACT_REL),
+      JSON.stringify({
+        "   ": ["Ada Lovelace"],
+        "no names": ["   ", ""],
+        al: ["Alan Lovelace"],
+        loop: ["Loop"],
+      }),
+    );
+
+    const warnings = runDoctor(vault).warnings.filter(
+      (i) => i.code === "person-nicknames-entry-skipped",
+    );
+    // Entries #1 (empty nickname), #2 (no usable value) and #4 (the
+    // nickname equals the name it stands for) are each named by
+    // position; #3, the usable two-letter nickname, is not a skip.
+    expect(warnings).toHaveLength(3);
+    expect(warnings.map((w) => w.message).join(" ")).toContain("#1");
+    expect(warnings.map((w) => w.message).join(" ")).toContain("#2");
+    expect(warnings.map((w) => w.message).join(" ")).toContain("#4");
+    expect(warnings.every((w) => w.severity === "warning")).toBe(true);
+    for (const w of warnings) {
+      expect(w.path).toContain("person-nicknames.json");
+    }
+  });
+
+  test("a missing nickname file raises no skipped-entry warning", () => {
+    person("Ada Lovelace");
+    expect(
+      runDoctor(vault).warnings.filter((i) => i.code === "person-nicknames-entry-skipped"),
+    ).toEqual([]);
+  });
 });

@@ -76,13 +76,10 @@ describe("derived entity ranking lane (unit)", () => {
   });
 
   test("declared, neutral and derived-only candidates sort transitively", () => {
-    // A declared chunk with a tiny base score, a derived-only chunk with
-    // a large one, and a neutral chunk in between: a comparator that
-    // answers declared-before-derived BEFORE comparing scores is not a
-    // strict weak ordering (A<B, B<C, C<A), so the sorted output depends
-    // on the input order. The ranking must be a total order - declared,
-    // then neutral, then derived-only, score within each tier - the same
-    // for every input permutation.
+    // Three lanes, three scores: the composite score orders every pair
+    // on its own, so the sort is a total order - the same for every
+    // input permutation - with the declared/derived tier reserved for
+    // exact ties.
     const inputsFor = (ids: number[]) => {
       const bm25 = new Map([
         [1, -1],
@@ -103,7 +100,39 @@ describe("derived entity ranking lane (unit)", () => {
     const forward = idsOf(rankResults(inputsFor([1, 2, 3]), RANK_OPTS));
     const backward = idsOf(rankResults(inputsFor([3, 2, 1]), RANK_OPTS));
     expect(forward).toEqual(backward);
-    expect(forward).toEqual([1, 3, 2]);
+    // The derived-only chunk carries the best bm25, the neutral chunk
+    // the middle one, and the declared chunk - whose boost cannot
+    // rescue a much weaker base - the worst.
+    expect(forward).toEqual([2, 3, 1]);
+  });
+
+  test("a derived-only chunk with the highest score stays first, and a low-scoring declared chunk does not jump ahead", () => {
+    // The regression the tier-before-score comparator made inevitable on
+    // both ends: the derived-only hit the feature exists for was sunk
+    // below every neutral chunk (and off the limit cut), while any
+    // single declared match floated above every higher-scoring chunk.
+    const ranked = rankResults(
+      {
+        ...baseInputs(),
+        keyword: [
+          { chunkId: 1, documentId: 10, bm25: -9 },
+          { chunkId: 2, documentId: 11, bm25: -5 },
+          { chunkId: 3, documentId: 12, bm25: -1 },
+        ] as KeywordHit[],
+        hydrated: new Map([
+          [1, hyd(1, 10)],
+          [2, hyd(2, 11)],
+          [3, hyd(3, 12)],
+        ]),
+        entityMatchByChunk: new Map([[3, 1]]),
+        derivedEntityMatchByChunk: new Map([[1, 1]]),
+      },
+      RANK_OPTS,
+    );
+    // Score order end to end: the derived-only best match, then the
+    // neutral middle, then the declared chunk whose weak base its boost
+    // cannot lift.
+    expect(ranked.map((r) => r.chunkId)).toEqual([1, 2, 3]);
   });
 
   test("the derived lane is capped strictly below the declared cap", () => {
@@ -168,30 +197,45 @@ describe("derived entity ranking lane (unit)", () => {
     expect(withEmpty.map((r) => r.score)).toEqual(without.map((r) => r.score));
   });
 
-  test("two otherwise-equal chunks, one with a single declared match, one with three derived matches: declared ranks first for several entityMul values", () => {
-    for (const entityMul of [0.5, 1.0, 2.0]) {
-      for (const [declaredId, derivedId] of [
-        [1, 2],
-        [2, 1],
-      ] as const) {
-        const ranked = rankResults(
-          {
-            ...baseInputs(),
-            entityMatchByChunk: new Map([[declaredId, 1]]),
-            derivedEntityMatchByChunk: new Map([[derivedId, 3]]),
-          },
-          {
-            ...RANK_OPTS,
-            weightProfile: { keywordMul: 1, semanticMul: 1, recencyMul: 1, entityMul },
-          },
-        );
-        const declaredIndex = ranked.findIndex((r) => r.chunkId === declaredId);
-        const derivedIndex = ranked.findIndex((r) => r.chunkId === derivedId);
-        expect(declaredIndex).toBeGreaterThanOrEqual(0);
-        expect(derivedIndex).toBeGreaterThanOrEqual(0);
-        expect(declaredIndex).toBeLessThan(derivedIndex);
-      }
+  test("one declared match against three derived matches: the score decides, the tier only breaks an exact tie", () => {
+    // Identical base scores for both chunks. At entityMul 2 the declared
+    // cap (0.04) tops the derived cap (0.02): declared first by score. At
+    // entityMul 1 both lanes land on 0.02 - an exact tie the tier
+    // break resolves toward declared. At entityMul 0.5 the three derived
+    // matches (0.015) outweigh the one declared match (0.01): the
+    // derived chunk is simply the higher-scoring one.
+    for (const [entityMul, firstId] of [
+      [2.0, 1],
+      [1.0, 1],
+      [0.5, 2],
+    ] as const) {
+      const ranked = rankResults(
+        {
+          ...baseInputs(),
+          entityMatchByChunk: new Map([[1, 1]]),
+          derivedEntityMatchByChunk: new Map([[2, 3]]),
+        },
+        {
+          ...RANK_OPTS,
+          weightProfile: { keywordMul: 1, semanticMul: 1, recencyMul: 1, entityMul },
+        },
+      );
+      expect(ranked[0]!.chunkId).toBe(firstId);
     }
+  });
+
+  test("an exact score tie between a declared and a derived-only chunk resolves toward declared", () => {
+    // One declared match and two derived matches both land on 0.02: an
+    // exact tie the tier break is the only thing left to separate, and
+    // it separates declared first.
+    const inputs = {
+      ...baseInputs(),
+      entityMatchByChunk: new Map([[1, 1]]),
+      derivedEntityMatchByChunk: new Map([[2, 2]]),
+    };
+    const ranked = rankResults(inputs, RANK_OPTS);
+    expect(ranked[0]!.chunkId).toBe(1);
+    expect(ranked[0]!.score).toBeCloseTo(ranked[1]!.score, 12);
   });
 });
 

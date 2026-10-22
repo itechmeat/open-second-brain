@@ -23,9 +23,13 @@ import {
   archiveEntity,
   getEntity,
   listEntities,
+  resolvePersonDerivedIndex,
   upsertEntity,
 } from "../../../../src/core/brain/entities/registry.ts";
-import { PERSON_NICKNAMES_ARTIFACT_REL } from "../../../../src/core/brain/entities/person-nicknames.ts";
+import {
+  PERSON_NICKNAMES_ARTIFACT_REL,
+  PersonNicknameConfigError,
+} from "../../../../src/core/brain/entities/person-nicknames.ts";
 import { BRAIN_ENTITY_STATUS } from "../../../../src/core/brain/entities/types.ts";
 
 let vault: string;
@@ -82,6 +86,31 @@ describe("getEntity resolves a unique derived match after the exact miss", () =>
     expect(getEntity(vault, { category: "people", query: "r smith" })!.id).toBe(id);
   });
 
+  test("the dotted-initial and comma spellings resolve the plain-named person", () => {
+    const id = upsertPerson("Ada Lovelace");
+    // "A. Lovelace" and "Lovelace, Ada" are the two punctuation shapes
+    // normalization keeps; both fold onto the derived forms of the
+    // plain spelling instead of missing.
+    expect(getEntity(vault, { query: "A. Lovelace" })!.id).toBe(id);
+    expect(getEntity(vault, { query: "Lovelace, Ada" })!.id).toBe(id);
+    expect(getEntity(vault, { category: "people", query: "lovelace, ada" })!.id).toBe(id);
+  });
+
+  test("an astral initial resolves through the derived initial form", () => {
+    // U+10414 DESERET CAPITAL LETTER AIL - a surrogate pair in UTF-16,
+    // so a UTF-16-unit initial slice would emit a lone surrogate.
+    const id = upsertPerson("\u{10414}avid Smith");
+    expect(getEntity(vault, { query: "\u{10414} smith" })!.id).toBe(id);
+  });
+
+  test("a two-letter operator nickname resolves the person it stands for", () => {
+    // Operator-declared nicknames are exempt from the structural floor.
+    const id = upsertPerson("Alan Lovelace");
+    writeNicknames({ al: ["Alan Lovelace"] });
+    expect(getEntity(vault, { query: "Al" })!.id).toBe(id);
+    expect(getEntity(vault, { query: "a lovelace" })!.id).toBe(id);
+  });
+
   test("an exact declared form still wins before the derived lane is consulted", () => {
     const id = upsertPerson("Robert Smith", { aliases: ["Rob"] });
     writeNicknames({ bob: ["Robert Smith"], rob: ["Robert Smith"] });
@@ -108,6 +137,29 @@ describe("a shared derived form is an ambiguity, not a silent pick", () => {
     expect(amb.name).toBe("EntityAmbiguityError");
     expect(amb.message).toContain(smith);
     expect(amb.message).toContain(jones);
+  });
+
+  test("the derived ambiguity names the remedy of two real people, not a merge", () => {
+    // Two persons reaching one initial form are not duplicates: the
+    // message must offer a more specific reference, never the
+    // archive-or-merge exit the exact lane's duplicates get.
+    upsertPerson("Robert Smith");
+    upsertPerson("Robert Jones");
+    writeNicknames({ bob: ["Robert Smith", "Robert Jones"] });
+
+    let err: unknown;
+    try {
+      getEntity(vault, { query: "bob" });
+    } catch (e) {
+      err = e;
+    }
+    const amb = err as EntityAmbiguityError;
+    expect(amb.derived).toBe(true);
+    expect(amb.message).toContain("derived name form");
+    expect(amb.message).toContain("full name");
+    expect(amb.message).toContain("alias");
+    expect(amb.message).toContain("category");
+    expect(amb.message).not.toContain("archived or merged");
   });
 
   test("the exact forms of the same two persons still resolve uniquely", () => {
@@ -207,5 +259,37 @@ describe("a malformed nickname file degrades reads to exact-only", () => {
 
     expect(getEntity(vault, { query: "robert smith" })!.id).toBe(id);
     expect(getEntity(vault, { query: "bob" })).toBeNull();
+  });
+});
+
+describe("the derived person-form index is cached per signature", () => {
+  test("unchanged inputs return the same object; a nickname edit forces a rebuild", () => {
+    const smith = upsertPerson("Robert Smith");
+    writeNicknames({ bob: ["Robert Smith"] });
+
+    const first = resolvePersonDerivedIndex(vault);
+    expect(resolvePersonDerivedIndex(vault)).toBe(first);
+
+    // A nicknames edit shifts the mtime/size signature and forces a
+    // fresh build that answers through the new entry.
+    writeNicknames({ bob: ["Robert Smith"], rob: ["Robert Smith"] });
+    const second = resolvePersonDerivedIndex(vault);
+    expect(second).not.toBe(first);
+    expect(second.byForm.get("rob")?.derived.map((e) => e.id)).toEqual([smith]);
+
+    // A present-but-unusable file is captured, not thrown: the derived
+    // lane empties while the structure stays available to consumers
+    // that degrade by posture.
+    writeFileSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), "{ not json");
+    const broken = resolvePersonDerivedIndex(vault);
+    expect(broken).not.toBe(second);
+    expect(broken.nicknameError).toBeInstanceOf(PersonNicknameConfigError);
+    expect(broken.byForm.get("bob")).toBeUndefined();
+    // An entity write still shows up: the index identity is part of the
+    // cache key.
+    upsertPerson("Robert Jones");
+    const afterWrite = resolvePersonDerivedIndex(vault);
+    expect(afterWrite).not.toBe(broken);
+    expect(afterWrite.nicknameError).toBeInstanceOf(PersonNicknameConfigError);
   });
 });
