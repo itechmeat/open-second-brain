@@ -748,6 +748,37 @@ export const BRAIN_CONFIG_TEMPLATE_OMISSIONS: ReadonlyArray<BrainTemplateOmissio
       "Templating an example would invite copying folder names that do not exist; " +
       "the block and its contract example are documented in docs/cli-reference.md.",
   },
+  {
+    // The provider-consent record (write-honesty-egress-consent, Lane F) is
+    // a MACHINE-configuration surface, and this is where that surface is
+    // declared rather than in the template. The record has two spellings,
+    // `search_semantic_enabled=false` and `embedding_provider=disabled`,
+    // and both live in the operator's `config.yaml`; the resolver that
+    // reads them is `src/core/search/provider-consent.ts`, which answers
+    // UNSET apart from DECLINED and fails closed on a record it cannot
+    // read.
+    //
+    // It is NOT a vault-configuration key, and the reason is the layer,
+    // not a preference: this file travels between machines through
+    // Syncthing, so a key here would carry one machine's provider
+    // decision to every other one - and a key that a vault declares and
+    // the resolver never reads is a knob that does nothing, which is the
+    // failure the omission list exists to prevent. The vault tier of the
+    // same idea is the `decision_model` block above, which can only
+    // NARROW; the provider decision is the operator's, and it stays on the
+    // machine that made it.
+    key: "provider_consent",
+    reason:
+      "The provider-consent record is a machine-configuration key, not a " +
+      "vault-configuration one: an explicit decline is written as " +
+      "`search_semantic_enabled=false` or `embedding_provider=disabled` in the " +
+      "operator's `config.yaml`. `_brain.yaml` travels between machines through " +
+      "Syncthing, so templating the record here would carry one machine's " +
+      "provider decision to every other one - and a vault key the resolver " +
+      "never reads would advertise a knob that does nothing. The record is " +
+      "resolved by `src/core/search/provider-consent.ts` and disclosed by the " +
+      "readiness probe that names the provider environment variables.",
+  },
 ]) as ReadonlyArray<BrainTemplateOmission>;
 
 export interface RenderBrainConfigTemplateOptions {
