@@ -10,6 +10,7 @@ import {
   isBlockedCapability,
   resolveSemanticCapability,
   semanticCapabilityLabel,
+  SEMANTIC_CAPABILITY_TIER,
 } from "./capability-tier.ts";
 import { classifyEmbeddingError } from "./embeddings/openai-compat.ts";
 import { makeProvider } from "./embeddings/provider.ts";
@@ -19,6 +20,7 @@ import {
   queryEmbedEmptyFitMessage,
   queryEmbedRefusalMessage,
 } from "./embeddings/query-embed.ts";
+import { providerConsentIsDeclined, resolveProviderConsent } from "./provider-consent.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { Store } from "./store.ts";
 import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "./types.ts";
@@ -143,6 +145,31 @@ export async function runSemanticPhase(
   const warnings: string[] = [];
   const degraded: RetrievalDegradationSink = [];
 
+  // The operator's WRITTEN decision comes before every other arm, and
+  // before the capability ladder below. A decline is a more specific fact
+  // than a tier: the tier says what the configuration can do, and it
+  // cannot say that the operator said no. Reporting the tier for a
+  // declined vault would answer "not configured" for a configuration that
+  // was configured on purpose - and the sentence it would use is the one
+  // that tells an operator to set a provider they deliberately declined.
+  //
+  // The record is read from the SAME configuration the search
+  // configuration was resolved from (`config.configPath`), so the two can
+  // never disagree about which file is in force.
+  const consent = resolveProviderConsent({
+    configPath: config.configPath ?? null,
+    env: process.env,
+    semantic: config.semantic,
+  });
+  if (providerConsentIsDeclined(consent)) {
+    if (opts.explicit) throw new SearchError("EMBEDDING_DISABLED", consent.detail);
+    warnings.push(consent.detail);
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticCapabilityBlocked, {
+      tier: SEMANTIC_CAPABILITY_TIER.disabled,
+    });
+    return { attempted: false, hits: [], warnings, degraded };
+  }
+
   const counts = store.counts();
   if (counts.embeddings === 0) {
     warnings.push("no compatible embeddings; run: o2b search index --embeddings");
@@ -176,7 +203,7 @@ export async function runSemanticPhase(
   // was served lexical results with exit 0 was told the search succeeded.
   // Both arms name the condition with the SAME registry sentence, so the
   // warning and the error message cannot drift apart.
-  const capability = resolveSemanticCapability(config.semantic);
+  const capability = consent.capability ?? resolveSemanticCapability(config.semantic);
   if (isBlockedCapability(capability)) {
     const label = await semanticCapabilityLabel(capability.code);
     if (opts.explicit) throw new SearchError(BLOCKED_TIER_ERROR_CODE[capability.tier], label);
@@ -231,7 +258,7 @@ export async function runSemanticPhase(
   const timing = opts.timing;
   if (timing !== undefined) timing.preCallStartMs = timing.clock();
   try {
-    const provider = makeProvider(config.semantic);
+    const provider = makeProvider(config.semantic, consent);
     const vectors = await provider.embed(
       [prepared.text],
       "query",
