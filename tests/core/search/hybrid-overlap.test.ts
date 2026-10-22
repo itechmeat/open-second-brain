@@ -528,7 +528,13 @@ test("a provider that never reports a dispatch keeps the pre-call interval as th
 test("keyword sentences precede semantic sentences in the merged warnings", async () => {
   if (!sqliteVecLoadable()) return;
   await seedCorpus();
-  const cfg = semanticConfig({ inputWindowTokens: 8 });
+  // The window must still CARRY the corpus now that provably over-window
+  // chunks are held back from embedding (the skip-and-hold contract): a
+  // window of 8 held every seeded chunk, so no embedding existed and the
+  // query-side cut never ran. At 32 the seeded chunks embed and the
+  // 200-character query still exceeds the window, which is the cut this
+  // test exists to observe.
+  const cfg = semanticConfig({ inputWindowTokens: 32 });
   await indexVault(cfg, { embeddings: true });
   // Keyword sentence: a desynced FTS table rebuilt at query time.
   const db = new Database(dbPath);
