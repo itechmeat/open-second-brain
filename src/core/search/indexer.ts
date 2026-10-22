@@ -35,6 +35,7 @@ import { effectiveInputWindowTokens, passagePrefixSentByProvider } from "./embed
 import {
   activeEmbeddingModel,
   activeSpendQuote,
+  chunkHoldExclusion,
   COST_GATE_KEY,
   EMBEDDING_GATE_REASON,
   type EmbeddingGateReason,
@@ -52,6 +53,8 @@ import {
   embeddingSignature,
   isStaleSignature,
   MODEL_NATIVE_DIMENSION,
+  textExtent,
+  tokenEstimateFloor,
   type EmbeddingIdentity,
 } from "./embeddings/signature.ts";
 import { LOCAL_DEFAULT_DIMENSION } from "./embeddings/local-provider.ts";
@@ -109,7 +112,7 @@ import {
   LINK_RESOLUTION_PENDING_STATE_KEY,
 } from "./store.ts";
 import { LATEST_SCHEMA_VERSION, documentAttributesFromFrontmatter } from "./schema.ts";
-import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
+import { chunkWindowDiagnosticCode, CHUNK_HOLD_REASON, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import {
   callableVisibilitySurfaces,
@@ -120,10 +123,14 @@ import type { PendingVectorScope } from "./store/chunks.ts";
 import type {
   ChunkWindowCensus,
   EmbedderRecordCensus,
+  HeldChunkRecord,
+  HeldChunkReport,
+  HeldChunkReportItem,
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
   PendingVectorCensus,
+  ResolvedEmbeddingConfig,
   ResolvedSearchConfig,
   VisibilityHonestyFinding,
 } from "./types.ts";
@@ -186,6 +193,9 @@ interface MutableStats {
   embeddingsComputed: number;
   embeddingsReused: number;
   embeddingsRetries: number;
+  /** Held-back-over-window chunks (F2); frozen out of the stats when zero. */
+  embeddingsHeld: number;
+  heldChunks: HeldChunkRecord[];
   errors: Array<{ readonly path: string; readonly message: string }>;
   frontmatterNotices: DegradationNotice[];
   relationViolations: IndexStats["relationViolations"];
@@ -216,6 +226,10 @@ function newStats(): MutableStats {
     embeddingsComputed: 0,
     embeddingsReused: 0,
     embeddingsRetries: 0,
+    // Filled by the embedding phase only when it holds a chunk back;
+    // zero means the frozen stats carry neither hold field at all.
+    embeddingsHeld: 0,
+    heldChunks: [],
     errors: [],
     frontmatterNotices: [],
     relationViolations: [],
@@ -258,6 +272,11 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     embeddingsComputed: s.embeddingsComputed,
     embeddingsReused: s.embeddingsReused,
     embeddingsRetries: s.embeddingsRetries,
+    // Absent together, never one without the other: a run that held
+    // nothing emits the statistics it emitted before the hold existed.
+    ...(s.embeddingsHeld === 0
+      ? {}
+      : { embeddingsHeld: s.embeddingsHeld, heldChunks: Object.freeze([...s.heldChunks]) }),
     errors: Object.freeze([...s.errors]),
     frontmatterNotices: Object.freeze([...s.frontmatterNotices]),
     relationViolations: Object.freeze([...s.relationViolations]),
@@ -991,15 +1010,17 @@ async function formatChunkWindowMeasured(
 ): Promise<string> {
   const { requireNextStep } = await import("../brain/next-step.ts");
   const step = requireNextStep(chunkWindowDiagnosticCode(census));
-  const remedy =
-    `whatever does not fit is truncated by the provider, silently. ` +
-    `Lower ${CHUNK_SIZE_CONFIG_KEY}, then run: ${step.nextCommand}`;
+  const levers =
+    `Two levers change the outcome: split the source by lowering ` +
+    `${CHUNK_SIZE_CONFIG_KEY}, or exclude the page from embedding. Then run: ${step.nextCommand}`;
   if (census.verdict === "estimate-undecided") {
     return (
       `${census.chunksUndecided} of ${census.chunksMeasured} indexed chunk(s) cannot be ` +
       `placed inside the ${census.windowTokens}-token input window declared for ` +
       `${census.model}: the census estimates tokens from character counts, which does not ` +
-      `bound a token window for non-Latin scripts, so this is not a pass - ${remedy}`
+      `bound a token window for non-Latin scripts, so this is not a pass. Undecided chunks ` +
+      `are still sent, and whatever does not fit is truncated by the provider, silently - ` +
+      `${levers}`
     );
   }
   const undecided =
@@ -1008,8 +1029,10 @@ async function formatChunkWindowMeasured(
       : ` A further ${census.chunksUndecided} chunk(s) the estimate cannot place either way.`;
   return (
     `${census.chunksOverWindow} of ${census.chunksMeasured} indexed chunk(s) estimate above ` +
-    `the ${census.windowTokens}-token input window declared for ${census.model}; ` +
-    `${remedy}${undecided}`
+    `the ${census.windowTokens}-token input window declared for ${census.model}; chunks ` +
+    `proved over the window are held back from embedding rather than sent and truncated, ` +
+    `and \`o2b search status\` names the held ones in its held-chunks report. ${levers}` +
+    `${undecided}`
   );
 }
 
@@ -1043,6 +1066,15 @@ const INDEX_STAGE = Object.freeze({
 export interface EmbeddingPhaseTally {
   embeddingsComputed: number;
   embeddingsRetries: number;
+  /**
+   * Chunks this phase held back as provably over the model's declared
+   * input window (chunk skip-and-hold, F2), and one record per chunk.
+   * Absent until the phase holds something: a tally a hold-free run
+   * owns never carries either, which is what lets the stats freeze drop
+   * both together.
+   */
+  embeddingsHeld?: number;
+  heldChunks?: HeldChunkRecord[];
   /**
    * The cost gate's own verdict for this phase's census, set just before
    * the first provider call (t_9d155d0e). `forced` is true only when a
@@ -1088,8 +1120,65 @@ export interface EmbeddingPhaseOptions {
   readonly progress?: import("../brain/progress.ts").ProgressCounter;
 }
 
+/** One entry of the embedding phase's pending census. */
+type PendingCensusEntry = EmbeddingSpendPlan["pending"][number];
+
+/**
+ * Split a pending census into what the embedding phase may send and what
+ * it must HOLD back (chunk skip-and-hold, F2).
+ *
+ * The hold acts on proof only. A chunk is held when the estimator's FLOOR
+ * - code points over four, charged through the prefix the configured
+ * backend actually prepends - already exceeds the model's effective
+ * declared window: then the real request is over it whatever tokenizer the
+ * provider runs. The undecided band between the floor and the ceiling
+ * stays embedded exactly as before this feature, because acting there
+ * would hold work on a guess, and a model with no declared window (or the
+ * local embedder, which has no window by construction) proves nothing at
+ * all - for them nothing is held and every chunk stays pending.
+ *
+ * The predicate is the same measurement the oversize-chunk census makes
+ * its `over-window` arm with, so the phase and the report can never
+ * disagree about which chunks are provably over.
+ */
+function partitionHeldChunks(
+  pending: ReadonlyArray<PendingCensusEntry>,
+  semantic: ResolvedEmbeddingConfig,
+  model: string | null,
+): { readonly embeddable: Array<PendingCensusEntry>; readonly held: HeldChunkRecord[] } {
+  const windowTokens = effectiveInputWindowTokens(semantic, model);
+  if (windowTokens === null) return { embeddable: [...pending], held: [] };
+  // Charge the text the provider will actually receive: only
+  // `openai-compat` prepends the configured passage prefix, and a
+  // prefix nobody sends cannot push a chunk over a window.
+  const prefix = passagePrefixSentByProvider(semantic.provider, semantic.passagePrefix);
+  const embeddable: Array<PendingCensusEntry> = [];
+  const held: HeldChunkRecord[] = [];
+  for (const chunk of pending) {
+    const estimatedTokens = tokenEstimateFloor(textExtent(prefix + chunk.content));
+    if (estimatedTokens > windowTokens) {
+      held.push(
+        Object.freeze({
+          chunkId: chunk.chunkId,
+          estimatedTokens,
+          windowTokens,
+          reason: CHUNK_HOLD_REASON.overDeclaredWindow,
+        }),
+      );
+    } else {
+      embeddable.push(chunk);
+    }
+  }
+  return { embeddable, held };
+}
+
 /**
  * Compute and store a vector for every indexed chunk that has none.
+ *
+ * Chunks whose token estimate PROVABLY exceeds the model's effective
+ * declared input window are held back instead (see
+ * {@link partitionHeldChunks}): they are never sent, never stored and
+ * never priced, and the tally records each one.
  *
  * Exported (provenance-at-the-boundary, F) because it is the whole of
  * `o2b search vector-backfill --apply`: the population step is already
@@ -1133,15 +1222,48 @@ export async function runEmbeddingPhase(
 
   // A handed-in plan keeps its census but is priced and gated again here,
   // unforced: the verdict this phase acts on is always its own.
-  const plan =
+  const initialPlan =
     opts.plan !== undefined
       ? priceSpendPlan(opts.plan.pending, config)
       : planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
-  const pending = plan.pending;
+  const pending = initialPlan.pending;
   if (pending.length === 0) return;
 
   const provider = makeProvider(config.semantic);
   const model = config.semantic.model ?? provider.model;
+
+  // Skip-and-hold (F2): chunks provably over the declared window leave
+  // the census BEFORE it is priced, batched or gated, so held work can
+  // neither trip the cost gate nor appear on the receipt. Filtering ahead
+  // of the batch loop is also what keeps the 1:1 invariant below intact:
+  // the provider is only ever asked about chunks it will answer for.
+  const { embeddable, held } = partitionHeldChunks(pending, config.semantic, model);
+  if (held.length > 0) {
+    stats.embeddingsHeld = (stats.embeddingsHeld ?? 0) + held.length;
+    (stats.heldChunks ??= []).push(...held);
+    // The record is what makes the hold outlive the run: the pending
+    // anti-join excludes these chunks under this key, so the status
+    // estimate, the preview and the next census stop pricing work this
+    // config proved it will not spend. A hold the config-side resolver
+    // cannot key is not persisted - there is no stable identity to
+    // release it under.
+    const exclusion = chunkHoldExclusion(config);
+    if (exclusion !== null) {
+      store.recordChunkHolds(
+        held.map((h) => ({
+          chunkId: h.chunkId,
+          estimatedTokens: h.estimatedTokens,
+          windowTokens: h.windowTokens,
+        })),
+        { model: exclusion.model, embeddingSignature: exclusion.embeddingSignature },
+      );
+    }
+  }
+  // A run that holds everything pending spends nothing: no provider
+  // request, no gate verdict, and no receipt on a census it will not
+  // embed.
+  if (embeddable.length === 0) return;
+  const plan = held.length > 0 ? priceSpendPlan(embeddable, config) : initialPlan;
 
   // Cost gate: the shared spend plan estimates the whole pending set up
   // front and the run is refused when it exceeds the configured ceiling,
@@ -1159,7 +1281,7 @@ export async function runEmbeddingPhase(
     }
     throw new SearchError(
       "EMBEDDING_COST_GATE",
-      `estimated embedding cost ${formatEstimatedUsd(plan.estimatedUsd)} for ${pending.length} chunk(s) ` +
+      `estimated embedding cost ${formatEstimatedUsd(plan.estimatedUsd)} for ${plan.pending.length} chunk(s) ` +
         `exceeds ${COST_GATE_KEY} ${formatEstimatedUsd(gateUsd)}. ` +
         `Re-run with ${FORCE_COST_FLAG} to proceed or raise the gate.`,
     );
@@ -1182,13 +1304,13 @@ export async function runEmbeddingPhase(
   // `embedding_concurrency`.
   const superBatch = batchSize * Math.max(1, config.semantic.concurrency);
 
-  progress?.start(INDEX_STAGE.embed, pending.length);
-  for (let i = 0; i < pending.length; i += superBatch) {
+  progress?.start(INDEX_STAGE.embed, embeddable.length);
+  for (let i = 0; i < embeddable.length; i += superBatch) {
     // Cooperative deadline: embedding batches are the other long
     // phase of an index run - abort between batches, never mid-batch.
     safeguard?.checkpoint();
     throwIfAborted(signal, "index");
-    const batch = pending.slice(i, i + superBatch);
+    const batch = embeddable.slice(i, i + superBatch);
     progress?.advance(INDEX_STAGE.embed, batch.length);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts, "passage");
@@ -1652,6 +1774,14 @@ function isEnoent(e: unknown): boolean {
 // indexStatus
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * How many held chunks the status snapshot names. A vault can hold
+ * thousands of chunks after a model swap, and the status JSON is read by
+ * humans and by agents on a token budget; the report's `total` carries
+ * the whole so the cap is a disclosure, not a concealment.
+ */
+export const HELD_CHUNK_REPORT_CAP = 20;
+
 export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexStatusSnapshot> {
   let store: Store;
   try {
@@ -1773,6 +1903,32 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       warnings.push(await formatChunkWindowMeasured(chunkWindow));
     }
 
+    // What the index holds back right now (chunk skip-and-hold, F2), read
+    // from the durable records under the ACTIVE configuration's key. A
+    // row whose key a config change released is a decision the next run
+    // will not honour, so it is not a hold this status would report, and
+    // a configuration that can hold nothing (no model, no declared
+    // window) reads nothing. Absent unless something matches the key -
+    // the same byte discipline as the census field beside it.
+    let heldChunks: HeldChunkReport | undefined;
+    const holdKey = config.semantic.enabled ? chunkHoldExclusion(config) : null;
+    if (holdKey !== null) {
+      const heldCensus = store.heldChunkCensus(holdKey, HELD_CHUNK_REPORT_CAP);
+      if (heldCensus.total > 0) {
+        const items: HeldChunkReportItem[] = heldCensus.rows.map((row) =>
+          Object.freeze({
+            path: row.path,
+            chunkIndex: row.chunkIndex,
+            estimatedTokens: row.estimatedTokens,
+            windowTokens: row.windowTokens,
+            // The only decision the hold table records.
+            reason: CHUNK_HOLD_REASON.overDeclaredWindow,
+          }),
+        );
+        heldChunks = Object.freeze({ total: heldCensus.total, items: Object.freeze(items) });
+      }
+    }
+
     // Best-effort spend estimate to bring stale/missing embeddings current,
     // from the shared spend plan. Chunk content is scanned only when the
     // price is a positive known rate: a known-free model costs 0. An
@@ -1786,7 +1942,10 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       refreshPriceSource = quote.source;
       if (quote.usdPerMtok !== null && quote.usdPerMtok > 0) {
         estimatedRefreshCostUsd = planEmbeddingSpend(store, config).estimatedUsd;
-      } else if (quote.usdPerMtok === null && store.countChunksWithoutEmbeddings() > 0) {
+      } else if (
+        quote.usdPerMtok === null &&
+        store.countChunksWithoutEmbeddings(undefined, chunkHoldExclusion(config) ?? undefined) > 0
+      ) {
         estimatedRefreshCostUsd = null;
       } else {
         estimatedRefreshCostUsd = 0;
@@ -1815,6 +1974,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       // Absent, not null, whenever the check could run - so a status
       // over a curated model serializes the bytes it always has.
       ...(chunkWindowUndeclared === null ? {} : { chunkWindowUndeclared }),
+      ...(heldChunks === undefined ? {} : { heldChunks }),
       warnings: Object.freeze(warnings),
     });
   } finally {

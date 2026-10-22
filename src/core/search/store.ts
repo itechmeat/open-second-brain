@@ -533,17 +533,43 @@ export class Store {
   /**
    * Chunks that have no row in `embeddings`. Used by the indexer to
    * populate vectors after a fresh index or after the model-change drop,
-   * optionally scoped to path prefixes.
+   * optionally scoped to path prefixes and optionally excluding chunks
+   * held under `hold`'s key (chunk skip-and-hold, F2).
    */
   findChunksWithoutEmbeddings(
     scope?: chunks.PendingVectorScope,
+    hold?: chunks.ChunkHoldExclusion,
   ): Array<{ chunkId: number; content: string }> {
-    return chunks.findChunksWithoutEmbeddings(this.db, scope);
+    return chunks.findChunksWithoutEmbeddings(this.db, scope, hold);
   }
 
   /** How many chunks the scoped census above would return, without their bodies. */
-  countChunksWithoutEmbeddings(scope?: chunks.PendingVectorScope): number {
-    return chunks.countChunksWithoutEmbeddings(this.db, scope);
+  countChunksWithoutEmbeddings(
+    scope?: chunks.PendingVectorScope,
+    hold?: chunks.ChunkHoldExclusion,
+  ): number {
+    return chunks.countChunksWithoutEmbeddings(this.db, scope, hold);
+  }
+
+  /** Persist embedding-phase hold decisions under one (model, signature) stamp. */
+  recordChunkHolds(
+    entries: ReadonlyArray<chunks.ChunkHoldEntry>,
+    stamp: chunks.ChunkHoldStamp,
+  ): void {
+    chunks.recordChunkHolds(this.db, entries, stamp);
+  }
+
+  /** The hold rows recorded for one chunk, whatever key made them. */
+  chunkHoldRowsFor(chunkId: number): chunks.ChunkHoldRow[] {
+    return chunks.chunkHoldRowsFor(this.db, chunkId);
+  }
+
+  /** Held chunks under one key: capped position-ordered rows plus the total. */
+  heldChunkCensus(
+    hold: chunks.ChunkHoldExclusion,
+    limit: number,
+  ): { total: number; rows: chunks.HeldChunkCensusRow[] } {
+    return chunks.heldChunkCensus(this.db, hold, limit);
   }
 
   /** How many documents sit under one path prefix of a pending-vector scope. */

@@ -247,6 +247,58 @@ export function chunkWindowDiagnosticCode(census: ChunkWindowCensus): string {
   return CHUNK_WINDOW_CODE[census.verdict];
 }
 
+/**
+ * Why the embedding phase held a chunk back instead of embedding it
+ * (chunk skip-and-hold, F2). One value today; a closed union so a second
+ * hold reason - a per-request budget, say - cannot be added by string
+ * comparison at the read sites.
+ */
+export const CHUNK_HOLD_REASON = Object.freeze({
+  /** The estimator's FLOOR already exceeds the model's declared window. */
+  overDeclaredWindow: "over_declared_window",
+} as const);
+
+/** Closed union over {@link CHUNK_HOLD_REASON}. */
+export type ChunkHoldReason = (typeof CHUNK_HOLD_REASON)[keyof typeof CHUNK_HOLD_REASON];
+
+/**
+ * One chunk the embedding phase held back. `estimatedTokens` is the
+ * estimator's floor - the conservative bound that made the overflow a
+ * proof rather than a guess - and `windowTokens` is the effective
+ * declared window it was measured against, prefix included.
+ */
+export interface HeldChunkRecord {
+  readonly chunkId: number;
+  readonly estimatedTokens: number;
+  readonly windowTokens: number;
+  readonly reason: ChunkHoldReason;
+}
+
+/**
+ * One held chunk as the status snapshot reports it: the same facts as a
+ * {@link HeldChunkRecord} plus the position that identifies it to an
+ * operator - document path and chunk index - and no database id, which
+ * means nothing outside the index file.
+ */
+export interface HeldChunkReportItem {
+  readonly path: string;
+  readonly chunkIndex: number;
+  readonly estimatedTokens: number;
+  readonly windowTokens: number;
+  readonly reason: ChunkHoldReason;
+}
+
+/**
+ * What the index currently holds under the ACTIVE embedding
+ * configuration's (model, window, signature) key. `items` is capped by
+ * the reporting bound; `total` is the unbounded count, so a reader can
+ * see how many the cap left out.
+ */
+export interface HeldChunkReport {
+  readonly total: number;
+  readonly items: ReadonlyArray<HeldChunkReportItem>;
+}
+
 export interface IndexStats {
   readonly added: number;
   readonly updated: number;
@@ -260,6 +312,19 @@ export interface IndexStats {
    */
   readonly embeddingsReused: number;
   readonly embeddingsRetries: number;
+  /**
+   * Chunks the embedding phase held back as provably over the model's
+   * declared input window (chunk skip-and-hold, F2): never sent, never
+   * stored, never priced. Present only when the run held something, so
+   * a run that embedded everything carries the shape it carried before
+   * this field existed. {@link heldChunks} names which.
+   */
+  readonly embeddingsHeld?: number;
+  /**
+   * What was held, one {@link HeldChunkRecord} per held chunk. Present
+   * exactly when {@link embeddingsHeld} is.
+   */
+  readonly heldChunks?: ReadonlyArray<HeldChunkRecord>;
   readonly errors: ReadonlyArray<{
     readonly path: string;
     readonly message: string;
@@ -451,6 +516,16 @@ export interface IndexStatusSnapshot {
    * the check passed - without spending the warning channel on it.
    */
   readonly chunkWindowUndeclared?: ChunkWindowUndeclared;
+  /**
+   * Chunks the index currently holds back from embedding (chunk
+   * skip-and-hold, F2), read from the durable hold records under the
+   * ACTIVE configuration's (model, window, signature) key. Present only
+   * when the index holds something: a status with nothing held emits the
+   * bytes it emitted before this field existed, and records whose key a
+   * config change released are not a hold the next run would honour, so
+   * they are absent too. The list is capped; `total` names the whole.
+   */
+  readonly heldChunks?: HeldChunkReport;
   readonly warnings: ReadonlyArray<string>;
 }
 

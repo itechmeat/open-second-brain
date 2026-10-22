@@ -319,6 +319,13 @@ test("search status warns with the registered exit when chunks exceed the window
   // boundaries - is named too, because a rebuild alone re-cuts the same
   // chunks.
   expect(warning!).toContain("search_chunk_size");
+  // F2: the consequence and the disclosure changed. Proved-over chunks
+  // are HELD, not sent-and-truncated, and the warning points at the
+  // held-chunks report that lists them.
+  expect(warning!).toContain("held");
+  expect(warning!).toContain("o2b search status");
+  // The levers are named as two, not one implicit trim: split or exclude.
+  expect(warning!).toContain("exclude");
 });
 
 test("an uncurated model is a status FIELD, never a status warning", async () => {
@@ -376,6 +383,10 @@ test("the status wire shape carries the field only when the check could not run"
   // The bytes either side of where the key would have landed are the
   // pre-census bytes.
   expect(JSON.stringify(curated)).not.toContain("chunk_window");
+  // The F2 held-chunk report follows the same discipline on the same
+  // bytes: nothing held, so the key is absent rather than empty.
+  expect("held_chunks" in curated).toBe(false);
+  expect(JSON.stringify(curated)).not.toContain("held_chunks");
 });
 
 // ── every verdict names a registered exit ────────────────────────────────────

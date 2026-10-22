@@ -20,9 +20,15 @@ import {
   resolveEmbeddingPrice,
   type PriceQuote,
 } from "./embeddings/pricing.ts";
-import { estimateCostUsd, estimateTokens, LOCAL_EMBEDDING_MODEL } from "./embeddings/signature.ts";
+import { effectiveInputWindowTokens } from "./embeddings/presets.ts";
+import {
+  embeddingSignature,
+  estimateCostUsd,
+  estimateTokens,
+  LOCAL_EMBEDDING_MODEL,
+} from "./embeddings/signature.ts";
 import type { Store } from "./store.ts";
-import type { PendingVectorScope } from "./store/chunks.ts";
+import type { ChunkHoldExclusion, PendingVectorScope } from "./store/chunks.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
 /** Why a gate refused. The value leaves TypeScript in previews and JSON. */
@@ -139,16 +145,50 @@ export interface EmbeddingSpendPlanOptions {
 }
 
 /**
+ * The pending-census exclusion key for this config's chunk holds
+ * (chunk skip-and-hold, F2): the (model, window, signature) triple under
+ * which the embedding phase records a hold, and under which the pending
+ * anti-join hides held chunks from every spend surface.
+ *
+ * Null when no chunk can be proved over anything - no model, or no
+ * declared window - and a null key excludes nothing: an old hold row
+ * whose key no longer matches the config is inert, which is exactly the
+ * release path. The phase persists under the same rendering so the writer
+ * and the readers cannot drift on what "the same hold" means.
+ */
+export function chunkHoldExclusion(config: ResolvedSearchConfig): ChunkHoldExclusion | null {
+  const model = activeEmbeddingModel(config);
+  if (model === null) return null;
+  const windowTokens = effectiveInputWindowTokens(config.semantic, model);
+  if (windowTokens === null) return null;
+  return Object.freeze({
+    model,
+    windowTokens,
+    embeddingSignature: embeddingSignature({
+      provider: config.semantic.provider,
+      model,
+      dimension: config.semantic.dimension,
+    }),
+  });
+}
+
+/**
  * Plan the spend of embedding every pending chunk in scope. Reads only:
  * the phase in `indexer.ts` remains the only spender and throws on a
- * blocked verdict.
+ * blocked verdict. Chunks held under the config's own key are not
+ * pending: they leave the census before they can be priced.
  */
 export function planEmbeddingSpend(
   store: Store,
   config: ResolvedSearchConfig,
   opts: EmbeddingSpendPlanOptions = {},
 ): EmbeddingSpendPlan {
-  return priceSpendPlan(store.findChunksWithoutEmbeddings(opts.scope), config, opts.forced);
+  const hold = chunkHoldExclusion(config);
+  return priceSpendPlan(
+    store.findChunksWithoutEmbeddings(opts.scope, hold ?? undefined),
+    config,
+    opts.forced,
+  );
 }
 
 /**

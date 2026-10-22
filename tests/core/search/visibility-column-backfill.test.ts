@@ -165,6 +165,23 @@ describe("the migration over a pre-column index", () => {
     expect(migrate()).toBe(LATEST_SCHEMA_VERSION);
     expect(visibilityByPath()).toEqual(first);
   });
+
+  test("a marker page's backfilled row keeps the reservation the indexer would stamp", async () => {
+    // write-honesty F1: `access: private` and friends reserve a page
+    // against remote reads. The indexer stamps that through
+    // `remoteDenyVisibilityTokens`; a migration backfill reading only the
+    // declared `visibility:` would silently UN-reserve the page for every
+    // row it touches, which is the opposite of what the marker declares.
+    writeMd(vault, "marked.md", "---\naccess: private\n---\n\n# Marked\n\nlattice widget marked");
+    writeMd(vault, "plain.md", "# Plain\n\nlattice widget ordinary");
+    await indexVault(makeConfig({ vault, dbPath }));
+    rewindToPreColumnSchema();
+    migrate();
+    expect(visibilityByPath().get("marked.md")).toBe(
+      JSON.stringify([REMOTE_DENY_VISIBILITY_TOKEN]),
+    );
+    expect(visibilityByPath().get("plain.md")).toBe("[]");
+  });
 });
 
 describe("the indexer", () => {

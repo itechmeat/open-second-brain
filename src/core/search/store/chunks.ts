@@ -8,6 +8,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "../types.ts";
+import { CHUNK_HOLDS_TABLE } from "../schema.ts";
 import { pathPrefixRange } from "./path-prefix.ts";
 import { nowIso, sqlPlaceholders } from "./sql.ts";
 import {
@@ -363,6 +364,40 @@ const PENDING_ANTI_JOIN =
   "FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id WHERE e.chunk_id IS NULL";
 
 /**
+ * The identity a persistent chunk hold is matched under (chunk
+ * skip-and-hold, F2): the (model, window, signature) triple whose proof
+ * put the chunk in `chunk_embedding_holds`. The pending anti-join
+ * excludes a held chunk ONLY while this triple still describes the
+ * active configuration, so a window or model change releases the hold
+ * back into pending without any delete pass.
+ */
+export interface ChunkHoldExclusion {
+  readonly model: string;
+  readonly windowTokens: number;
+  readonly embeddingSignature: string;
+}
+
+/** One recorded hold, as read back for reporting. */
+export interface ChunkHoldRow {
+  readonly chunkId: number;
+  readonly model: string;
+  readonly windowTokens: number;
+  readonly embeddingSignature: string;
+  readonly estimatedTokens: number;
+  readonly heldAt: string;
+}
+
+/**
+ * The anti-join's exclusion of holds made under `hold`: a chunk with a
+ * row matching the whole key is owed no vector by this configuration.
+ * Bound after the scope's bindings, matching clause order.
+ */
+const HOLD_NOT_EXISTS =
+  ` AND NOT EXISTS (SELECT 1 FROM ${CHUNK_HOLDS_TABLE} h ` +
+  "WHERE h.chunk_id = c.id AND h.model = ? AND h.window_tokens = ? " +
+  "AND h.embedding_signature = ?)";
+
+/**
  * The anti-join's FROM/WHERE text and bindings for a scope. A scoped
  * census joins `documents` and matches each prefix with the sargable
  * range form every other prefix reader uses (`path-prefix.ts`), which
@@ -370,12 +405,18 @@ const PENDING_ANTI_JOIN =
  * the match. A prefix whose last code point cannot increment has a null
  * bound and contributes its lower-bound-only clause.
  */
-function pendingCensusClause(scope: PendingVectorScope | undefined): {
-  sql: string;
-  bindings: string[];
-} {
+function pendingCensusClause(
+  scope: PendingVectorScope | undefined,
+  hold: ChunkHoldExclusion | undefined,
+): { sql: string; bindings: (string | number)[] } {
   const prefixes = scope?.pathPrefixes ?? [];
-  if (prefixes.length === 0) return { sql: PENDING_ANTI_JOIN, bindings: [] };
+  const holdBindings: (string | number)[] = hold
+    ? [hold.model, hold.windowTokens, hold.embeddingSignature]
+    : [];
+  const holdClause = hold ? HOLD_NOT_EXISTS : "";
+  if (prefixes.length === 0) {
+    return { sql: PENDING_ANTI_JOIN + holdClause, bindings: holdBindings };
+  }
   const ranges = prefixes.map((prefix) => pathPrefixRange(prefix));
   const matches = ranges
     .map((range) => (range.hi !== null ? "(d.path >= ? AND d.path < ?)" : "(d.path >= ?)"))
@@ -384,23 +425,28 @@ function pendingCensusClause(scope: PendingVectorScope | undefined): {
     sql:
       "FROM chunks c JOIN documents d ON d.id = c.document_id " +
       "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-      `WHERE e.chunk_id IS NULL AND (${matches})`,
-    bindings: ranges.flatMap((range) => (range.hi !== null ? [range.lo, range.hi] : [range.lo])),
+      `WHERE e.chunk_id IS NULL AND (${matches})${holdClause}`,
+    bindings: [
+      ...ranges.flatMap((range) => (range.hi !== null ? [range.lo, range.hi] : [range.lo])),
+      ...holdBindings,
+    ],
   };
 }
 
 /**
  * Chunks that have no row in `embeddings`. Used by the indexer to
  * populate vectors after a fresh index or after the model-change drop,
- * optionally scoped to path prefixes.
+ * optionally scoped to path prefixes and optionally excluding the chunks
+ * held back under `hold`'s key (chunk skip-and-hold, F2).
  */
 export function findChunksWithoutEmbeddings(
   db: Database,
   scope?: PendingVectorScope,
+  hold?: ChunkHoldExclusion,
 ): Array<{ chunkId: number; content: string }> {
-  const { sql, bindings } = pendingCensusClause(scope);
+  const { sql, bindings } = pendingCensusClause(scope, hold);
   const rows = db
-    .query<{ id: number; content: string }, string[]>(
+    .query<{ id: number; content: string }, (string | number)[]>(
       `SELECT c.id AS id, c.content AS content ${sql} ORDER BY c.id`,
     )
     .all(...bindings);
@@ -412,15 +458,181 @@ export function findChunksWithoutEmbeddings(
  * single one of their bodies.
  *
  * The same anti-join {@link findChunksWithoutEmbeddings} walks, under the
- * same scope, as a `COUNT(*)`. The row-returning form is the indexer's
- * work queue and loads every pending chunk's full `content` into JS
- * memory to hand it to a provider; a diagnostic that only wants the
- * number must not pay that, which is the whole reason this second query
- * exists rather than a `.length` on the first.
+ * same scope and hold exclusion, as a `COUNT(*)`. The row-returning form
+ * is the indexer's work queue and loads every pending chunk's full
+ * `content` into JS memory to hand it to a provider; a diagnostic that
+ * only wants the number must not pay that, which is the whole reason this
+ * second query exists rather than a `.length` on the first.
  */
-export function countChunksWithoutEmbeddings(db: Database, scope?: PendingVectorScope): number {
-  const { sql, bindings } = pendingCensusClause(scope);
-  return db.query<{ n: number }, string[]>(`SELECT COUNT(*) AS n ${sql}`).get(...bindings)?.n ?? 0;
+export function countChunksWithoutEmbeddings(
+  db: Database,
+  scope?: PendingVectorScope,
+  hold?: ChunkHoldExclusion,
+): number {
+  const { sql, bindings } = pendingCensusClause(scope, hold);
+  return (
+    db.query<{ n: number }, (string | number)[]>(`SELECT COUNT(*) AS n ${sql}`).get(...bindings)
+      ?.n ?? 0
+  );
+}
+
+/** One hold decision to record: the chunk and the proof's numbers. */
+export interface ChunkHoldEntry {
+  readonly chunkId: number;
+  readonly estimatedTokens: number;
+  readonly windowTokens: number;
+}
+
+/** The (model, signature) pair every hold of one phase run shares. */
+export interface ChunkHoldStamp {
+  readonly model: string;
+  readonly embeddingSignature: string;
+}
+
+/**
+ * Record the embedding phase's hold decisions (chunk skip-and-hold, F2).
+ *
+ * `INSERT OR REPLACE` on the (chunk, key) primary key: re-deciding the
+ * same hold refreshes its estimate and timestamp rather than stacking a
+ * second row, which is what keeps a hand-in-plan re-run of the phase
+ * free of duplicate state.
+ */
+export function recordChunkHolds(
+  db: Database,
+  entries: ReadonlyArray<ChunkHoldEntry>,
+  stamp: ChunkHoldStamp,
+): void {
+  if (entries.length === 0) return;
+  const heldAt = nowIso();
+  const insert = db.query<never, [number, string, number, string, number, string]>(
+    `INSERT OR REPLACE INTO ${CHUNK_HOLDS_TABLE}` +
+      "(chunk_id, model, window_tokens, embedding_signature, estimated_tokens, held_at) " +
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  );
+  for (const entry of entries) {
+    insert.run(
+      entry.chunkId,
+      stamp.model,
+      entry.windowTokens,
+      stamp.embeddingSignature,
+      entry.estimatedTokens,
+      heldAt,
+    );
+  }
+}
+
+/** The hold rows recorded for one chunk, whatever key made them. */
+export function chunkHoldRowsFor(db: Database, chunkId: number): ChunkHoldRow[] {
+  return chunkHoldRowsForMany(db, [chunkId]);
+}
+
+/** Hold rows for many chunks in one read, keyed by chunk id. */
+export function chunkHoldRowsForMany(
+  db: Database,
+  chunkIds: ReadonlyArray<number>,
+): ChunkHoldRow[] {
+  if (chunkIds.length === 0) return [];
+  const placeholders = sqlPlaceholders(chunkIds);
+  return db
+    .query<
+      {
+        chunk_id: number;
+        model: string;
+        window_tokens: number;
+        embedding_signature: string;
+        estimated_tokens: number;
+        held_at: string;
+      },
+      number[]
+    >(
+      `SELECT chunk_id, model, window_tokens, embedding_signature, estimated_tokens, held_at ` +
+        `FROM ${CHUNK_HOLDS_TABLE} WHERE chunk_id IN (${placeholders}) ORDER BY chunk_id, model`,
+    )
+    .all(...chunkIds)
+    .map((r) => ({
+      chunkId: r.chunk_id,
+      model: r.model,
+      windowTokens: r.window_tokens,
+      embeddingSignature: r.embedding_signature,
+      estimatedTokens: r.estimated_tokens,
+      heldAt: r.held_at,
+    }));
+}
+
+/** One held chunk with the position that names it outside the index. */
+export interface HeldChunkCensusRow {
+  readonly path: string;
+  readonly chunkIndex: number;
+  readonly estimatedTokens: number;
+  readonly windowTokens: number;
+}
+
+/**
+ * The held chunks recorded under one key, with the UNCAPPED total. The
+ * rows come back position-ordered and at most `limit` of them, so the
+ * caller caps without loading a vault's whole hold list.
+ */
+export function heldChunkCensus(
+  db: Database,
+  hold: ChunkHoldExclusion,
+  limit: number,
+): { total: number; rows: HeldChunkCensusRow[] } {
+  const total =
+    db
+      .query<{ n: number }, (string | number)[]>(
+        `SELECT COUNT(*) AS n FROM ${CHUNK_HOLDS_TABLE} ` +
+          "WHERE model = ? AND window_tokens = ? AND embedding_signature = ?",
+      )
+      .get(hold.model, hold.windowTokens, hold.embeddingSignature)?.n ?? 0;
+  if (total === 0) return { total: 0, rows: [] };
+  const rows = db
+    .query<
+      { path: string; chunk_index: number; estimated_tokens: number; window_tokens: number },
+      (string | number)[]
+    >(
+      "SELECT d.path AS path, c.chunk_index AS chunk_index, " +
+        "h.estimated_tokens AS estimated_tokens, h.window_tokens AS window_tokens " +
+        `FROM ${CHUNK_HOLDS_TABLE} h ` +
+        "JOIN chunks c ON c.id = h.chunk_id " +
+        "JOIN documents d ON d.id = c.document_id " +
+        "WHERE h.model = ? AND h.window_tokens = ? AND h.embedding_signature = ? " +
+        "ORDER BY d.path, c.chunk_index LIMIT ?",
+    )
+    .all(hold.model, hold.windowTokens, hold.embeddingSignature, limit)
+    .map((r) => ({
+      path: r.path,
+      chunkIndex: r.chunk_index,
+      estimatedTokens: r.estimated_tokens,
+      windowTokens: r.window_tokens,
+    }));
+  return { total, rows };
+}
+
+/** Held chunks aggregated to the source document that carries them. */
+export interface HeldChunkDocRow {
+  readonly path: string;
+  readonly heldChunks: number;
+  readonly maxEstimatedTokens: number;
+}
+
+/**
+ * Per-document counts of the holds recorded under one key, document-
+ * ordered. The doctor's held-sources check speaks per document, and the
+ * aggregation belongs to the SQL rather than to a caller that would
+ * have to load every held row to do it.
+ */
+export function heldChunkDocCensus(db: Database, hold: ChunkHoldExclusion): HeldChunkDocRow[] {
+  return db
+    .query<{ path: string; held: number; max_est: number }, (string | number)[]>(
+      "SELECT d.path AS path, COUNT(*) AS held, MAX(h.estimated_tokens) AS max_est " +
+        `FROM ${CHUNK_HOLDS_TABLE} h ` +
+        "JOIN chunks c ON c.id = h.chunk_id " +
+        "JOIN documents d ON d.id = c.document_id " +
+        "WHERE h.model = ? AND h.window_tokens = ? AND h.embedding_signature = ? " +
+        "GROUP BY d.path ORDER BY d.path",
+    )
+    .all(hold.model, hold.windowTokens, hold.embeddingSignature)
+    .map((r) => ({ path: r.path, heldChunks: r.held, maxEstimatedTokens: r.max_est }));
 }
 
 export function hydrateChunks(

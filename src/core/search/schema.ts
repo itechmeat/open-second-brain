@@ -10,7 +10,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "./types.ts";
-import { pageVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { closeDatabase } from "../sqlite-close.ts";
 
@@ -19,7 +19,7 @@ import { closeDatabase } from "../sqlite-close.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 14;
+export const LATEST_SCHEMA_VERSION = 15;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -712,6 +712,40 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       backfillDocumentAttributes(db);
     },
   },
+  {
+    // v15 (chunk skip-and-hold, t_f029b413) - the persistent hold
+    // record: one row per (chunk, hold-decision key) for chunks the
+    // embedding phase PROVED over a model's declared input window.
+    //
+    // The key is the whole design. `PENDING_ANTI_JOIN` excludes a chunk
+    // only while a row matches the CURRENT (model, window, signature)
+    // triple, so a config change releases holds back into pending with
+    // no migration and no delete pass, while an unchanged config keeps
+    // them held without a second provider contact. The FK cascade is
+    // the garbage collector: re-indexing a document replaces its chunk
+    // rows, and a hold against a chunk that no longer exists dies with
+    // it rather than keying a ghost.
+    //
+    // No backfill, deliberately: a hold is a decision about a CONFIG -
+    // which window which model declares - and a migration has no config
+    // to consult. An index predating this version keeps its oversize
+    // chunks pending until the next embedding pass decides, and records,
+    // for them.
+    version: 15,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ${CHUNK_HOLDS_TABLE} (
+          chunk_id            INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+          model               TEXT NOT NULL,
+          window_tokens       INTEGER NOT NULL,
+          embedding_signature TEXT NOT NULL,
+          estimated_tokens    INTEGER NOT NULL,
+          held_at             TEXT NOT NULL,
+          PRIMARY KEY (chunk_id, model, window_tokens, embedding_signature)
+        ) WITHOUT ROWID;
+      `);
+    },
+  },
 ]);
 
 /**
@@ -753,6 +787,15 @@ export const CHUNK_KIND_SECTION = "section";
 
 /** The `document_attributes` table (v14), named once for the same reason. */
 export const DOCUMENT_ATTRIBUTES_TABLE = "document_attributes";
+
+/**
+ * The `chunk_embedding_holds` table (v15): the persistent record of the
+ * embedding phase's skip-and-hold decisions, keyed by the chunk and the
+ * (model, window, signature) triple that made the proof. Named once: the
+ * migration, the store's anti-join exclusion and the hold report all
+ * spell it from here.
+ */
+export const CHUNK_HOLDS_TABLE = "chunk_embedding_holds";
 
 /**
  * The frontmatter keys the attributes extractor never copies: each keeps a
@@ -919,6 +962,13 @@ export function encodeDocumentVisibility(tokens: ReadonlyArray<string>): string 
  * Fill {@link DOCUMENT_VISIBILITY_COLUMN} for every row that has no value
  * yet, from the frontmatter chunk the index already holds.
  *
+ * The tokens come from {@link remoteDenyVisibilityTokens} - the declared
+ * `visibility:` plus any informal privacy marker's reservation - because
+ * that is exactly what the indexer stamps on a live write. Backfilling
+ * from the declaration alone would silently UN-reserve every marker page
+ * this migration touches: the row would answer differently after a
+ * migration than the same file answers after a re-index.
+ *
  * A document with no chunk zero is left NULL - the index holds nothing to
  * measure, and saying "no tokens" about it would be a claim nobody made.
  */
@@ -937,7 +987,7 @@ function backfillDocumentVisibility(db: Database): void {
   for (const row of rows) {
     if (row.content === null) continue;
     const [meta] = parseFrontmatterText(row.content);
-    update.run(encodeDocumentVisibility(pageVisibility(meta)), row.id);
+    update.run(encodeDocumentVisibility(remoteDenyVisibilityTokens(meta)), row.id);
   }
 }
 

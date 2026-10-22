@@ -194,6 +194,23 @@ export function serializeIndexStatus(s: IndexStatusSnapshot): Record<string, unk
     ...(s.chunkWindowUndeclared === undefined
       ? {}
       : { chunk_window_undeclared: serializeChunkWindowCensus(s.chunkWindowUndeclared) }),
+    // The same terms as the census field above: present only when the
+    // index actually holds chunks under the active key, so a status with
+    // nothing held serializes the bytes it emitted before this existed.
+    ...(s.heldChunks === undefined
+      ? {}
+      : {
+          held_chunks: {
+            total: s.heldChunks.total,
+            items: s.heldChunks.items.map((item) => ({
+              path: item.path,
+              chunk_index: item.chunkIndex,
+              estimated_tokens: item.estimatedTokens,
+              window_tokens: item.windowTokens,
+              reason: item.reason,
+            })),
+          },
+        }),
     warnings: s.warnings,
   };
 }
