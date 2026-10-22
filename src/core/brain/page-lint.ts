@@ -24,6 +24,12 @@
  *     composite scope bucket - through the shared `tokenise`/`jaccard`
  *     primitives (t_d30c0548). A bounded, deterministic candidate set per
  *     write; the finding rides the receipt and never gates the write.
+ *   - {@link UNDATED_QUANTITY_CODE}, the authored body scanned for a count
+ *     or amount with no structural date on the page (t_fb442a24). The
+ *     trigger shapes live in `undated-quantity.ts`; this module owns the
+ *     escape hatches - `valid_from` in frontmatter, any ISO date in the
+ *     body, or a `[Source: <name>, YYYY-MM-DD]` marker - and the finding
+ *     quotes the lexeme and its offset, never the line. Advisory only.
  *
  * `demote-stale-stable` is deliberately EXCLUDED, not overlooked: its
  * trigger is the page's creation age against the staleness cap, so it can
@@ -106,8 +112,11 @@ import {
   type NearDuplicatePoolEntry,
   type ReadableRef,
 } from "./near-duplicate.ts";
+import { VALID_FROM_KEY } from "./lifecycle/temporal-replace.ts";
 import { tokenise } from "./similarity.ts";
+import { parseCitations } from "./temporal/citations.ts";
 import type { DoctorSeverity } from "./types.ts";
+import { containsIsoDate, findUndatedQuantities } from "./undated-quantity.ts";
 import { WIKILINK_TARGET_RE, isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { ARTIFACT_MAX_BYTES, validateArtifact } from "./write-session/validate.ts";
 
@@ -139,6 +148,14 @@ export const NEAR_DUPLICATE_JACCARD = NEAR_DUPLICATE_THRESHOLDS.writeHint;
 
 /** Code the near-duplicate detector reports under. */
 export const NEAR_DUPLICATE_CODE = "near-duplicate";
+
+/**
+ * Code the undated-quantity detector reports under (write-honesty, F4).
+ * A count or amount with no structural date on the page answers as true at
+ * every instant, because an absent `valid_from` is unbounded. The code is
+ * registered in `diagnostics.ts` so the finding carries a next command.
+ */
+export const UNDATED_QUANTITY_CODE = "undated-quantity";
 
 /**
  * Most sibling pages one directory contributes as near-duplicate
@@ -555,6 +572,45 @@ function hasReadableArtifact(vault: string, ctx: LintContext, target: string): b
   return false;
 }
 
+/**
+ * Whether the page supplies a structural date that places its quantities
+ * in time. Three hatches, all structural: a `valid_from` boundary in
+ * frontmatter, any ISO date or instant in the body, or a
+ * `[Source: <name>, YYYY-MM-DD]` marker. The citation marker always
+ * carries its own ISO date, so the date hatch already covers a well-formed
+ * one; it is checked explicitly through the canonical parser so the
+ * contract reads as three hatches rather than a coincidence.
+ */
+function hasDatedQuantityContext(meta: FrontmatterMap, body: string): boolean {
+  const declared = meta[VALID_FROM_KEY];
+  if (typeof declared === "string" && declared.trim() !== "") return true;
+  if (containsIsoDate(body)) return true;
+  return parseCitations(body).markers.length > 0;
+}
+
+/**
+ * The undated-quantity findings for one written page: one warning per
+ * lexeme the body states with no date on the page. The lexeme and its
+ * offset are the whole evidence - the authored line is not quoted, so a
+ * receipt cannot carry prose the caller did not ask it to repeat.
+ */
+function undatedQuantityFindings(
+  page: string,
+  meta: FrontmatterMap,
+  body: string,
+): PageLintFinding[] {
+  if (hasDatedQuantityContext(meta, body)) return [];
+  return findUndatedQuantities(body).map(({ lexeme, offset }) =>
+    finding(
+      "warning",
+      UNDATED_QUANTITY_CODE,
+      page,
+      "body",
+      `quantity ${JSON.stringify(lexeme)} at offset ${offset} carries no date`,
+    ),
+  );
+}
+
 function lintOnePage(
   vault: string,
   ctx: LintContext,
@@ -609,6 +665,7 @@ function lintOnePage(
       );
     }
   }
+  out.push(...undatedQuantityFindings(page, meta, body));
   out.push(
     ...timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
       nearDuplicateFindings(ctx, page, meta, body),

@@ -23,6 +23,7 @@ import {
   PAGE_LINT_MAX_FINDINGS,
   PAGE_LINT_SKIP_REASON,
   PAGE_LINT_UNAVAILABLE_CODE,
+  UNDATED_QUANTITY_CODE,
   comparePageLintFindings,
   lintPagesWithContext,
   lintWrittenPages,
@@ -144,6 +145,91 @@ describe("lintWrittenPages - findings", () => {
     const rel = writeNote("Notes/Typed.md", "---\ntitle: T\ntype: not-a-declared-type\n---\n\nx\n");
     const codes = lintWrittenPages(vault, [rel], READ_ALL).findings.map((f) => f.code);
     expect(codes).toContain("schema-type-unknown");
+  });
+});
+
+/**
+ * The fifth detector (write-honesty, F4, t_fb442a24). A count or amount
+ * with no structural date is an advisory warning on the `body` path: the
+ * page states a quantity a reader cannot place in time. The escape hatches
+ * are structural, never natural language - `valid_from` in frontmatter, any
+ * ISO date in the body, or a `[Source: <name>, YYYY-MM-DD]` marker.
+ */
+describe("lintWrittenPages - undated-quantity findings", () => {
+  const BODY = "We onboarded 5,000 users.";
+  const QUANTITY = "5,000 users";
+
+  function undatedFindings(report: ReturnType<typeof lintWrittenPages>) {
+    return report.findings.filter((f) => f.code === UNDATED_QUANTITY_CODE);
+  }
+
+  test("an undated numeric note is exactly one warning on the body path", () => {
+    const rel = writeNote("Notes/Undated.md", `---\ntitle: U\n---\n\n${BODY}\n`);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    const findings = undatedFindings(report);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: "warning",
+      code: UNDATED_QUANTITY_CODE,
+      page: rel,
+      path: "body",
+    });
+    // The finding quotes the lexeme and its offset, never the raw line.
+    expect(findings[0]!.message).toContain(JSON.stringify(QUANTITY));
+    expect(findings[0]!.message).toContain(`offset ${BODY.indexOf(QUANTITY)}`);
+    expect(findings[0]!.message).not.toContain("onboarded");
+    expect(report.total).toBe(1);
+    expect(pageLintField(report)).toMatchObject({ [PAGE_LINT_KEY]: { total: 1 } });
+  });
+
+  test("valid_from in frontmatter silences the finding and keeps the key absent", () => {
+    const rel = writeNote(
+      "Notes/DatedFrontmatter.md",
+      `---\ntitle: D\nvalid_from: 2026-10-01\n---\n\n${BODY}\n`,
+    );
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(report.findings).toEqual([]);
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("an ISO date in the body silences the finding", () => {
+    const rel = writeNote(
+      "Notes/DatedBody.md",
+      `---\ntitle: D\n---\n\nOn 2026-10-01 ${BODY.toLowerCase()}\n`,
+    );
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(undatedFindings(report)).toEqual([]);
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("a [Source: <name>, YYYY-MM-DD] marker silences the finding", () => {
+    const rel = writeNote(
+      "Notes/Cited.md",
+      `---\ntitle: C\n---\n\n${QUANTITY} [Source: annual report, 2026-10-01]\n`,
+    );
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(undatedFindings(report)).toEqual([]);
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("a version token, a table row and a code span are not quantities", () => {
+    const rel = writeNote(
+      "Notes/NotQuantities.md",
+      "---\ntitle: N\n---\n\nupgraded to v1.73.0\n\n| 5,000 users | 35% |\n\n`5,000 users`\n",
+    );
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(undatedFindings(report)).toEqual([]);
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("the finding cap still counts what it drops", () => {
+    const lines = Array.from({ length: PAGE_LINT_MAX_FINDINGS + 2 }, () => "5 users").join("\n");
+    const rel = writeNote("Notes/ManyUndated.md", `---\ntitle: M\n---\n\n${lines}\n`);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
+    expect(report.total).toBe(PAGE_LINT_MAX_FINDINGS + 2);
+    expect(report.returned).toBe(PAGE_LINT_MAX_FINDINGS);
+    expect(report.truncated).toBe(true);
+    expect(report.findings.every((f) => f.code === UNDATED_QUANTITY_CODE)).toBe(true);
   });
 });
 
