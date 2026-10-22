@@ -30,6 +30,7 @@ import {
 } from "../brain/entities/person-nicknames.ts";
 import {
   derivePersonNameVariants,
+  EMPTY_PERSON_NICKNAME_MAP,
   isPersonCategory,
   type PersonNicknameMap,
 } from "../brain/entities/person-variants.ts";
@@ -87,11 +88,17 @@ export function expandQueryEntities(
   }
   if (index.entities.length === 0) return identity;
 
-  let nicknames: PersonNicknameMap;
+  let nicknames = EMPTY_PERSON_NICKNAME_MAP;
   try {
     nicknames = resolvePersonNicknameMap(vault);
-  } catch {
-    return identity; // fail-soft: an unusable nickname file is not a search outage
+  } catch (err) {
+    // Fail-soft for the operator data alone: an unusable nickname file
+    // drops the NICKNAME lane, not the expansion the registry provides
+    // without it - the declared name/alias forms and the structural
+    // variants keep working, exactly as they did before operator
+    // nickname data existed. Anything that is not a config fault is not
+    // a degradation, it is a bug, and it surfaces by name.
+    if (!(err instanceof PersonNicknameConfigError)) throw err;
   }
 
   const querySet = new Set(queryEntities.map((e) => normalizeEntityName(e)));
@@ -126,7 +133,9 @@ export function expandQueryEntities(
       for (const variants of derivedByForm) {
         for (const variant of variants) {
           // A derived form another entity (or this one) already DECLARED
-          // is tracked as declared: declared attribution wins.
+          // is tracked as declared: declared attribution wins. The guard
+          // sees declarations collected SO FAR; a declaration collected
+          // LATER in the walk is claimed by the post-loop filter below.
           if (querySet.has(variant) || addedSet.has(variant) || derivedSet.has(variant)) continue;
           derivedSet.add(variant);
           derived.push(variant);
@@ -137,11 +146,17 @@ export function expandQueryEntities(
     if (contributed) sourceIds.push(entity.id);
   }
 
-  if (added.length === 0 && derived.length === 0) return identity;
+  // Declared attribution wins in BOTH visit orders: a form some entity
+  // declared is subtracted from the derived lane even when the derivation
+  // reached it first, so the two lanes stay disjoint and a form is never
+  // counted - or boosted - twice.
+  const derivedOnly = derived.filter((v) => !addedSet.has(v));
+
+  if (added.length === 0 && derivedOnly.length === 0) return identity;
   return Object.freeze({
-    expanded: Object.freeze([...queryEntities, ...added, ...derived]),
+    expanded: Object.freeze([...queryEntities, ...added, ...derivedOnly]),
     added: Object.freeze(added),
-    derived: Object.freeze(derived),
+    derived: Object.freeze(derivedOnly),
     sourceIds: Object.freeze(sourceIds.toSorted()),
   });
 }

@@ -127,6 +127,39 @@ describe("person-variant expansion", () => {
     expect(out.sourceIds).toContain("ent-people-smith-robert");
   });
 
+  test("a malformed nickname file drops only the nickname lane: declared expansion keeps working", () => {
+    // Identity expansion here would turn off the declared name/alias
+    // expansion that never needed the file - one bad operator file must
+    // not silence the whole registry.
+    seedRegistry();
+    mkdirSync(join(tmp.vault, "Brain", "entities"), { recursive: true });
+    writeFileSync(join(tmp.vault, PERSON_NICKNAMES_ARTIFACT_REL), "{ not json");
+    const out = expandQueryEntities(tmp.vault, ["osb"]);
+    expect(out.added).toEqual(["open second brain", "the vault project"]);
+    expect(out.expanded).toEqual(["osb", "open second brain", "the vault project"]);
+  });
+
+  test("a form two entities share is attributed to the declaration, never to both lanes", () => {
+    // Entity A's derivation reaches "smith robert"; entity B DECLARES it
+    // as an alias. Whichever entity the walk visits first, the form must
+    // land in exactly one lane - the declared one - or candidate signals
+    // count it twice and attribute it wrong.
+    seedPerson("Robert Smith");
+    upsertEntity(tmp.vault, {
+      category: "people",
+      name: "R Smith",
+      aliases: ["Smith Robert"],
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    const out = expandQueryEntities(tmp.vault, ["r smith"]);
+    // The declared claim wins: the shared form is added, not derived.
+    expect(out.added).toContain("smith robert");
+    expect(out.derived).not.toContain("smith robert");
+    // And the lanes are disjoint over the whole expansion.
+    expect(new Set(out.expanded).size).toBe(out.expanded.length);
+  });
+
   test("a vault with no person entities returns the identity expansion byte-identically", () => {
     seedRegistry();
     writeNicknames({ bob: ["ada lovelace"] });
