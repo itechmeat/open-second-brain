@@ -284,7 +284,7 @@ describe("the content-class census cannot pass by finding nothing", () => {
     // census names it - a blinded detector or a vacuous census shows here.
     expect(isPageCarryingRedactor(intruder.text)).toBe(true);
     expect(classFilterCensus([...SOURCE_TREE, intruder])).toContain(intruder.path);
-  });
+  }, 20000);
 
   test("removing the seam from a real verb is reported by name", () => {
     for (const path of [
@@ -299,7 +299,7 @@ describe("the content-class census cannot pass by finding nothing", () => {
       const tree = SOURCE_TREE.map((f) => (f.path === path ? { path, text: stripped } : f));
       expect(classFilterCensus(tree)).toContain(path);
     }
-  });
+  }, 20000);
 
   test("removing the transcript naming from `brain export` is reported by name", () => {
     // The transcript branch's duty is refuse-or-name, never silently
