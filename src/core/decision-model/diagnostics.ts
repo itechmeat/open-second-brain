@@ -11,8 +11,12 @@
 
 import { CHOICE_MAX_OPTIONS } from "./answers.ts";
 import { DECISION_MODEL_USES, isDecisionModelUse, type DecisionModelUse } from "./contract.ts";
-import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
-import { makeDecisionProvider } from "./provider.ts";
+import {
+  resolveDecisionModelConfig,
+  resolvedProviderEntries,
+  type ResolvedDecisionModelConfig,
+} from "./config.ts";
+import { makeEntryDecisionProvider } from "./provider.ts";
 import { DECISION_MODEL_UNPRICED_ADAPTERS } from "./presets.ts";
 import type { DecisionProvider } from "./contract.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
@@ -66,6 +70,12 @@ export interface DecisionModelCheckReport {
   readonly adapter: string;
   readonly base_url: string | null;
   readonly model: string | null;
+  /**
+   * The ordered provider chain (`decision_model_providers`), first entry
+   * first; the top-level provider fields are the FIRST entry's. With
+   * `--ping`, each entry also carries its own live `ping` result.
+   */
+  readonly provider_order: ReadonlyArray<DecisionProviderCheck>;
   /** NAME of the key variable, never its value. */
   readonly env_key: string | null;
   readonly key_set: boolean;
@@ -144,6 +154,28 @@ export interface DecisionModelCheckOptions {
    * running process's platform dirs; tests inject a state root.
    */
   readonly markSource?: PlatformDirsEnv | null;
+}
+
+/** One chain entry as `check` reports it, in configured order. */
+export interface DecisionProviderCheck {
+  readonly name: string;
+  readonly adapter: string;
+  readonly base_url: string | null;
+  readonly model: string | null;
+  /** NAME of the entry's key variable, never its value. */
+  readonly env_key: string | null;
+  readonly key_set: boolean;
+  readonly key_required: boolean;
+  /** Whether the entry would be tried: it has its key, or needs none. */
+  readonly configured: boolean;
+  readonly calibrated: boolean;
+  /** Present only for a `check --ping` of a configured entry. */
+  readonly ping?: {
+    readonly ok: boolean;
+    readonly model?: string;
+    readonly latency_ms?: number;
+    readonly reason?: string;
+  };
 }
 
 const RERANK_ENDPOINT_KEYS = [
@@ -466,6 +498,17 @@ export async function buildDecisionModelCheck(
     adapter: cfg.adapter,
     base_url: cfg.baseUrl,
     model: cfg.model,
+    provider_order: resolvedProviderEntries(cfg).map((entry): DecisionProviderCheck => ({
+      name: entry.name,
+      adapter: entry.adapter,
+      base_url: entry.baseUrl,
+      model: entry.model,
+      env_key: entry.envKey,
+      key_set: entry.keyPresent,
+      key_required: entry.keyRequired,
+      configured: entry.keyPresent || !entry.keyRequired,
+      calibrated: entry.calibrated,
+    })),
     env_key: cfg.envKey,
     key_set: cfg.keyPresent,
     key_required: cfg.keyRequired !== false,
@@ -495,64 +538,95 @@ export async function buildDecisionModelCheck(
   };
 
   if (opts.ping !== true) return report;
-  // The ping resolves the key the way the real request path does (the
+  // The ping resolves each key the way the real request path does (the
   // factory re-resolves at call time). A store that locks between the
   // config probe and here - or whose keyfile is missing while entries
-  // survive - raises the named refusal, degraded into the ping's reason,
-  // never sent as a Bearer key and never left to escape the check as an
-  // exception.
-  let provider: DecisionProvider | null;
-  try {
-    provider = makeDecisionProvider(cfg, env, opts.vault ?? undefined);
-  } catch (err) {
-    if (
-      err instanceof SecretStoreLockedError ||
-      err instanceof SecretStoreKeyfileMissingError ||
-      err instanceof SecretReferenceError
-    ) {
-      return { ...report, ping: { ok: false, reason: `not sent: ${err.message}` } };
+  // survive - raises the named refusal, degraded into that entry's ping
+  // reason, never sent as a Bearer key and never left to escape the
+  // check as an exception.
+  const order = [...report.provider_order];
+  const entries = resolvedProviderEntries(cfg);
+  let firstPing: DecisionModelCheckReport["ping"] | undefined;
+  let anyConfigured = false;
+  for (const [index, entry] of entries.entries()) {
+    const slot = order[index];
+    if (slot === undefined || !slot.configured) continue;
+    anyConfigured = true;
+    let adapter: DecisionProvider | null;
+    try {
+      adapter = makeEntryDecisionProvider(
+        entry,
+        { allowInsecureHttp: cfg.allowInsecureHttp, timeoutMs: cfg.timeoutMs },
+        env,
+        opts.vault ?? undefined,
+      );
+    } catch (err) {
+      if (
+        err instanceof SecretStoreLockedError ||
+        err instanceof SecretStoreKeyfileMissingError ||
+        err instanceof SecretReferenceError
+      ) {
+        const ping = { ok: false, reason: `not sent: ${err.message}` };
+        order[index] = { ...slot, ping };
+        if (firstPing === undefined) firstPing = ping;
+        continue;
+      }
+      throw err;
     }
-    throw err;
-  }
-  if (provider === null) {
-    return { ...report, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
-  }
-  const pong = await provider.ping();
-  // A ping is a real request: record it (origin `ping`), so it counts
-  // toward the daily gate and shows in the report.
-  emitDecisionModelCall(cfg.vault, {
-    use: "ping",
-    mode: "shadow",
-    provider: provider.name,
-    model: pong.model ?? provider.model,
-    calibrated: provider.calibrated,
-    questionCount: 1,
-    candidateCount: 0,
-    ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
-    inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
-    ...(cfg.outputPriceUsdPerMtok !== undefined && cfg.outputPriceUsdPerMtok !== null
-      ? { outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok }
-      : {}),
-    latencyMs: pong.latencyMs ?? 0,
-    outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
-    origin: "ping",
-    ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
-  });
-  return {
-    ...report,
-    ping: {
+    if (adapter === null) continue;
+    // eslint-disable-next-line no-await-in-loop -- the order is the point: one ping per entry, in order
+    const pong = await adapter.ping();
+    // A ping is a real request: record it (origin `ping`), so it counts
+    // toward the daily gate and shows in the report. Each entry's ping
+    // names its own provider and answering model, so the records never
+    // pool two routes.
+    emitDecisionModelCall(cfg.vault, {
+      use: "ping",
+      mode: "shadow",
+      provider: adapter.name,
+      model: pong.model ?? adapter.model,
+      calibrated: adapter.calibrated,
+      questionCount: 1,
+      candidateCount: 0,
+      ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
+      inputPriceUsdPerMtok: entry.inputPriceUsdPerMtok,
+      ...(entry.outputPriceUsdPerMtok !== undefined && entry.outputPriceUsdPerMtok !== null
+        ? { outputPriceUsdPerMtok: entry.outputPriceUsdPerMtok }
+        : {}),
+      latencyMs: pong.latencyMs ?? 0,
+      outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
+      origin: "ping",
+      ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
+    });
+    const ping: DecisionModelCheckReport["ping"] = {
       ok: pong.ok,
       ...(pong.model !== undefined ? { model: pong.model } : {}),
       ...(pong.latencyMs !== undefined ? { latency_ms: pong.latencyMs } : {}),
       ...(pong.reason !== undefined ? { reason: pong.reason } : {}),
-    },
-  };
+    };
+    order[index] = { ...slot, ping };
+    if (firstPing === undefined) firstPing = ping;
+  }
+  const withOrder: DecisionModelCheckReport = { ...report, provider_order: order };
+  if (!anyConfigured) {
+    return { ...withOrder, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
+  }
+  return { ...withOrder, ping: firstPing };
 }
 
 /** Non-zero only for a broken configured provider. */
 export function decisionModelCheckExitCode(report: DecisionModelCheckReport): number {
   if (report.status === "invalid") return 1;
-  if (report.ping !== undefined && report.status === "active" && !report.ping.ok) return 1;
+  if (
+    report.ping !== undefined &&
+    report.status === "active" &&
+    !report.ping.ok &&
+    // With a chain, a dead FIRST entry is the situation the fallback
+    // exists for: the check fails only when no configured entry answers.
+    !report.provider_order.some((entry) => entry.ping?.ok === true)
+  ) {
+    return 1;
+  }
   return 0;
 }
 
@@ -566,6 +640,25 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
   );
   lines.push(`  base url: ${report.base_url ?? "(not set)"}`);
   lines.push(`  model: ${report.model ?? "(not set)"}`);
+  const order = report.provider_order;
+  if (order.length > 1) {
+    lines.push(`  providers (in order): ${order.map((p) => p.name).join(", ")}`);
+    for (const [i, p] of order.entries()) {
+      const key = p.env_key === null ? "" : `, key ${p.env_key} ${p.key_set ? "set" : "not set"}`;
+      lines.push(
+        `    ${i + 1}. ${p.name} (${p.adapter}): ${p.base_url ?? "(no base url)"}, ` +
+          `model ${p.model ?? "?"}${key}` +
+          `${p.configured ? "" : ", not configured (no key)"}`,
+      );
+      if (p.ping !== undefined) {
+        lines.push(
+          p.ping.ok
+            ? `       ping: ok, answered by ${p.ping.model ?? "?"} in ${p.ping.latency_ms ?? 0}ms`
+            : `       ping: failed (${p.ping.reason ?? "unknown"})`,
+        );
+      }
+    }
+  }
   const optional = report.key_required ? "" : ", optional on this loopback server";
   lines.push(
     report.env_key === null
