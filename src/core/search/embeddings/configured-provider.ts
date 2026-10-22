@@ -31,7 +31,12 @@ export function resolveConfiguredEmbeddingProvider(
 ): EmbeddingProvider | null {
   try {
     const configPath = opts.configPath ?? discoverConfig().path;
-    const provider = makeProvider(resolveSearchConfig({ vault, configPath }).semantic);
+    const config = resolveSearchConfig({ vault, configPath });
+    // The consent is read from the file the semantic configuration was
+    // resolved FROM, not from whatever file the process happens to
+    // default to: a decline is a decision about a configuration, and a
+    // caller that named another file did not have this one in force.
+    const provider = makeProvider({ ...config.semantic, configPath: config.configPath });
     return providerProducesVectors(provider) ? provider : null;
   } catch {
     return null;

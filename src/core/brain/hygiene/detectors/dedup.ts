@@ -112,7 +112,12 @@ function cosine(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 
 function resolveConfiguredProvider(vault: string): EmbeddingProvider | null {
   try {
-    const provider = makeProvider(resolveSearchConfig({ vault }).semantic);
+    const config = resolveSearchConfig({ vault });
+    // The consent travels with the configuration that would spend it:
+    // this semantic configuration was resolved env-only (no config path),
+    // so the consent reads the same source instead of whatever file the
+    // process happens to default to.
+    const provider = makeProvider({ ...config.semantic, configPath: config.configPath });
     return providerProducesVectors(provider) ? provider : null;
   } catch {
     return null;

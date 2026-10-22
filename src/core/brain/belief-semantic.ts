@@ -268,7 +268,16 @@ export async function loadBeliefSemanticRelevance(
       const readable = isRemotelyReadable(indexed.get(path) ?? [], reach);
       vectorsByPath.set(path, readable ? store.storedEmbeddingsForDocument(doc.id) : []);
     }
-    const provider = deps.provider ?? makeProvider(config.semantic);
+    // The consent travels with the configuration that would spend it:
+    // the provider is built under the decline record of the SAME file
+    // (or env, when there is none) this semantic configuration was
+    // resolved from.
+    const provider =
+      deps.provider ??
+      makeProvider({
+        ...config.semantic,
+        configPath: config.configPath,
+      });
     const model = config.semantic.model ?? provider.model;
     // No belief row under the model anywhere means none in reach has one:
     // the pack's refusal is certain, so it is raised before the paid embed.

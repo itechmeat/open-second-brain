@@ -28,6 +28,7 @@ import { join } from "node:path";
 
 import { makeProvider } from "../../../src/core/search/embeddings/provider.ts";
 import { providerProducesVectors } from "../../../src/core/search/embeddings/contract.ts";
+import { resolveConfiguredEmbeddingProvider } from "../../../src/core/search/embeddings/configured-provider.ts";
 import {
   PROVIDER_CONSENT_KEY,
   PROVIDER_CONSENT_REENABLE_KEYS,
@@ -102,6 +103,25 @@ function searchConfig(configPath: string, semantic: ResolvedEmbeddingConfig): Re
   };
 }
 
+/**
+ * The consent env twins are saved and CLEARED around the tests that
+ * resolve a provider without an explicit consent: the resolver reads
+ * `process.env` and env values take precedence over the config file, so
+ * a developer or CI runner exporting either of them would flip these
+ * cases no matter what the fixtures write to disk.
+ */
+function saveAndClearConsentEnv(): () => void {
+  const names = ["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER"];
+  const saved = names.map((name) => [name, process.env[name]] as const);
+  for (const name of names) delete process.env[name];
+  return () => {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
 describe("the decline at provider construction", () => {
   test("a declined record refuses the construction and contacts nothing", async () => {
     const server: FakeHttp = await startFakeHttp();
@@ -160,6 +180,7 @@ describe("the decline at provider construction", () => {
     const server: FakeHttp = await startFakeHttp();
     const f = fixture("decline-default-path");
     const saved = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    const restoreConsentEnv = saveAndClearConsentEnv();
     process.env["OPEN_SECOND_BRAIN_CONFIG"] = f.configPath;
     try {
       writeFileSync(f.configPath, "search_semantic_enabled: false\n");
@@ -173,6 +194,7 @@ describe("the decline at provider construction", () => {
       expect((thrown as SearchError).code).toBe("EMBEDDING_DISABLED");
       expect(server.callCount()).toBe(0);
     } finally {
+      restoreConsentEnv();
       if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
       else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved;
       f.cleanup();
@@ -185,6 +207,7 @@ describe("the decline at provider construction", () => {
     const fDeclined = fixture("named-decline");
     const fActive = fixture("named-active");
     const saved = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    const restoreConsentEnv = saveAndClearConsentEnv();
     try {
       writeFileSync(fDeclined.configPath, "search_semantic_enabled: false\n");
       writeFileSync(fActive.configPath, 'vault: "/tmp/v"\n');
@@ -210,10 +233,51 @@ describe("the decline at provider construction", () => {
       expect((thrown as SearchError).code).toBe("EMBEDDING_DISABLED");
       expect(server.callCount()).toBe(0);
     } finally {
+      restoreConsentEnv();
       if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
       else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved;
       fDeclined.cleanup();
       fActive.cleanup();
+      await server.close();
+    }
+  });
+
+  test("a caller that resolved a named config reads the consent from that file, not the ambient default", async () => {
+    // `resolveConfiguredEmbeddingProvider` resolves the semantic
+    // configuration from the config file it was handed. The consent that
+    // gates construction must come from the SAME file: a decline written
+    // in some other file the process happens to default to is not a
+    // decision about this configuration, and reading it here let one
+    // file's decline silently disable a provider another file enabled.
+    const server: FakeHttp = await startFakeHttp();
+    const fNamed = fixture("named-consent");
+    const fAmbient = fixture("ambient-decline");
+    const saved = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    const restoreConsentEnv = saveAndClearConsentEnv();
+    try {
+      writeFileSync(
+        fNamed.configPath,
+        "search_semantic_enabled: true\n" +
+          "embedding_provider: openai-compat\n" +
+          `embedding_base_url: ${server.url}\n` +
+          "embedding_model: fake-model\n" +
+          `embedding_api_key: ${FAKE_PROVIDER_KEY}\n` +
+          "embedding_dimension: 4\n",
+      );
+      writeFileSync(fAmbient.configPath, "search_semantic_enabled: false\n");
+      process.env["OPEN_SECOND_BRAIN_CONFIG"] = fAmbient.configPath;
+      const provider = resolveConfiguredEmbeddingProvider(fNamed.dir, {
+        configPath: fNamed.configPath,
+      });
+      expect(provider !== null).toBe(true);
+      expect(providerProducesVectors(provider!)).toBe(true);
+      expect(server.callCount()).toBe(0);
+    } finally {
+      restoreConsentEnv();
+      if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved;
+      fNamed.cleanup();
+      fAmbient.cleanup();
       await server.close();
     }
   });
