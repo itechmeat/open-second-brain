@@ -13,7 +13,10 @@ import { join } from "node:path";
 
 import { indexVault, search } from "../../../src/core/search/index.ts";
 import { makeConfig, createTempVault } from "../../helpers/search-fixtures.ts";
-import { expandQueryEntities } from "../../../src/core/search/entity-alias.ts";
+import {
+  expandQueryEntities,
+  PERSON_NICKNAMES_ARTIFACT_REL,
+} from "../../../src/core/search/entity-alias.ts";
 import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 
 let tmp: ReturnType<typeof createTempVault>;
@@ -36,6 +39,22 @@ function seedRegistry(): void {
     agent: "claude-dev-agent",
     now: NOW,
   });
+}
+
+function seedPerson(name = "Robert Smith"): string {
+  const { entity } = upsertEntity(tmp.vault, {
+    category: "people",
+    name,
+    agent: "claude-dev-agent",
+    now: NOW,
+  });
+  return entity.id;
+}
+
+/** Write the operator nickname map the config reader resolves. */
+function writeNicknames(entries: Record<string, string[]>): void {
+  mkdirSync(join(tmp.vault, "Brain", "entities"), { recursive: true });
+  writeFileSync(join(tmp.vault, PERSON_NICKNAMES_ARTIFACT_REL), JSON.stringify(entries));
 }
 
 describe("expandQueryEntities", () => {
@@ -66,6 +85,95 @@ describe("expandQueryEntities", () => {
     archiveEntity(tmp.vault, { category: "projects", query: "Open Second Brain" }, { now: NOW });
     const out = expandQueryEntities(tmp.vault, ["osb"]);
     expect(out.added).toEqual([]);
+  });
+});
+
+describe("person-variant expansion", () => {
+  test("query 'Bob' resolves against a Robert-only registry through operator nickname data", () => {
+    const id = seedPerson();
+    writeNicknames({ bob: ["Robert Smith"] });
+    const out = expandQueryEntities(tmp.vault, ["bob"]);
+    // The declared canonical name joins `added`; the derived structural
+    // forms join `derived` ("bob" itself is already a query entity).
+    expect(out.expanded).toEqual(["bob", "robert smith", "r smith", "smith robert"]);
+    expect(out.added).toEqual(["robert smith"]);
+    expect(out.derived).toEqual(["r smith", "smith robert"]);
+    expect(out.sourceIds).toEqual([id]);
+  });
+
+  test("structural variants participate without any nickname data", () => {
+    seedPerson();
+    const out = expandQueryEntities(tmp.vault, ["smith robert"]);
+    expect(out.added).toEqual(["robert smith"]);
+    // The reversed form the query already carried is skipped; the
+    // initial form is the one derived addition.
+    expect(out.derived).toEqual(["r smith"]);
+    expect(out.expanded).toEqual(["smith robert", "robert smith", "r smith"]);
+  });
+
+  test("declared forms always win attribution: a derived form another entity declared stays in added", () => {
+    seedPerson();
+    upsertEntity(tmp.vault, {
+      category: "people",
+      name: "Smith Robert",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    const out = expandQueryEntities(tmp.vault, ["smith robert"]);
+    // "smith robert" is entity B's DECLARED name: it must never also
+    // appear as a derived form.
+    expect(out.added).toContain("robert smith");
+    expect(out.derived).not.toContain("smith robert");
+    expect(out.sourceIds).toContain("ent-people-smith-robert");
+  });
+
+  test("a vault with no person entities returns the identity expansion byte-identically", () => {
+    seedRegistry();
+    writeNicknames({ bob: ["ada lovelace"] });
+    const out = expandQueryEntities(tmp.vault, ["osb"]);
+    // Exactly the pre-variant expansion: every declared non-query form
+    // in `added`, nothing derived.
+    expect(out.expanded).toEqual(["osb", "open second brain", "the vault project"]);
+    expect(out.added).toEqual(["open second brain", "the vault project"]);
+    expect(out.derived).toEqual([]);
+    expect(out.sourceIds).toEqual(["ent-projects-open-second-brain"]);
+  });
+
+  test("org-category entities never derive person variants", () => {
+    upsertEntity(tmp.vault, {
+      category: "org",
+      name: "Acme Corp",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    const out = expandQueryEntities(tmp.vault, ["corp acme"]);
+    expect(out.derived).toEqual([]);
+    expect(out.added).toEqual([]);
+  });
+
+  test("a quarantined person does not derive", () => {
+    upsertEntity(tmp.vault, {
+      category: "people",
+      name: "Robert Smith",
+      agent: "claude-dev-agent",
+      now: NOW,
+      untrustedOrigin: true,
+    });
+    writeNicknames({ bob: ["Robert Smith"] });
+    const out = expandQueryEntities(tmp.vault, ["bob"]);
+    expect(out.expanded).toEqual(["bob"]);
+    expect(out.added).toEqual([]);
+    expect(out.derived).toEqual([]);
+  });
+
+  test("an unreadable or malformed nickname file degrades to the identity expansion", () => {
+    seedPerson();
+    mkdirSync(join(tmp.vault, "Brain", "entities"), { recursive: true });
+    writeFileSync(join(tmp.vault, PERSON_NICKNAMES_ARTIFACT_REL), "{ not json");
+    const out = expandQueryEntities(tmp.vault, ["bob"]);
+    expect(out.expanded).toEqual(["bob"]);
+    expect(out.added).toEqual([]);
+    expect(out.derived).toEqual([]);
   });
 });
 
