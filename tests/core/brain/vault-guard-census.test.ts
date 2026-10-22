@@ -124,9 +124,9 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "failed backup denies the tool call).",
   "src/core/brain/provenance/content-class.ts":
     "the stamp helper composes no path of its own: the absolute page path arrives from " +
-    "the caller, every call site (the session import loop and the in-process research " +
-    "writer) asserts vault identity ahead of the write, and the helper only splices the " +
-    "class line into the frontmatter block the shared parser already delimited.",
+    "the caller, its one production call site (the session import loop, " +
+    "sessions/import.ts) asserts vault identity ahead of the write, and the helper only " +
+    "splices the class line into the frontmatter block the shared parser already delimited.",
   "src/core/brain/provenance/source-archive.ts":
     "every path it writes or removes is derived inside this module from the " +
     "entry's own sha-256 and validated before the join, so the store cannot be " +
