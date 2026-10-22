@@ -75,6 +75,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "author's head - the two produce different graphs",
   },
   {
+    code: "chunk-holds-active",
+    reason:
+      "the hold is a consequence of the embedding configuration, not a defect in the page or " +
+      "the index: the configured model provably cannot take the chunk inside its declared " +
+      "input window, and the two ways to change that - chunking the source more finely, or " +
+      "leaving the page unembedded - are per-page editorial decisions, which the finding " +
+      "names together so the operator can make them",
+  },
+  {
     code: "concept-gap",
     reason:
       "the repair is to write a preference that does not exist yet, which is authoring content " +
@@ -207,6 +216,14 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "a regular expression in the capture configuration failed to compile. What it was meant " +
       "to match is not recoverable from a pattern that does not parse, so the repair is an edit " +
       "by whoever wrote it",
+  },
+  {
+    code: "person-nicknames-unreadable",
+    reason:
+      "the operator's person nickname map exists but cannot be used - it does not parse or " +
+      "violates its shape. The repair is an edit to that file by whoever wrote it: the map it " +
+      "was meant to hold is not derivable from the error, and minting nickname data would put " +
+      "words in the operator's mouth about who knows whom",
   },
   {
     code: "iso-invalid",

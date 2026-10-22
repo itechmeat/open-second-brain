@@ -315,6 +315,16 @@ const ENTRIES: ReadonlyArray<RepairCapability> = [
       "the ratchet measurement yields scalar counts over the search index and no " +
       "per-link rows, so there is no individual finding for an applier to act on",
   },
+  {
+    code: "chunk-holds-active",
+    surface: REPAIR_SURFACE.detectorOnly,
+    verdict: REPAIR_VERDICT.refused,
+    reason:
+      "a hold is the embedding configuration declining a chunk it provably cannot " +
+      "take, not damage to repair; the levers - narrower chunking or leaving the " +
+      "page unembedded - are per-document editorial decisions, and the index-side " +
+      "release is automatic the moment the configuration changes",
+  },
 ];
 
 /**

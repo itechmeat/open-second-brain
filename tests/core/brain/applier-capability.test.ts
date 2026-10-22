@@ -89,8 +89,9 @@ describe("applier capability table - shape", () => {
       if (entry.surface !== REPAIR_SURFACE.detectorOnly) continue;
       expect(entry.verdict).toBe(REPAIR_VERDICT.refused);
     }
-    // The four refusals reconnaissance verified as stated-and-deliberate.
+    // The five refusals reconnaissance verified as stated-and-deliberate.
     expect(codesForSurface(REPAIR_SURFACE.detectorOnly)).toEqual([
+      "chunk-holds-active",
       "frontmatter-line-dropped",
       "link_integrity",
       "stale-lock",
