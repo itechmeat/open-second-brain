@@ -61,6 +61,24 @@ function isMissingFileError(err: unknown): boolean {
 }
 
 /**
+ * A position-only note from a JSON parser error, or a fixed sentence when
+ * the runtime exposes no position.
+ *
+ * The parser's own message can quote the bytes it choked on, and this
+ * detail reaches doctor output and logs, so the raw message never
+ * travels: only a line or offset number - which says nothing about the
+ * content - or the fixed sentence ever leaves here.
+ */
+function jsonPositionNote(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const line = /line (\d+)/i.exec(raw)?.[1];
+  if (line !== undefined) return `parse failed at line ${line}`;
+  const offset = /position (\d+)/i.exec(raw)?.[1];
+  if (offset !== undefined) return `parse failed at offset ${offset}`;
+  return "the parser reported a syntax error";
+}
+
+/**
  * Fold one parsed JSON document into the normalized nickname map the
  * derivation kernel consumes: keys and values are run through
  * `normalizeEntityName` (the comparison is post-normalization, exactly
@@ -73,7 +91,7 @@ function parsePersonNicknameDocument(text: string, path: string): PersonNickname
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new PersonNicknameConfigError(path, `not parseable JSON (${String(err)})`);
+    throw new PersonNicknameConfigError(path, `not parseable JSON (${jsonPositionNote(err)})`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new PersonNicknameConfigError(path, "expected a JSON object mapping nickname to names");

@@ -222,4 +222,37 @@ describe("doctor derived-variant collisions (write-honesty-egress-consent F3/C5)
     // fires - the point is that the pass did not swallow the check.
     expect(out.warnings.filter((i) => i.code === "duplicate-entity")).toEqual([]);
   });
+
+  test("a malformed nickname file surfaces exactly one warning naming the path", () => {
+    // The read lanes degrade to their documented postures, but the
+    // doctor is the surfacing point: a present-yet-unusable operator
+    // file must be visible, by name.
+    person("Ada Lovelace");
+    person("Ada");
+    atomicWriteFileSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), '{ "quoted-bytes" broken');
+
+    const warnings = runDoctor(vault).warnings.filter(
+      (i) => i.code === "person-nicknames-unreadable",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.severity).toBe("warning");
+    expect(warnings[0]!.path).toContain("person-nicknames.json");
+    expect(warnings[0]!.message).toContain("person-nicknames.json");
+    // The detail is short and never quotes the file bytes the parser
+    // choked on: the message must not become a byte-echo channel.
+    expect(warnings[0]!.message).not.toContain("quoted-bytes");
+    expect(warnings[0]!.message).not.toContain("Unexpected");
+  });
+
+  test("a well-formed nickname file raises no unreadable warning", () => {
+    person("Ada Lovelace");
+    person("Ada");
+    atomicWriteFileSync(
+      join(vault, PERSON_NICKNAMES_ARTIFACT_REL),
+      JSON.stringify({ ada: ["Ada Lovelace"] }),
+    );
+    expect(
+      runDoctor(vault).warnings.filter((i) => i.code === "person-nicknames-unreadable"),
+    ).toEqual([]);
+  });
 });

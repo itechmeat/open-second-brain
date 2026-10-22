@@ -68,6 +68,26 @@ describe("resolvePersonNicknameMap", () => {
     expect((err as PersonNicknameConfigError).path).toContain("person-nicknames.json");
   });
 
+  test("the parse-failure detail is position-only, never the parser's message", () => {
+    // The parser's own message can quote the bytes it choked on, and the
+    // detail reaches doctor output and logs - so only a position (or the
+    // fixed sentence) may travel.
+    writeArtifact('{ "quoted-bytes" from the file }');
+    let err: unknown;
+    try {
+      resolvePersonNicknameMap(vault);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(PersonNicknameConfigError);
+    const detail = (err as PersonNicknameConfigError).detail;
+    expect(detail).not.toContain("quoted-bytes");
+    expect(detail).not.toContain("Unexpected");
+    expect(detail).toMatch(
+      /^not parseable JSON \((parse failed at (line \d+|offset \d+)|the parser reported a syntax error)\)$/,
+    );
+  });
+
   test("a non-array value surfaces by name", () => {
     writeArtifact(JSON.stringify({ bob: "Robert Smith" }));
     expect(() => resolvePersonNicknameMap(vault)).toThrow(PersonNicknameConfigError);

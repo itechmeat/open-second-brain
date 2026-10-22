@@ -22,7 +22,10 @@ import {
   ENTITY_CONFLICT_KIND,
   type EntityIndex,
 } from "../entities/index-builder.ts";
-import { resolvePersonNicknameMap } from "../entities/person-nicknames.ts";
+import {
+  PersonNicknameConfigError,
+  resolvePersonNicknameMap,
+} from "../entities/person-nicknames.ts";
 import {
   derivePersonNameVariants,
   EMPTY_PERSON_NICKNAME_MAP,
@@ -56,6 +59,9 @@ function claimedForms(index: EntityIndex, conflict: EntityConflict): string[] {
     (c) => c.aliases.find((a) => normalizeEntityName(a) === conflict.key) ?? c.name,
   );
 }
+
+/** Doctor code of an unusable operator nickname map. */
+export const PERSON_NICKNAMES_UNREADABLE_CODE = "person-nicknames-unreadable";
 
 /** Doctor code of a proposal-only alias-merge candidate. */
 export const ENTITY_ALIAS_CANDIDATE_CODE = "entity-alias-candidate";
@@ -252,16 +258,27 @@ export const entityRegistryCheck: DoctorCheck = {
     // (scoping them would stop the doctor reporting on exactly the
     // records a read path hides), this scan and the malformed-label scan
     // resolve through the shared canonical predicate: a quarantined
-    // person's variants nominate no merges. An unusable nickname file
-    // degrades this scan to no derived collisions rather than
-    // discarding the check: the config fault is surfaced by name
-    // (PersonNicknameConfigError) to every consumer that resolves the
-    // map for reads.
+    // person's variants nominate no merges.
+    // An unusable nickname file degrades this scan to no derived
+    // collisions rather than discarding the check - the read lanes keep
+    // their documented degradations too - but the doctor is the
+    // surfacing point: a present-yet-unusable operator file is one
+    // warning, naming the path, with the error's own short
+    // (position-only) detail.
     let nicknames = EMPTY_PERSON_NICKNAME_MAP;
     try {
       nicknames = resolvePersonNicknameMap(vault);
-    } catch {
+    } catch (err) {
+      if (!(err instanceof PersonNicknameConfigError)) throw err;
       nicknames = EMPTY_PERSON_NICKNAME_MAP;
+      issues.push({
+        severity: "warning",
+        code: PERSON_NICKNAMES_UNREADABLE_CODE,
+        path: err.path,
+        message:
+          `the person nickname map at ${err.path} is unusable and nickname-derived ` +
+          `lookups run without it: ${err.detail}`,
+      });
     }
     for (const message of derivedVariantCollisionMessages(index, nicknames)) {
       issues.push({
