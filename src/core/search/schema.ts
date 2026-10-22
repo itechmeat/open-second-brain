@@ -10,7 +10,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "./types.ts";
-import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
+import { hasPrivacyMarkerKey, remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { closeDatabase } from "../sqlite-close.ts";
 
@@ -19,7 +19,7 @@ import { closeDatabase } from "../sqlite-close.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 15;
+export const LATEST_SCHEMA_VERSION = 16;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -746,6 +746,47 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       `);
     },
   },
+  {
+    // v16 (privacy-marker visibility restamp) - re-measure the
+    // {@link DOCUMENT_VISIBILITY_COLUMN} of every row whose chunk-zero
+    // frontmatter carries an informal privacy marker key (`access`,
+    // `confidentiality`, `sensitivity`).
+    //
+    // WHY A RE-STAMP, NOT A BACKFILL: the column has existed since v12,
+    // and the v12 backfill ran once, for `IS NULL` rows, under whatever
+    // measurement its binary knew. An index migrated to v12-v14 by a
+    // pre-marker binary holds rows stamped from the declared `visibility:`
+    // alone, and those rows are NOT NULL anymore - the v12 gate never
+    // opens for them again. The marker-aware measurement
+    // ({@link remoteDenyVisibilityTokens}) arrived after, and the
+    // incremental indexer skips an unchanged file, so a marker page's
+    // column can keep saying `[]` - measured, and declaring nothing -
+    // while the live read roots deny the page. Every consumer that reads
+    // the column alone (the belief-semantic lane, the visibility-honesty
+    // census) then undercounts the very pages this column exists to make
+    // countable. A new migration is the only frame that runs on those
+    // indexes: editing v15 in place would rewrite released migration
+    // history and never execute on an index already at 15.
+    //
+    // The gate is {@link hasPrivacyMarkerKey}, not the deny predicate:
+    // any marker key at all marks a row whose pre-marker stamp may
+    // understate it, and the update writes the full marker-aware token
+    // list, so a row already carrying the reserved token re-derives the
+    // same value and a non-marker row is not touched. Re-running the v12
+    // recipe over EVERY row would be equivalent but would rewrite rows
+    // this migration has no reason to touch; a NULL row (no chunk zero)
+    // stays NULL - there is still nothing to measure. No DDL: the
+    // manifest this migration produces is v15's, unchanged.
+    //
+    // It runs INSIDE `applyMigrations`' single open transaction, like the
+    // v12 backfill: a half-restamped column would leave sibling rows
+    // disagreeing about the same kind of claim, and a crash mid-pass
+    // would leave exactly that.
+    version: 16,
+    up(db) {
+      restampMarkerVisibility(db);
+    },
+  },
 ]);
 
 /**
@@ -988,6 +1029,42 @@ function backfillDocumentVisibility(db: Database): void {
     if (row.content === null) continue;
     const [meta] = parseFrontmatterText(row.content);
     update.run(encodeDocumentVisibility(remoteDenyVisibilityTokens(meta)), row.id);
+  }
+}
+
+/**
+ * Re-measure {@link DOCUMENT_VISIBILITY_COLUMN} for every row whose
+ * chunk-zero frontmatter carries an informal privacy marker key, from that
+ * same chunk, through {@link remoteDenyVisibilityTokens} - the v16
+ * migration's whole body.
+ *
+ * The rows it targets are exactly the ones a pre-marker stamp can
+ * understate: a marker page's column reads `[]` (measured, declares
+ * nothing) while the live read roots deny the page, and the incremental
+ * indexer never revisits an unchanged file to correct it. A row already
+ * carrying the marker-aware value re-derives that value and is written
+ * with what it already was, so the pass is idempotent; a row whose column
+ * disagrees with its frontmatter for any other reason is left to a
+ * re-index, which remains the authoritative rewrite.
+ */
+function restampMarkerVisibility(db: Database): void {
+  const rows = db
+    .query<{ id: number; content: string | null; current: string | null }, [number]>(
+      `SELECT d.id AS id, c.content AS content, d.${DOCUMENT_VISIBILITY_COLUMN} AS current ` +
+        `FROM documents d ` +
+        `LEFT JOIN chunks c ON c.document_id = d.id AND c.chunk_index = ?1`,
+    )
+    .all(FRONTMATTER_CHUNK_INDEX);
+  if (rows.length === 0) return;
+  const update = db.query<never, [string, number]>(
+    `UPDATE documents SET ${DOCUMENT_VISIBILITY_COLUMN} = ?1 WHERE id = ?2`,
+  );
+  for (const row of rows) {
+    if (row.content === null) continue;
+    const [meta] = parseFrontmatterText(row.content);
+    if (!hasPrivacyMarkerKey(meta)) continue;
+    const next = encodeDocumentVisibility(remoteDenyVisibilityTokens(meta));
+    if (row.current !== next) update.run(next, row.id);
   }
 }
 

@@ -214,10 +214,11 @@ function attributesFor(path: string): ReadonlyArray<{ key: string; value: string
 }
 
 describe("the v14 entry", () => {
-  test("remains in the frozen array once the v15 entry appends after it", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(15);
-    expect(MIGRATIONS.length).toBe(15);
-    expect(MIGRATIONS[MIGRATIONS.length - 2]!.version).toBe(14);
+  test("remains in the frozen array once later entries append after it", () => {
+    expect(LATEST_SCHEMA_VERSION).toBe(16);
+    expect(MIGRATIONS.length).toBe(16);
+    expect(MIGRATIONS[MIGRATIONS.length - 2]!.version).toBe(15);
+    expect(MIGRATIONS[MIGRATIONS.length - 3]!.version).toBe(14);
   });
 
   test("runs from a rewound v13 index and stamps the version", async () => {
@@ -226,7 +227,7 @@ describe("the v14 entry", () => {
     expect(migrate()).toBe(LATEST_SCHEMA_VERSION);
     const db = new Database(dbPath, { readonly: true });
     try {
-      expect(readSchemaVersion(db)).toBe(15);
+      expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
     } finally {
       db.close();
     }
