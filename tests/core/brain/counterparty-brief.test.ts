@@ -351,6 +351,17 @@ describe("buildCounterpartyBrief abstentions", () => {
     expect(brief.entityId).toBe(publicId);
   });
 
+  test("an entity page carrying only the informal access marker abstains", () => {
+    const id = seedPerson("Ada Lovelace");
+    // No `visibility:` key at all - the reservation is stated only under
+    // the pre-convention informal key, which the brief's entity gate must
+    // read through the same union the read roots use.
+    addFrontmatter(entityRel(id), "access: private");
+    expect(buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW })).toEqual({
+      abstain: "no_match",
+    });
+  });
+
   // A mode change cannot make a file unreadable to uid 0, nor on Windows.
   test.skipIf(CHMOD_CANNOT_DENY)(
     "an entity page that cannot be read is treated as carrying the reserved token",
@@ -476,6 +487,28 @@ describe("buildCounterpartyBrief items", () => {
     // item under a sanitized path would still carry its principle text.
     const rendered = renderCounterpartyBrief(brief);
     expect(rendered).not.toContain("the confidential merger plan");
+    expect(rendered).not.toContain("pref-hidden");
+  });
+
+  test("a preference page carrying only the informal confidentiality marker never surfaces", () => {
+    seedPerson("Ada Lovelace");
+    const kept = writePref("kept", "Ada Lovelace reviewed the draft");
+    const hidden = writePref(
+      "hidden",
+      "Ada Lovelace shared a confidence",
+      "2026-05-02T00:00:00Z",
+      "the sealed settlement terms",
+    );
+    // No `visibility:` key - the reservation lives only under the informal
+    // key, so the preference walk must fold it through the same union the
+    // read roots use or the page's text renders to the counterparty.
+    addFrontmatter(hidden, "confidentiality: secret");
+    const brief = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(brief.items.map((i) => i.sourceRel)).toEqual([kept]);
+    const rendered = renderCounterpartyBrief(brief);
+    expect(rendered).not.toContain("the sealed settlement terms");
     expect(rendered).not.toContain("pref-hidden");
   });
 
