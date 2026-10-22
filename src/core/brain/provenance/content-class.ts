@@ -35,6 +35,22 @@
  * reads as unmarked, and the era boundary is documented rather than
  * migrated - a pre-stamp page keeps exporting exactly as it did.
  *
+ * ## Two signal writers carry no stamp, on purpose
+ *
+ * The agent-authored signal writers behind `session-checkpoint.ts` and
+ * `session-lifecycle.ts` stamp nothing. That is a NAMED SCOPING
+ * DECISION, not an omission: their pages are written under `Brain/`
+ * (the inbox and its lanes), and every page-carrying export walk in
+ * this system excludes Brain-internal pages at the source - the OKF
+ * walk and the knowledge pack compose from `collectOkfPages` (ordinary
+ * pages plus the `Brain/sources/` and `Brain/reports/` lanes only), the
+ * graph export skips the `Brain/` root, and the bank bundle's walk
+ * skips it at the top level. A page those writers produce cannot reach
+ * a shared export, so there is no egress decision for the stamp to
+ * carry; the writers are left untouched rather than stamped for a leak
+ * that has no path. The day an export walk starts carrying Brain-
+ * internal pages, that walk is the change this module must hear about.
+ *
  * ## A closed vocabulary meeting a hand editor
  *
  * On disk the key is frontmatter an operator can edit. The narrowing
@@ -54,7 +70,14 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { ORIGIN_CHANNEL, type OriginChannelStamp } from "../../origin-channel.ts";
-import { parseFrontmatterText } from "../../vault.ts";
+// The block-boundary regex the shared parser itself closes at, and the
+// byte-order mark its text entry strips before matching: the stamp's
+// insertion point and the parser's read boundary are the same decision,
+// so they share the constant rather than two spellings of it.
+import { FRONTMATTER_RE, parseFrontmatterText } from "../../vault.ts";
+
+/** U+FEFF, which may precede a page's opening fence (see vault.ts). */
+const BYTE_ORDER_MARK = 0xfeff;
 
 /**
  * The closed vocabulary. `prompt-derived` names material an agent
@@ -163,19 +186,39 @@ export function withoutCallerContentClass(frontmatter: FrontmatterMap): Frontmat
  * frontmatter block is a named refusal rather than a silent miss - the
  * one state where the stamp could be quietly lost is the one state this
  * refuses to paper over.
+ *
+ * The insertion point is the block boundary the SHARED PARSER closes at
+ * ({@link FRONTMATTER_RE}), never a raw fence search: a close fence that
+ * carries trailing whitespace - or ends the file without a newline -
+ * is a close the parser accepts and a `"\n---\n"` search misses, and a
+ * search that misses runs on to the next bare `---` line in the page,
+ * planting the stamp outside the parsed block where the page reads
+ * unmarked. Where the stamp lands is a question with one right answer,
+ * and it is whatever `parseFrontmatterText` would answer.
  */
 export function stampPromptDerivedLine(abs: string): void {
-  const text = readFileSync(abs, "utf8");
-  if (!text.startsWith("---\n")) {
+  const raw = readFileSync(abs, "utf8");
+  // The same byte-order-mark strip the parser applies, spliced back in
+  // around the write so a BOM'd page keeps its first byte.
+  const stripped = raw.charCodeAt(0) === BYTE_ORDER_MARK ? raw.slice(1) : raw;
+  const prefix = raw.length - stripped.length;
+  const match = FRONTMATTER_RE.exec(stripped);
+  if (match === null) {
     throw new Error(`stampPromptDerivedLine: ${abs} has no frontmatter block to stamp`);
   }
-  const close = text.indexOf("\n---\n", 4);
-  if (close < 0) {
-    throw new Error(`stampPromptDerivedLine: ${abs} has an unterminated frontmatter block`);
+  if (readContentClass(parseFrontmatterText(stripped)[0]) !== null) return;
+  // The block match ends with the close fence (`\n---` plus any
+  // trailing whitespace), and the close is the only `\n---` inside the
+  // match - the lazy body stops at the first one. The line goes right
+  // after the newline that precedes that fence: the last line INSIDE
+  // the block, wherever the fence's own line ends.
+  const closeStart = match[0].lastIndexOf("\n---");
+  if (closeStart < 0) {
+    throw new Error(`stampPromptDerivedLine: ${abs} has a frontmatter block with no close fence`);
   }
-  if (readContentClass(parseFrontmatterText(text)[0]) !== null) return;
+  const at = prefix + closeStart + 1;
   const line = `${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}\n`;
-  atomicWriteFileSync(abs, `${text.slice(0, close + 1)}${line}${text.slice(close + 1)}`);
+  atomicWriteFileSync(abs, `${raw.slice(0, at)}${line}${raw.slice(at)}`);
 }
 
 /**
