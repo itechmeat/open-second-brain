@@ -70,9 +70,6 @@ describe("the provider-consent readiness probe", () => {
     expect(READINESS_PROBE.providerConsent).toBe("provider_consent");
     const registered = DEFAULT_PROBES.map((probe) => probe.name);
     expect(registered).toContain(READINESS_PROBE.providerConsent);
-    // The default set is the surface the CLI runs; a probe that is not in
-    // it is a probe nobody sees.
-    expect(registered.length).toBe(DEFAULT_PROBES.length);
   });
 
   test("a declined vault is named as a decline, with both spellings", async () => {
@@ -92,7 +89,9 @@ describe("the provider-consent readiness probe", () => {
   });
 
   test("a configuration that records no decision says so, without a decline", async () => {
-    writeConfig('vault: "/tmp/v"\n');
+    // No body at all: writeConfig already prepends the vault line, and a
+    // second one would be a duplicate key the config reader never wrote.
+    writeConfig("");
     const verdict = await probeProviderConsent(probeOpts());
     expect(verdict.status).toBe("skipped");
     expect(verdict.detail).not.toContain("search_semantic_enabled=false");
@@ -113,6 +112,13 @@ describe("the provider-consent readiness probe", () => {
     for (const probe of report.probes) {
       expect(`${probe.name}: ${probe.detail.trim().length > 0}`).toBe(`${probe.name}: true`);
     }
+    // The default entry point really consumes the default set: the report
+    // the CLI's `--readiness` flag runs through lists exactly the default
+    // probes, in order - a probe dropped from ( or reordered out of ) the
+    // run fails here rather than vanishing silently.
+    expect(report.probes.map((probe) => probe.name)).toEqual(
+      DEFAULT_PROBES.map((probe) => probe.name),
+    );
   });
 });
 
@@ -126,7 +132,7 @@ describe("the skipped arm of the key probe is split", () => {
   });
 
   test("a configuration that records no decision keeps the existing sentence", async () => {
-    writeConfig('vault: "/tmp/v"\n');
+    writeConfig("");
     const verdict = await probeLlmKey(probeOpts());
     expect(verdict.status).toBe("skipped");
     // Byte-identical to the sentence this probe has always reported.
