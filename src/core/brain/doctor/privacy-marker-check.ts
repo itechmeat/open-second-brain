@@ -53,7 +53,9 @@ export const privacyMarkerCheck: DoctorCheck = {
         "(access / confidentiality / sensitivity) rather than a visibility: declaration: " +
         `${named.join(", ")}${remainder}. Remote reads are already denied, but tools that ` +
         "read visibility: cannot see the reservation. The preview-first restamp reports each " +
-        "would-be visibility line and writes only on request, additively",
+        "would-be visibility line and writes only on request, additively. After an apply a " +
+        "stamped page is also excluded from default-scope local search (the CLI reaches it " +
+        "again with search --visibility private)",
     } satisfies DoctorIssue);
   },
 };

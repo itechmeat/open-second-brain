@@ -44,6 +44,10 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
     ok(
       `privacy-marker-restamp: updated ${result.updated} of ${result.candidates.length} candidate(s)`,
     );
+    info(
+      "note: each stamped page is now also excluded from default-scope local search; " +
+        "reach it again with `o2b search --visibility private`",
+    );
     for (const s of result.skipped) process.stderr.write(`  refused ${s.path}: ${s.reason}\n`);
   } else {
     ok(
@@ -51,6 +55,10 @@ export async function cmdBrainPrivacyMarkerRestamp(argv: string[]): Promise<numb
         `(scanned ${result.scanned})`,
     );
     info("re-run with --apply to union the reserved token into visibility:");
+    info(
+      "note: after --apply each stamped page is also excluded from default-scope local search; " +
+        "reach it again with `o2b search --visibility private`",
+    );
   }
   for (const c of result.candidates) info(`  ${c.path}: ${c.visibilityLine}`);
   return 0;
