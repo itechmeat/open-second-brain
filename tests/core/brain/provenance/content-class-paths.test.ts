@@ -1,9 +1,11 @@
 /**
  * The deterministic prompt-derived write paths (F5, task E2).
  *
- * Three write paths are definitionally prompt-derived and stamp
+ * Four write paths are definitionally prompt-derived and stamp
  * `content_class: prompt-derived` at creation, server-side:
  *  - a note created over the MCP transport (the mcp-tool origin channel),
+ *  - a source summary ingested over the same channel (the ingest pipeline
+ *    composes its own frontmatter, and the calling agent wrote the prose),
  *  - a signal replayed from a session by the import,
  *  - a research report the in-process pipeline synthesised.
  *
@@ -16,7 +18,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readFileSync as readSource } from "node:fs";
@@ -28,6 +30,7 @@ import { importSession } from "../../../../src/core/brain/sessions/import.ts";
 import { writeResearchReport } from "../../../../src/core/brain/research/research.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { createNote } from "../../../../src/core/brain/notes/create-note.ts";
+import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import {
   CONTENT_CLASS_FIELD,
   CONTENT_CLASS,
@@ -102,6 +105,54 @@ describe("research reports stamp the class", () => {
     expect(res.created).toBe(true);
     const text = readFileSync(join(vault, res.reportPath), "utf8");
     expect(text).toContain(`${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}`);
+  });
+});
+
+/** Seed and ingest one local source, the shape every ingest lane writes. */
+function ingestLocalSource() {
+  writeFileSync(join(vault, "source.md"), "raw source bytes\n", "utf8");
+  return ingestSource(
+    vault,
+    {
+      sourcePath: "source.md",
+      summary: "Agent-written summary prose.",
+      extraction: { entities: [{ category: "concept", name: "Bolts" }], relations: [] },
+    },
+    { agent: "claude", now: new Date("2026-06-13T12:00:00Z") },
+  );
+}
+
+describe("ingest stamps the class", () => {
+  test("a summary page ingested over the MCP channel carries content_class", () => {
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    const res = ingestLocalSource();
+    const text = readFileSync(join(vault, res.summaryPath), "utf8");
+    expect(text).toContain(`${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}`);
+  });
+
+  test("a re-ingest over the CLI keeps the creating writer's stamp", () => {
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    const first = ingestLocalSource();
+    setOriginChannel(ORIGIN_CHANNEL.cli);
+    const second = ingestSource(
+      vault,
+      {
+        sourcePath: "source.md",
+        summary: "Rewritten summary prose.",
+        extraction: { entities: [{ category: "concept", name: "Bolts" }], relations: [] },
+      },
+      { agent: "claude", now: new Date("2026-06-14T12:00:00Z") },
+    );
+    expect(second.summaryPath).toBe(first.summaryPath);
+    const text = readFileSync(join(vault, second.summaryPath), "utf8");
+    expect(text).toContain(`${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}`);
+  });
+
+  test("an operator-run CLI ingest stays unmarked", () => {
+    setOriginChannel(ORIGIN_CHANNEL.cli);
+    const res = ingestLocalSource();
+    const text = readFileSync(join(vault, res.summaryPath), "utf8");
+    expect(text).not.toContain(CONTENT_CLASS_FIELD);
   });
 });
 
