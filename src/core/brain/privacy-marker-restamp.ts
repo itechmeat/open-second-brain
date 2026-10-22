@@ -17,6 +17,11 @@
  *   - ADDITIVE ONLY. The reserved token is unioned into `visibility:`.
  *     No key is removed, no declared token is dropped, and a page already
  *     carrying the reserved token is not a candidate at all.
+ *   - WRITTEN FROM A RE-READ. The apply loop re-parses each candidate
+ *     immediately before its write and recomputes the token list from
+ *     that parse, so an edit that landed between the scan and the write
+ *     is honoured, and a page whose marker vanished is skipped (it stays
+ *     in the reported candidate list, which is what the scan found).
  *   - IDEMPOTENT. A re-run over a restamped vault reports no candidates
  *     and writes nothing, byte for byte.
  *   - WRITE-GUARDED AT THE ENTRY POINT, ONLY WHEN THE CALL WILL WRITE.
@@ -159,8 +164,26 @@ export function planPrivacyMarkerRestamp(
   if (apply) {
     for (const candidate of candidates) {
       const absolute = absolutePath(vault, candidate.path);
+      // Write-time recompute: the candidate list describes the vault as
+      // the scan saw it, but the page is re-parsed here, immediately
+      // before its write, and an edit that landed in between (operator,
+      // sync) is the state this write is responsible for. The tokens are
+      // therefore recomputed from the just-parsed frontmatter - the
+      // declared tokens as they stand now, plus the reserved token while
+      // the marker is still present - never copied off the scanned
+      // candidate, which would clobber a token the edit declared. A page
+      // whose marker vanished is no longer a reservation this run owes:
+      // it is skipped, while staying in the reported candidate list,
+      // which is what the scan found. The already-reserved case skips
+      // for the same reason the scan never nominated such a page.
       const [meta, body] = parseFrontmatter(absolute);
-      const next: FrontmatterMap = { ...meta, visibility: candidate.visibility };
+      if (!hasPrivacyDenyMarker(meta)) continue;
+      const declared = declaredTokens(meta);
+      if (declaresReserved(declared)) continue;
+      const next: FrontmatterMap = {
+        ...meta,
+        visibility: Object.freeze([...declared, REMOTE_DENY_VISIBILITY_TOKEN]),
+      };
       writeFrontmatterAtomic(absolute, next, body, { overwrite: true });
       updated++;
     }

@@ -18,12 +18,13 @@
  *   - a page already carrying `visibility: private` is not a candidate.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { planPrivacyMarkerRestamp } from "../../../src/core/brain/privacy-marker-restamp.ts";
+import * as vaultModule from "../../../src/core/vault.ts";
 import {
   VaultIdentityMismatchError,
   assertVaultIdentityForWrite,
@@ -151,6 +152,63 @@ describe("apply unions the reserved token into visibility", () => {
     expect(second.candidates).toEqual([]);
     expect(second.updated).toBe(0);
     expect(files.map((f) => readFileSync(join(vault, f), "utf8"))).toEqual(afterFirst);
+  });
+});
+
+// --- The write reads the page it is about to rewrite ------------------------
+
+/**
+ * The scan and the write happen in one call, so the window between them is
+ * simulated at the seam the writer itself reads through: the apply loop
+ * re-parses each candidate with `parseFrontmatter`, and the mock below
+ * lands an operator edit on disk the instant that re-parse first fires.
+ * `listVaultPages` (the scan) reads through its own internals, so the
+ * interception sits exactly between the scan and the write.
+ */
+function withEditAtWriteTime(rel: string, nextFrontmatter: string, run: () => void): void {
+  const realParse = vaultModule.parseFrontmatter;
+  let armed = true;
+  mock.module("../../../src/core/vault.ts", () => ({
+    ...vaultModule,
+    parseFrontmatter(path: string) {
+      if (armed) {
+        armed = false;
+        writeFileSync(join(vault, rel), `---\n${nextFrontmatter}\n---\n\nbody text\n`);
+      }
+      return realParse(path);
+    },
+  }));
+  try {
+    run();
+  } finally {
+    mock.module("../../../src/core/vault.ts", () => vaultModule);
+  }
+}
+
+describe("apply recomputes the tokens from the page as it stands now", () => {
+  test("a candidate edited between the scan and the write keeps its new declared token", () => {
+    withEditAtWriteTime("access.md", "title: Access\naccess: private\nvisibility: [team]", () => {
+      const result = planPrivacyMarkerRestamp(vault, { apply: true });
+      // The page was rewritten, from the tokens the edit declared.
+      expect(result.updated).toBe(5);
+      const md = readFileSync(join(vault, "access.md"), "utf8");
+      expect(md).toContain("visibility: [team, private]");
+      expect(md).toContain("access: private");
+    });
+  });
+
+  test("a candidate whose marker vanished between the scan and the write is skipped", () => {
+    withEditAtWriteTime("access.md", "title: Access\nvisibility: [team]", () => {
+      const result = planPrivacyMarkerRestamp(vault, { apply: true });
+      expect(result.updated).toBe(4);
+      // The reported list still shows what the scan found; the write did
+      // not touch the page the scan can no longer nominate.
+      expect(result.candidates.map((c) => c.path)).toContain("access.md");
+      const md = readFileSync(join(vault, "access.md"), "utf8");
+      // The operator's edit stands and no reservation was stamped.
+      expect(md).toContain("visibility: [team]");
+      expect(md).not.toContain("visibility: [private]");
+    });
   });
 });
 
