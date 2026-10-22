@@ -95,6 +95,8 @@ import { providerProducesVectors } from "./search/embeddings/contract.ts";
 import { makeProvider } from "./search/embeddings/provider.ts";
 import { resolveSearchConfig } from "./search/index.ts";
 import { providerConsentIsDeclined, resolveProviderConsent } from "./search/provider-consent.ts";
+import { envKeyList, loadProviderRegistry } from "./search/embeddings/registry.ts";
+import { loadRerankRegistry } from "./search/rerank/registry.ts";
 import {
   COMMAND_PROBE_VERDICT,
   CommandProbeError,
@@ -141,21 +143,24 @@ export const READINESS_PROBE = {
 const PROVIDERS_REQUIRING_API_KEY: ReadonlySet<string> = new Set(["openai-compat", "zeroentropy"]);
 
 /**
- * The environment-variable PREFIXES that name an embedding-provider
- * setting.
+ * The environment-variable PREFIXES that name an embedding-provider or
+ * rerank setting.
  *
  * A prefix rather than a hand-written list, because a list would be a
  * second copy of the resolver's spelling table and would drift: a new
  * `OPEN_SECOND_BRAIN_EMBEDDING_*` key added to the resolver would not
  * appear here, and the probe would then under-report what is present in
- * the environment - which is the one thing this probe exists to say.
+ * the environment - which is the one thing this probe exists to say. The
+ * rerank resolver spells its settings `OPEN_SECOND_BRAIN_SEARCH_RERANK_*`
+ * and is missed by the embedding prefix alone.
  */
 const PROVIDER_ENV_PREFIXES: ReadonlyArray<string> = Object.freeze([
   "OPEN_SECOND_BRAIN_EMBEDDING_",
+  "OPEN_SECOND_BRAIN_SEARCH_RERANK_",
 ]);
 
 /**
- * The provider environment variables that do NOT carry the prefix above.
+ * The provider environment variables that do NOT carry a prefix above.
  * The switch is one of them: it is the environment twin of the decline
  * record, and an operator who set it in the environment rather than in
  * the config file is exactly the case this probe has to reach.
@@ -165,8 +170,47 @@ const PROVIDER_ENV_NAMES: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
+ * The env-var NAMES the operator's own provider registrations and rerank
+ * settings point at: every embedding profile's `envKey` in
+ * `Brain/search/embedding-providers.json`, every rerank profile's
+ * `envKey` in `Brain/search/rerank-providers.json`, and the variable the
+ * `search_rerank_env_key` setting names. A registry profile keeps its
+ * credential in an operator-named variable (`OPENROUTER_API_KEY`, say),
+ * which no prefix above can reach - and the probe that misses it reports
+ * exactly the credentials an operator set as absent.
+ *
+ * Reads are fail-soft: a missing registry contributes nothing, and a
+ * config that cannot be read contributes its env spelling only.
+ */
+function operatorNamedProviderEnvNames(
+  opts: ReadinessOptions,
+  env: Readonly<Record<string, string | undefined>>,
+): ReadonlyArray<string> {
+  const names = new Set<string>();
+  for (const profile of loadProviderRegistry(opts.vault)) {
+    for (const name of envKeyList(profile.envKey)) names.add(name);
+  }
+  for (const profile of loadRerankRegistry(opts.vault)) names.add(profile.envKey);
+  let config: Readonly<Record<string, string>> = {};
+  try {
+    config = discoverConfig(resolveConfigPath(opts)).data;
+  } catch {
+    // The consent resolver reports the unreadable record by name; the
+    // env census here simply cannot add its config half.
+  }
+  const rerankEnvKey =
+    env["OPEN_SECOND_BRAIN_SEARCH_RERANK_ENV_KEY"] ?? config["search_rerank_env_key"];
+  if (typeof rerankEnvKey === "string" && rerankEnvKey.trim() !== "") {
+    names.add(rerankEnvKey.trim());
+  }
+  return Object.freeze([...names]);
+}
+
+/**
  * The NAMES of the provider environment variables present in `env`, in
- * alphabetical order.
+ * alphabetical order. `operatorNamed` extends the membership with the
+ * env-var names the operator's own provider and rerank registrations
+ * point at.
  *
  * NAMES ONLY, never values: a readiness detail travels into logs, into a
  * JSON payload an operator pastes into a bug report and into the
@@ -180,6 +224,7 @@ const PROVIDER_ENV_NAMES: ReadonlyArray<string> = Object.freeze([
  */
 function presentProviderEnvNames(
   env: Readonly<Record<string, string | undefined>>,
+  operatorNamed: ReadonlyArray<string> = [],
 ): ReadonlyArray<string> {
   const names: string[] = [];
   for (const name of Object.keys(env).toSorted()) {
@@ -187,6 +232,7 @@ function presentProviderEnvNames(
     if (value === undefined || value === "") continue;
     const isProviderEnv =
       PROVIDER_ENV_NAMES.includes(name) ||
+      operatorNamed.includes(name) ||
       PROVIDER_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
     if (isProviderEnv) names.push(name);
   }
@@ -405,30 +451,41 @@ export async function probeLlmKey(opts: ReadinessOptions): Promise<ReadinessVerd
  * first one is named.
  *
  * `skipped`, not `fail`: a decline is a decision, and a decision is not
- * a fault. The detail names the two spellings a decline is written in,
- * so the operator can see which one is in force, and lists the provider
- * environment variables that are PRESENT - by NAME. The names are the
- * point: an operator who set `OPEN_SECOND_BRAIN_EMBEDDING_KEY` in their
- * environment and then wrote a decline in the config file needs to know
- * that the key is still there, and a readiness detail is the wrong
- * place to publish a credential.
+ * a fault. The detail names the keys the decline was written in, so the
+ * operator can see which one is in force, and lists the provider
+ * environment variables that are PRESENT - by NAME, on every arm,
+ * because a key sitting in the environment beside a recorded decline (or
+ * beside no decision at all) is exactly the fact that explains the
+ * configuration's behaviour. The names are the point: an operator who set
+ * `OPEN_SECOND_BRAIN_EMBEDDING_KEY` in their environment and then wrote a
+ * decline in the config file needs to know that the key is still there,
+ * and a readiness detail is the wrong place to publish a credential.
+ *
+ * `unknown`, not `skipped`, when the record could not be read: the
+ * resolver fails that arm closed to declined (an unreadable record is
+ * not consent), but this probe answers whether a decision EXISTS, and a
+ * record nobody could read is a measurement that did not complete. The
+ * CLI already carries `unknown` for exactly that, and reporting the
+ * fail-closed decline as the operator's choice showed a broken machine
+ * configuration as 0 failed / 0 unknown - a clean bill nobody earned.
  */
 export async function probeProviderConsent(opts: ReadinessOptions): Promise<ReadinessVerdict> {
   const configPath = resolveConfigPath(opts);
   const env = opts.env ?? process.env;
   const consent = resolveProviderConsent({ configPath, env });
-  if (!providerConsentIsDeclined(consent)) {
+  const present = presentProviderEnvNames(env, operatorNamedProviderEnvNames(opts, env));
+  const presentSentence =
+    ` Present provider environment variables: ` +
+    `${present.length > 0 ? present.join(", ") : "none"}.`;
+  if (consent.unreadableReason !== null) {
     return {
-      status: READINESS_STATUS.skipped,
-      detail: consent.detail,
+      status: READINESS_STATUS.unknown,
+      detail: `${consent.detail}${presentSentence}`,
     };
   }
-  const present = presentProviderEnvNames(env);
   return {
     status: READINESS_STATUS.skipped,
-    detail:
-      `${consent.detail} Present provider environment variables: ` +
-      `${present.length > 0 ? present.join(", ") : "none"}.`,
+    detail: `${consent.detail}${presentSentence}`,
   };
 }
 

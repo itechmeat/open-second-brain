@@ -259,6 +259,57 @@ describe("the provider-consent resolver", () => {
     }
   });
 
+  test("the re-enable advice names only the keys this decline used, with the value that clears each", () => {
+    const f = fixture("consent-reenable-precise");
+    try {
+      // The switch alone: the advice is the switch's clearing value, and
+      // it does NOT name the provider key - the two keys decline
+      // independently, so an operator who followed advice naming both
+      // could clear one and still be refused by the other.
+      writeFileSync(f.configPath, "search_semantic_enabled: false\n");
+      const bySwitch = resolveProviderConsent({ configPath: f.configPath, env: {} });
+      expect(bySwitch.detail).toContain(`re-enable it with ${PROVIDER_CONSENT_KEY.semantic}=true`);
+      expect(bySwitch.detail).not.toContain(`${PROVIDER_CONSENT_KEY.provider}=<provider>`);
+
+      // The provider name alone: mirror image.
+      writeFileSync(f.configPath, "embedding_provider: disabled\n");
+      const byProvider = resolveProviderConsent({ configPath: f.configPath, env: {} });
+      expect(byProvider.detail).toContain(
+        `re-enable it with ${PROVIDER_CONSENT_KEY.provider}=<provider>`,
+      );
+      expect(byProvider.detail).not.toContain(`${PROVIDER_CONSENT_KEY.semantic}=true`);
+
+      // Both at once: one advice line naming both keys and both values.
+      writeFileSync(f.configPath, "search_semantic_enabled: false\nembedding_provider: disabled\n");
+      const byBoth = resolveProviderConsent({ configPath: f.configPath, env: {} });
+      expect(byBoth.detail).toContain(
+        `re-enable it with ${PROVIDER_CONSENT_KEY.semantic}=true or ` +
+          `${PROVIDER_CONSENT_KEY.provider}=<provider>`,
+      );
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("an unreadable record advises repairing the file, not flipping a key", () => {
+    // A DIRECTORY in the config's place, the same platform-safe fixture
+    // the unreadable arm above uses: the record named no key, so the
+    // advice cannot be a key to clear - and the reason the record could
+    // not be read rides on the verdict beside the file to repair.
+    const f = fixture("consent-unreadable-advice");
+    try {
+      mkdirSync(f.configPath, { recursive: true });
+      const consent = resolveProviderConsent({ configPath: f.configPath, env: {} });
+      expect(providerConsentIsDeclined(consent)).toBe(true);
+      expect(consent.unreadableReason).not.toBeNull();
+      expect(consent.detail).toContain("repair the configuration file at");
+      expect(consent.detail).toContain(f.configPath);
+      expect(consent.detail).not.toContain("re-enable it with");
+    } finally {
+      f.cleanup();
+    }
+  });
+
   test("every verdict carries a non-empty detail", () => {
     const f = fixture("consent-detail");
     try {
