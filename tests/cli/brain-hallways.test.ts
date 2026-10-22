@@ -264,6 +264,26 @@ describe("o2b brain hallways promote", () => {
     expect(page).not.toContain("[[ent-symbol-sessionstore]]");
   });
 
+  test("a pair partner under a family the fold does not mine contributes nothing", async () => {
+    seedPair(3);
+    // A person-family row is not a mention the scan can re-reach (the
+    // fold mines symbol/url/path/qualified-ident only), so a hand-planted
+    // person key never becomes a pair partner: the promote neither fails
+    // nor relates, whatever the entity registry holds under that spelling.
+    for (let i = 1; i <= 3; i++) mention("person", "smith robert", `s${i}.jsonl`);
+    await runCli(["brain", "entity", "set", "people", "Robert Smith", "--json"], { env: env() });
+
+    const out = await runCli(["brain", "hallways", "promote", "symbol", "SessionStore", "--json"], {
+      env: env(),
+    });
+
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as Record<string, unknown>;
+    expect(payload["created"]).toBe(true);
+    expect(payload["related"]).toEqual([]);
+    expect(entityFiles()).toContain("symbol/ent-symbol-sessionstore.md");
+  });
+
   test("promotes under the same bounded-wait deadline the mine fold carries", async () => {
     seedPair(3);
     // A clock that jumps a full day per reading, so any budget the safeguard
