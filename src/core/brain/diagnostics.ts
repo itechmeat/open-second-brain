@@ -273,6 +273,23 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // write-honesty, F4. A count or amount authored with no structural
+        // date is a claim that answers as true at every instant, because an
+        // absent `valid_from` is unbounded. The exit is the claim-graph
+        // query: `--at` and `--history` are what place a claim in time, and
+        // the write-time finding names the lexeme the reader should check.
+        //
+        // Spelled as a literal for the same reason `vault-frozen` above is:
+        // importing the code from `page-lint.ts` would close an import cycle
+        // (page-lint -> next-step -> diagnostics -> page-lint). The producer
+        // and this entry are kept in step by the producer's own test, which
+        // resolves THIS code through `nextCommandField`.
+        code: "undated-quantity",
+        issueClass: "count or amount written with no date",
+        nextCommand: "o2b brain claims",
+        autoRepairable: false,
+      },
+      {
         // Issue #149. The detector has existed since the hygiene lints
         // shipped; what it never had was an exit. Recording real use is
         // the only thing that moves a cold-start rule, and the reporter
