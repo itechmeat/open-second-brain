@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -53,6 +53,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Clean here, not only in the tempDirs() safety net: the temp-hygiene
+  // guard's afterAll runs before this file's module-scope net, so a dir
+  // only the net would remove still fails the run.
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   if (savedDeviceEnv === undefined) delete process.env["O2B_DEVICE_ID"];
   else process.env["O2B_DEVICE_ID"] = savedDeviceEnv;
 });
