@@ -19,10 +19,14 @@
  *     database - a chunk estimated at twice the window was missed.
  *
  * All three shared one shape: the census said nothing, and nothing was
- * defined to mean "every chunk fits". The fix is a two-sided bound - a
- * chunk over the low estimate is counted, a chunk over only the high
- * estimate is reported as undecided - so silence is earned rather than
- * assumed.
+ * defined to mean "every chunk fits". The fix is two arms with a stated
+ * boundary between them: `over-window` is the HOLD population, decided by
+ * the conservative hold bound (`tokenHoldFloor`, a code point charged at
+ * no more than a twelfth of a token) - the only estimate that reads as
+ * proof, after the chars-over-four average was caught holding chunks that
+ * fit; and `undecided` is everything the proof cannot settle, whose high
+ * estimate still reads over the window and which is reported, still sent.
+ * Silence is earned rather than assumed.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -33,7 +37,7 @@ import {
   estimateTokens,
   textExtent,
   tokenEstimateCeiling,
-  tokenEstimateFloor,
+  tokenHoldFloor,
   utf8ByteFloorUnderTokenBudget,
 } from "../../../src/core/search/embeddings/signature.ts";
 import {
@@ -144,8 +148,9 @@ test("a chunk pushed over the window BY the instruction prefix is counted", asyn
   expect(RESOLVED_PASSAGE_PREFIX).toBe(E5_PASSAGE_PREFIX);
 
   const content = "a".repeat(RECOMMENDED_WINDOW * 4);
-  // Without the prefix the estimate lands exactly ON the window; with it,
-  // over. The request always carries it.
+  // Without the prefix the average estimate lands exactly ON the window;
+  // with it, over. The request always carries it, so this chunk is in
+  // the census's undecided band - reported, never a pass.
   expect(estimateTokens([content])).toBe(RECOMMENDED_WINDOW);
   expect(estimateTokens([RESOLVED_PASSAGE_PREFIX + content])).toBeGreaterThan(RECOMMENDED_WINDOW);
 
@@ -153,6 +158,23 @@ test("a chunk pushed over the window BY the instruction prefix is counted", asyn
   const surface = await censusSurface(cfg());
   const warning = surface.warnings.find((w) => w.includes(OVERFLOW_COMMAND));
   expect(warning ?? "(the census said nothing)").toContain(String(RECOMMENDED_WINDOW));
+});
+
+test("a chunk pushed over the hold bound BY the instruction prefix is counted as over", async () => {
+  // The same charge at the hold bound itself: this body fits the window
+  // by exactly one code point, and the prefix the backend sends is what
+  // puts the request over it. The verdict is the over-window arm, the
+  // one the embedding phase holds on.
+  const content = "a".repeat(RECOMMENDED_WINDOW * 12 - RESOLVED_PASSAGE_PREFIX.length + 1);
+  expect(tokenHoldFloor(textExtent(content))).toBe(RECOMMENDED_WINDOW);
+  expect(tokenHoldFloor(textExtent(RESOLVED_PASSAGE_PREFIX + content))).toBeGreaterThan(
+    RECOMMENDED_WINDOW,
+  );
+
+  await seedOneChunk(cfg(), content);
+  const status = await indexStatus(cfg());
+  const warning = status.warnings.find((w) => w.includes(OVERFLOW_COMMAND));
+  expect(warning ?? "(the census said nothing)").toContain("held");
 });
 
 test("a provider that sends no prefix has none subtracted", async () => {
@@ -212,22 +234,36 @@ test("an all-ASCII chunk comfortably inside the window still says nothing", asyn
   expect(surface.undeclared).toBe(false);
 });
 
-// ── the two bounds, as arithmetic ────────────────────────────────────────────
+// ── the two arms, as arithmetic ──────────────────────────────────────────────
 
-test("for pure ASCII the two estimates ARE the old one, so the band is empty", () => {
+test("for pure ASCII the high estimate IS the average one", () => {
   for (let len = 0; len <= 64; len++) {
     const text = "a".repeat(len);
     const extent = textExtent(text);
-    expect(`len=${len} floor=${tokenEstimateFloor(extent)}`).toBe(
-      `len=${len} floor=${estimateTokens([text])}`,
-    );
     expect(`len=${len} ceiling=${tokenEstimateCeiling(extent)}`).toBe(
       `len=${len} ceiling=${estimateTokens([text])}`,
     );
   }
 });
 
-test("the ceiling brackets what the old estimate under-reported on Han and astral text", () => {
+test("the hold bound clears prose the average estimate would hold", () => {
+  // The defect that moved the hold to a conservative bound: a real
+  // English paragraph of 519 code points costs about 111 tokens under
+  // the shipped preset families' 4.5-9 code points per token, so it fits
+  // the narrowest shipped window (128) - while the chars-over-four
+  // average reads 130 and held it from embedding for nothing.
+  const paragraph =
+    "The survey team recorded every measurement in the ledger before the storm reached " +
+    "the harbour wall, and the notes survived the night in a dry canvas bag. ";
+  const prose = paragraph.repeat(Math.ceil(519 / paragraph.length)).slice(0, 519);
+  const extent = textExtent(prose);
+  expect(extent.codePoints).toBe(519);
+  expect(Math.ceil(extent.codePoints / 4)).toBe(130);
+  expect(Math.ceil(extent.codePoints / 4)).toBeGreaterThan(128);
+  expect(tokenHoldFloor(extent)).toBeLessThanOrEqual(128);
+});
+
+test("the ceiling brackets what the average estimate under-reports on Han and astral text", () => {
   // Han: about one token per character under a BERT-family tokenizer.
   const han = "文".repeat(400);
   expect(estimateTokens([han])).toBe(100);
@@ -235,21 +271,21 @@ test("the ceiling brackets what the old estimate under-reported on Han and astra
   // Astral: SQLite reads half of what String.length reads, and the
   // ceiling covers both readings.
   const astral = "\u{1F600}".repeat(400);
-  expect(tokenEstimateFloor(textExtent(astral))).toBe(100);
+  expect(tokenHoldFloor(textExtent(astral))).toBe(34);
   expect(estimateTokens([astral])).toBe(200);
   expect(tokenEstimateCeiling(textExtent(astral))).toBe(400);
 });
 
-test("the floor never exceeds the ceiling, over every script mixture", () => {
+test("the hold bound never exceeds the ceiling, over every script mixture", () => {
   const alphabets = ["a", "é", "文", "\u{1F600}", " ", "Ж"];
   for (const first of alphabets) {
     for (const second of alphabets) {
       for (const repeats of [0, 1, 3, 17]) {
         const text = (first + second).repeat(repeats);
         const extent = textExtent(text);
-        const floor = tokenEstimateFloor(extent);
+        const bound = tokenHoldFloor(extent);
         const ceiling = tokenEstimateCeiling(extent);
-        expect(`${JSON.stringify(text)}: ${floor <= ceiling}`).toBe(
+        expect(`${JSON.stringify(text)}: ${bound <= ceiling}`).toBe(
           `${JSON.stringify(text)}: true`,
         );
       }
@@ -257,11 +293,12 @@ test("the floor never exceeds the ceiling, over every script mixture", () => {
   }
 });
 
-test("the byte prefilter never skips a text either estimate would flag", () => {
+test("the byte prefilter never skips a text either census arm would flag", () => {
   // The query tests the free measurement first and walks only the
   // survivors. That is only sound if a text under the byte floor is
-  // provably under both estimates, so prove it by brute force over every
-  // script mixture and every length either estimate can straddle.
+  // provably under BOTH arms - the hold bound and the high estimate - so
+  // prove it by brute force over every script mixture and every length
+  // either arm can straddle.
   const units = ["a", "ab", "é", "文", "\u{1F600}", "Ж文", "a文", "\u{1F600}a"];
   for (const windowTokens of [1, 4, 16, 128, 512]) {
     const floor = utf8ByteFloorUnderTokenBudget(windowTokens);
@@ -270,7 +307,7 @@ test("the byte prefilter never skips a text either estimate would flag", () => {
         const extent = textExtent(unit.repeat(repeats));
         if (extent.utf8Bytes > floor) continue;
         const flagged =
-          tokenEstimateFloor(extent) > windowTokens || tokenEstimateCeiling(extent) > windowTokens;
+          tokenHoldFloor(extent) > windowTokens || tokenEstimateCeiling(extent) > windowTokens;
         expect(`w=${windowTokens} ${JSON.stringify(unit)}x${repeats}: ${flagged}`).toBe(
           `w=${windowTokens} ${JSON.stringify(unit)}x${repeats}: false`,
         );
@@ -281,18 +318,26 @@ test("the byte prefilter never skips a text either estimate would flag", () => {
 
 // ── the store evaluates exactly those two predicates ─────────────────────────
 
-test("the SQL tally reproduces the two predicates chunk for chunk", async () => {
+test("the SQL tally reproduces the two census arms chunk for chunk", async () => {
   const windowTokens = 16;
   const prefix = RESOLVED_PASSAGE_PREFIX;
-  const budget = windowTokens * 4;
+  const holdBoundary = windowTokens * 12; // code points past this are held
+  const averageBoundary = windowTokens * 4; // past this the high estimate reads over
   const bodies: string[] = [];
-  // Straddle the low threshold in ASCII, then the high one in three
-  // other scripts, then the empty chunk.
-  for (const len of [budget - prefix.length - 1, budget - prefix.length, budget, budget + 1]) {
+  // Straddle the hold bound in ASCII, then the undecided band below it,
+  // then the high estimate in four other scripts, then the empty chunk.
+  for (const len of [
+    holdBoundary - prefix.length - 1,
+    holdBoundary - prefix.length,
+    holdBoundary - prefix.length + 1,
+  ]) {
     bodies.push("a".repeat(len));
   }
+  for (const len of [averageBoundary - prefix.length - 1, averageBoundary - prefix.length]) {
+    bodies.push("a".repeat(Math.max(0, len)));
+  }
   for (const unit of ["文", "\u{1F600}", "Ж", "é"]) {
-    for (const count of [1, windowTokens - 1, windowTokens, windowTokens + 1, budget]) {
+    for (const count of [1, windowTokens, windowTokens + 1, averageBoundary, holdBoundary + 1]) {
       bodies.push(unit.repeat(count));
     }
   }
@@ -326,7 +371,7 @@ test("the SQL tally reproduces the two predicates chunk for chunk", async () => 
     let undecided = 0;
     for (const body of bodies) {
       const extent = textExtent(prefix + body);
-      if (tokenEstimateFloor(extent) > windowTokens) overWindow++;
+      if (tokenHoldFloor(extent) > windowTokens) overWindow++;
       else if (tokenEstimateCeiling(extent) > windowTokens) undecided++;
     }
     // The fixture must actually exercise both arms, or this test would

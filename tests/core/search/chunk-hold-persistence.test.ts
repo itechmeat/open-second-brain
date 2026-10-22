@@ -32,8 +32,9 @@ import {
   RECOMMENDED_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/presets.ts";
 import {
-  charLengthOverTokenBudget,
   embeddingSignature,
+  textExtent,
+  tokenHoldFloor,
 } from "../../../src/core/search/embeddings/signature.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -45,9 +46,24 @@ import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 const WINDOW = declaredInputWindowTokens(RECOMMENDED_EMBEDDING_MODEL)!;
 
-/** The LOW estimate exceeds the window: provably over, so it gets held. */
-const OVER_CONTENT = "b".repeat(charLengthOverTokenBudget(WINDOW) + 1);
-const OVER_FLOOR = Math.ceil(OVER_CONTENT.length / 4);
+/**
+ * An ordinary English sentence, assembled into a fixture of an exact
+ * code-point size: the hold's proof reads code points, and a fixture
+ * shaped like the corpus keeps the persistence tests honest about which
+ * chunks a real tokenizer cannot fit.
+ */
+const PROSE_SENTENCE =
+  "The survey team recorded every measurement in the ledger before the storm reached the harbour wall. ";
+
+/**
+ * The conservative hold bound already exceeds the window: even at one
+ * token per twelve code points - far below what this prose costs a real
+ * tokenizer - it cannot fit, so it gets held.
+ */
+const OVER_CONTENT = PROSE_SENTENCE.repeat(
+  Math.ceil((WINDOW * 12 + 1) / PROSE_SENTENCE.length),
+).slice(0, WINDOW * 12 + 1);
+const HELD_TOKENS = tokenHoldFloor(textExtent(OVER_CONTENT));
 const FITTING = "small chunk of ordinary prose";
 
 let vault: string;
@@ -186,7 +202,7 @@ test("the phase persists a hold row keyed by model, window and signature", async
       dimension: config.semantic.dimension,
     }),
   );
-  expect(rows[0]!.estimated_tokens).toBe(OVER_FLOOR);
+  expect(rows[0]!.estimated_tokens).toBe(HELD_TOKENS);
   expect(Number.isNaN(Date.parse(rows[0]!.held_at))).toBe(false);
 });
 
@@ -283,7 +299,7 @@ test("a model change releases the hold under the old model's key", async () => {
   }
   // bge-m3's declared window bounds the proof the other way: under the
   // new model the chunk simply fits, so the releasing run embeds it.
-  expect(declaredInputWindowTokens("BAAI/bge-m3")! > OVER_FLOOR).toBe(true);
+  expect(declaredInputWindowTokens("BAAI/bge-m3")! > HELD_TOKENS).toBe(true);
   const store2 = await Store.open(other, { mode: "write" });
   const tally = EMPTY_TALLY();
   try {
@@ -306,7 +322,7 @@ test("holding again refreshes the row rather than duplicating it", async () => {
     // Same-key re-decision re-records through the primary key rather than
     // stacking a second row for one chunk.
     store.recordChunkHolds(
-      [{ chunkId: heldId, estimatedTokens: OVER_FLOOR, windowTokens: WINDOW }],
+      [{ chunkId: heldId, estimatedTokens: HELD_TOKENS, windowTokens: WINDOW }],
       {
         model: RECOMMENDED_EMBEDDING_MODEL,
         embeddingSignature: chunkHoldExclusion(original)!.embeddingSignature,

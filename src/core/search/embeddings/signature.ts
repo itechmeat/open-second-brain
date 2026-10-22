@@ -182,17 +182,37 @@ function maxNonAsciiCodePoints(extent: TextExtent): number {
 }
 
 /**
- * Fewest tokens the text can plausibly cost: every code point at a
- * quarter token, which is {@link estimateTokens} generalised from UTF-16
- * code units to code points.
+ * The code-point cost the chunk-hold proof charges a single token.
+ *
+ * Chars-over-four is an AVERAGE, not a bound: real tokenizer rates for
+ * the shipped preset families run roughly 4.5-9 code points per token on
+ * prose, tables and code, so a text estimated at `ceil(codePoints / 4)`
+ * tokens usually costs fewer, and holding on that number holds chunks
+ * that fit. This constant is the widest per-token cost the hold's proof
+ * will grant - a full code point is charged at no more than a twelfth of
+ * a token - so when the resulting bound still exceeds the window, the
+ * real request is over it whatever the tokenizer does.
+ */
+export const MAX_CODE_POINTS_PER_TOKEN = 12;
+
+/**
+ * A LOWER bound on the tokens the text can cost: every code point at no
+ * more than a twelfth of a token ({@link MAX_CODE_POINTS_PER_TOKEN}).
+ *
+ * This is the quantity the chunk skip-and-hold acts on, and the word
+ * bound is the whole point: the chars-over-four average read LOW chunks
+ * that fit the window as over it and held them from embedding for
+ * nothing. Only when even this conservative bound exceeds the window is
+ * the chunk provably over; everything between this bound and the
+ * average-rate estimate is undecided, reported as such, and still sent.
  *
  * Code points rather than code units because that is the unit SQLite
  * counts, and because it is the SMALLER of the two - a supplementary-plane
- * character is one code point and two code units - so the floor stays a
- * floor on both sides of the seam.
+ * character is one code point and two code units - so the bound stays a
+ * bound on both sides of the seam.
  */
-export function tokenEstimateFloor(extent: TextExtent): number {
-  return Math.ceil(extent.codePoints / CHARS_PER_ESTIMATED_TOKEN);
+export function tokenHoldFloor(extent: TextExtent): number {
+  return Math.ceil(extent.codePoints / MAX_CODE_POINTS_PER_TOKEN);
 }
 
 /**
@@ -200,9 +220,11 @@ export function tokenEstimateFloor(extent: TextExtent): number {
  * {@link MAX_TOKENS_PER_NON_ASCII_CODE_POINT}, the rest at a quarter
  * token each.
  *
- * Equal to {@link tokenEstimateFloor} for pure ASCII, which is what keeps
- * an all-Latin index reporting exactly what it reported before this
- * two-sided bound existed.
+ * For pure ASCII this equals the average-rate estimate - every code point
+ * at a quarter token, {@link estimateTokens} generalised from UTF-16 code
+ * units to code points - which is what keeps an all-Latin index reporting
+ * exactly what the high arm reported before the conservative hold bound
+ * existed beside it.
  */
 export function tokenEstimateCeiling(extent: TextExtent): number {
   const nonAscii = maxNonAsciiCodePoints(extent);

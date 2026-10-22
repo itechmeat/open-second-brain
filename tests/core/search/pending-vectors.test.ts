@@ -28,10 +28,13 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
-import { indexCheck, indexVault } from "../../../src/core/search/indexer.ts";
+import { indexCheck, indexVault, runEmbeddingPhase } from "../../../src/core/search/indexer.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { chunkHoldExclusion } from "../../../src/core/search/embedding-spend.ts";
 import {
   countChunksWithoutEmbeddings,
   findChunksWithoutEmbeddings,
@@ -83,6 +86,38 @@ function cfg(semantic: Partial<ResolvedEmbeddingConfig> = {}) {
       ...semantic,
     },
   });
+}
+
+/**
+ * A temporary directory whose config file records a decline, for the
+ * `search check` consent arm.
+ */
+function fixtureDeclinedConfig(): {
+  readonly configPath: string;
+  readonly cleanup: () => void;
+} {
+  const dir = mkdtempSync(join(tmpdir(), "osb-pending-declined-"));
+  const configPath = join(dir, "config.yaml");
+  writeFileSync(configPath, "search_semantic_enabled: false\n");
+  return { configPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/**
+ * The consent env twins are saved and CLEARED around a test that resolves
+ * the consent from the process environment: env values take precedence
+ * over the config file, so a developer or CI runner exporting either of
+ * them would flip the case no matter what the fixture writes to disk.
+ */
+function saveAndClearConsentEnv(): () => void {
+  const names = ["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER"];
+  const saved = names.map((name) => [name, process.env[name]] as const);
+  for (const name of names) delete process.env[name];
+  return () => {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
 }
 
 test("the count agrees with the row walk it replaces", async () => {
@@ -192,6 +227,116 @@ test("a partially embedded index names the count and the verb that prices the wo
   // figure comes from, and a second estimator here could disagree with it.
   expect(line!).not.toContain("$");
   expect(report.recommendations.some((r) => r.includes("compute the first vectors"))).toBe(false);
+});
+
+test("an index whose vector-less chunks are all held reports none pending and no backfill", async () => {
+  if (!sqliteVecLoadable()) return;
+  // A narrow operator-declared window arms the hold for every chunk of
+  // ordinary prose: the phase records the holds and embeds nothing, so
+  // the index owes no vector for any of them.
+  const PROSE =
+    "The survey team recorded every measurement in the ledger before the storm reached the harbour wall. ";
+  const heldWindow = cfg({ inputWindowTokens: 8 });
+  {
+    const store = await Store.open(heldWindow, { mode: "write" });
+    try {
+      const docId = store.upsertDocument({
+        path: "Brain/held.md",
+        title: "held",
+        contentHash: "h-held",
+        mtime: 1,
+        size: PROSE.length,
+      });
+      store.replaceChunks(docId, [
+        {
+          chunkIndex: 0,
+          content: PROSE,
+          contentHash: "h-held-0",
+          startLine: 1,
+          endLine: 1,
+          tokenCount: 9,
+        },
+      ]);
+    } finally {
+      await store.close();
+    }
+  }
+  {
+    const store = await Store.open(heldWindow, { mode: "write" });
+    try {
+      await runEmbeddingPhase(store, heldWindow, {
+        embeddingsComputed: 0,
+        embeddingsRetries: 0,
+      });
+    } finally {
+      await store.close();
+    }
+  }
+
+  // The key-free diagnostic read still sees the missing vector: the chunk
+  // genuinely has none, which the hold does not erase.
+  const hold = chunkHoldExclusion(heldWindow);
+  expect(hold).not.toBeNull();
+  {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      expect(countChunksWithoutEmbeddings(db)).toBe(1);
+      expect(countChunksWithoutEmbeddings(db, undefined, hold ?? undefined)).toBe(0);
+    } finally {
+      db.close();
+    }
+  }
+  const peeked = peekPendingVectorsSync(dbPath, hold ?? undefined);
+  expect(peeked.kind).toBe("read");
+  if (peeked.kind === "read") {
+    expect(peeked.value.pending).toBe(0);
+    expect(peeked.value.chunks).toBeGreaterThan(0);
+  }
+
+  // Declaring the model's price keeps the price hint out of a report
+  // whose only job here is the backfill recommendation.
+  const priced = cfg({
+    inputWindowTokens: 8,
+    priceOverride: { model: "fake-model", usdPerMtok: 0 },
+  });
+  const report = await indexCheck(priced);
+  expect(report.pendingVectors.verdict).toBe("measured");
+  if (report.pendingVectors.verdict === "measured") {
+    expect(report.pendingVectors.pending).toBe(0);
+    expect(report.pendingVectors.chunks).toBeGreaterThan(0);
+  }
+  // The recommendation never clears when it is driven by the raw count:
+  // vector-backfill excludes the held chunks, finds nothing to do, and
+  // the same state would be re-reported on every check.
+  expect(report.recommendations.some((r) => r.includes("vector-backfill"))).toBe(false);
+  expect(report.recommendations.some((r) => r.includes("compute the first vectors"))).toBe(false);
+});
+
+test("a declined vault reports the probe as skipped with the decline, never as unconfigured", async () => {
+  if (!sqliteVecLoadable()) return;
+  const f = fixtureDeclinedConfig();
+  const restoreConsentEnv = saveAndClearConsentEnv();
+  try {
+    const config = Object.freeze({
+      ...makeConfig({
+        vault,
+        dbPath,
+        semantic: { enabled: false },
+      }),
+      configPath: f.configPath,
+    });
+    const report = await indexCheck(config);
+    // A decline is a decision recorded in the machine configuration, and
+    // the probe names it: skipped, with the consent's own sentence, on
+    // the same state an absent configuration used to read as
+    // not-configured.
+    expect(report.providerProbe).toBe("skipped");
+    expect(report.providerReason ?? "").toContain("provider consent declined");
+    expect(report.providerReason ?? "").toContain("search_semantic_enabled=true");
+  } finally {
+    restoreConsentEnv();
+    f.cleanup();
+  }
 });
 
 test("an index that could not be read recommends building it and says so", async () => {

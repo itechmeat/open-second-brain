@@ -14,12 +14,13 @@
  *
  * Three properties are pinned here, and each one can fail:
  *
- *   - the predicate the store evaluates is EXACTLY the estimator the
- *     embedding request path sizes batches with, proved by brute force
- *     rather than by inspection;
- *   - the ONE place the two disagree - SQLite counts code points where
- *     JavaScript counts UTF-16 code units - is pinned as a bound and a
- *     direction, not left to be discovered;
+ *   - the census's over-window arm is EXACTLY the hold bound the
+ *     embedding phase acts on, so the report and the phase can never
+ *     disagree about which chunks are provably over, and the boundary is
+ *     proved by brute force rather than by inspection;
+ *   - the ONE place the estimates disagree with the database - SQLite
+ *     counts code points where JavaScript counts UTF-16 code units - is
+ *     pinned as a bound and a direction, not left to be discovered;
  *   - a model with no declared window reports that the check did not
  *     run. Never that it passed.
  *
@@ -108,7 +109,12 @@ function oversizeBody(windowTokens: number): string {
 
 // ── the predicate is the estimator ───────────────────────────────────────────
 
-test("the census predicate equals the request path's estimator at every length", () => {
+test("the request path's spend estimator is chars-over-four at every length", () => {
+  // The average-rate estimate the batches are priced with. The census's
+  // over-window arm is deliberately NOT this predicate - it is the
+  // conservative hold bound - because the average reads whole English
+  // chunks that fit the window as over it; the undecided band between
+  // the two is what the census reports instead of passing them.
   for (const windowTokens of [1, 8, 128, RECOMMENDED_WINDOW]) {
     const threshold = charLengthOverTokenBudget(windowTokens);
     for (let len = 0; len <= threshold + 8; len++) {
@@ -153,9 +159,12 @@ test("the shipped defaults are the ones that overflow each other", async () => {
 
 // ── the store-side count ─────────────────────────────────────────────────────
 
-test("the store counts exactly the chunks whose estimate exceeds the window", async () => {
+test("the store counts exactly the chunks whose hold bound exceeds the window", async () => {
   const window = 16;
-  const threshold = charLengthOverTokenBudget(window);
+  // The over-window arm is the HOLD population: past it only when even
+  // the conservative bound - one token per twelve code points - cannot
+  // fit the window.
+  const holdBoundary = window * 12;
   const store = await Store.open(cfg(), { mode: "write" });
   try {
     const docId = store.upsertDocument({
@@ -171,7 +180,7 @@ test("the store counts exactly the chunks whose estimate exceeds the window", as
     store.replaceChunks(docId, [
       {
         chunkIndex: 0,
-        content: "b".repeat(threshold),
+        content: "b".repeat(holdBoundary),
         contentHash: "h0",
         startLine: 1,
         endLine: 1,
@@ -179,7 +188,7 @@ test("the store counts exactly the chunks whose estimate exceeds the window", as
       },
       {
         chunkIndex: 1,
-        content: "b".repeat(threshold + 1),
+        content: "b".repeat(holdBoundary + 1),
         contentHash: "h1",
         startLine: 2,
         endLine: 2,
@@ -187,7 +196,7 @@ test("the store counts exactly the chunks whose estimate exceeds the window", as
       },
       {
         chunkIndex: 2,
-        content: "b".repeat(threshold * 3),
+        content: "b".repeat(holdBoundary * 3),
         contentHash: "h2",
         startLine: 3,
         endLine: 3,
@@ -196,7 +205,8 @@ test("the store counts exactly the chunks whose estimate exceeds the window", as
       { chunkIndex: 3, content: "", contentHash: "h3", startLine: 4, endLine: 4, tokenCount: 0 },
     ]);
     // Exactly the two over the boundary - the one AT it is not over it,
-    // which is the same boundary `estimateTokens` draws.
+    // which is the same boundary the phase's hold draws. The first two
+    // chunks sit in the undecided band instead: reported, still sent.
     expect(store.chunksOverTokenWindow(window)).toBe(2);
     expect(store.chunksOverTokenWindow(window * 4)).toBe(0);
   } finally {
@@ -206,13 +216,13 @@ test("the store counts exactly the chunks whose estimate exceeds the window", as
 
 test("the code-point / code-unit divergence is a lower bound, and only that", async () => {
   const window = 16;
-  const threshold = charLengthOverTokenBudget(window);
+  const holdBoundary = window * 12;
   // A supplementary-plane character is ONE code point to SQLite's
   // length() and TWO code units to String.length. A chunk built entirely
-  // from them sits at the threshold in the database and past it in the
-  // estimator, so the census declines to count it.
-  const astral = "\u{1F600}".repeat(threshold);
-  expect(astral.length).toBe(threshold * 2);
+  // from them sits at the hold boundary in the database and past it in
+  // the estimator, so the census declines to count it as over.
+  const astral = "\u{1F600}".repeat(holdBoundary);
+  expect(astral.length).toBe(holdBoundary * 2);
   expect(estimateTokens([astral])).toBeGreaterThan(window);
 
   const store = await Store.open(cfg(), { mode: "write" });
@@ -240,12 +250,12 @@ test("the code-point / code-unit divergence is a lower bound, and only that", as
     // The stated bound: never a false alarm, and short by at most one
     // code unit per supplementary character.
     expect(store.chunksOverTokenWindow(window)).toBe(0);
-    // One more astral character past the code-point threshold and the
+    // One more astral character past the code-point boundary and the
     // count fires, so the divergence is a bound and not a blind spot.
     store.replaceChunks(docId, [
       {
         chunkIndex: 0,
-        content: "\u{1F600}".repeat(threshold + 1),
+        content: "\u{1F600}".repeat(holdBoundary + 1),
         contentHash: "h1",
         startLine: 1,
         endLine: 1,

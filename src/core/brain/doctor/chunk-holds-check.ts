@@ -71,12 +71,14 @@ function indexProbe(dbPath: string, hold: ChunkHoldExclusion): HeldChunkDocRow[]
 
 function holdMessage(row: HeldChunkDocRow, hold: ChunkHoldExclusion): string {
   return (
-    `${row.heldChunks} chunk(s) in this document are held back from embedding as provably ` +
-    `over the declared input window of ${hold.model}: the largest single-chunk estimate is ` +
-    `${row.maxEstimatedTokens} tokens against a ${hold.windowTokens}-token window. The page ` +
-    "still searches lexically and is never sent to the embedding provider; narrowing the " +
-    "chunking (search_chunk_size) or leaving the page unembedded are the ways to change the " +
-    "outcome, both per-document decisions. `o2b search status` lists the held chunks."
+    `${row.heldChunks} chunk(s) in this document are held back from embedding: even a ` +
+    `conservative lower-bound estimate puts them over the declared input window of ` +
+    `${hold.model} - the largest single-chunk bound is ${row.maxEstimatedTokens} tokens ` +
+    `against a ${hold.windowTokens}-token window, and chunks merely estimated over that ` +
+    "window are still sent. The page still searches lexically and is never sent to the " +
+    "embedding provider; narrowing the chunking (search_chunk_size) or leaving the page " +
+    "unembedded are the ways to change the outcome, both per-document decisions. " +
+    "`o2b search status` lists the held chunks."
   );
 }
 

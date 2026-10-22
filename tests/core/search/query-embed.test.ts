@@ -43,7 +43,6 @@ import {
   LOCAL_EMBEDDING_MODEL,
   textExtent,
   tokenEstimateCeiling,
-  tokenEstimateFloor,
 } from "../../../src/core/search/embeddings/signature.ts";
 
 const PREFIX = "query: ";
@@ -91,9 +90,10 @@ test("a Han query is cut under the ceiling bound, never the floor", () => {
   expect(fit.truncated).toBe(true);
   expect(ceiling(PREFIX + fit.text)).toBeLessThanOrEqual(window);
   expect(ceiling(PREFIX + fit.text + nextCodePoint(query, fit.text)!)).toBeGreaterThan(window);
-  // The floor would have admitted roughly four times as much Han text.
+  // The average-rate estimate would have admitted roughly four times as
+  // much Han text.
   const floorCut = [...query].slice(0, (window - 2) * 4).join("");
-  expect(tokenEstimateFloor(textExtent(PREFIX + floorCut))).toBeLessThanOrEqual(window);
+  expect(estimateTokens([PREFIX + floorCut])).toBeLessThanOrEqual(window);
   expect([...fit.text].length).toBeLessThan([...floorCut].length);
 });
 

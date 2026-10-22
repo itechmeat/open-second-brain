@@ -49,13 +49,13 @@ import {
 import { embeddingPriceRecommendations } from "./price-recommendations.ts";
 import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
-import { resolveProviderConsent } from "./provider-consent.ts";
+import { resolveProviderConsent, providerConsentIsDeclined } from "./provider-consent.ts";
 import {
   embeddingSignature,
   isStaleSignature,
   MODEL_NATIVE_DIMENSION,
   textExtent,
-  tokenEstimateFloor,
+  tokenHoldFloor,
   type EmbeddingIdentity,
 } from "./embeddings/signature.ts";
 import { LOCAL_DEFAULT_DIMENSION } from "./embeddings/local-provider.ts";
@@ -120,7 +120,7 @@ import {
   excludedCallableVisibilitySurfaces,
 } from "./visibility-surface-registry.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
-import type { PendingVectorScope } from "./store/chunks.ts";
+import type { ChunkHoldExclusion, PendingVectorScope } from "./store/chunks.ts";
 import type {
   ChunkWindowCensus,
   EmbedderRecordCensus,
@@ -936,7 +936,7 @@ const CHUNK_SIZE_CONFIG_KEY = "search_chunk_size";
  *
  * The silences it does NOT produce are the two states the estimate
  * cannot back: a model with no declared window (`window-undeclared`),
- * and chunks the estimate cannot place on either side of a declared one
+ * and chunks the census cannot place inside a declared one
  * (`estimate-undecided`). A check that could not run and a check that
  * passed are not the same statement.
  */
@@ -991,7 +991,7 @@ function censusChunkWindow(
 
 /**
  * The operator-facing warning line for a census that MEASURED something
- * - chunks proved over the window, or chunks its estimate cannot place
+ * - chunks proved over the window, or chunks its estimates cannot place
  * inside one - ending in the command its REGISTERED diagnostic names.
  * The command is resolved from the registry rather than written here, so
  * this sentence cannot name an exit the registry does not hold; an
@@ -1018,22 +1018,23 @@ async function formatChunkWindowMeasured(
     return (
       `${census.chunksUndecided} of ${census.chunksMeasured} indexed chunk(s) cannot be ` +
       `placed inside the ${census.windowTokens}-token input window declared for ` +
-      `${census.model}: the census estimates tokens from character counts, which does not ` +
-      `bound a token window for non-Latin scripts, so this is not a pass. Undecided chunks ` +
-      `are still sent, and whatever does not fit is truncated by the provider, silently - ` +
-      `${levers}`
+      `${census.model}: the census cannot bound a token window with character counts - the ` +
+      `average-rate estimate reads high on ordinary prose, and non-Latin scripts and dense ` +
+      `symbols cost far more than four characters per token - so this is not a pass. ` +
+      `Undecided chunks are still sent, and whatever does not fit is truncated by the ` +
+      `provider, silently - ${levers}`
     );
   }
   const undecided =
     census.chunksUndecided === undefined
       ? ""
-      : ` A further ${census.chunksUndecided} chunk(s) the estimate cannot place either way.`;
+      : ` A further ${census.chunksUndecided} chunk(s) the census cannot place either way.`;
   return (
-    `${census.chunksOverWindow} of ${census.chunksMeasured} indexed chunk(s) estimate above ` +
-    `the ${census.windowTokens}-token input window declared for ${census.model}; chunks ` +
-    `proved over the window are held back from embedding rather than sent and truncated, ` +
-    `and \`o2b search status\` names the held ones in its held-chunks report. ${levers}` +
-    `${undecided}`
+    `${census.chunksOverWindow} of ${census.chunksMeasured} indexed chunk(s) cannot fit the ` +
+    `${census.windowTokens}-token input window declared for ${census.model} even at a ` +
+    `conservative estimate; chunks proved over the window are held back from embedding ` +
+    `rather than sent and truncated, and \`o2b search status\` names the held ones in its ` +
+    `held-chunks report. ${levers}${undecided}`
   );
 }
 
@@ -1128,17 +1129,26 @@ type PendingCensusEntry = EmbeddingSpendPlan["pending"][number];
  * Split a pending census into what the embedding phase may send and what
  * it must HOLD back (chunk skip-and-hold, F2).
  *
- * The hold acts on proof only. A chunk is held when the estimator's FLOOR
- * - code points over four, charged through the prefix the configured
- * backend actually prepends - already exceeds the model's effective
- * declared window: then the real request is over it whatever tokenizer the
- * provider runs. The undecided band between the floor and the ceiling
- * stays embedded exactly as before this feature, because acting there
- * would hold work on a guess, and a model with no declared window (or the
- * local embedder, which has no window by construction) proves nothing at
- * all - for them nothing is held and every chunk stays pending.
+ * The hold acts on proof only. A chunk is held when the conservative
+ * bound - code points charged at no more than one token per
+ * `MAX_CODE_POINTS_PER_TOKEN` (embeddings/signature.ts), through the
+ * prefix the configured backend actually prepends - already exceeds the
+ * model's effective declared window: real tokenizers absorb several code
+ * points per token, so a text over even that generous charge cannot fit.
+ * The chars-over-four
+ * average is deliberately NOT the trigger: it is an average, not a bound,
+ * and holding on it read whole English chunks that fit the window as over
+ * it - recall lost on an arithmetic guess.
  *
- * The predicate is the same measurement the oversize-chunk census makes
+ * Everything between that bound and the average-rate estimate is the
+ * undecided band: those chunks stay embedded exactly as before this
+ * feature, because acting there would hold work on a guess, and the window
+ * census beside this phase reports the band rather than passing it in
+ * silence. A model with no declared window (or the local embedder, which
+ * has no window by construction) proves nothing at all - for them nothing
+ * is held and every chunk stays pending.
+ *
+ * The hold bound is the same measurement the oversize-chunk census makes
  * its `over-window` arm with, so the phase and the report can never
  * disagree about which chunks are provably over.
  */
@@ -1156,12 +1166,12 @@ function partitionHeldChunks(
   const embeddable: Array<PendingCensusEntry> = [];
   const held: HeldChunkRecord[] = [];
   for (const chunk of pending) {
-    const estimatedTokens = tokenEstimateFloor(textExtent(prefix + chunk.content));
-    if (estimatedTokens > windowTokens) {
+    const heldTokens = tokenHoldFloor(textExtent(prefix + chunk.content));
+    if (heldTokens > windowTokens) {
       held.push(
         Object.freeze({
           chunkId: chunk.chunkId,
-          estimatedTokens,
+          estimatedTokens: heldTokens,
           windowTokens,
           reason: CHUNK_HOLD_REASON.overDeclaredWindow,
         }),
@@ -2285,9 +2295,15 @@ export async function indexCheck(
     warnings.push(await semanticCapabilityLabel(capability.code));
   }
 
-  // The live probe (wiring-what-exists, E1). Three decisions, each one
+  // The live probe (wiring-what-exists, E1). Four decisions, each one
   // the difference between two states a single verdict used to blur:
   //
+  //   - A recorded DECLINE is `skipped`, with the consent's own sentence
+  //     as the reason - decided, before the tiers are consulted. The two
+  //     decline keys refuse independently, and the operator who wrote one
+  //     made the same decision either way; reporting that as
+  //     `not-configured` merged a decision with an absence and read a
+  //     broken configuration as one that was never finished.
   //   - Nothing configured is `not-configured`, not a failed probe. The
   //     absence of a provider is not a broken provider, and it costs no
   //     network call: `probeProvider` is never reached on that arm.
@@ -2303,11 +2319,14 @@ export async function indexCheck(
     env: process.env,
     semantic: config.semantic,
   });
-  const probe = !embeddingKeyResolved
-    ? PROVIDER_PROBE_NOT_CONFIGURED
-    : opts?.probeProvider === false
-      ? PROVIDER_PROBE_SKIPPED
-      : await probeProvider(() => makeProvider(config.semantic, consent));
+  const consentDeclined = providerConsentIsDeclined(consent);
+  const probe = consentDeclined
+    ? Object.freeze({ state: PROVIDER_PROBE.skipped, reason: consent.detail })
+    : !embeddingKeyResolved
+      ? PROVIDER_PROBE_NOT_CONFIGURED
+      : opts?.probeProvider === false
+        ? PROVIDER_PROBE_SKIPPED
+        : await probeProvider(() => makeProvider(config.semantic, consent));
   const providerProbe = probe.state;
   const providerReason = probe.reason;
   if (providerProbe === PROVIDER_PROBE.unreachable) {
@@ -2334,8 +2353,14 @@ export async function indexCheck(
   // The measured pending-vector count (nothing-writes-silently, unit A),
   // read through the same explicit peek the ABI tokens use and for the
   // same reason. Two `COUNT(*)`s on a read-only handle; the report is a
-  // diagnostic an operator ran, never the query path.
-  const pendingVectors = readPendingVectorCensus(config.dbPath);
+  // diagnostic an operator ran, never the query path. The config's own
+  // chunk-hold exclusion rides along: a held chunk is not work the index
+  // owes a vector for, and counting it here would recommend a backfill
+  // that finds nothing to do and never clears.
+  const pendingVectors = readPendingVectorCensus(
+    config.dbPath,
+    config.semantic.enabled ? (chunkHoldExclusion(config) ?? undefined) : undefined,
+  );
 
   // The record-vs-data embedder audit (nothing-writes-silently, unit G).
   // Ungated by the semantic switch on purpose: it compares the index's
@@ -2400,12 +2425,20 @@ export async function indexCheck(
  * UNRECORDED - they differ in their reason, not in what they prove -
  * and neither is a count of zero.
  *
+ * `hold` is the configuration's chunk-hold exclusion key; passing it
+ * keeps held chunks out of the pending count, the same way the spend
+ * plan and the backfill exclude them. Callers without a configuration
+ * in hand omit it and read the raw anti-join.
+ *
  * Exported for the brain doctor's embeddings-health check, which
  * consolidates this census beside the index counts instead of deriving
  * a private copy whose unrecorded contract could drift from this one.
  */
-export function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
-  const peek = peekPendingVectorsSync(dbPath);
+export function readPendingVectorCensus(
+  dbPath: string,
+  hold?: ChunkHoldExclusion,
+): PendingVectorCensus {
+  const peek = peekPendingVectorsSync(dbPath, hold);
   if (peek.kind === "read") {
     return Object.freeze({
       verdict: "measured" as const,
