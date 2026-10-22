@@ -48,8 +48,12 @@
  * not a second one.
  */
 
+import { readFileSync } from "node:fs";
+
+import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { ORIGIN_CHANNEL, type OriginChannelStamp } from "../../origin-channel.ts";
+import { parseFrontmatterText } from "../../vault.ts";
 
 /**
  * The closed vocabulary. `prompt-derived` names material an agent
@@ -141,4 +145,34 @@ export function withoutCallerContentClass(frontmatter: FrontmatterMap): Frontmat
   const rest = { ...frontmatter };
   delete rest[CONTENT_CLASS_FIELD];
   return rest;
+}
+
+/**
+ * Stamp `content_class: prompt-derived` onto a page an in-process
+ * pipeline has just written.
+ *
+ * This exists for the generation writers whose bytes are composed by
+ * their own writer function (the signal writer, for one, renders its
+ * frontmatter internally and exposes no extension point), so the stamp
+ * cannot ride the frontmatter map the way it does in `createNote`. It is
+ * still a CREATION-time stamp: the caller invokes it on the same run
+ * that wrote the page, the line is inserted as text so every other byte
+ * of the just-written document survives untouched, the write is atomic,
+ * and a page already carrying the class is a no-op. A file without a
+ * frontmatter block is a named refusal rather than a silent miss - the
+ * one state where the stamp could be quietly lost is the one state this
+ * refuses to paper over.
+ */
+export function stampPromptDerivedLine(abs: string): void {
+  const text = readFileSync(abs, "utf8");
+  if (!text.startsWith("---\n")) {
+    throw new Error(`stampPromptDerivedLine: ${abs} has no frontmatter block to stamp`);
+  }
+  const close = text.indexOf("\n---\n", 4);
+  if (close < 0) {
+    throw new Error(`stampPromptDerivedLine: ${abs} has an unterminated frontmatter block`);
+  }
+  if (readContentClass(parseFrontmatterText(text)[0]) !== null) return;
+  const line = `${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}\n`;
+  atomicWriteFileSync(abs, `${text.slice(0, close + 1)}${line}${text.slice(close + 1)}`);
 }

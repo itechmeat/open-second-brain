@@ -33,6 +33,7 @@ import {
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { isSecretReferenceValue, resolveNamedSecret } from "../../secret-resolver.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
+import { CONTENT_CLASS, CONTENT_CLASS_FIELD } from "../provenance/content-class.ts";
 import {
   CAPTURE_SCOPE,
   captureScopesFrontmatter,
@@ -261,6 +262,12 @@ export function writeResearchReport(
     // Written only when some source is not a local file, so a report built
     // from vault files alone stays byte-identical to before.
     ...captureScopesFrontmatter(captureScopes),
+    // Server-derived content class (F5): a research report is prompt-
+    // derived material by definition - the pipeline synthesised it from
+    // provider runs - so the writer that knows the material stamps it
+    // here, at creation. The shared exports leave such pages out by
+    // default and name the omission.
+    [CONTENT_CLASS_FIELD]: CONTENT_CLASS.promptDerived,
     created_at: stamp,
     updated_at: stamp,
     tags: ["brain", "brain/report"],
