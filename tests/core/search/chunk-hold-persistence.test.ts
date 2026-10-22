@@ -297,9 +297,9 @@ test("a model change releases the hold under the old model's key", async () => {
 
 test("holding again refreshes the row rather than duplicating it", async () => {
   const { heldId } = await runOnceUntilHold();
-  // Release into pending (wider window that still proves over once back
-  // down is impossible - instead, drop the record's power by widening,
-  // then narrow again) and re-run under the ORIGINAL key.
+  // No release and no re-decide under a new key: this test exercises only
+  // the SAME-key path, re-recording the hold under the original
+  // (model, embedding signature) key.
   const original = cfg();
   const store = await Store.open(original, { mode: "write" });
   try {
