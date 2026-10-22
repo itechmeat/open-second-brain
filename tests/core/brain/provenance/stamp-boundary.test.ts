@@ -92,4 +92,22 @@ describe("stampPromptDerivedLine places the stamp at the parser's boundary", () 
     stampPromptDerivedLine(abs);
     expect(readFileSync(abs, "utf8")).toBe(once);
   });
+
+  test("a page already carrying an out-of-vocabulary class is refused, not double-stamped", () => {
+    // The read side maps an unknown class value to unmarked, but the
+    // STAMP must not read that as "no key": planting a second
+    // `content_class:` line gives the frontmatter a duplicate key, which
+    // strict YAML consumers reject outright.
+    const abs = join(dir, "page.md");
+    writeFileSync(
+      abs,
+      "---\ntitle: Hand\ntype: note\ncontent_class: agent-session-v2\n---\n\nbody\n",
+      "utf8",
+    );
+    expect(() => stampPromptDerivedLine(abs)).toThrow(/content_class/);
+    // The refusal never writes: the bytes are untouched.
+    expect(readFileSync(abs, "utf8")).toBe(
+      "---\ntitle: Hand\ntype: note\ncontent_class: agent-session-v2\n---\n\nbody\n",
+    );
+  });
 });

@@ -206,7 +206,22 @@ export function stampPromptDerivedLine(abs: string): void {
   if (match === null) {
     throw new Error(`stampPromptDerivedLine: ${abs} has no frontmatter block to stamp`);
   }
-  if (readContentClass(parseFrontmatterText(stripped)[0]) !== null) return;
+  // The idempotency guard reads the RAW key, not `readContentClass`: the
+  // read side maps an out-of-vocabulary value to unmarked (that is its
+  // documented posture toward a hand edit or a newer build's spelling),
+  // but the stamp must not read that as "no key" - planting a second
+  // `content_class:` line gives the frontmatter a duplicate key, which
+  // strict YAML consumers reject. A page carrying the reserved member is
+  // the byte-level no-op; a page carrying anything ELSE under the key is
+  // a state this stamp refuses to overwrite, named, and leaves untouched.
+  const existing = parseFrontmatterText(stripped)[0][CONTENT_CLASS_FIELD];
+  if (existing === CONTENT_CLASS.promptDerived) return;
+  if (existing !== undefined) {
+    throw new Error(
+      `stampPromptDerivedLine: ${abs} already carries ${CONTENT_CLASS_FIELD}: ` +
+        `${JSON.stringify(existing)}; the stamp writes only an unmarked page`,
+    );
+  }
   // The block match ends with the close fence (`\n---` plus any
   // trailing whitespace), and the close is the only `\n---` inside the
   // match - the lazy body stops at the first one. The line goes right
