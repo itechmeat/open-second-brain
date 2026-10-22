@@ -148,6 +148,12 @@ const UNSCOPED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "agent-facing form of the same operator ask, validated against the same " +
     "vocabulary. Its `get` view resolves through `getEntity`, which applies the " +
     "canonical scope inside the registry.",
+  "src/core/brain/doctor/entity-checks.ts":
+    "the doctor is the surfacing point for what a read scope hides: its duplicate " +
+    "and broken-relation findings deliberately read what is STORED, so scoping " +
+    "them would stop the doctor reporting on exactly the records a read path " +
+    "hides. Its derived person-variant scan resolves through the registry's " +
+    "canonical-scope derived index, so no second filter belongs in the check.",
 });
 
 interface CensusRow {

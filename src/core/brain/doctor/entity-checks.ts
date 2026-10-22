@@ -5,6 +5,9 @@
  * through hand edits or sync merges - observable, never auto-deleted.
  */
 
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+
 import {
   entityLexicalAliasCandidates,
   resolveEntitySemanticDedupConfig,
@@ -22,18 +25,10 @@ import {
   ENTITY_CONFLICT_KIND,
   type EntityIndex,
 } from "../entities/index-builder.ts";
-import {
-  PersonNicknameConfigError,
-  resolvePersonNicknameMap,
-} from "../entities/person-nicknames.ts";
-import {
-  derivePersonNameVariants,
-  EMPTY_PERSON_NICKNAME_MAP,
-  isPersonCategory,
-  type PersonNicknameMap,
-} from "../entities/person-variants.ts";
+import { PERSON_NICKNAMES_ARTIFACT_REL } from "../entities/person-nicknames.ts";
+import { isPersonCategory } from "../entities/person-variants.ts";
+import { resolvePersonDerivedIndex, type PersonDerivedIndex } from "../entities/registry.ts";
 import { findMalformedEntityLabels } from "../entities/label-hygiene.ts";
-import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 import type { BrainEntity, EntityConflict } from "../entities/types.ts";
 import type { DoctorCheck } from "./check.ts";
 
@@ -129,36 +124,92 @@ export function personVariantCollisionMessage(a: BrainEntity, b: BrainEntity): s
  * neither record declared it, so the collision scan has nothing to offer
  * the merge that the ambiguity error at lookup time does not already
  * say better.
+ *
+ * The join runs over the shared derived person-form index: one pass over
+ * its per-form claimant lists, linear in forms times claimants, instead
+ * of a variants-per-person rebuild inside an all-pairs loop.
  */
-function derivedVariantCollisionMessages(
-  index: EntityIndex,
-  nicknames: PersonNicknameMap,
-): string[] {
-  const persons = index.entities.filter(
-    (e) =>
-      entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) && isPersonCategory(e.category),
-  );
-  const declared = new Map<string, ReadonlySet<string>>(
-    persons.map((p) => [p.id, new Set([p.name, ...p.aliases].map((f) => normalizeEntityName(f)))]),
-  );
+function derivedVariantCollisionMessages(derivedIndex: PersonDerivedIndex): string[] {
   const seenPairs = new Set<string>();
   const messages: string[] = [];
-  for (const deriver of persons) {
-    const variants = new Set<string>();
-    for (const form of [deriver.name, ...deriver.aliases]) {
-      for (const v of derivePersonNameVariants(normalizeEntityName(form), nicknames)) {
-        variants.add(v);
+  for (const claimants of derivedIndex.byForm.values()) {
+    if (claimants.derived.length === 0) continue;
+    // The collision is person-to-person: the declared claimant lane also
+    // carries non-person records (every canonical entity claims its
+    // declared forms there), and a person's nickname matching an org's
+    // name is not the alias-merge this scan nominates.
+    for (const deriver of claimants.derived) {
+      for (const claimant of claimants.declared) {
+        if (deriver.id === claimant.id) continue;
+        if (!isPersonCategory(claimant.category)) continue;
+        const pairKey = [deriver.id, claimant.id].toSorted().join("\u0000");
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        messages.push(personVariantCollisionMessage(deriver, claimant));
       }
     }
-    if (variants.size === 0) continue;
-    for (const claimant of persons) {
-      if (claimant.id === deriver.id) continue;
-      const pairKey = [deriver.id, claimant.id].toSorted().join("\u0000");
-      if (seenPairs.has(pairKey)) continue;
-      const claimantForms = declared.get(claimant.id)!;
-      if (![...variants].some((v) => claimantForms.has(v))) continue;
-      seenPairs.add(pairKey);
-      messages.push(personVariantCollisionMessage(deriver, claimant));
+  }
+  return messages;
+}
+
+/** Doctor code of a silently-skipped `person-nicknames.json` entry. */
+export const PERSON_NICKNAMES_ENTRY_SKIPPED_CODE = "person-nicknames-entry-skipped";
+
+/**
+ * The entries of `person-nicknames.json` the parser keeps the file's
+ * other entries running without - a nickname that normalizes to an
+ * empty form, a value list with no usable name, a nickname equal to the
+ * full name it stands for - as one warning per skipped entry, naming
+ * the entry's POSITION (the same numbering the parser's shape errors
+ * use). A nickname below the derived-form floor is NOT a skip: declared
+ * nicknames are exempt from that floor by design.
+ *
+ * The doctor is the surfacing point for operator data faults, and a
+ * silently dropped entry is one: the file resolves, the read lanes
+ * report no degradation, and without this pass the entry would vanish.
+ * The raw document is read here because the shared reader deliberately
+ * folds the skipped entries away. A file that is missing, unreadable or
+ * unparseable reports nothing here - the unreadable warning or the
+ * quiet missing-file posture already covers it.
+ */
+function personNicknameSkippedEntryWarnings(vault: string): string[] {
+  const path = join(vault, PERSON_NICKNAMES_ARTIFACT_REL);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
+  const messages: string[] = [];
+  let entryIndex = 0;
+  for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+    entryIndex += 1;
+    const nick = normalizeEntityName(rawKey);
+    if (!nick) {
+      messages.push(
+        `person-nicknames entry #${entryIndex} is skipped: the nickname normalizes to an ` +
+          "empty form and can never resolve.",
+      );
+      continue;
+    }
+    if (!Array.isArray(rawValue)) continue; // the parser raises an unreadable-config fault for this
+    const values = rawValue
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => normalizeEntityName(v))
+      .filter((v) => v !== "");
+    if (values.length === 0) {
+      messages.push(
+        `person-nicknames entry #${entryIndex} is skipped: none of its values normalizes ` +
+          "to a name, so the nickname stands for no one.",
+      );
+      continue;
+    }
+    if (values.includes(nick)) {
+      messages.push(
+        `person-nicknames entry #${entryIndex} never resolves: the nickname is one of the ` +
+          "full names it stands for, so it adds no form.",
+      );
     }
   }
   return messages;
@@ -264,23 +315,28 @@ export const entityRegistryCheck: DoctorCheck = {
     // their documented degradations too - but the doctor is the
     // surfacing point: a present-yet-unusable operator file is one
     // warning, naming the path, with the error's own short
-    // (position-only) detail.
-    let nicknames = EMPTY_PERSON_NICKNAME_MAP;
-    try {
-      nicknames = resolvePersonNicknameMap(vault);
-    } catch (err) {
-      if (!(err instanceof PersonNicknameConfigError)) throw err;
-      nicknames = EMPTY_PERSON_NICKNAME_MAP;
+    // (position-only) detail. Entries the parser folds away silently
+    // surface beside it, one warning each, by position.
+    const derivedIndex = resolvePersonDerivedIndex(vault);
+    if (derivedIndex.nicknameError !== null) {
       issues.push({
         severity: "warning",
         code: PERSON_NICKNAMES_UNREADABLE_CODE,
-        path: err.path,
+        path: derivedIndex.nicknameError.path,
         message:
-          `the person nickname map at ${err.path} is unusable and nickname-derived ` +
-          `lookups run without it: ${err.detail}`,
+          `the person nickname map at ${derivedIndex.nicknameError.path} is unusable and ` +
+          `nickname-derived lookups run without it: ${derivedIndex.nicknameError.detail}`,
       });
     }
-    for (const message of derivedVariantCollisionMessages(index, nicknames)) {
+    for (const message of personNicknameSkippedEntryWarnings(vault)) {
+      issues.push({
+        severity: "warning",
+        code: PERSON_NICKNAMES_ENTRY_SKIPPED_CODE,
+        path: join(vault, PERSON_NICKNAMES_ARTIFACT_REL),
+        message,
+      });
+    }
+    for (const message of derivedVariantCollisionMessages(derivedIndex)) {
       issues.push({
         severity: "warning",
         code: ENTITY_ALIAS_CANDIDATE_CODE,

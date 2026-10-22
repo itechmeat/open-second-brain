@@ -226,6 +226,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "words in the operator's mouth about who knows whom",
   },
   {
+    code: "person-nicknames-entry-skipped",
+    reason:
+      "one entry of an otherwise usable person nickname map resolves nobody - the nickname " +
+      "normalizes to nothing, every value it lists normalizes to nothing, or the nickname " +
+      "equals a name it stands for. The repair is an edit to that entry by whoever wrote it: " +
+      "which real-world nickname was meant, and for whom, is their knowledge and is not " +
+      "derivable from the finding, so the doctor names the entry's position and stops there",
+  },
+  {
     code: "iso-invalid",
     reason:
       "a timestamp field is not ISO-8601. The instant it meant is not recoverable from the " +

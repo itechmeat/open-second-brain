@@ -17,8 +17,8 @@
  * frontmatter keys the operator may have added by hand.
  */
 
-import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { mkdirSync, statSync } from "node:fs";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../../vault.ts";
@@ -40,11 +40,20 @@ import {
 } from "./canonical.ts";
 import { resolveEntityLexicon } from "./lexicon.ts";
 import { resolveEntityLabelDenylist } from "./label-hygiene.ts";
-import { resolvePersonNicknameMap } from "./person-nicknames.ts";
+import {
+  PERSON_NICKNAMES_ARTIFACT_REL,
+  PersonNicknameConfigError,
+  resolvePersonNicknameMap,
+} from "./person-nicknames.ts";
 import {
   derivePersonNameVariants,
+  EMPTY_PERSON_NICKNAME_INDEX,
   EMPTY_PERSON_NICKNAME_MAP,
+  invertPersonNicknameMap,
   isPersonCategory,
+  personNameComparisonForm,
+  personVariantQueryForms,
+  type PersonNicknameIndex,
   type PersonNicknameMap,
 } from "./person-variants.ts";
 import {
@@ -192,70 +201,229 @@ function matchedLabel(entity: BrainEntity, query: string): string {
  * operator to pass one would name an exit that cannot work. The quote
  * fold is one way a vault arrives there, and when it is the cause the
  * message says so and names the command that ends it.
+ *
+ * The DERIVED lane raises this same type for a different collision: a
+ * form that reaches more than one person only through derivation - an
+ * initial, a word order, an operator nickname. Those records are two
+ * real people, not duplicates, so the remedy is a more specific
+ * reference, not a merge; `derived` selects that message. The `name`
+ * stays the historic one so generic handlers keyed on the string keep
+ * working; callers that must tell the two collisions apart read the
+ * flag.
  */
 export class EntityAmbiguityError extends Error {
-  constructor(query: string, matches: ReadonlyArray<BrainEntity>) {
+  /** True when the collision exists only through derivation, not declaration. */
+  readonly derived: boolean;
+  constructor(
+    query: string,
+    matches: ReadonlyArray<BrainEntity>,
+    opts: { derived?: boolean } = {},
+  ) {
     const ids = matches.map((m) => m.id).join(", ");
-    const categories = new Set(matches.map((m) => m.category));
-    if (categories.size > 1) {
-      super(`entity reference '${query}' is ambiguous across categories: ${ids} - pass a category`);
+    let message: string;
+    if (opts.derived === true) {
+      message =
+        `entity reference '${query}' matches ${matches.length} person records through a ` +
+        `derived name form (an initial, a word order or an operator nickname): ${ids} - ` +
+        "that form alone does not name one person. Query the full name or a declared " +
+        "alias, or pass a category";
     } else {
-      const normalized = normalizeEntityName(query);
-      const tail = quoteVariantCollisionTail(...matches.map((m) => matchedLabel(m, normalized)));
-      super(
-        `entity reference '${query}' is claimed by ${matches.length} canonical records in one ` +
+      const categories = new Set(matches.map((m) => m.category));
+      if (categories.size > 1) {
+        message = `entity reference '${query}' is ambiguous across categories: ${ids} - pass a category`;
+      } else {
+        const normalized = normalizeEntityName(query);
+        const tail = quoteVariantCollisionTail(...matches.map((m) => matchedLabel(m, normalized)));
+        message =
+          `entity reference '${query}' is claimed by ${matches.length} canonical records in one ` +
           `category (${[...categories][0]}): ${ids} - no category separates them, so one must be ` +
-          `archived or merged${tail}`,
-      );
+          `archived or merged${tail}`;
+      }
     }
+    super(message);
     this.name = "EntityAmbiguityError";
+    this.derived = opts.derived === true;
+  }
+}
+
+// ----- Derived person-form index ---------------------------------------------
+
+/**
+ * The canonical records that answer to one comparison form in each
+ * lane: `declared` holds the records naming the form outright (name or
+ * alias, any category), `derived` the PERSON records a derivation
+ * kernel form of theirs reaches it through. Both lists are id-ordered,
+ * because the index walk they are built from is.
+ */
+export interface PersonFormClaimants {
+  readonly declared: ReadonlyArray<BrainEntity>;
+  readonly derived: ReadonlyArray<BrainEntity>;
+}
+
+/**
+ * Everything the derived person-form lanes need, built once per
+ * signature: the entity index it was built from (also the entity-change
+ * detector - the cache below reuses the index object identity the
+ * entity-index memo already maintains), the INVERTED nickname index,
+ * the config fault of an unusable nickname file if there was one, and
+ * the comparison-form -> claimants map.
+ */
+export interface PersonDerivedIndex {
+  readonly entityIndex: EntityIndex;
+  readonly nicknames: PersonNicknameIndex;
+  /** Present when `person-nicknames.json` exists but is unusable. */
+  readonly nicknameError: PersonNicknameConfigError | null;
+  readonly byForm: ReadonlyMap<string, PersonFormClaimants>;
+}
+
+function buildPersonDerivedIndex(
+  entityIndex: EntityIndex,
+  nicknames: PersonNicknameIndex,
+  nicknameError: PersonNicknameConfigError | null,
+): PersonDerivedIndex {
+  const byForm = new Map<string, { declared: BrainEntity[]; derived: BrainEntity[] }>();
+  const claim = (form: string, lane: "declared" | "derived", entity: BrainEntity): void => {
+    if (!form) return;
+    let entry = byForm.get(form);
+    if (entry === undefined) {
+      entry = { declared: [], derived: [] };
+      byForm.set(form, entry);
+    }
+    const list = entry[lane];
+    if (!list.some((e) => e.id === entity.id)) list.push(entity);
+  };
+  for (const entity of entityIndex.entities) {
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
+    const declared = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
+    // Every canonical entity claims its declared forms; only person
+    // categories also derive (the kernel emits nothing for the others).
+    for (const form of declared) {
+      claim(personNameComparisonForm(form), "declared", entity);
+    }
+    if (!isPersonCategory(entity.category)) continue;
+    for (const form of declared) {
+      for (const variant of derivePersonNameVariants(form, nicknames)) {
+        claim(variant, "derived", entity);
+      }
+    }
+  }
+  return Object.freeze({
+    entityIndex,
+    nicknames,
+    nicknameError,
+    byForm: Object.freeze(byForm),
+  });
+}
+
+interface PersonDerivedCacheEntry {
+  readonly entityIndex: EntityIndex;
+  readonly nicknameSignature: string;
+  readonly value: PersonDerivedIndex;
+}
+
+/** Per-vault memo. Small (a process serves one vault); capped defensively. */
+const PERSON_DERIVED_CACHE = new Map<string, PersonDerivedCacheEntry>();
+const PERSON_DERIVED_CACHE_MAX = 16;
+
+let unstableSignatureCounter = 0;
+
+/**
+ * The nickname file's change signature: nanosecond mtime plus byte size
+ * when it exists, a fixed marker when it does not. A stat failure other
+ * than a missing file yields a fresh marker each call, so an unreadable
+ * file is never cached - the read path keeps surfacing the fault.
+ */
+function personNicknameFileSignature(vault: string): string {
+  try {
+    const st = statSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), { bigint: true });
+    return `${st.mtimeNs}\0${st.size}`;
+  } catch (err) {
+    if (typeof err === "object" && err !== null && (err as { code?: string }).code === "ENOENT") {
+      return "missing";
+    }
+    unstableSignatureCounter += 1;
+    return `unstable-${unstableSignatureCounter}`;
   }
 }
 
 /**
- * Every derived person form `entity` answers to: the variants the
- * derivation kernel emits for each of its declared forms (name and
- * aliases), as a set. Empty by construction for non-person categories,
- * because the kernel emits nothing for them.
+ * Resolve the derived person-form index for `vault`, reusing the last
+ * build while neither the entity files nor the nickname file changed.
+ * The entity side is detected through the entity index's own memo
+ * (object identity), the nickname side through its mtime/size
+ * signature - so a per-query expansion, a registry read or a doctor
+ * scan each pay the parse and the derivation once per signature instead
+ * of per call. An unusable nickname file is captured as
+ * `nicknameError` (consumers keep their documented degradations); any
+ * other fault propagates.
  */
-function derivedPersonForms(
-  entity: BrainEntity,
-  nicknames: PersonNicknameMap,
-): ReadonlySet<string> {
-  const forms = new Set<string>();
-  for (const declared of [entity.name, ...entity.aliases]) {
-    for (const variant of derivePersonNameVariants(normalizeEntityName(declared), nicknames)) {
-      forms.add(variant);
-    }
+export function resolvePersonDerivedIndex(vault: string): PersonDerivedIndex {
+  const entityIndex = buildEntityIndex(vault);
+  const nicknameSignature = personNicknameFileSignature(vault);
+  const cached = PERSON_DERIVED_CACHE.get(vault);
+  if (
+    cached !== undefined &&
+    cached.entityIndex === entityIndex &&
+    cached.nicknameSignature === nicknameSignature
+  ) {
+    return cached.value;
   }
-  return forms;
+  let map: PersonNicknameMap;
+  let nicknameError: PersonNicknameConfigError | null = null;
+  try {
+    map = resolvePersonNicknameMap(vault);
+  } catch (err) {
+    if (!(err instanceof PersonNicknameConfigError)) throw err;
+    nicknameError = err;
+    map = EMPTY_PERSON_NICKNAME_MAP;
+  }
+  const value = buildPersonDerivedIndex(
+    entityIndex,
+    map.size > 0 ? invertPersonNicknameMap(map) : EMPTY_PERSON_NICKNAME_INDEX,
+    nicknameError,
+  );
+  if (PERSON_DERIVED_CACHE.size >= PERSON_DERIVED_CACHE_MAX && !PERSON_DERIVED_CACHE.has(vault)) {
+    const oldest = PERSON_DERIVED_CACHE.keys().next().value;
+    if (oldest !== undefined) PERSON_DERIVED_CACHE.delete(oldest);
+  }
+  PERSON_DERIVED_CACHE.set(vault, { entityIndex, nicknameSignature, value });
+  return value;
 }
 
 /**
  * The DERIVED lane of canonical read resolution: the person variants
  * (write-honesty-egress-consent, F3) - first-initial-plus-surname,
  * reversed word order, operator nicknames - consulted only after the
- * exact name/alias lanes above have missed. A unique derived match
+ * exact name/alias lanes above have missed. The lookup joins the query's
+ * forms (itself plus its comparison form - the dotted-initial and
+ * comma spellings) against the shared claimants map, over the declared
+ * lane too: a "Last, First" spelling that comparison-folds onto a
+ * canonical name resolves here rather than nowhere. A unique match
  * resolves; more than one is the same ambiguity the exact lane reports,
- * naming both ids. Like the exact lane it resolves canonical-scope
+ * through the derived message - two real people sharing a form are not
+ * duplicates to merge. Like the exact lane it resolves canonical-scope
  * records only, so a quarantined person's variants resolve nothing.
  */
-function resolveDerived(
-  index: EntityIndex,
-  ref: EntityRef,
-  nicknames: PersonNicknameMap,
-): BrainEntity | null {
+function resolveDerived(derived: PersonDerivedIndex, ref: EntityRef): BrainEntity | null {
   const query = normalizeEntityName(ref.query);
   if (!query) return null;
   const category = ref.category !== undefined ? validateEntityCategory(ref.category) : undefined;
-  const matches = index.entities.filter(
-    (e) =>
-      entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
-      isPersonCategory(e.category) &&
-      (category === undefined || e.category === category) &&
-      derivedPersonForms(e, nicknames).has(query),
-  );
-  if (matches.length > 1) throw new EntityAmbiguityError(ref.query, matches);
+  const matches: BrainEntity[] = [];
+  const seenIds = new Set<string>();
+  for (const form of personVariantQueryForms(query)) {
+    const claimants = derived.byForm.get(form);
+    if (claimants === undefined) continue;
+    for (const entity of [...claimants.declared, ...claimants.derived]) {
+      if (category !== undefined && entity.category !== category) continue;
+      if (seenIds.has(entity.id)) continue;
+      seenIds.add(entity.id);
+      matches.push(entity);
+    }
+  }
+  if (matches.length > 1) {
+    matches.sort((a, b) => a.id.localeCompare(b.id));
+    throw new EntityAmbiguityError(ref.query, matches, { derived: true });
+  }
   return matches[0] ?? null;
 }
 
@@ -365,13 +533,13 @@ export function getEntity(vault: string, ref: EntityRef): BrainEntity | null {
   const index = buildEntityIndex(vault);
   const exact = resolveActive(index, ref);
   if (exact !== null) return exact;
-  let nicknames = EMPTY_PERSON_NICKNAME_MAP;
+  let derived: PersonDerivedIndex;
   try {
-    nicknames = resolvePersonNicknameMap(vault);
+    derived = resolvePersonDerivedIndex(vault);
   } catch {
     return null;
   }
-  return resolveDerived(index, ref, nicknames);
+  return resolveDerived(derived, ref);
 }
 
 /**
