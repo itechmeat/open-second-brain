@@ -314,6 +314,18 @@ test("addPledge inherits source visibility and omits it for public sources", () 
   ]);
 });
 
+test("addPledge inherits an informal privacy marker from the source", () => {
+  // No `visibility:` key - the reservation is stated only under the
+  // pre-convention informal key, and the evidence quotes the source, so
+  // the derived page must inherit the reservation through the union.
+  writeFileSync(join(vault, SOURCE_REL), `---\naccess: private\n---\n\n${SOURCE_TEXT}`, "utf8");
+  const page = addPledge(vault, {
+    ...cite(["Grace will review the incident timeline"]),
+    title: "Marker-source pledge",
+  });
+  expect(parseFrontmatter(page.path)[0]["visibility"]).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
+});
+
 test("evidence containment forgives presentation, never wording", () => {
   // The shared comparator strips Markdown emphasis and line markers, so a
   // quote over a list item or emphasis passes; wording and word boundaries

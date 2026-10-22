@@ -153,6 +153,20 @@ test("a created pledge inherits the source page's visibility", () => {
   expect(parseFrontmatter(page!.path)[0]["visibility"]).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
 });
 
+test("a created pledge inherits an informal privacy marker from the source", () => {
+  // No `visibility:` key - the reservation is stated only under the
+  // pre-convention informal key, and the evidence quotes the source, so
+  // the derived page must inherit the reservation through the union.
+  writeFileSync(
+    join(vault, SOURCE_REL),
+    `---\nconfidentiality: secret\n---\n\n${SOURCE_TEXT}`,
+    "utf8",
+  );
+  intake([item()]);
+  const page = showPledge(vault, { slug: "send-ada-the-migration-recap" });
+  expect(parseFrontmatter(page!.path)[0]["visibility"]).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
+});
+
 test("an empty intake is a no-op that reports nothing", () => {
   // The MCP tool refuses an empty array as INVALID_PARAMS in parseIntakeArgs
   // before the kernel runs, so no tool caller reaches this branch; the test

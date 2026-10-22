@@ -18,6 +18,7 @@ import {
   listTensions,
   TENSION_STATUS,
 } from "../../../src/core/brain/tensions.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 
 let vault: string;
 
@@ -83,6 +84,26 @@ describe("detectTensionsInVault", () => {
     expect(second.updated).toBe(1);
     expect(listTensions(vault).length).toBe(1);
     expect(listTensions(vault)[0]!.detectedCount).toBe(2);
+  });
+
+  test("a tension drafted from a marker-only note carries the reserved token", () => {
+    // One side reserves itself under the informal key only - no
+    // `visibility:` line anywhere in the corpus - so the derived tension
+    // page inherits the reservation through the marker union or not at all.
+    writeConfig("\nnotes:\n  read_paths:\n    - Notes\n");
+    writeMd(
+      "Notes/tabs.md",
+      "---\nid: note-tabs\naccess: private\n---\nAlways use tabs for indentation in source files.\n",
+    );
+    writeMd(
+      "Notes/spaces.md",
+      "---\nid: note-spaces\n---\nNever use tabs for indentation in source files.\n",
+    );
+    const res = detectTensionsInVault(vault, { agent: "tester" });
+    expect(res.created).toBe(1);
+    const persisted = listTensions(vault);
+    expect(persisted.length).toBe(1);
+    expect(persisted[0]!.visibility).toEqual([REMOTE_DENY_VISIBILITY_TOKEN]);
   });
 
   test("an unconfigured vault (no read_paths) scans nothing and creates nothing", () => {

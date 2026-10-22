@@ -72,7 +72,8 @@ import {
 import { validateIsoDate } from "./paths.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { pageVisibility, strictestVisibilityOf } from "../graph/visibility.ts";
+import { strictestVisibilityOf } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
 
@@ -290,7 +291,11 @@ export function intakePledges(
   // visibility the created pages inherit. The write pass hands both to
   // `createPledgePage`, so a full batch never re-reads the source.
   const [sourceMeta] = parseFrontmatterText(sourceText);
-  const visibility = strictestVisibilityOf([pageVisibility(sourceMeta)]);
+  // The full union, so a source reserving itself under an informal key
+  // (`confidentiality: secret`) reserves the derived pledge pages too -
+  // their evidence fields quote the source, so the quotes inherit the
+  // reservation.
+  const visibility = strictestVisibilityOf([remoteDenyVisibilityTokens(sourceMeta)]);
 
   const prepared: PreparedIntakeItem[] = [];
   const seenSlugs = new Set<string>();

@@ -34,6 +34,7 @@ import { resolveAgentName } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { pageVisibility, strictestVisibility } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import {
@@ -607,8 +608,13 @@ export function detectTensionsInVault(
       typeof rawSubject === "string" && rawSubject.trim() !== "" ? rawSubject.trim() : undefined;
     notes.push({ id, ...(subject !== undefined ? { subject } : {}), text: body });
     // Two notes may share a frontmatter id; the id then reads under the
-    // stricter of their rules.
-    visibilityById.set(id, strictestVisibility(visibilityById.get(id) ?? [], pageVisibility(meta)));
+    // stricter of their rules. The fold is the full union, so a note
+    // reserving itself under an informal key (`access: private`) reserves
+    // every tension page drafted from it, not just a formally declared one.
+    visibilityById.set(
+      id,
+      strictestVisibility(visibilityById.get(id) ?? [], [...remoteDenyVisibilityTokens(meta)]),
+    );
   }
 
   const result = detectTensions(vault, notes, {

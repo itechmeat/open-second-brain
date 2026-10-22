@@ -52,7 +52,8 @@ import {
   validateIsoDate,
   BRAIN_PLEDGES_REL,
 } from "./paths.ts";
-import { pageVisibility, strictestVisibilityOf } from "../graph/visibility.ts";
+import { strictestVisibilityOf } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
@@ -474,7 +475,10 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
   }
   const sourceText = readFileSync(sourceAbs, "utf8");
   const [sourceMeta] = parseFrontmatterText(sourceText);
-  const visibility = strictestVisibilityOf([pageVisibility(sourceMeta)]);
+  // The full union, so a source reserving itself under an informal key
+  // (`access: private`) reserves the derived pledge page too - the page's
+  // evidence quotes the source, so the quote inherits the reservation.
+  const visibility = strictestVisibilityOf([remoteDenyVisibilityTokens(sourceMeta)]);
   return createPledgePage(vault, {
     title,
     due,
