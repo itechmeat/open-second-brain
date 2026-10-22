@@ -41,7 +41,6 @@ beforeEach(() => {
       `embedding_model: ${RECOMMENDED_EMBEDDING_MODEL}\n` +
       `embedding_api_key: ${FAKE_PROVIDER_KEY}\n` +
       "embedding_dimension: 4\n",
-    "utf8",
   );
 });
 
