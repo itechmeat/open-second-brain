@@ -1,4 +1,5 @@
 import {
+  buildLog,
   buildOkfBundleFromPages,
   collectOkfPages,
   OKF_INDEX_FILENAME,
@@ -9,7 +10,10 @@ import {
   type OkfBundle,
   type OkfBundleFile,
 } from "../../../core/brain/portability/okf.ts";
-import { readContentClass } from "../../../core/brain/provenance/content-class.ts";
+import {
+  omittedPageReferenceMatcher,
+  readContentClass,
+} from "../../../core/brain/provenance/content-class.ts";
 import {
   EGRESS_OUTCOME,
   EGRESS_CONTENT_CLASS_INCLUDE_NOTICE,
@@ -19,6 +23,32 @@ import {
   redactForEgress,
 } from "../../../core/egress/guard.ts";
 import { brainVerbContext, fail, parse } from "../helpers.ts";
+
+/**
+ * The stderr line counting the change-log entries the default content-
+ * class policy dropped from `log.md`, beside the page omission notice.
+ * A log the policy shortened without a word is the same silently smaller
+ * export the page notice exists to prevent.
+ */
+function logOmissionNotice(dropped: number): string {
+  return (
+    `note: ${dropped} log line(s) left out by the same policy (agent-channel lines and ` +
+    "lines naming a left-out page); pass --include-prompt-derived to keep the log whole\n"
+  );
+}
+
+/**
+ * The stderr line counting the kept pages' structured citations that
+ * named a left-out page and were dropped from the manifest. The page
+ * bodies are untouched - a dropped citation is a metadata omission, and
+ * the notice says so.
+ */
+function citationOmissionNotice(dropped: number): string {
+  return (
+    `note: ${dropped} citation(s) to left-out page(s) dropped from kept pages' manifest ` +
+    "metadata; page text is untouched\n"
+  );
+}
 
 /**
  * `o2b brain okf-export --out <dir> [--force] [--include-prompt-derived]`
@@ -48,10 +78,21 @@ import { brainVerbContext, fail, parse } from "../helpers.ts";
  * re-rendered from the REDACTED manifest by the same renderer the
  * builder uses - the pre-redaction index named the excluded pages, and
  * an index that lists pages or values the shipped `okf.json` does not
- * carry would make the bundle disagree with itself - and `log.md` is
- * kept whole, because its entries are day-keyed events (a timestamp, a
- * kind, body bullets), not page content; it still rides the same
- * redaction scan as the page files.
+ * carry would make the bundle disagree with itself - and `log.md` gets
+ * the content-class policy too. Its entries are day-keyed events, not
+ * page content, but the shards hold agent-written material: an entry the
+ * MCP transport appended is agent-dictated text, and a write entry whose
+ * `target` is a page the split left out would name the very omission
+ * back into the bundle. Under the default, both kinds of entry leave
+ * (counted on stderr beside the page notice) and every kept entry rides
+ * byte-exactly; `--include-prompt-derived` keeps the log whole and says
+ * so. The log still rides the same redaction scan as the page files.
+ *
+ * A kept page's own prose is never rewritten, but the manifest's
+ * structured `citations` are not prose: a citation naming a left-out
+ * page is the omitted page's name leaving through a kept page, so such
+ * citations are dropped from the manifest (counted on stderr) while the
+ * body text that carries the link stays exactly as written.
  *
  * A redacted bundle is no longer a lossless round-trip of the vault. The
  * verb says so on stderr rather than leaving the interchange contract to
@@ -84,14 +125,36 @@ export async function cmdBrainOkfExport(argv: string[]): Promise<number> {
       isPromptDerived: (page) => readContentClass(page.frontmatter) !== null,
     });
 
-    const built = buildOkfBundleFromPages(vault, split.kept);
+    // A kept page's structured citations naming a left-out page are
+    // metadata, not prose: they leave the manifest, counted, while the
+    // page body that carries the link is untouched. The bundle's
+    // `sources` need no second pass - they are resolved against the kept
+    // pages alone, so a citation to an omitted page already resolves to
+    // nothing there.
+    const namesOmitted = omittedPageReferenceMatcher(split.omitted);
+    let droppedCitations = 0;
+    const keptPages = split.kept.map((page) => {
+      const citations = page.citations.filter((target) => !namesOmitted(target));
+      droppedCitations += page.citations.length - citations.length;
+      return { ...page, citations };
+    });
+
+    // The log gets the same policy the pages got: agent-channel entries
+    // and entries naming a left-out page leave under the default, and the
+    // prebuilt result is handed to the builder so the vault is read once.
+    const log = buildLog(vault, {
+      includePromptDerived: flags["include-prompt-derived"] === true,
+      omittedPaths: new Set(split.omitted),
+    });
+
+    const built = buildOkfBundleFromPages(vault, keptPages, log);
     const verdict = redactForEgress("brain-okf-export", {
       manifest: built.manifest,
       // The two reserved files rendered FROM the manifest are re-rendered
       // after redaction below, so only the per-page files and the log are
-      // scanned as text here. The log stays whole - its entries name days
-      // and events, not page bodies - but it is scanned like any other
-      // markdown the bundle carries.
+      // scanned as text here. The log arrives already carrying the class
+      // policy's filter, and is scanned like any other markdown the
+      // bundle carries.
       files: built.files.filter(
         (file) => file.path !== OKF_MANIFEST_FILENAME && file.path !== OKF_INDEX_FILENAME,
       ),
@@ -119,8 +182,14 @@ export async function cmdBrainOkfExport(argv: string[]): Promise<number> {
     );
     if (flags["include-prompt-derived"] === true) {
       process.stderr.write(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
-    } else if (split.omitted.length > 0) {
-      process.stderr.write(contentClassOmissionNotice(split.omitted));
+    } else {
+      if (split.omitted.length > 0) {
+        process.stderr.write(contentClassOmissionNotice(split.omitted));
+      }
+      if (log.droppedEntries > 0) process.stderr.write(logOmissionNotice(log.droppedEntries));
+      if (droppedCitations > 0) {
+        process.stderr.write(citationOmissionNotice(droppedCitations));
+      }
     }
     if (verdict.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
   } catch (exc) {

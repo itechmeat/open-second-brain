@@ -254,6 +254,66 @@ export function isPromptDerivedPage(vault: string, relPath: string): boolean {
   return readContentClass(parseFrontmatterText(text)[0]) === CONTENT_CLASS.promptDerived;
 }
 
+/**
+ * A citation target that names an absolute resource, not a vault page.
+ * The same shape the OKF source resolver keys on; a target a URL parser
+ * accepts cannot be a vault page, so it can never name an omitted one.
+ */
+const ABSOLUTE_RESOURCE_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+
+/** Basename of a vault-relative or bare path, separators of either platform dropped. */
+function basenameOf(p: string): string {
+  return p.split(/[\\/]/).pop() ?? p;
+}
+
+/**
+ * The id a bare citation target names a page by: the basename minus one
+ * trailing `.md`. Pages end in `.md`, so this - not a strip of any
+ * extension - is the stem a reader resolves a bare target against.
+ */
+function pageStem(p: string): string {
+  const base = basenameOf(p);
+  return base.replace(/\.md$/i, "");
+}
+
+/**
+ * Build the predicate that answers whether one structured reference
+ * target - a graph link, a typed-relation target, a citation - names one
+ * of the pages a content-class split left out.
+ *
+ * The export verbs split their page collections BEFORE composition, and
+ * that is the whole story for the pages themselves; but a KEPT page can
+ * still name an omitted one in its structured references, and a
+ * reference is a disclosure of the omitted page's name. The verbs drop
+ * those references (never the kept page's prose) and count the drops
+ * into their omission notice; this matcher is the one reading of "does
+ * this target name an omitted page" they share, so the three exporters
+ * cannot grow three answers.
+ *
+ * The matching mirrors how a consumer resolves targets, in three shapes:
+ * an absolute resource (a URL) names no vault page; a path-shaped target
+ * names an omitted page on the exact path, with or without the `.md`
+ * suffix; a bare target names one on the stem. Dropping on ANY stem
+ * collision is the deliberate direction: a target that could name either
+ * a kept or an omitted page is dropped, because a wrong citation is
+ * worse than a missing one.
+ *
+ * Fail-open, like the split's page predicate: a target that matches
+ * nothing in the omitted list names a kept page or a dangling one, and
+ * stays exactly as the kept page wrote it.
+ */
+export function omittedPageReferenceMatcher(
+  omitted: ReadonlyArray<string>,
+): (target: string) => boolean {
+  const paths = new Set(omitted);
+  const stems = new Set(omitted.map(pageStem));
+  return (target: string): boolean => {
+    if (target.length === 0 || ABSOLUTE_RESOURCE_RE.test(target)) return false;
+    if (target.includes("/")) return paths.has(target) || paths.has(`${target}.md`);
+    return stems.has(target) || stems.has(pageStem(target));
+  };
+}
+
 /** How deep {@link treeCarriesPromptDerived} descends before it stops. */
 const TREE_SEARCH_DEPTH = 8;
 

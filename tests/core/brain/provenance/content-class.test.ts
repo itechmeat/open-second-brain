@@ -31,6 +31,7 @@ import {
   contentClassCreationStamp,
   ContentClassValueError,
   isContentClass,
+  omittedPageReferenceMatcher,
   readContentClass,
   resolveContentClass,
 } from "../../../../src/core/brain/provenance/content-class.ts";
@@ -41,7 +42,6 @@ import {
   ORIGIN_CHANNEL,
   setOriginChannel,
 } from "../../../../src/core/origin-channel.ts";
-
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-content-class-"));
@@ -171,5 +171,30 @@ describe("an update cannot forge or strip the class", () => {
     const written = readFileSync(join(vault, "Notes/Marked2.md"), "utf8");
     expect(written).toContain("status: final");
     expect(written).toContain(`${CONTENT_CLASS_FIELD}: prompt-derived`);
+  });
+});
+
+describe("the omitted-page reference matcher", () => {
+  const namesOmitted = omittedPageReferenceMatcher(["Agent Page.md", "Notes/Nested Plan.md"]);
+
+  test("a bare target names an omitted page with or without the .md suffix", () => {
+    expect(namesOmitted("Agent Page")).toBe(true);
+    expect(namesOmitted("Agent Page.md")).toBe(true);
+  });
+
+  test("a path-shaped target matches the exact path, suffix optional", () => {
+    expect(namesOmitted("Notes/Nested Plan")).toBe(true);
+    expect(namesOmitted("Notes/Nested Plan.md")).toBe(true);
+    // A different folder holding the same basename is a different page.
+    expect(namesOmitted("Other/Agent Page.md")).toBe(false);
+  });
+
+  test("an absolute resource names no vault page", () => {
+    expect(namesOmitted("https://example.org/Agent Page")).toBe(false);
+  });
+
+  test("anything else names a kept page and stays", () => {
+    expect(namesOmitted("Operator Page")).toBe(false);
+    expect(namesOmitted("")).toBe(false);
   });
 });
