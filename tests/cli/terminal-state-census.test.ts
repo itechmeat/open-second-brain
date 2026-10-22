@@ -152,7 +152,7 @@ const CLASSIFIED_BY_HAND: Readonly<Record<string, StateNote>> = Object.freeze({
  * why an entry here owes a written reason, passes the gates a
  * hand-classified entry passes, and counts against the same cap.
  *
- * Three of these five carry a second argument, about the EMPTY RESULT
+ * Three of these four carry a second argument, about the EMPTY RESULT
  * each verb can return. That is a different question from the one the
  * three classes ask - it is a property of one path through a verb, not of
  * the verb's terminal states - and it is recorded here because the state
@@ -186,6 +186,13 @@ const CLASSIFIED_BY_MODULE_WALK: Readonly<Record<string, StateNote>> = Object.fr
       "judgement over content that naming any one of would be a guess dressed as an " +
       "instruction.",
   },
+  // `o2b brain privacy-marker-restamp` also classifies in its own file
+  // now: its per-page apply refusal prints through `process.stderr.write`,
+  // so hop 0 sees the refusal spelling and the walk is no longer what
+  // classifies it. Its real vault refusal is still `brainVerbContext` in
+  // `brain/helpers.ts`; the reason its EMPTY result names no exit travels
+  // with the verb here - the dry-run default is the answer surface, and
+  // zero candidates means the tightened posture already holds.
   // `o2b search check` sat here while its only refusal was the shared
   // `resolveConfig` one, a module hop away. It classifies in its own file
   // now: `--integrity` (what-the-index-already-knew, unit K) writes the
