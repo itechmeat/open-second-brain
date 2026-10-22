@@ -29,8 +29,6 @@
  * path treats as off and the diagnostics report with a non-zero exit.
  */
 
-import { homedir } from "node:os";
-
 import { assertHttpEgressEndpoint } from "../search/embeddings/http-util.ts";
 import {
   SecretStoreKeyfileMissingError,
@@ -313,19 +311,18 @@ export interface ResolveDecisionModelOptions {
 function thresholdsStoreFor(opts: ResolveDecisionModelOptions): DecisionThresholdsStore {
   if (opts.thresholdsPath === null) return EMPTY_THRESHOLD_STORE;
   if (opts.thresholdsPath !== undefined) return readThresholdsStore(opts.thresholdsPath);
-  // The file beside the default config path, discovered from the SAME
-  // environment the rest of this resolution reads (an injected `env`
-  // moves the config file, so it must move the store with it). Lazy, as
-  // in the policy require above: core/config is a large module and only
-  // this store read needs its discovery chain (env, XDG, home).
+  // The file beside the config path this process resolves: an explicit
+  // OPEN_SECOND_BRAIN_CONFIG in the resolution's environment names it, as
+  // it does for every other config read; otherwise the process's default
+  // discovery (env, XDG, home) applies. Lazy, as in the policy require
+  // above: core/config is a large module and only this store read needs
+  // its discovery chain.
   const env = opts.env ?? process.env;
-  const home = typeof env["HOME"] === "string" && env["HOME"] !== "" ? env["HOME"] : homedir();
+  const explicit = env["OPEN_SECOND_BRAIN_CONFIG"];
   const coreConfig = require("../config.ts") as typeof import("../config.ts");
-  return readThresholdsStore(
-    decisionThresholdsPath(
-      coreConfig.resolveDefaultConfigPath({ platform: process.platform, home, env }),
-    ),
-  );
+  const configPath =
+    typeof explicit === "string" && explicit !== "" ? explicit : coreConfig.defaultConfigPath();
+  return readThresholdsStore(decisionThresholdsPath(configPath));
 }
 
 /**

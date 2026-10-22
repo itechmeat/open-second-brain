@@ -160,7 +160,7 @@ function buildChain(
     return [{ adapter: opts.provider, entry, mode }];
   }
   const attempts: ChainAttempt[] = [];
-  for (const entry of resolvedProviderEntries(cfg)) {
+  for (const [index, entry] of resolvedProviderEntries(cfg).entries()) {
     const adapter = makeEntryDecisionProvider(
       entry,
       { allowInsecureHttp: cfg.allowInsecureHttp, timeoutMs: cfg.timeoutMs },
@@ -168,10 +168,15 @@ function buildChain(
       secretsVault,
     );
     if (adapter === null) continue;
-    // A chain entry's held mode is never off (off-ness is the global
-    // config's decision); anything but enforce is shadow.
-    const heldMode = opts.modeOverride ?? (entry.uses[use] === "enforce" ? "enforce" : "shadow");
-    attempts.push({ adapter, entry, mode: heldMode });
+    // The first entry answers for the config as written: the top-level
+    // modes are its held modes, and a caller that overrode them (the
+    // eval gate forces enforce) means it for the primary. A later entry
+    // is judged by its own thresholds - a fallback model without tuned
+    // thresholds answers as shadow even when the primary enforces. A
+    // held mode is never off (off-ness is the global config's decision);
+    // anything but enforce is shadow.
+    const held = opts.modeOverride ?? (index === 0 ? cfg.uses[use] : (entry.uses[use] ?? "shadow"));
+    attempts.push({ adapter, entry, mode: held === "enforce" ? "enforce" : "shadow" });
   }
   return attempts;
 }
