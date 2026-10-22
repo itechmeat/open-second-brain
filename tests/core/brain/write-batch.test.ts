@@ -45,6 +45,7 @@ import {
   WriteBatchError,
   type WriteOperation,
 } from "../../../src/core/brain/write-batch.ts";
+import { PRIVACY_MARKER_KEYS } from "../../../src/core/graph/privacy-markers.ts";
 import { WriteRefusedError } from "../../../src/core/brain/pending/pending-lanes.ts";
 import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import * as ledger from "../../../src/core/brain/idempotency-ledger.ts";
@@ -209,6 +210,47 @@ describe("applyWriteBatch note operations", () => {
       ]),
     ).toThrow(WriteBatchError);
     expect(readFileSync(join(vault, "Notes/Other.md"), "utf8")).not.toContain("status: final");
+  });
+
+  test("update_note refuses the informal privacy marker keys, creation does not", () => {
+    // The marker keys are boundary state like `visibility`: the read roots
+    // resolve `access: private` (and its two siblings) to the reserved
+    // remote-deny token, so a merged `access: ""` would clear the
+    // reservation without the caller ever naming the boundary.
+    for (const markerKey of PRIVACY_MARKER_KEYS) {
+      const rel = `Notes/Marked-${markerKey}.md`;
+      seedNote(rel, "body", `title: M\n${markerKey}: private`);
+      let thrown: unknown;
+      try {
+        applyWriteBatch(vault, [
+          { kind: "update_note", path: rel, frontmatter: { [markerKey]: "" } },
+        ]);
+        throw new Error("expected throw");
+      } catch (err) {
+        thrown = err;
+        expect(err).toBeInstanceOf(WriteBatchError);
+        expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+        // The refusal names the key, in the visibility posture.
+        expect((err as WriteBatchError).message).toContain(markerKey);
+        expect((err as WriteBatchError).message).toContain("edit the note directly");
+        expect((err as WriteBatchError).details).toMatchObject({ path: rel, key: markerKey });
+      }
+      // The marker survived the refused update byte-for-byte.
+      expect(readFileSync(join(vault, rel), "utf8")).toContain(`${markerKey}: private`);
+    }
+
+    // Creation is not restricted: the guard lives at the update merge, so
+    // a caller may still author a marker through create_note.
+    const res = applyWriteBatch(vault, [
+      {
+        kind: "create_note",
+        path: "Notes/Authored.md",
+        frontmatter: { title: "A", access: "private" },
+        content: "body",
+      },
+    ]);
+    expect(res.applied).toBe(1);
+    expect(readFileSync(join(vault, "Notes/Authored.md"), "utf8")).toContain("access: private");
   });
 
   test("create_note refuses to clobber an existing note", () => {

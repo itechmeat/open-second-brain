@@ -46,6 +46,7 @@ import {
   type NoteWriteOp,
 } from "./notes/write-record.ts";
 import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
+import { PRIVACY_MARKER_KEYS } from "../graph/privacy-markers.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { writePathAdvisoryField, type WritePathAdvisoryField } from "./write-path-advisory.ts";
 import {
@@ -759,19 +760,28 @@ function projectCreateNote(
 }
 
 /**
- * Frontmatter keys a caller-named UPDATE may not set. All three are read
- * as boundary state, not note content: `visibility` carries the page's
- * read-scope tokens (the reserved `private` among them), and
+ * Frontmatter keys a caller-named UPDATE may not set. The first three are
+ * read as boundary state, not note content: `visibility` carries the
+ * page's read-scope tokens (the reserved `private` among them), and
  * `origin_channel` and `content_class` are the server-derived stamps
- * creation writes once and mutation never rewrites. Creation needs no
- * refusal - the server stamps are merged last there and a caller-named
- * class is dropped outright - but the update merge inverts the order, so
- * the guard lives at the merge.
+ * creation writes once and mutation never rewrites. The marker keys
+ * (`access`, `confidentiality`, `sensitivity`) are boundary state for the
+ * same reason, one layer over: the read roots resolve a deny value under
+ * any of them to the same reserved remote-deny token (`graph/privacy-
+ * markers.ts`), so a merged `access: ""` would clear that reservation
+ * without the caller ever naming the boundary - and a merged deny value
+ * would forge one. The refusal posture is the visibility one: edit the
+ * note directly. Creation needs no refusal - the server stamps are merged
+ * last there and a caller-named class is dropped outright, and a marker a
+ * caller authors at creation is the caller stating the claim about their
+ * own new note - but the update merge inverts the order, so the guard
+ * lives at the merge.
  */
 const RESERVED_UPDATE_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "visibility",
   ORIGIN_CHANNEL_FIELD,
   CONTENT_CLASS_FIELD,
+  ...PRIVACY_MARKER_KEYS,
 ]);
 
 /** The first reserved key the caller's map names, or `null`. */
