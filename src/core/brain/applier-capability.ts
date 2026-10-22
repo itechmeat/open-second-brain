@@ -11,6 +11,13 @@
  * MECHANICAL (naming the fixer that performs the repair) or REFUSED
  * (naming the reason it is not attempted).
  *
+ * One surface is a verb rather than one of those four: the preview-first
+ * privacy-marker restamp is run by an operator against a named vault, so
+ * its MECHANICAL entry names that module's planner instead of an applier
+ * that routes a Finding. The verdict answers the same question - a
+ * deterministic, idempotent repair exists - and the separate exits table
+ * still says why the doctor names no single command for it.
+ *
  * A refusal is a deliverable here. Every entry below that declines a
  * repair states why in a non-empty reason, because a finding whose exit
  * is "nothing happens" is exactly the dead end this release removes.
@@ -84,6 +91,10 @@ export const REPAIR_SURFACE = Object.freeze({
   healthRemediation: "health/remediation",
   hygieneApply: "hygiene/apply",
   lintConsolidate: "lint-consolidate",
+  // A repair pipeline that is a verb rather than one of the three
+  // appliers: the preview-first restamp rewrites frontmatter and is
+  // invoked by an operator, not routed from a Finding.
+  privacyMarkerRestamp: "privacy-marker-restamp",
   detectorOnly: "detector-only",
 } as const);
 
@@ -258,6 +269,14 @@ const ENTRIES: ReadonlyArray<RepairCapability> = [
     surface: REPAIR_SURFACE.lintConsolidate,
     verdict: REPAIR_VERDICT.mechanical,
     fixer: "lint-consolidate.applyDemotion",
+  },
+
+  // --- privacy-marker-restamp: the operator-run additive repair ------------
+  {
+    code: "privacy-marker-unstamped",
+    surface: REPAIR_SURFACE.privacyMarkerRestamp,
+    verdict: REPAIR_VERDICT.mechanical,
+    fixer: "privacy-marker-restamp.planPrivacyMarkerRestamp",
   },
 
   // --- detector-only: reported, deliberately never repaired ---------------

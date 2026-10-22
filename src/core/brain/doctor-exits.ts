@@ -136,6 +136,19 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "their content, not a repair of a record this store owns",
   },
   {
+    // The informal privacy marker (write-honesty, F1). The marker is a
+    // claim about audience, and the vocabulary is the author's: `access:`
+    // can mean a narrower group than one token states. The restamp is
+    // preview-first for exactly that reason.
+    code: "privacy-marker-unstamped",
+    reason:
+      "the informal marker is a claim about audience written in the author's own vocabulary, " +
+      "which can mean a narrower group than any single token states, and the additive restamp " +
+      "is preview-first by contract: it writes only after an operator has read each would-be " +
+      "visibility line, so no one command resolves the class without deciding for pages nobody " +
+      "reviewed",
+  },
+  {
     code: "stale-lock",
     reason:
       "the lock primitive is a single-attempt exclusive create, so no timeout distinguishes a " +

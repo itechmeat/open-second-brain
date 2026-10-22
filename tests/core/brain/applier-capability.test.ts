@@ -33,6 +33,7 @@ import {
   REPAIR_FIXER_CODES,
   applyRepair,
 } from "../../../src/core/brain/diagnostics.ts";
+import { PRIVACY_MARKER_UNSTAMPED_CODE } from "../../../src/core/brain/doctor/privacy-marker-check.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
 import { applyHygienePlan } from "../../../src/core/brain/hygiene/apply.ts";
 import {
@@ -174,6 +175,18 @@ describe("applier capability table - cannot disagree with the fixers", () => {
   test("the lint-consolidate fix kinds are the table's lint entries", () => {
     const kinds: string[] = Object.values(LINT_CONSOLIDATE_KIND);
     expect(kinds.toSorted()).toEqual(codesForSurface(REPAIR_SURFACE.lintConsolidate));
+  });
+
+  test("the privacy-marker restamp owns exactly its one code", () => {
+    // The surface is an operator-run verb rather than a Finding router, so
+    // the binding is by name in both directions: the table's row names the
+    // restamp's planner, and the detector's code is the one it repairs.
+    expect(codesForSurface(REPAIR_SURFACE.privacyMarkerRestamp)).toEqual([
+      PRIVACY_MARKER_UNSTAMPED_CODE,
+    ]);
+    const entry = requireMechanicalRepair(PRIVACY_MARKER_UNSTAMPED_CODE);
+    expect(entry.surface).toBe(REPAIR_SURFACE.privacyMarkerRestamp);
+    expect(entry.fixer).toBe("privacy-marker-restamp.planPrivacyMarkerRestamp");
   });
 });
 

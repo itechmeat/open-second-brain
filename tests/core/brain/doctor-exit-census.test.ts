@@ -62,6 +62,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { DIAGNOSTIC_SIGNALS } from "../../../src/core/brain/diagnostics.ts";
+import { PRIVACY_MARKER_UNSTAMPED_CODE } from "../../../src/core/brain/doctor/privacy-marker-check.ts";
 import {
   DOCTOR_EXIT_EXCLUSIONS,
   doctorExitReason,
@@ -354,6 +355,15 @@ describe("the classification is readable at runtime, not only by this test", () 
     expect(doctorExitReason("iso-invalid")).toBe(DOCTOR_EXIT_EXCLUSIONS.get("iso-invalid")!);
     expect(doctorExitReason("config-missing")).toBeNull();
     expect(doctorExitReason("not-a-doctor-code")).toBeNull();
+  });
+
+  test("the informal privacy marker finding publishes its no-command reason", () => {
+    // The restamp is preview-first by contract, so the doctor names the
+    // reason rather than an unconditional exit. Pinned by NAME: the code is
+    // read from the check module, not retyped here.
+    const reason = doctorExitReason(PRIVACY_MARKER_UNSTAMPED_CODE);
+    expect(reason).toBe(DOCTOR_EXIT_EXCLUSIONS.get(PRIVACY_MARKER_UNSTAMPED_CODE)!);
+    expect(reason!.trim().length).toBeGreaterThanOrEqual(MIN_REASON_LENGTH);
   });
 
   test("reasons are collected once per code, in the order the codes were reported", () => {
