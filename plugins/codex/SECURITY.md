@@ -46,5 +46,6 @@ and such a page exports exactly as it did before. A hand-edited class value
 this build does not recognise reads as unmarked rather than hiding the page.
 
 The full decision record for every export path, scanned and unscanned, is
-`src/core/egress/registry.ts`, and the operator-facing summary is the
-"network egress" section of [`docs/cli-reference.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cli-reference.md).
+`src/core/egress/registry.ts`, and the operator-facing summaries are the
+"content class" and "network egress" sections of
+[`docs/cli-reference.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cli-reference.md).

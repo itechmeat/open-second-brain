@@ -5,7 +5,7 @@
  * `src/core/search/entity-alias.ts` to this brain-side leaf: the
  * registry's derived lookup lane (C4) and the doctor's collision scan
  * (C5) consume it from the brain side, and the brain must not import
- * from `src/core/`. The reader's behavior is unchanged - the search
+ * from `src/core/search/`. The reader's behavior is unchanged - the search
  * suite keeps exercising the same class through its re-export.
  */
 

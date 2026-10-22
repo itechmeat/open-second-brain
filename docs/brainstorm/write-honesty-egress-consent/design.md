@@ -7,7 +7,7 @@
 ## Problem statement
 
 Four classes of dishonesty survive in the current tree: informal privacy frontmatter
-markers (`access: private`, `confidentiality: secret`) resolve to default visibility
+markers (`access: private`, `confidentiality: secret`, `sensitivity: confidential`) resolve to default visibility
 because the visibility layer reads only `meta["visibility"]` (src/core/graph/visibility.ts:44-48);
 embedding chunks larger than the model input window are silently truncated by the
 serving stack while the full text stays searchable (src/core/search/indexer.ts:1184);
@@ -80,9 +80,10 @@ with append-with-poll for the second writer: `src/core/brain/diagnostics.ts`
 (primary F4, F1 appends its doctor signal in its final task after polling for F4's
 commit) and `docs/cli-reference.md` (primary F5, F1 and F2 append their CLI doc
 lines in their final tasks). `src/core/search/indexer.ts` is owned outright by F2;
-F6's decline path terminates at provider construction (makeProvider throws a typed
-declined error that existing error surfaces report by name), so F6 never edits the
-indexer. Integration is one integrator pass: census recounts, full local gates, the
+F6's decline is resolved by `resolveProviderConsent` and handed to
+`makeProvider(config.semantic, consent)`: the indexer's embed phase and its
+embedding probe call the resolver directly (a coordinated edit with F2) and the
+probe reports a decline as skipped. Integration is one integrator pass: census recounts, full local gates, the
 docs and version bump land in the osb-pr-prepare sub-playbook.
 
 ## Design decisions
@@ -90,7 +91,11 @@ docs and version bump land in the osb-pr-prepare sub-playbook.
 - F1 enforces remote-deny only, at the read roots (`isPathReadableAtReach`,
   `applyReachFilter`, `listVaultPages`) plus the indexed visibility stamp - not
   inside `pageVisibility` - so informal markers never become caller-scope-liftable
-  tokens and `strictestVisibility` derived-page stamping is untouched. The restamp
+  tokens. Derived-page stamping is not untouched in the shipped tree: the derived
+  drafters (tensions, pledges, the dream lane) union an informal marker's
+  reservation into the `strictestVisibility` fold, and the counterparty brief's
+  entity and preference gates read the same union, so a marker page's
+  reservation reaches the pages derived from it. The restamp
   is additive-only: it unions the reserved token into `visibility:`, never removes
   keys or tokens, follows the dry-run-by-default repair-verb family contract, and
   rewrites through `writeFrontmatterAtomic` behind `assertVaultIdentityForWrite`.

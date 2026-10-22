@@ -192,9 +192,9 @@ describe("write lanes keep exact semantics", () => {
     expect(res.created).toBe(true);
     expect(res.entity.id).not.toBe(smith);
     expect(listEntities(vault, { category: "people" })).toHaveLength(2);
-    // The derived lane stays a read aid: 'bob' resolves to the record
-    // that actually declared it, and the person it derives from keeps
-    // answering to its nickname.
+    // The derived lane stays a read aid: once a record DECLARES the
+    // spelling, the exact lane answers for it, and the person the
+    // nickname was derived from keeps answering to its declared name.
     expect(getEntity(vault, { query: "bob" })!.id).toBe(res.entity.id);
     expect(getEntity(vault, { query: "robert smith" })!.id).toBe(smith);
   });

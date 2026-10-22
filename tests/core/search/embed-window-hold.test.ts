@@ -1,6 +1,6 @@
 /**
  * F2 chunk skip-and-hold (Lane B, task B1): the embedding phase holds
- * chunks whose token estimate PROVBLY exceeds the model's effective
+ * chunks whose token estimate PROVABLY exceeds the model's effective
  * declared input window.
  *
  * "Provably" is the whole unit. The estimator is two-sided (floor

@@ -68,14 +68,14 @@ Shared-file ownership:
 ### Lane F - F6 provider-decline consent (t_fa467133)
 
 - **F1t: consent resolver.** Files: src/core/search/provider-consent.ts (new), src/core/brain/config-template.ts (key declarations), tests. Acceptance: unset and explicit decline resolve to distinct states; unreadable/unparseable config resolves to declined (fail-closed); resolver extends the capability-tier ladder rather than paralleling it; import-cycles green.
-- **F2t: honor the decline before any network call.** Files: src/core/search/embeddings/provider.ts (makeProvider typed declined error naming the keys), src/core/search/semantic-phase.ts refusal path, tests. Acceptance: declined vault refuses at provider construction with a fetch counter asserting no network call; unset-config vaults behave byte-identically to today.
+- **F2t: honor the decline before any network call.** Files: src/core/search/embeddings/provider.ts (makeProvider typed declined error naming the keys), src/core/search/semantic-phase.ts refusal path, src/core/search/indexer.ts (the embed phase and the embedding probe resolve the consent and hand it to makeProvider - a coordinated edit with F2, shipped as such), tests. Acceptance: declined vault refuses at provider construction with a fetch counter asserting no network call; unset-config vaults behave byte-identically to today.
 - **F3t: doctor consent probe.** Files: src/core/doctor-readiness.ts (READINESS_PROBE + DEFAULT_PROBES, split the skipped-decline arm), tests. Acceptance: declined vault reports a decline sentence naming search_semantic_enabled=false / embedding_provider=disabled and lists present provider env vars BY NAME ONLY (tests assert absence of values); unset keeps the existing sentence.
 - **F4t: consent-stamp primitive with kill switch.** Files: src/core/egress/consent-stamp.ts (new, no destination declared), tests. Acceptance: kill switch set refuses every stamp regardless of any other env value; refusal discloses what would leave the machine; leaf-level redaction composes via redactForEgress.
 - **F5t: durable-surface registration if needed.** Files: src/core/state/surfaces.ts, tests/core/architecture/state-surface-census.test.ts (only if a durable file appears). Acceptance: new row attributed with sources, counts bumped with a written reason, naive cross-check green.
 
 ### Integrator (single pass after all lanes)
 
-- Census recount across all moved pins; full local gates in CI order (CI-pinned Bun); cross-lane contract verification (declined error surfaces by name through the indexer's existing error path without indexer edits); remaining docs.
+- Census recount across all moved pins; full local gates in CI order (CI-pinned Bun); cross-lane contract verification (declined error surfaces by name through the indexer's consent-resolved provider construction); remaining docs.
 
 ## Dependency notes
 

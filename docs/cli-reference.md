@@ -2891,7 +2891,8 @@ it as declaring nothing.
 o2b brain bank-export --out <file>   [--include-prompt-derived]
 o2b brain graph-export --out <file>  [--include-prompt-derived]
 o2b brain okf-export --out <dir>     [--include-prompt-derived]
-o2b brain export --out <file>        [--include-prompt-derived]
+o2b brain export --format transcripts-jsonl --transcripts <file|dir>
+                   --out <file>      [--include-prompt-derived]
 ```
 
 Pages carry a `content_class:` frontmatter key that the server writes, the
@@ -2903,16 +2904,22 @@ note writes that arrive over the MCP transport, the session import, and the
 in-process report writers. A caller that sends the key has it dropped; an
 operator-authored CLI write is never stamped.
 
-Every shared export leaves class-marked pages out by default. The four
-verbs above split them out of the payload BEFORE it is composed, so a
-marked page is absent from the export rather than redacted inside it, and
-each omission is named on stderr with the page's path and its class, so a
-smaller export is never a silent one. Passing `--include-prompt-derived`
-carries the pages back in; the run says so on stderr, because an operator
-who opted in deserves to see the opt-in acknowledged where the copy is
-made. The knowledge pack goes one step earlier: a marked page is blocked
-by the selection step beside the `visibility` and `owner` blocks and named
-in the pack's `blocked` list, since a pack is a curated subset by design.
+Every shared export leaves class-marked pages out by default. The three
+page-export verbs above split them out of the payload BEFORE it is
+composed, so a marked page is absent from the export rather than redacted
+inside it, and each omission is named on stderr with the page's path and
+its class, so a smaller export is never a silent one. Passing
+`--include-prompt-derived` carries the pages back in; the run says so on
+stderr, because an operator who opted in deserves to see the opt-in
+acknowledged where the copy is made. `o2b brain export` is the transcript
+export, not a page export: it never drops vault pages, and its
+`--include-prompt-derived` governs TRANSCRIPT CONVERSATIONS - a record
+that carries the class is omitted and named by its `session_id`, the same
+way the page verbs name paths (and only the `transcripts-jsonl` format
+reads the flag; the other formats ignore it). The knowledge pack goes one
+step earlier: a marked page is blocked by the selection step beside the
+`visibility` and `owner` blocks and named in the pack's `blocked` list,
+since a pack is a curated subset by design and offers no override.
 The transcript format has a contract to export session material, so it
 never applies the default quietly: a record that carries the class is
 omitted and named, and a corpus the policy would empty is a refusal, never

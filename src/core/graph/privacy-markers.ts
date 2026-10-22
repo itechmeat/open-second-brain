@@ -8,7 +8,7 @@
  * visibility: the reserved-token rule never sees the claim the author
  * wrote. This module is that missing reading, and nothing else.
  *
- * What it answers, in two functions:
+ * What it answers, in three functions:
  *
  *   - {@link hasPrivacyDenyMarker} - does the frontmatter carry a value
  *     under one of the three marker keys that says "not for everyone";
