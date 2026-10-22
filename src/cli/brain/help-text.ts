@@ -124,6 +124,7 @@ Brain verbs (observing memory):
   backlinks           List inbound references to a Brain artifact id
   semantics-backfill  Preview deterministic typed preference-edge backfill proposals
   authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
+  privacy-marker-restamp  Formalize informal privacy markers (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
@@ -346,6 +347,14 @@ export const VERB_HELP: Record<string, string> = {
     "excludes, minus code fences, and minus Brain/log, which is append-only. The\n" +
     "receipt names how stale the search index now is and the command that fixes it.\n" +
     "Distinct from `o2b brain lifecycle`, which annotates a memory and moves no bytes.\n",
+  "privacy-marker-restamp":
+    "usage: o2b brain privacy-marker-restamp [--apply] [--vault <path>] [--json]\n" +
+    "Make an informal privacy marker formal. A page that declares its audience only\n" +
+    "through an informal marker (access / confidentiality / sensitivity) is a\n" +
+    "candidate; dry-run is the default and writes nothing. --apply stamps the\n" +
+    "reserved visibility token (`private`) onto every candidate by unioning it into\n" +
+    "`visibility:`. Additive and idempotent: no key is removed, no declared token is\n" +
+    "dropped, and a re-run writes nothing; it never removes a token.\n",
   "scaffold-stub":
     "usage: o2b brain scaffold-stub list [--limit <n>] [--vault <path>] [--json]\n" +
     "   or: o2b brain scaffold-stub write <target> [--path <rel>] [--source <rel>]...\n" +
@@ -361,7 +370,11 @@ export const VERB_HELP: Record<string, string> = {
     "valid_from / valid_until relations. Default is current truth; --at <ISO|YYYY-MM-DD>\n" +
     "gives truth at that instant; --history lists every claim (tombstoned included);\n" +
     "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
-    "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
+    "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n" +
+    "The write-time lint reports a count or amount written with no date as the\n" +
+    "advisory `undated-quantity` finding; it is silenced by valid_from in\n" +
+    "frontmatter, any ISO date in the body, or a [Source: <name>, YYYY-MM-DD]\n" +
+    "marker, and --at / --history are how such a claim is placed in time.\n",
   decision:
     "usage: o2b brain decision <record|outcome|rate|show|list|compare|similar|history|recall|open|list_open|show_open|resolve|discard> [...] [--vault <path>] [--json]\n" +
     "Decision-record note family under Brain/decisions/. record --title <t> --chosen <c>\n" +
