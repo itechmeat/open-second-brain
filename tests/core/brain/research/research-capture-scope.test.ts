@@ -28,9 +28,9 @@ const NOW = new Date("2026-06-13T12:00:00Z");
 const LOCAL_SOURCE = "Articles/a.md";
 const URL_SOURCE = "https://example.test/articles/a";
 
-/** The report page the base release (v1.66.0) wrote for one local source. */
+/** The report page for one local source; the in-process generation stamp landed in the content-class wave. */
 const BASE_LOCAL_REPORT =
-  '---\nkind: brain-report\ntitle: T\nreport_date: 2026-06-13\nprovenance: stated\nsource_count: 1\ncreated_at: "2026-06-13T12:00:00Z"\nupdated_at: "2026-06-13T12:00:00Z"\ntags: [brain, brain/report]\n---\n\n# T\n\n## Findings\n\n- S (cites: [[Articles/a.md]])\n\n## Sources\n\n- [[Articles/a.md]]\n';
+  '---\nkind: brain-report\ntitle: T\nreport_date: 2026-06-13\nprovenance: stated\nsource_count: 1\ncontent_class: prompt-derived\ncreated_at: "2026-06-13T12:00:00Z"\nupdated_at: "2026-06-13T12:00:00Z"\ntags: [brain, brain/report]\n---\n\n# T\n\n## Findings\n\n- S (cites: [[Articles/a.md]])\n\n## Sources\n\n- [[Articles/a.md]]\n';
 
 function seed(rel: string): void {
   mkdirSync(join(vault, rel, ".."), { recursive: true });
