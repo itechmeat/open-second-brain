@@ -715,6 +715,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Backfill authored_at on session-imported signals (dry-run by default)",
         ),
         command(
+          "privacy-marker-restamp",
+          "Restamp informal privacy markers as visibility: private (dry-run by default)",
+          [flag("vault", "string"), flag("apply", "boolean")],
+        ),
+        command(
           "distill",
           "Condense a source into agent-supplied atomic claims with block provenance and checked quotes",
           [

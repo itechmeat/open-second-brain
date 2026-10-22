@@ -78,6 +78,7 @@ import {
   cmdBrainBacklinks,
   cmdBrainSemanticsBackfill,
   cmdBrainAuthoredAtBackfill,
+  cmdBrainPrivacyMarkerRestamp,
   cmdBrainMcpLandscape,
   cmdBrainMerge,
   cmdBrainExplorer,
@@ -367,6 +368,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSemanticsBackfill(rest);
       case "authored-at-backfill":
         return await cmdBrainAuthoredAtBackfill(rest);
+      case "privacy-marker-restamp":
+        return await cmdBrainPrivacyMarkerRestamp(rest);
       case "mcp-landscape":
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":

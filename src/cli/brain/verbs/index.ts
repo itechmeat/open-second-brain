@@ -61,6 +61,7 @@ export { cmdBrainBankImport } from "./bank-import.ts";
 export { cmdBrainBacklinks } from "./backlinks.ts";
 export { cmdBrainSemanticsBackfill } from "./semantics-backfill.ts";
 export { cmdBrainAuthoredAtBackfill } from "./authored-at-backfill.ts";
+export { cmdBrainPrivacyMarkerRestamp } from "./privacy-marker-restamp.ts";
 export { cmdBrainMcpLandscape } from "./mcp-landscape.ts";
 export { cmdBrainMerge } from "./merge.ts";
 export { cmdBrainExplorer } from "./explorer.ts";
