@@ -239,12 +239,9 @@ function isCallerReadable(
   reach: TransportReach,
   agentScope: string | null,
   cache: FrontmatterCache,
-  store: Store,
+  store: Pick<Store, "indexedVisibilityByPaths">,
 ): boolean {
-  const indexedTags =
-    typeof store.indexedVisibilityByPaths === "function"
-      ? store.indexedVisibilityByPaths([path]).get(path)
-      : undefined;
+  const indexedTags = store.indexedVisibilityByPaths([path]).get(path);
   return (
     isPathReadableAtReach(vault, path, reach, cache, indexedTags) &&
     (agentScope === null || isPathOwnerVisible(vault, path, agentScope, cache))

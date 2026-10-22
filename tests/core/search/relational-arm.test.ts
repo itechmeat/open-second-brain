@@ -175,6 +175,11 @@ function armFixtureStore(opts: {
     documentTitles() {
       return new Map([...byId].map(([id, path]) => [id, { path, title: null }]));
     },
+    // The real Store always carries the measured-visibility reader; the
+    // fixture pages carry no indexed tags, which is the empty map.
+    indexedVisibilityByPaths(paths: ReadonlyArray<string>) {
+      return new Map(paths.map((p) => [p, [] as string[]]));
+    },
     typedRelationEdgesForDocuments(ids: ReadonlyArray<number>) {
       const set = new Set(ids);
       return opts.typed
