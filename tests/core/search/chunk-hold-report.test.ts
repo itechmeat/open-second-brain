@@ -218,6 +218,26 @@ test("the list is capped and the total discloses the remainder", async () => {
   expect(status.heldChunks?.items.length).toBe(HELD_CHUNK_REPORT_CAP);
 });
 
+test("a hold row whose chunk has a vector is not reported as held", async () => {
+  // Window up, chunk embedded, window back: the old row matches the
+  // active key again, but the chunk has a stored vector and is not held
+  // back from anything. Reporting it would warn an operator about work
+  // that is already done - the report answers to the same fact the
+  // pending anti-join answers to.
+  const config = cfg();
+  const chunkId = await seedOne(config, "Brain/embedded-anyway.md", ["x".repeat(2048)]);
+  await recordHolds(config, [{ chunkId, estimatedTokens: 512 }]);
+  const store = await Store.open(config, { mode: "write" });
+  try {
+    store.ensureEmbeddingModel(RECOMMENDED_EMBEDDING_MODEL, 4, { query: "", passage: "" });
+    store.vecUpsert(chunkId, [1, 0, 0, 0], RECOMMENDED_EMBEDDING_MODEL, 4, "hash-1");
+  } finally {
+    await store.close();
+  }
+  const status = await indexStatus(config);
+  expect(status.heldChunks).toBeUndefined();
+});
+
 test("a row under a released key is not reported", async () => {
   const config = cfg();
   const heldId = await seedOne(config, "Brain/big-note.md", ["x".repeat(2048)]);

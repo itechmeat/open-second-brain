@@ -509,16 +509,23 @@ export function recordChunkHolds(
       "(chunk_id, model, window_tokens, embedding_signature, estimated_tokens, held_at) " +
       "VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
   );
-  for (const entry of entries) {
-    insert.run(
-      entry.chunkId,
-      stamp.model,
-      entry.windowTokens,
-      stamp.embeddingSignature,
-      entry.estimatedTokens,
-      heldAt,
-    );
-  }
+  // One transaction, the way the sibling bulk writers commit: after a
+  // model or window change a large held set is hundreds of rows, and one
+  // autocommit (WAL fsync) per row prices the run in syscalls while a
+  // failure halfway leaves a partial record beside an in-memory tally
+  // that already counts every hold.
+  db.transaction(() => {
+    for (const entry of entries) {
+      insert.run(
+        entry.chunkId,
+        stamp.model,
+        entry.windowTokens,
+        stamp.embeddingSignature,
+        entry.estimatedTokens,
+        heldAt,
+      );
+    }
+  })();
 }
 
 /** The hold rows recorded for one chunk, whatever key made them. */
@@ -577,11 +584,16 @@ export function heldChunkCensus(
   hold: ChunkHoldExclusion,
   limit: number,
 ): { total: number; rows: HeldChunkCensusRow[] } {
+  // A hold row whose chunk has a vector is not a hold any more (window
+  // up, chunk embedded, window back): the report answers to the same fact
+  // the pending anti-join answers to, so the operator is never warned
+  // about work that is already done.
   const total =
     db
       .query<{ n: number }, (string | number)[]>(
-        `SELECT COUNT(*) AS n FROM ${CHUNK_HOLDS_TABLE} ` +
-          "WHERE model = ? AND window_tokens = ? AND embedding_signature = ?",
+        `SELECT COUNT(*) AS n FROM ${CHUNK_HOLDS_TABLE} h ` +
+          "WHERE h.model = ? AND h.window_tokens = ? AND h.embedding_signature = ? " +
+          "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = h.chunk_id)",
       )
       .get(hold.model, hold.windowTokens, hold.embeddingSignature)?.n ?? 0;
   if (total === 0) return { total: 0, rows: [] };
@@ -596,6 +608,7 @@ export function heldChunkCensus(
         "JOIN chunks c ON c.id = h.chunk_id " +
         "JOIN documents d ON d.id = c.document_id " +
         "WHERE h.model = ? AND h.window_tokens = ? AND h.embedding_signature = ? " +
+        "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = h.chunk_id) " +
         "ORDER BY d.path, c.chunk_index LIMIT ?",
     )
     .all(hold.model, hold.windowTokens, hold.embeddingSignature, limit)
@@ -629,6 +642,7 @@ export function heldChunkDocCensus(db: Database, hold: ChunkHoldExclusion): Held
         "JOIN chunks c ON c.id = h.chunk_id " +
         "JOIN documents d ON d.id = c.document_id " +
         "WHERE h.model = ? AND h.window_tokens = ? AND h.embedding_signature = ? " +
+        "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = h.chunk_id) " +
         "GROUP BY d.path ORDER BY d.path",
     )
     .all(hold.model, hold.windowTokens, hold.embeddingSignature)

@@ -30,6 +30,8 @@ import {
   declaredInputWindowTokens,
   RECOMMENDED_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/presets.ts";
+import { chunkHoldExclusion } from "../../../src/core/search/embedding-spend.ts";
+import { signatureIdentityKnown } from "../../../src/core/search/embeddings/signature.ts";
 import {
   charLengthOverTokenBudget,
   estimateTokens,
@@ -321,6 +323,25 @@ test("an operator-declared window arms the hold even for an uncurated model", as
   expect(sent).not.toContain(OVER_CONTENT);
   expect(tally.embeddingsHeld).toBe(1);
   expect(tally.embeddingsComputed).toBe(0);
+});
+
+test("the hold key changes when the sent passage prefix changes", () => {
+  // The hold's proof is measured over prefix + content, so the key the
+  // proof is recorded under has to answer for the prefix too: a shortened
+  // or removed prefix changes what fits the window, and a key that cannot
+  // see the change would keep excluding a chunk that now fits.
+  const withPrefix = cfg({ passagePrefix: "passage: ", dimension: 4 });
+  const shortened = cfg({ passagePrefix: "", dimension: 4 });
+  const otherPrefix = cfg({ passagePrefix: "represent passage: ", dimension: 4 });
+  const a = chunkHoldExclusion(withPrefix)!;
+  const b = chunkHoldExclusion(shortened)!;
+  const c = chunkHoldExclusion(otherPrefix)!;
+  expect(a.embeddingSignature).not.toBe(b.embeddingSignature);
+  expect(a.embeddingSignature).not.toBe(c.embeddingSignature);
+  // The composed key still reads as a signature from the end: the
+  // trailing provider:model:dimension triple is intact.
+  expect(signatureIdentityKnown(a.embeddingSignature)).toBe(true);
+  expect(signatureIdentityKnown(b.embeddingSignature)).toBe(true);
 });
 
 test("the local embedder has no window and holds nothing", async () => {
