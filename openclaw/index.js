@@ -4752,28 +4752,28 @@ var EGRESS_SITES = Object.freeze({
     verb: "o2b brain bank-export",
     module: "src/cli/brain/verbs/bank-export.ts",
     redaction: R.sharedRedactor,
-    reason: "the widest export in the tree: preferences, the page graph, page contracts and " + "the sources dashboard composed into one file. Redaction runs over the bundle " + "TREE and the JSON is serialised afterwards, so a note whose text happens to " + "contain a credential assignment cannot mangle the document's own quoting."
+    reason: "the widest export in the tree: preferences, the page graph, page contracts and " + "the sources dashboard composed into one file. Redaction runs over the bundle " + "TREE and the JSON is serialised afterwards, so a note whose text happens to " + "contain a credential assignment cannot mangle the document's own quoting. A page " + "whose content_class carries the reserved prompt-derived value is left out of both " + "page sections - graph node and contract - and the omission is named on stderr; " + "--include-prompt-derived carries it back in. The sources dashboard is an aggregate " + "over signal records, carries no page text, and is not class-filtered."
   },
   "brain-graph-export": {
     id: "brain-graph-export",
     verb: "o2b brain graph-export",
     module: "src/cli/brain/verbs/graph-export.ts",
     redaction: R.sharedRedactor,
-    reason: "carries no page body, but does carry every page title, path and typed-relation " + "target - a credential pasted into a title left through here verbatim."
+    reason: "carries no page body, but does carry every page title, path and typed-relation " + "target - a credential pasted into a title left through here verbatim. A page whose " + "content_class carries the reserved prompt-derived value has no node in the graph - " + "title, path and relations go with it - and the omission is named on stderr; " + "--include-prompt-derived carries it back in. Link and relation targets inside a " + "kept node are that page's own declared citations and are not rewritten."
   },
   "brain-okf-export": {
     id: "brain-okf-export",
     verb: "o2b brain okf-export",
     module: "src/cli/brain/verbs/okf-export.ts",
     redaction: R.sharedRedactor,
-    reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise. What it does NOT " + "do is filter by label: a page carrying `private: true` in its frontmatter exports in " + "full, because the `<private>` region marker is this product's only content-derived " + "privacy primitive and these composers are content composers, not visibility filters."
+    reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise. What it does NOT " + "do is filter by the informal privacy labels: a page carrying `private: true` in its " + "frontmatter exports in full, because the `<private>` region marker is this product's " + "only content-derived privacy primitive and these composers are content composers, " + "not visibility filters. What it DOES filter, since the content class shipped, is the " + "server-derived class itself: a page stamped content_class: prompt-derived is absent " + "from the manifest and no file is written for it, every omission is named on stderr, " + "and --include-prompt-derived carries the pages back in."
   },
   "brain-export": {
     id: "brain-export",
     verb: "o2b brain export",
     module: "src/cli/brain/verbs/export.ts",
     redaction: R.sharedRedactor,
-    reason: "preference principles are free text an agent wrote, and the llms-txt form is " + "meant to be pasted into a foreign prompt - the destination least likely to be " + "read before it is shared. One entry covers all three of the verb's formats " + "because the census keys on the MODULE and the destination is declared once, in " + "the verb: the JSON and transcript forms are redacted as TREES and serialised " + "afterwards, llms-txt as text. What proves each branch scans is a per-handler " + "check in the census, not the guard-call count - counting guards against " + "DESTINATIONS is an inequality, and this module declares one destination against " + "three guards, so a fourth handler that scanned nothing would satisfy it. The " + "transcript form is the widest of the three by far - whole recorded " + "conversations with whichever runtime wrote them, which is where a key pasted " + "into a prompt actually lives. Its records are guarded ONE AT A TIME, so a " + "single oversized turn cannot put a machine's whole corpus past the scan window, " + "and a refusal names the conversation rather than the run - by its basename, " + "except when the basename is itself the secret-shaped identifier, where it is " + "named by runtime and start instant instead. The transcript branch is also the " + "one caller that passes `foreignIdentifiers`, because its `session_id` and " + "`turn_id` were named by the harness that wrote the transcript rather than by " + "this vault, so the guard's vendor-prefix-only rule for identifiers - an " + "argument about ids this build constructs - does not cover them."
+    reason: "preference principles are free text an agent wrote, and the llms-txt form is " + "meant to be pasted into a foreign prompt - the destination least likely to be " + "read before it is shared. One entry covers all three of the verb's formats " + "because the census keys on the MODULE and the destination is declared once, in " + "the verb: the JSON and transcript forms are redacted as TREES and serialised " + "afterwards, llms-txt as text. What proves each branch scans is a per-handler " + "check in the census, not the guard-call count - counting guards against " + "DESTINATIONS is an inequality, and this module declares one destination against " + "three guards, so a fourth handler that scanned nothing would satisfy it. The " + "transcript form is the widest of the three by far - whole recorded " + "conversations with whichever runtime wrote them, which is where a key pasted " + "into a prompt actually lives. Its records are guarded ONE AT A TIME, so a " + "single oversized turn cannot put a machine's whole corpus past the scan window, " + "and a refusal names the conversation rather than the run - by its basename, " + "except when the basename is itself the secret-shaped identifier, where it is " + "named by runtime and start instant instead. The transcript branch is also the " + "one caller that passes `foreignIdentifiers`, because its `session_id` and " + "`turn_id` were named by the harness that wrote the transcript rather than by " + "this vault, so the guard's vendor-prefix-only rule for identifiers - an " + "argument about ids this build constructs - does not cover them. The formats " + "carry no page-classed material - the two preference forms serialise preference " + "rows, which never take the content-class stamp, and the transcript corpus is " + "runtime session logs, not vault pages - so the default content-class exclusion " + "has nothing to remove here; the transcript branch still does not apply it " + "SILENTLY: a record that carries the reserved class is omitted and named, and a " + "corpus the policy would empty is a refusal, never an empty file."
   },
   "config-export": {
     id: "config-export",
@@ -4787,21 +4787,21 @@ var EGRESS_SITES = Object.freeze({
     verb: "o2b brain continuity export",
     module: "src/cli/brain/verbs/continuity.ts",
     redaction: R.sharedRedactor,
-    reason: "was declared as covered by its read model, which was wrong in both directions. " + "The upstream call redacts at WRITE time with the redactor's DEFAULT options, so " + "`redactTokens` and `redactUrlCredentials` were both off and a vendor key, a bare " + "high-entropy token and a `user:pass@host` URL all left through here verbatim - " + "the two flags the export boundary exists to turn on. Write-time coverage also " + "says nothing about a record already on disk or appended by another writer, since " + "the read model never re-scans. The verb now scans what it READ, which answers " + "both, and gains the truncation refusal the other five already had."
+    reason: "was declared as covered by its read model, which was wrong in both directions. " + "The upstream call redacts at WRITE time with the redactor's DEFAULT options, so " + "`redactTokens` and `redactUrlCredentials` were both off and a vendor key, a bare " + "high-entropy token and a `user:pass@host` URL all left through here verbatim - " + "the two flags the export boundary exists to turn on. Write-time coverage also " + "says nothing about a record already on disk or appended by another writer, since " + "the read model never re-scans. The verb now scans what it READ, which answers " + "both, and gains the truncation refusal the other five already had. Continuity " + "records are structured events, not pages, and never take the content-class " + "stamp, so the default class exclusion removes nothing here."
   },
   "brain-explorer-export": {
     id: "brain-explorer-export",
     verb: "o2b brain explorer --export",
     module: "src/cli/brain/verbs/explorer.ts",
     redaction: R.sharedRedactor,
-    reason: "a self-contained HTML file with the whole rule graph embedded as JSON: every " + "preference and retired principle verbatim, plus each one's topic, scope and " + "provenance counts. It is the export most likely to be handed to a person rather " + "than a program - it opens in a browser - and it was the one export that never " + "scanned anything. Redaction runs over the graph TREE before the template " + "substitution, so a principle whose text contains a quote cannot disturb the " + "document. The label rule holds here too: a preference is not withheld for carrying " + "a `private` tag, because the `<private>` region marker is the only content-derived " + "privacy primitive in this product."
+    reason: "a self-contained HTML file with the whole rule graph embedded as JSON: every " + "preference and retired principle verbatim, plus each one's topic, scope and " + "provenance counts. It is the export most likely to be handed to a person rather " + "than a program - it opens in a browser - and it was the one export that never " + "scanned anything. Redaction runs over the graph TREE before the template " + "substitution, so a principle whose text contains a quote cannot disturb the " + "document. The label rule holds here too: a preference is not withheld for carrying " + "a `private` tag, because the `<private>` region marker is the only content-derived " + "privacy primitive in this product. The content-class default removes nothing here " + "either: preferences and retired principles are operator-curated rows and never " + "take the prompt-derived stamp, which is written by note creation, the session " + "import and the report writers only."
   },
   "brain-knowledge-pack-export": {
     id: "brain-knowledge-pack-export",
     verb: "o2b brain knowledge-pack export",
     module: "src/cli/brain/verbs/knowledge-pack.ts",
     redaction: R.sharedRedactor,
-    reason: "a selected subset - preference principles and page bodies verbatim - built to be " + "handed to someone else, so it is the one export that also filters by LABEL before " + "it scans: a page declaring `visibility:`, an entry carrying `owner:`, and an " + "unreviewed `OKF Review/` candidate are blocked and named, never written. What is " + "carried is redacted as a tree (OKF manifest, preference rows) and as text (pages) " + "BEFORE the pack is sealed, so the sha256 table hashes the bytes that left and a " + "recipient's integrity check verifies the redacted copy, not the vault. Preference " + "rows leave without their evidence links and rendered body."
+    reason: "a selected subset - preference principles and page bodies verbatim - built to be " + "handed to someone else, so it is the one export that also filters by LABEL before " + "it scans: a page declaring `visibility:`, an entry carrying `owner:`, an " + "unreviewed `OKF Review/` candidate, and - since the content class shipped - a page " + "stamped content_class: prompt-derived are blocked and named, never written. What is " + "carried is redacted as a tree (OKF manifest, preference rows) and as text (pages) " + "BEFORE the pack is sealed, so the sha256 table hashes the bytes that left and a " + "recipient's integrity check verifies the redacted copy, not the vault. Preference " + "rows leave without their evidence links and rendered body."
   },
   "brain-secret-bundle-export": {
     id: "brain-secret-bundle-export",
@@ -5826,6 +5826,46 @@ function isRemotelyReadable(pageTags, reach) {
   return !pageTags.includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
 
+// src/core/graph/privacy-markers.ts
+var PRIVACY_MARKER_KEYS = Object.freeze([
+  "access",
+  "confidentiality",
+  "sensitivity"
+]);
+var PRIVACY_DENY_MARKER_VALUES = Object.freeze([
+  "private",
+  "secret",
+  "confidential"
+]);
+function declaredValues(raw) {
+  if (typeof raw === "string")
+    return [raw];
+  if (!Array.isArray(raw))
+    return [];
+  return raw.filter((v) => typeof v === "string");
+}
+function hasPrivacyDenyMarker(meta) {
+  for (const key of PRIVACY_MARKER_KEYS) {
+    for (const value of declaredValues(meta[key])) {
+      if (PRIVACY_DENY_MARKER_VALUES.includes(normToken(value)))
+        return true;
+    }
+  }
+  return false;
+}
+function markerDenyTokens(meta) {
+  return hasPrivacyDenyMarker(meta) ? Object.freeze([REMOTE_DENY_VISIBILITY_TOKEN]) : Object.freeze([]);
+}
+function remoteDenyVisibilityTokens(meta) {
+  const declared = pageVisibility(meta);
+  const out = [...declared];
+  for (const token of markerDenyTokens(meta)) {
+    if (!out.includes(token))
+      out.push(token);
+  }
+  return Object.freeze(out);
+}
+
 // src/core/vault.ts
 init_fs_utils();
 var FRONTMATTER_RE = /^---[^\S\n]*\n([\s\S]*?)\n---\s*\n?/;
@@ -5962,7 +6002,7 @@ function listVaultPages(vaultDir, opts) {
     sink: opts.notices,
     site: opts.site ?? LIST_VAULT_PAGES_SITE
   });
-  const pages = walked.filter((w) => isRemotelyReadable(w.unreadable ? UNMEASURABLE_PAGE_VISIBILITY : pageVisibility(w.page.metadata), opts.reach)).map((w) => w.page);
+  const pages = walked.filter((w) => isRemotelyReadable(w.unreadable ? UNMEASURABLE_PAGE_VISIBILITY : remoteDenyVisibilityTokens(w.page.metadata), opts.reach)).map((w) => w.page);
   pages.sort((a, b) => COLLATOR.compare(a.title.toLowerCase(), b.title.toLowerCase()));
   return pages;
 }
