@@ -136,6 +136,29 @@ describe("derived entity ranking lane (unit)", () => {
     );
     expect(withEmpty.map((r) => r.score)).toEqual(without.map((r) => r.score));
   });
+
+  test("two otherwise-equal chunks, one with a single declared match, one with three derived matches: declared ranks first for several entityMul values", () => {
+    for (const entityMul of [0.5, 1.0, 2.0]) {
+      for (const [declaredId, derivedId] of [
+        [1, 2],
+        [2, 1],
+      ] as const) {
+        const ranked = rankResults(
+          {
+            ...baseInputs(),
+            entityMatchByChunk: new Map([[declaredId, 1]]),
+            derivedEntityMatchByChunk: new Map([[derivedId, 3]]),
+          },
+          { ...RANK_OPTS, weightProfile: { entityMul } },
+        );
+        const declaredIndex = ranked.findIndex((r) => r.chunkId === declaredId);
+        const derivedIndex = ranked.findIndex((r) => r.chunkId === derivedId);
+        expect(declaredIndex).toBeGreaterThanOrEqual(0);
+        expect(derivedIndex).toBeGreaterThanOrEqual(0);
+        expect(declaredIndex).toBeLessThan(derivedIndex);
+      }
+    }
+  });
 });
 
 let tmp: ReturnType<typeof createTempVault>;

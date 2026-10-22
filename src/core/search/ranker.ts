@@ -907,6 +907,18 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const aRelationalOnly = relationalOnlyIds.has(a.chunkId);
     const bRelationalOnly = relationalOnlyIds.has(b.chunkId);
     if (aRelationalOnly !== bRelationalOnly) return aRelationalOnly ? 1 : -1;
+    // Structural declared-before-derived entity precedence: we partition candidates
+    // so any chunk with a declared-form match ranks above any derived-only chunk
+    // (stable secondary ordering within each partition), enforcing the invariant
+    // that declared forms always outrank derived-variant forms regardless of entityMul.
+    const aDeclared = (inputs.entityMatchByChunk?.get(a.chunkId) ?? 0) > 0;
+    const bDeclared = (inputs.entityMatchByChunk?.get(b.chunkId) ?? 0) > 0;
+    const aDerivedOnly =
+      aDeclared === false && (inputs.derivedEntityMatchByChunk?.get(a.chunkId) ?? 0) > 0;
+    const bDerivedOnly =
+      bDeclared === false && (inputs.derivedEntityMatchByChunk?.get(b.chunkId) ?? 0) > 0;
+    if (aDeclared && bDerivedOnly) return -1;
+    if (bDeclared && aDerivedOnly) return 1;
     if (b.score !== a.score) return b.score - a.score;
     if (temporalIntent !== null) {
       const aTemporal = a.breakdown?.temporal ?? 0;
