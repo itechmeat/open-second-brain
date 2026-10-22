@@ -256,6 +256,7 @@ describe("the transcript corpus refuses or names, never silently empties", () =>
     if (outcome.kind !== "written") return;
     expect(outcome.written).toBe(2);
     expect(outcome.promptDerivedOmitted).toEqual([]);
+    expect(lines).toHaveLength(2);
   });
 });
 
