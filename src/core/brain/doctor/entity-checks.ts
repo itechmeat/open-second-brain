@@ -104,7 +104,7 @@ export function entityAliasCandidateMessage(c: EntityAliasCandidate): string {
  * by-message match simply never pairs this finding with one.
  */
 export function personVariantCollisionMessage(a: BrainEntity, b: BrainEntity): string {
-  const [first, second] = [a, b].toSorted((x, y) => x.id.localeCompare(y.id));
+  const [first, second] = a.id.localeCompare(b.id) <= 0 ? [a, b] : [b, a];
   return aliasMergeCandidateMessage(
     first.name,
     first.id,

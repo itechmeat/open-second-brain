@@ -69,9 +69,9 @@ describe("derived entity ranking lane (unit)", () => {
     const declared = ranked.find((r) => r.chunkId === 1)!;
     const derived = ranked.find((r) => r.chunkId === 2)!;
     expect(declared.score).toBeGreaterThan(derived.score);
-    expect(declared.breakdown.entity).toBe(0.02);
-    expect(derived.breakdown.entity).toBe(0);
-    expect(derived.breakdown.entityDerived).toBe(0.01);
+    expect(declared.breakdown!.entity).toBe(0.02);
+    expect(derived.breakdown!.entity).toBe(0);
+    expect(derived.breakdown!.entityDerived).toBe(0.01);
     expect(derived.reasons).toContain("entity_variant: 0.010");
   });
 
@@ -86,9 +86,9 @@ describe("derived entity ranking lane (unit)", () => {
     );
     const declared = ranked.find((r) => r.chunkId === 1)!;
     const derived = ranked.find((r) => r.chunkId === 2)!;
-    expect(declared.breakdown.entity).toBe(0.04);
-    expect(derived.breakdown.entityDerived).toBe(0.02);
-    expect(derived.breakdown.entityDerived!).toBeLessThan(declared.breakdown.entity);
+    expect(declared.breakdown!.entity).toBe(0.04);
+    expect(derived.breakdown!.entityDerived).toBe(0.02);
+    expect(derived.breakdown!.entityDerived).toBeLessThan(declared.breakdown!.entity);
   });
 
   test("a chunk matching both a declared and a derived form outranks either alone", () => {
@@ -101,8 +101,8 @@ describe("derived entity ranking lane (unit)", () => {
       RANK_OPTS,
     );
     const both = ranked.find((r) => r.chunkId === 1)!;
-    expect(both.breakdown.entity).toBe(0.02);
-    expect(both.breakdown.entityDerived).toBe(0.01);
+    expect(both.breakdown!.entity).toBe(0.02);
+    expect(both.breakdown!.entityDerived).toBe(0.01);
   });
 
   test("a zero derived match omits the layer from breakdown and reasons", () => {
@@ -149,7 +149,10 @@ describe("derived entity ranking lane (unit)", () => {
             entityMatchByChunk: new Map([[declaredId, 1]]),
             derivedEntityMatchByChunk: new Map([[derivedId, 3]]),
           },
-          { ...RANK_OPTS, weightProfile: { entityMul } },
+          {
+            ...RANK_OPTS,
+            weightProfile: { keywordMul: 1, semanticMul: 1, recencyMul: 1, entityMul },
+          },
         );
         const declaredIndex = ranked.findIndex((r) => r.chunkId === declaredId);
         const derivedIndex = ranked.findIndex((r) => r.chunkId === derivedId);

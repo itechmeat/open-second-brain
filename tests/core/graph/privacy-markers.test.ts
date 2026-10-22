@@ -26,6 +26,7 @@ import {
   markerDenyTokens,
   remoteDenyVisibilityTokens,
 } from "../../../src/core/graph/privacy-markers.ts";
+import type { FrontmatterMap } from "../../../src/core/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import {
   REMOTE_DENY_VISIBILITY_TOKEN,
@@ -77,7 +78,7 @@ describe("pages with no deny marker are unchanged", () => {
 describe("privacy-denying marker values are caught", () => {
   const cases: ReadonlyArray<{
     readonly name: string;
-    readonly meta: Record<string, unknown>;
+    readonly meta: FrontmatterMap;
   }> = [
     { name: "access: private", meta: { access: "private" } },
     { name: "access: secret", meta: { access: "secret" } },
