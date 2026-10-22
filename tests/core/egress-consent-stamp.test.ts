@@ -141,6 +141,26 @@ describe("the egress consent stamp", () => {
     expect(verdict.reason).toContain(CONSENT_STAMP_ENV);
   });
 
+  test("a set-but-unrecognized grant value is named, not told to set what is already set", () => {
+    // "no egress consent is recorded; set X to grant it" is a false
+    // sentence when the variable IS set: the operator would re-run the
+    // instruction that already failed. The refusal names the value as
+    // the problem and lists what grants.
+    const verdict = stampEgressConsent({
+      site: SITE,
+      payloadClass: PAYLOAD_CLASS,
+      payload: { body: "a page body" },
+      env: { [CONSENT_STAMP_ENV]: "yes" },
+    });
+    expect(verdict.outcome).toBe(CONSENT_STAMP_OUTCOME.withheld);
+    if (verdict.outcome !== CONSENT_STAMP_OUTCOME.withheld) return;
+    expect(verdict.reason).toContain("unrecognized");
+    expect(verdict.reason).toContain(CONSENT_STAMP_ENV);
+    for (const grant of CONSENT_STAMP_GRANT_VALUES) {
+      expect(verdict.reason).toContain(grant);
+    }
+  });
+
   test("the stamped payload is the redacted one: what would leave, not what was meant to", () => {
     const verdict = stampEgressConsent({
       site: SITE,

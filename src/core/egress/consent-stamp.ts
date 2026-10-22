@@ -206,12 +206,19 @@ export function stampEgressConsent<T>(request: ConsentStampRequest<T>): ConsentS
     );
   }
 
-  // The grant. Without one there is no consent to record.
+  // The grant. Without one there is no consent to record. The refusal
+  // separates an ABSENT grant from an UNRECOGNIZED one: telling an
+  // operator who set the variable to set it would have them re-run the
+  // instruction that already failed, so a value that is not a granting
+  // value is named as the problem, with the granting spellings beside it.
   if (!consentIsGranted(env)) {
-    return withheld(
-      payloadClass,
-      `no egress consent is recorded; set ${CONSENT_STAMP_ENV} to grant it`,
-    );
+    const rawGrant = env[CONSENT_STAMP_ENV];
+    const cause =
+      rawGrant === undefined || rawGrant === ""
+        ? `no egress consent is recorded; set ${CONSENT_STAMP_ENV} to grant it`
+        : `${CONSENT_STAMP_ENV} is set to an unrecognized value; ` +
+          `only ${CONSENT_STAMP_GRANT_VALUES.map((v) => JSON.stringify(v)).join(" or ")} grants consent`;
+    return withheld(payloadClass, cause);
   }
 
   // The redaction. A stamp carries what would ACTUALLY leave, so the
