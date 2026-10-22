@@ -2457,6 +2457,13 @@ model. The
 offline `local` embedder has no input window, so the key is refused with
 `INVALID_INPUT` when `embedding_provider` is `local`.
 
+`o2b search status --json` carries `held_chunks` - `{ total, items }`, each
+item `{ path, chunk_index, estimated_tokens, window_tokens, reason }`, the
+list position-ordered and capped at 20 with `total` naming the whole - only
+while the index holds chunks under the ACTIVE embedding configuration; it is
+absent when nothing is held, and records whose (model, window, signature)
+key a config change released are not reported.
+
 `embedding_extra_body` (`OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY`, since
 v1.73.0) sends operator-declared fields with every embedding request to an
 OpenAI-compatible endpoint, for a serving stack that needs a field the
