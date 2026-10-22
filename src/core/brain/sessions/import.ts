@@ -499,8 +499,12 @@ export async function importSession(
         try {
           stampPromptDerivedLine(res.path);
         } catch (err) {
+          // The row names `res.path` - the signal page the failure is
+          // about - never `absPath`, which is the transcript this import
+          // only read. An operator following the row must land on the
+          // page that went unstamped.
           errors.push({
-            path: absPath,
+            path: res.path,
             message: `content-class stamp failed: ${(err as Error).message ?? String(err)}`,
           });
         }
