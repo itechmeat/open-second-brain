@@ -65,11 +65,8 @@ import {
 } from "./integrity/degradation.ts";
 import { vaultRelative } from "./path-safety.ts";
 import { type TransportReach } from "./graph/transport-reach.ts";
-import {
-  REMOTE_DENY_VISIBILITY_TOKEN,
-  isRemotelyReadable,
-  pageVisibility,
-} from "./graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "./graph/privacy-markers.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN, isRemotelyReadable } from "./graph/visibility.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 /**
@@ -677,6 +674,13 @@ const UNMEASURABLE_PAGE_VISIBILITY: ReadonlyArray<string> = Object.freeze([
  * showing you". A vault that never wrote the token is byte-identical at
  * both reaches.
  *
+ * The reservation is read through {@link remoteDenyVisibilityTokens}, so
+ * an informal privacy marker (`access: private`, `confidentiality:
+ * secret`, `sensitivity: confidential`) withholds the page exactly as a
+ * `visibility: private` declaration does. The marker is not a
+ * caller-scope token and this walk knows no scopes; it answers the reach
+ * question only.
+ *
  * FAILS CLOSED on a page whose file could not be read, which is the one
  * input the three roots must not disagree about. The parsed map resolves
  * an unreadable file to `{}`, and reading that as "declares nothing"
@@ -698,7 +702,7 @@ export function listVaultPages(vaultDir: string, opts: ListVaultPagesOptions): V
   const pages = walked
     .filter((w) =>
       isRemotelyReadable(
-        w.unreadable ? UNMEASURABLE_PAGE_VISIBILITY : pageVisibility(w.page.metadata),
+        w.unreadable ? UNMEASURABLE_PAGE_VISIBILITY : remoteDenyVisibilityTokens(w.page.metadata),
         opts.reach,
       ),
     )

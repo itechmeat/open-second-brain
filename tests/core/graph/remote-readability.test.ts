@@ -12,7 +12,10 @@
  * natural-language phrase, and not a closed list of them.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   REMOTE_DENY_VISIBILITY_TOKEN,
@@ -26,6 +29,8 @@ import {
   TRANSPORT_REACHES,
   isTransportReach,
 } from "../../../src/core/graph/transport-reach.ts";
+import { isPathReadableAtReach } from "../../../src/core/search/result-filters.ts";
+import { listVaultPages } from "../../../src/core/vault.ts";
 
 /** A token that is NOT the reserved one, for the "unaffected" arm. */
 const ORDINARY_TOKEN = "team";
@@ -110,5 +115,83 @@ describe("the predicate is independent of the caller's requested scope", () => {
     expect(isRemotelyReadable(tags, TRANSPORT_REACH.remote)).toBe(true);
     expect(isVisible(tags, normalizeVisibilityScope([]))).toBe(false);
     expect(isVisible(tags, normalizeVisibilityScope([ORDINARY_TOKEN]))).toBe(true);
+  });
+});
+
+// --- The informal marker at the two path roots -------------------------------
+//
+// `access: private` and its siblings are not visibility tokens (see
+// graph/privacy-markers.ts): no caller scope can name them, and they never
+// enter `pageVisibility`. What they do is reserve the page against a remote
+// read, at the same two roots that enforce the reserved token - the by-path
+// verdict (`isPathReadableAtReach`, root A/C) and the vault walk
+// (`listVaultPages`, root B).
+
+describe("an informal privacy marker at the read roots", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "remote-readability-"));
+    writeFileSync(join(vault, "open.md"), "---\ntitle: Open\n---\n\nordinary body");
+    writeFileSync(
+      join(vault, "access.md"),
+      "---\ntitle: Access\ntags: [imported]\naccess: private\n---\n\nmarked body",
+    );
+    writeFileSync(
+      join(vault, "confidentiality.md"),
+      "---\ntitle: Confidentiality\nconfidentiality: [Secret]\n---\n\nmarked body",
+    );
+    writeFileSync(
+      join(vault, "sensitivity.md"),
+      "---\ntitle: Sensitivity\nsensitivity: confidential\nvisibility: [team]\n---\n\nmarked body",
+    );
+  });
+  afterEach(() => rmSync(vault, { recursive: true, force: true }));
+
+  const readable = (rel: string, reach: (typeof TRANSPORT_REACH)[keyof typeof TRANSPORT_REACH]) =>
+    isPathReadableAtReach(vault, rel, reach, new Map());
+
+  test("a marker-only page is withheld by path at remote reach", () => {
+    expect(readable("access.md", TRANSPORT_REACH.remote)).toBe(false);
+    expect(readable("confidentiality.md", TRANSPORT_REACH.remote)).toBe(false);
+  });
+
+  test("a marker-only page stays readable by path at local reach", () => {
+    // Local reach is byte-identical to before the marker rule: the
+    // operator can open the file directly anyway.
+    for (const rel of ["open.md", "access.md", "confidentiality.md", "sensitivity.md"]) {
+      expect(readable(rel, TRANSPORT_REACH.local)).toBe(true);
+    }
+  });
+
+  test("a marker beside a caller-liftable token is still remote-denied", () => {
+    // `visibility: [team]` would be readable at remote reach on its own;
+    // the marker dominates, exactly as the reserved token does.
+    expect(readable("sensitivity.md", TRANSPORT_REACH.remote)).toBe(false);
+  });
+
+  test("an unmarked non-reserved page keeps today's verdict at both reaches", () => {
+    expect(readable("open.md", TRANSPORT_REACH.remote)).toBe(true);
+    expect(readable("open.md", TRANSPORT_REACH.local)).toBe(true);
+  });
+
+  test("the indexed tokens are honoured beside a marker in the file", () => {
+    // Either measurement reserving the page withholds it; the index
+    // decides for bytes captured while reserved.
+    expect(
+      isPathReadableAtReach(vault, "open.md", TRANSPORT_REACH.remote, new Map(), [
+        REMOTE_DENY_VISIBILITY_TOKEN,
+      ]),
+    ).toBe(false);
+  });
+
+  test("listVaultPages withholds every marker page at remote reach", () => {
+    const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
+    expect(titles.toSorted()).toEqual(["Open"]);
+  });
+
+  test("listVaultPages keeps every page at local reach, marker or not", () => {
+    const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
+    expect(titles.toSorted()).toEqual(["Access", "Confidentiality", "Open", "Sensitivity"]);
   });
 });

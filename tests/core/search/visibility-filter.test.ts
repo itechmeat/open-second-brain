@@ -234,3 +234,109 @@ describe("visibility scoping in search", () => {
     expect(out.results.map((r) => r.path).toSorted()).toEqual(["a.md", "b.md"]);
   });
 });
+
+// --- Informal privacy markers (write-honesty, F1) ----------------------------
+//
+// A page saying `access: private` used to resolve to default visibility and
+// be served to a remote caller. The read roots now union the reserved token
+// into the measured tokens, and the indexer stamps that union into the
+// column, so the snippet is withheld even after the file changes.
+
+describe("informal privacy markers in search", () => {
+  let vault: string;
+  let dbPath: string;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    ({ vault, dbPath, cleanup } = createTempVault("privacy-markers"));
+  });
+  afterEach(() => cleanup());
+
+  test("a marker-only page is remote-denied and locally readable", async () => {
+    writeMd(vault, "open.md", "# Open\n\nlattice widget open");
+    writeMd(vault, "access.md", "---\naccess: private\n---\n# Access\n\nlattice widget marked");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const remote = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    expect(remote.results.map((r) => r.path).toSorted()).toEqual(["open.md"]);
+
+    const local = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(local.results.map((r) => r.path).toSorted()).toEqual(["access.md", "open.md"]);
+  });
+
+  test("asking for the reserved scope does not lift an informal marker", async () => {
+    writeMd(vault, "open.md", "# Open\n\nlattice widget open");
+    writeMd(
+      vault,
+      "confidential.md",
+      "---\nconfidentiality: Secret\n---\n# Confidential\n\nlattice widget marked",
+    );
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const asked = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      visibility: [REMOTE_DENY_VISIBILITY_TOKEN],
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    expect(asked.results.map((r) => r.path).toSorted()).toEqual(["open.md"]);
+  });
+
+  test("a marker beside visibility: team is still remote-denied", async () => {
+    writeMd(vault, "open.md", "# Open\n\nlattice widget open");
+    writeMd(
+      vault,
+      "team.md",
+      "---\nsensitivity: confidential\nvisibility: [team]\n---\n# Team\n\nlattice widget marked",
+    );
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const remote = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    expect(remote.results.map((r) => r.path).toSorted()).toEqual(["open.md"]);
+  });
+
+  test("the indexed union keeps the snippet reserved after the file is rewritten", async () => {
+    // The page was reserved when its bytes were captured. A later rewrite
+    // that drops the marker must not make the indexed snippet readable.
+    writeMd(vault, "marked.md", "---\naccess: private\n---\n\nlattice widget captured");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    writeMd(vault, "marked.md", "# Rewritten\n\nlattice widget captured");
+    const remote = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      transportReach: TRANSPORT_REACH.remote,
+    });
+    expect(remote.results.map((r) => r.path)).toEqual([]);
+  });
+
+  test("a local-reach corpus without markers is byte-identical in ranking", async () => {
+    // The control for the whole feature: the marker rule adds no row, no
+    // score and no order on vaults that never wrote a marker key.
+    writeMd(vault, "a.md", "# A\n\nlattice widget alpha");
+    writeMd(vault, "b.md", "# B\n\nlattice widget beta");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    for (const reach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote] as const) {
+      const out = await search(cfg, { query: "lattice widget", limit: 10, transportReach: reach });
+      expect(out.results.map((r) => r.path).toSorted()).toEqual(["a.md", "b.md"]);
+    }
+  });
+});

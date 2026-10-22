@@ -128,7 +128,8 @@ import type {
   VisibilityHonestyFinding,
 } from "./types.ts";
 import type { ValidityWindow } from "./validity.ts";
-import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { closeDatabase } from "../sqlite-close.ts";
 import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 
@@ -600,7 +601,15 @@ async function indexIntoRun(
           // defect: `seen.add` runs BEFORE the content is read, so the
           // deletion sweep would not purge a skipped page's stale rows and
           // the page would keep whatever chunks it already had.
-          visibility: pageVisibility(frontmatter),
+          //
+          // The measurement is the UNION of the declared `visibility:`
+          // tokens and any informal privacy marker's reservation
+          // (`graph/privacy-markers.ts`), because the column is what a read
+          // root consults for bytes already captured: stamping the
+          // declaration alone would let a page reserved by
+          // `access: private` serve its snippet remotely after the file
+          // changed.
+          visibility: remoteDenyVisibilityTokens(frontmatter),
         });
         // Framework-kind files feed the tier-guard post-pass: keep the
         // parsed frontmatter of this run's changed docs that declare a

@@ -19,6 +19,7 @@ import {
   isVisible,
   pageVisibility,
 } from "../graph/visibility.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
 import { scopeAxisReachable, scopeFromFrontmatter, type CompositeScope } from "../scope-key.ts";
@@ -360,6 +361,14 @@ export function applyVisibilityScope(
  * pass this check - the file said "public" - and a remote search served
  * the private body. Omitted by surfaces that serve the file itself.
  *
+ * The file's verdict comes from {@link remoteDenyVisibilityTokens}, not
+ * from `pageVisibility` alone: a page that states its reservation with an
+ * informal marker (`access: private`, `confidentiality: secret`,
+ * `sensitivity: confidential`) is remote-denied here exactly as one that
+ * spells `visibility: private`. The marker adds no caller-scope token -
+ * {@link applyVisibilityScope} still reads `pageVisibility` - so the
+ * caller-liftable vocabulary is unchanged.
+ *
  * A path that resolves OUTSIDE the vault answers `false` at every reach,
  * before any read: it names no page anyone could be shown, and some
  * callers hand this function a path the caller of a tool chose, which
@@ -390,7 +399,7 @@ export function isPathReadableAtReach(
     return false;
   }
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
-  const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
+  const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : remoteDenyVisibilityTokens(entry.meta);
   return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
 }
 
