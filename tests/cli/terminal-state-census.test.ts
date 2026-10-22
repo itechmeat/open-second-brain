@@ -168,6 +168,15 @@ const CLASSIFIED_BY_MODULE_WALK: Readonly<Record<string, StateNote>> = Object.fr
       "configuration files this tool never writes, so an empty landscape changes by editing " +
       "another runtime's config and no `o2b` command is its exit.",
   },
+  "o2b brain privacy-marker-restamp": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through `brainVerbContext` in `brain/helpers.ts` on an unresolvable vault, " +
+      "and the apply arm refuses again on a vault-identity mismatch ahead of the first " +
+      "byte. Its EMPTY result names no exit by design: the dry-run default is the answer " +
+      "surface, and zero candidates means the tightened posture already holds - an " +
+      "answer, not a degraded state.",
+  },
   "o2b brain semantics-backfill": {
     cls: STATE_CLASS.refusal,
     reason:
