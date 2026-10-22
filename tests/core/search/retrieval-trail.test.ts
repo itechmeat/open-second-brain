@@ -80,6 +80,21 @@ test("the rerank liveness code is kebab-case and its sentence names no provider"
   expect(sentence).not.toMatch(RERANK_VENDOR_NAMES);
 });
 
+test("the derived person ambiguity code narrows and its detail keys carry the form", () => {
+  expect(RETRIEVAL_DEGRADATION.personDerivedAmbiguity).toBe("person-derived-ambiguity");
+  expect(isRetrievalDegradationCode("person-derived-ambiguity")).toBe(true);
+  const sentence = describeRetrievalDegradation(RETRIEVAL_DEGRADATION.personDerivedAmbiguity);
+  expect(sentence.length).toBeGreaterThan(0);
+  // The detail maps the ambiguous form (the key - a name form is not an
+  // identifier) to the competing person ids dot-joined (the value - ids
+  // never carry a dot, so the value stays an identifier under the rule).
+  const ids = ["ent-people-richard-smith", "ent-people-robert-smith"];
+  const detail = { "r smith": ids.join(".") };
+  for (const value of Object.values(detail)) {
+    expect(value).toMatch(RETRIEVAL_DETAIL_IDENTIFIER);
+  }
+});
+
 test("the guard rejects a near miss", () => {
   expect(isRetrievalDegradationCode(RETRIEVAL_DEGRADATION.hybridDegraded)).toBe(true);
   expect(isRetrievalDegradationCode("hybrid_degraded")).toBe(false);

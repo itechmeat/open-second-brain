@@ -14,9 +14,11 @@ import { join } from "node:path";
 import { indexVault, search } from "../../../src/core/search/index.ts";
 import { makeConfig, createTempVault } from "../../helpers/search-fixtures.ts";
 import {
+  DERIVED_PERSON_AMBIGUITY_CODE,
   expandQueryEntities,
   PERSON_NICKNAMES_ARTIFACT_REL,
 } from "../../../src/core/search/entity-alias.ts";
+import { RETRIEVAL_DETAIL_IDENTIFIER } from "../../../src/core/search/retrieval-trail.ts";
 import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 
 let tmp: ReturnType<typeof createTempVault>;
@@ -55,6 +57,15 @@ function seedPerson(name = "Robert Smith"): string {
 function writeNicknames(entries: Record<string, string[]>): void {
   mkdirSync(join(tmp.vault, "Brain", "entities"), { recursive: true });
   writeFileSync(join(tmp.vault, PERSON_NICKNAMES_ARTIFACT_REL), JSON.stringify(entries));
+}
+
+/** One note the keyword lane can match, so the pipeline reaches ranking. */
+function writeMatchableNote(): void {
+  mkdirSync(join(tmp.vault, "notes"), { recursive: true });
+  writeFileSync(
+    join(tmp.vault, "notes", "a.md"),
+    "---\ntitle: A\n---\n\nR Smith planned the payment flow for the vault project this week.\n",
+  );
 }
 
 describe("expandQueryEntities", () => {
@@ -326,5 +337,46 @@ describe("alias-aware search boost", () => {
     const out = await search(config, { query: "vector Vector Store", limit: 5 });
     expect(out.results.length).toBeGreaterThan(0);
     expect(out.results[0]!.reasons.some((x) => x.includes("ent-"))).toBe(false);
+  });
+});
+
+describe("derived-ambiguity trail reporting", () => {
+  test("an ambiguous derived query names the form and the competing ids on the trail", async () => {
+    const richard = seedPerson("Richard Smith");
+    const robert = seedPerson("Robert Smith");
+    writeMatchableNote();
+    const config = makeConfig({ vault: tmp.vault, dbPath: tmp.dbPath, maxHops: 0 });
+    await indexVault(config, {});
+
+    // "R Smith" is derived by BOTH persons and declared by neither, so
+    // the expansion adds nothing - and the trail says so instead of the
+    // answer reading as a quiet miss.
+    const out = await search(config, { query: "R Smith payment", limit: 10 });
+    const entries = (out.retrievalTrail?.degraded ?? []).filter(
+      (d) => d.code === DERIVED_PERSON_AMBIGUITY_CODE,
+    );
+    expect(entries).toHaveLength(1);
+    const ids = [richard, robert].toSorted().join(".");
+    expect(entries[0]!.detail).toEqual({ "r smith": ids });
+    // The detail values stay identifiers, under the trail's own rule.
+    for (const value of Object.values(entries[0]!.detail ?? {})) {
+      expect(value).toMatch(RETRIEVAL_DETAIL_IDENTIFIER);
+    }
+  });
+
+  test("an unambiguous query leaves no derived-ambiguity entry on the trail", async () => {
+    seedPerson("Richard Smith");
+    seedPerson("Robert Smith");
+    writeMatchableNote();
+    const config = makeConfig({ vault: tmp.vault, dbPath: tmp.dbPath, maxHops: 0 });
+    await indexVault(config, {});
+
+    // "Robert Smith" is a declared form of exactly one person: it expands,
+    // and no ambiguity is reported.
+    const out = await search(config, { query: "Robert Smith payment", limit: 10 });
+    const entries = (out.retrievalTrail?.degraded ?? []).filter(
+      (d) => d.code === DERIVED_PERSON_AMBIGUITY_CODE,
+    );
+    expect(entries).toEqual([]);
   });
 });

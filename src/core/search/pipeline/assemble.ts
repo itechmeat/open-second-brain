@@ -480,8 +480,30 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       effectiveCap = wideCap;
     }
   }
+  noteDerivedPersonAmbiguities(input.degraded, input.signals);
   noteAssemblyNarrowings(input.degraded, assembled, effectiveCap, poolCap);
   return assembled.visible;
+}
+
+/**
+ * Name the query person forms that reached several people ONLY through
+ * derivation, and therefore expanded nothing - the trail entry is what
+ * keeps "reported rather than guessed" from reading as silence. One entry
+ * per ambiguous form, recorded once per answer beside the assembly
+ * narrowings: the detail maps the form to its competing person ids,
+ * dot-joined. Entity ids never carry a dot, so the join is exact, and the
+ * form rides the detail KEY because a name form is not an identifier and
+ * the detail value lane carries identifiers and integers only.
+ */
+function noteDerivedPersonAmbiguities(
+  sink: RetrievalDegradationSink,
+  signals: CandidateSignals,
+): void {
+  for (const ambiguity of signals.derivedAmbiguities ?? []) {
+    noteDegradation(sink, RETRIEVAL_DEGRADATION.personDerivedAmbiguity, {
+      [ambiguity.form]: ambiguity.ids.join("."),
+    });
+  }
 }
 
 /**
