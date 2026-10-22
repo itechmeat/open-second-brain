@@ -7,6 +7,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { relateEntities, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
+import { PERSON_NICKNAMES_ARTIFACT_REL } from "../../../src/core/brain/entities/person-nicknames.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 
 let vault: string;
@@ -29,6 +30,22 @@ afterEach(() => {
 
 function entityFile(name: string, lines: string[]): void {
   atomicWriteFileSync(join(brainDirs(vault).entities, "people", name), lines.join("\n") + "\n");
+}
+
+/** Write the operator nickname map the collision scan resolves. */
+function writeNicknames(entries: Record<string, string[]>): void {
+  atomicWriteFileSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), JSON.stringify(entries));
+}
+
+function person(name: string, opts: { aliases?: string[]; untrusted?: boolean } = {}): string {
+  return upsertEntity(vault, {
+    category: "people",
+    name,
+    ...(opts.aliases !== undefined ? { aliases: opts.aliases } : {}),
+    agent: "a",
+    now: NOW,
+    ...(opts.untrusted === true ? { untrustedOrigin: true } : {}),
+  }).entity.id;
 }
 
 describe("doctor entity lints", () => {
@@ -124,5 +141,85 @@ describe("doctor entity lints", () => {
     const broken = runDoctor(vault).warnings.filter((i) => i.code === "broken-entity-relation");
     expect(broken).toHaveLength(1);
     expect(broken[0]!.message).toContain("ent-systems-ghost");
+  });
+});
+
+describe("doctor derived-variant collisions (write-honesty-egress-consent F3/C5)", () => {
+  function aliasCandidateWarnings() {
+    return runDoctor(vault).warnings.filter((i) => i.code === "entity-alias-candidate");
+  }
+
+  test("a nickname derived from one person colliding with another person's name surfaces one warning", () => {
+    const lovelace = person("Ada Lovelace");
+    const ada = person("Ada");
+    writeNicknames({ ada: ["Ada Lovelace"] });
+
+    const warnings = aliasCandidateWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.severity).toBe("warning");
+    // The existing alias-merge candidate shape, naming both ids.
+    expect(warnings[0]!.message).toContain("possible alias-merge:");
+    expect(warnings[0]!.message).toContain(lovelace);
+    expect(warnings[0]!.message).toContain(ada);
+    expect(warnings[0]!.message).toContain("[person-variant 1]");
+    expect(warnings[0]!.message).toContain("never auto-merged");
+  });
+
+  test("a collision through a declared alias counts the same", () => {
+    const lovelace = person("Ada Lovelace");
+    const prime = person("Adeline Prime", { aliases: ["Ada"] });
+    writeNicknames({ ada: ["Ada Lovelace"] });
+
+    const warnings = aliasCandidateWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.message).toContain(lovelace);
+    expect(warnings[0]!.message).toContain(prime);
+  });
+
+  test("several colliding variants of one pair still produce exactly one warning", () => {
+    // Mutual: each record's declared name is the other's reversed
+    // word-order variant, so both directions collide - the pair is
+    // still one finding, not two.
+    person("Grace Hopper");
+    person("Hopper Grace");
+
+    expect(aliasCandidateWarnings()).toHaveLength(1);
+  });
+
+  test("a variant shared as a variant is not a collision - only declared forms claim", () => {
+    person("Robert Smith");
+    person("Robert Jones");
+    writeNicknames({ bob: ["Robert Smith", "Robert Jones"] });
+
+    expect(aliasCandidateWarnings()).toEqual([]);
+  });
+
+  test("non-person records never collide on person variants", () => {
+    upsertEntity(vault, { category: "org", name: "Ada Lovelace Ltd", agent: "a", now: NOW });
+    person("Ada Lovelace");
+    writeNicknames({ "ada lovelace ltd": ["Ada Lovelace"] });
+
+    expect(aliasCandidateWarnings()).toEqual([]);
+  });
+
+  test("quarantined records are outside the collision scan", () => {
+    person("Ada Lovelace");
+    person("Ada", { untrusted: true });
+    writeNicknames({ ada: ["Ada Lovelace"] });
+
+    expect(aliasCandidateWarnings()).toEqual([]);
+  });
+
+  test("a malformed nickname file degrades the scan without losing the rest of the check", () => {
+    person("Ada Lovelace");
+    person("Ada");
+    atomicWriteFileSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), "{ not json");
+
+    const out = runDoctor(vault);
+    expect(out.warnings.filter((i) => i.code === "entity-alias-candidate")).toEqual([]);
+    // The other entity lints of the same check still ran: the registry
+    // is clean apart from the two distinct persons, so nothing else
+    // fires - the point is that the pass did not swallow the check.
+    expect(out.warnings.filter((i) => i.code === "duplicate-entity")).toEqual([]);
   });
 });

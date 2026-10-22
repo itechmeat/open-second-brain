@@ -120,11 +120,6 @@ const SCOPED_RE = /entityStatusInScope|ENTITY_STATUS_SCOPE|vaultPageInStatusScop
  * would be wrong, never because scoping it was inconvenient.
  */
 const UNSCOPED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
-  "src/core/brain/doctor/entity-checks.ts":
-    "registry-integrity surface. It reports duplicate identities and broken " +
-    "relation edges over what is STORED; scoping it would stop the doctor " +
-    "reporting on exactly the records most likely to be malformed - the ones " +
-    "a read path is already hiding.",
   "src/core/brain/entities/label-hygiene.ts":
     "runs the label validator over every stored node (its own docblock says " +
     "'any status'), and the prune pass must see every survivor or it would " +
