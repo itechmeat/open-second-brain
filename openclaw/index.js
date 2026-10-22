@@ -5844,8 +5844,11 @@ function declaredValues(raw) {
     return [];
   return raw.filter((v) => typeof v === "string");
 }
+var PRIVACY_MARKER_KEY_TOKENS = Object.freeze(new Set(PRIVACY_MARKER_KEYS.map((key) => normToken(key))));
 function hasPrivacyDenyMarker(meta) {
-  for (const key of PRIVACY_MARKER_KEYS) {
+  for (const key of Object.keys(meta)) {
+    if (!PRIVACY_MARKER_KEY_TOKENS.has(normToken(key)))
+      continue;
     for (const value of declaredValues(meta[key])) {
       if (PRIVACY_DENY_MARKER_VALUES.includes(normToken(value)))
         return true;
