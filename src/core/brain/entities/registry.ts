@@ -40,6 +40,13 @@ import {
 } from "./canonical.ts";
 import { resolveEntityLexicon } from "./lexicon.ts";
 import { resolveEntityLabelDenylist } from "./label-hygiene.ts";
+import { resolvePersonNicknameMap } from "./person-nicknames.ts";
+import {
+  derivePersonNameVariants,
+  EMPTY_PERSON_NICKNAME_MAP,
+  isPersonCategory,
+  type PersonNicknameMap,
+} from "./person-variants.ts";
 import {
   buildEntityIndex,
   conflictClaimants,
@@ -206,9 +213,65 @@ export class EntityAmbiguityError extends Error {
 }
 
 /**
- * Resolve a ref at the CANONICAL status scope: canonical name first, then
- * alias. The index's lookup maps are built at the same scope, so the two
- * branches below agree by construction rather than by coincidence.
+ * Every derived person form `entity` answers to: the variants the
+ * derivation kernel emits for each of its declared forms (name and
+ * aliases), as a set. Empty by construction for non-person categories,
+ * because the kernel emits nothing for them.
+ */
+function derivedPersonForms(
+  entity: BrainEntity,
+  nicknames: PersonNicknameMap,
+): ReadonlySet<string> {
+  const forms = new Set<string>();
+  for (const declared of [entity.name, ...entity.aliases]) {
+    for (const variant of derivePersonNameVariants(normalizeEntityName(declared), nicknames)) {
+      forms.add(variant);
+    }
+  }
+  return forms;
+}
+
+/**
+ * The DERIVED lane of canonical read resolution: the person variants
+ * (write-honesty-egress-consent, F3) - first-initial-plus-surname,
+ * reversed word order, operator nicknames - consulted only after the
+ * exact name/alias lanes above have missed. A unique derived match
+ * resolves; more than one is the same ambiguity the exact lane reports,
+ * naming both ids. Like the exact lane it resolves canonical-scope
+ * records only, so a quarantined person's variants resolve nothing.
+ */
+function resolveDerived(
+  index: EntityIndex,
+  ref: EntityRef,
+  nicknames: PersonNicknameMap,
+): BrainEntity | null {
+  const query = normalizeEntityName(ref.query);
+  if (!query) return null;
+  const category = ref.category !== undefined ? validateEntityCategory(ref.category) : undefined;
+  const matches = index.entities.filter(
+    (e) =>
+      entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
+      isPersonCategory(e.category) &&
+      (category === undefined || e.category === category) &&
+      derivedPersonForms(e, nicknames).has(query),
+  );
+  if (matches.length > 1) throw new EntityAmbiguityError(ref.query, matches);
+  return matches[0] ?? null;
+}
+
+/**
+ * Resolve a ref at the CANONICAL status scope for reading: canonical
+ * name first, then alias - and only after BOTH miss, the derived
+ * person-variant lane ({@link resolveDerived}). The index's lookup maps
+ * are built at the same canonical scope, so the exact branches agree by
+ * construction rather than by coincidence.
+ *
+ * The WRITE path deliberately does not come through here-then-derived
+ * as one step: {@link resolveWriteTarget} calls {@link resolveActive}
+ * alone, so a write resolves on declared forms only. A record is
+ * updated or claimed by the names it chose, never by a form derivation
+ * invented for it - and a quarantined namesake's variants (which the
+ * canonical scope never holds anyway) stay unreachable in both lanes.
  */
 function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
   const query = normalizeEntityName(ref.query);
@@ -291,8 +354,24 @@ function resolveWriteTarget(
   return untrustedOrigin ? resolveQuarantined(index, ref) : resolveActive(index, ref);
 }
 
+/**
+ * Read resolution: the exact lanes, then - only on a full miss - the
+ * derived person-variant lane. An unusable nickname file is an
+ * operator-data fault, not a read outage, so read resolution degrades
+ * to exact-only (the posture `PersonNicknameConfigError`'s docblock
+ * pins for every consumer).
+ */
 export function getEntity(vault: string, ref: EntityRef): BrainEntity | null {
-  return resolveActive(buildEntityIndex(vault), ref);
+  const index = buildEntityIndex(vault);
+  const exact = resolveActive(index, ref);
+  if (exact !== null) return exact;
+  let nicknames = EMPTY_PERSON_NICKNAME_MAP;
+  try {
+    nicknames = resolvePersonNicknameMap(vault);
+  } catch {
+    return null;
+  }
+  return resolveDerived(index, ref, nicknames);
 }
 
 /**

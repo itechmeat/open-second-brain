@@ -17,21 +17,30 @@
  * can tell a declared-form match from a derived-variant match; the
  * derivation kernel is the leaf module `person-variants.ts`, and the
  * nickname data is operator-supplied only (`person-nicknames.json` in
- * the vault, resolved below - never a shipped word list).
+ * the vault, resolved by `resolvePersonNicknameMap` in
+ * `person-nicknames.ts` - never a shipped word list).
  */
-
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { buildEntityIndex } from "../brain/entities/index-builder.ts";
 import { normalizeEntityName } from "../brain/entities/canonical.ts";
 import {
+  PERSON_NICKNAMES_ARTIFACT_REL,
+  PersonNicknameConfigError,
+  resolvePersonNicknameMap,
+} from "../brain/entities/person-nicknames.ts";
+import {
   derivePersonNameVariants,
-  EMPTY_PERSON_NICKNAME_MAP,
   isPersonCategory,
   type PersonNicknameMap,
 } from "../brain/entities/person-variants.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../brain/entities/status-scope.ts";
+
+// The nickname reader lives on the brain side (`person-nicknames.ts`),
+// beside the kernel it feeds: the registry's derived lookup lane and the
+// doctor's collision scan consume it from there, and the brain must not
+// import from `src/core/search/`. The re-export keeps this module's
+// public surface byte-identical to C2.
+export { PERSON_NICKNAMES_ARTIFACT_REL, PersonNicknameConfigError, resolvePersonNicknameMap };
 
 export interface QueryEntityExpansion {
   /** Original query entities plus every form added by the registry. */
@@ -48,101 +57,6 @@ export interface QueryEntityExpansion {
   readonly derived: ReadonlyArray<string>;
   /** Ids of the canonical entities whose forms were added, sorted. */
   readonly sourceIds: ReadonlyArray<string>;
-}
-
-// ----- Operator nickname data -------------------------------------------------
-
-/**
- * Vault-relative home of the operator-supplied nickname map: a JSON
- * object keyed by nickname, whose values are the full person names the
- * nickname can stand for. Same `Brain/entities/` neighbourhood as the
- * derived lexicon artifact, but this file is OPERATOR data, never
- * machine-derived, so there is no schema-version/freshness envelope -
- * the whole document is the map.
- */
-export const PERSON_NICKNAMES_ARTIFACT_REL = join("Brain", "entities", "person-nicknames.json");
-
-/**
- * Raised when `person-nicknames.json` exists but cannot be used. A
- * MISSING file is not an error - it means the vault declares no
- * nickname data - but a present file that fails to parse or violates
- * the shape is an operator-data fault, and it surfaces by name; every
- * consumer decides its own posture toward it (search expansion degrades
- * to the identity expansion, read resolution degrades to exact-only).
- */
-export class PersonNicknameConfigError extends Error {
-  readonly path: string;
-  readonly detail: string;
-  constructor(path: string, detail: string) {
-    super(`unreadable person nickname config at ${path}: ${detail}`);
-    this.name = "PersonNicknameConfigError";
-    this.path = path;
-    this.detail = detail;
-  }
-}
-
-/** True for the ENOENT family: the artifact is simply not there. */
-function isMissingFileError(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: string }).code === "ENOENT";
-}
-
-/**
- * Fold one parsed JSON document into the normalized nickname map the
- * derivation kernel consumes: keys and values are run through
- * `normalizeEntityName` (the comparison is post-normalization, exactly
- * like the label denylist), empty normalized forms are dropped, and
- * value lists are deduplicated. Malformed shapes surface through
- * {@link PersonNicknameConfigError}.
- */
-function parsePersonNicknameDocument(text: string, path: string): PersonNicknameMap {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (err) {
-    throw new PersonNicknameConfigError(path, `not parseable JSON (${String(err)})`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new PersonNicknameConfigError(path, "expected a JSON object mapping nickname to names");
-  }
-  const out = new Map<string, string[]>();
-  for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
-    const key = normalizeEntityName(rawKey);
-    if (!key) continue;
-    if (!Array.isArray(rawValue)) {
-      throw new PersonNicknameConfigError(path, `value of '${rawKey}' must be an array of names`);
-    }
-    const values: string[] = [];
-    for (const entry of rawValue) {
-      if (typeof entry !== "string") {
-        throw new PersonNicknameConfigError(path, `value of '${rawKey}' must be an array of names`);
-      }
-      const normalized = normalizeEntityName(entry);
-      if (normalized && !values.includes(normalized)) values.push(normalized);
-    }
-    if (values.length > 0) out.set(key, values);
-  }
-  return Object.freeze(
-    new Map([...out].map(([key, values]) => [key, Object.freeze(values)] as const)),
-  );
-}
-
-/**
- * Resolve the operator nickname map for `vault`. A missing file yields
- * the empty map (no nickname data declared); a present but unreadable
- * or malformed one throws {@link PersonNicknameConfigError}, so a
- * caller that must not guess can tell "none declared" from "declared
- * but unusable".
- */
-export function resolvePersonNicknameMap(vault: string): PersonNicknameMap {
-  const path = join(vault, PERSON_NICKNAMES_ARTIFACT_REL);
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (err) {
-    if (isMissingFileError(err)) return EMPTY_PERSON_NICKNAME_MAP;
-    throw new PersonNicknameConfigError(path, `not readable (${String(err)})`);
-  }
-  return parsePersonNicknameDocument(text, path);
 }
 
 /**
