@@ -22,6 +22,10 @@
  *     that parse, so an edit that landed between the scan and the write
  *     is honoured, and a page whose marker vanished is skipped (it stays
  *     in the reported candidate list, which is what the scan found).
+ *     The re-parse is the notice-carrying one: a page whose frontmatter
+ *     carries a line the scanner drops would lose that line in a
+ *     rewrite, so the apply pass refuses it by name (reported in
+ *     `skipped`, with the reason) and leaves its bytes untouched.
  *   - IDEMPOTENT. A re-run over a restamped vault reports no candidates
  *     and writes nothing, byte for byte.
  *   - WRITE-GUARDED AT THE ENTRY POINT, ONLY WHEN THE CALL WILL WRITE.
@@ -40,7 +44,7 @@
 
 import { join } from "node:path";
 
-import { listVaultPages, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { listVaultPages, parseFrontmatterWithNotices, writeFrontmatterAtomic } from "../vault.ts";
 import { vaultRelative } from "../path-safety.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../graph/visibility.ts";
@@ -67,6 +71,23 @@ export interface PrivacyMarkerRestampResult {
   readonly candidates: ReadonlyArray<PrivacyMarkerRestampCandidate>;
   /** Files actually rewritten (0 on a dry run). */
   readonly updated: number;
+  /**
+   * Candidates the apply pass REFUSED to rewrite, by name, with the
+   * reason. A page whose frontmatter parse reports dropped lines stays
+   * untouched: the line-based scanner cannot round-trip those lines, so
+   * a rewrite would silently drop them and break the no-key-removed
+   * promise. Empty on a dry run; the candidate list still shows what the
+   * scan found.
+   */
+  readonly skipped: ReadonlyArray<PrivacyMarkerRestampSkip>;
+}
+
+/** One page the apply pass refused, and why. */
+export interface PrivacyMarkerRestampSkip {
+  /** Vault-relative path with `/` separators. */
+  readonly path: string;
+  /** Why the page was not rewritten. */
+  readonly reason: string;
 }
 
 export interface PrivacyMarkerRestampOptions {
@@ -161,6 +182,7 @@ export function planPrivacyMarkerRestamp(
   candidates.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   let updated = 0;
+  const skipped: PrivacyMarkerRestampSkip[] = [];
   if (apply) {
     for (const candidate of candidates) {
       const absolute = absolutePath(vault, candidate.path);
@@ -176,7 +198,27 @@ export function planPrivacyMarkerRestamp(
       // it is skipped, while staying in the reported candidate list,
       // which is what the scan found. The already-reserved case skips
       // for the same reason the scan never nominated such a page.
-      const [meta, body] = parseFrontmatter(absolute);
+      //
+      // The re-parse is the NOTICE-CARRYING one, and a notice skips the
+      // page by name: the scanner is line-based, so a line it drops (a
+      // folded block scalar, a stray dash item) cannot round-trip through
+      // the writer - rewriting would silently lose it and break the
+      // no-key-removed promise above. The page keeps its informal marker
+      // (the read roots still deny it) and stays in the candidate list;
+      // the refusal is reported, never silent.
+      const [meta, body, parseNotices] = parseFrontmatterWithNotices(absolute);
+      if (parseNotices.length > 0) {
+        skipped.push(
+          Object.freeze({
+            path: candidate.path,
+            reason:
+              parseNotices.length === 1
+                ? `frontmatter parse dropped 1 line; rewriting would lose it (${parseNotices[0]!.code})`
+                : `frontmatter parse dropped ${parseNotices.length} lines; rewriting would lose them (${parseNotices[0]!.code})`,
+          }),
+        );
+        continue;
+      }
       if (!hasPrivacyDenyMarker(meta)) continue;
       const declared = declaredTokens(meta);
       if (declaresReserved(declared)) continue;
@@ -194,5 +236,6 @@ export function planPrivacyMarkerRestamp(
     scanned,
     candidates: Object.freeze(candidates),
     updated,
+    skipped: Object.freeze(skipped),
   });
 }

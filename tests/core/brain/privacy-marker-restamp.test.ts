@@ -155,25 +155,62 @@ describe("apply unions the reserved token into visibility", () => {
   });
 });
 
+describe("apply refuses pages the scanner cannot round-trip", () => {
+  test("a candidate carrying a dropped frontmatter line is skipped by name and left byte-identical", () => {
+    // The stray dash item (no open key to land in) is a line the
+    // line-based scanner drops with a notice: a rewrite through the
+    // writer would silently lose it, breaking the no-key-removed promise.
+    page("notice.md", "title: Notice\naccess: private\n- a stray dash item with no key");
+    // The fixture is honest: the scanner really does report the line.
+    const [, , notices] = vaultModule.parseFrontmatterWithNotices(join(vault, "notice.md"));
+    expect(notices.length).toBe(1);
+    const before = readFileSync(join(vault, "notice.md"), "utf8");
+    const result = planPrivacyMarkerRestamp(vault, { apply: true });
+    // The scan still nominates the page - the marker is real - but the
+    // apply pass refuses it, names it, and says why.
+    expect(result.candidates.map((c) => c.path)).toContain("notice.md");
+    const skip = result.skipped.find((s) => s.path === "notice.md");
+    expect(skip).toBeDefined();
+    expect(skip!.reason).toContain("dropped");
+    // Every other candidate is stamped; only the notice page is refused.
+    expect(result.updated).toBe(5);
+    expect(result.skipped).toHaveLength(1);
+    // The bytes are untouched: the informal marker still denies remote
+    // reads, and no line was lost to a rewrite.
+    expect(readFileSync(join(vault, "notice.md"), "utf8")).toBe(before);
+  });
+
+  test("a dry run reports no skips and touches nothing", () => {
+    page("notice.md", "title: Notice\naccess: private\n- a stray dash item with no key");
+    const result = planPrivacyMarkerRestamp(vault);
+    expect(result.applied).toBe(false);
+    expect(result.skipped).toEqual([]);
+    expect(result.updated).toBe(0);
+  });
+});
+
 // --- The write reads the page it is about to rewrite ------------------------
 
 /**
  * The scan and the write happen in one call, so the window between them is
- * simulated at the seam the writer itself reads through: the apply loop
- * re-parses each candidate with `parseFrontmatter`, and the mock below
- * lands an operator edit on disk the instant that re-parse first fires.
- * `listVaultPages` (the scan) reads through its own internals, so the
- * interception sits exactly between the scan and the write.
+ * simulated at the seam both passes read through: `parseFrontmatterWithNotices`.
+ * The vault walk parses the page first (the scan), the apply loop re-parses
+ * it second (the write-time recompute), so the mock below lands the
+ * operator edit on disk the instant the page is parsed for the SECOND time -
+ * the scan has seen the old bytes, the apply loop sees the new ones.
  */
 function withEditAtWriteTime(rel: string, nextFrontmatter: string, run: () => void): void {
-  const realParse = vaultModule.parseFrontmatter;
-  let armed = true;
+  const realParse = vaultModule.parseFrontmatterWithNotices;
+  const target = join(vault, rel);
+  let parses = 0;
   mock.module("../../../src/core/vault.ts", () => ({
     ...vaultModule,
-    parseFrontmatter(path: string) {
-      if (armed) {
-        armed = false;
-        writeFileSync(join(vault, rel), `---\n${nextFrontmatter}\n---\n\nbody text\n`);
+    parseFrontmatterWithNotices(path: string) {
+      if (path === target) {
+        parses += 1;
+        if (parses === 2) {
+          writeFileSync(target, `---\n${nextFrontmatter}\n---\n\nbody text\n`);
+        }
       }
       return realParse(path);
     },
