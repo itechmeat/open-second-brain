@@ -27,9 +27,11 @@
  *   - {@link UNDATED_QUANTITY_CODE}, the authored body scanned for a count
  *     or amount with no structural date on the page (t_fb442a24). The
  *     trigger shapes live in `undated-quantity.ts`; this module owns the
- *     escape hatches - `valid_from` in frontmatter, any ISO date in the
- *     body, or a `[Source: <name>, YYYY-MM-DD]` marker - and the finding
- *     quotes the lexeme and its offset, never the line. Advisory only.
+ *     escape hatches - `valid_from` in frontmatter, an ISO date in the
+ *     body's claim-bearing prose, or a `[Source: <name>, YYYY-MM-DD]`
+ *     marker - and the finding quotes the lexeme and its body offset,
+ *     counted after frontmatter removal and named as such, never the
+ *     line. Advisory only.
  *
  * `demote-stale-stable` is deliberately EXCLUDED, not overlooked: its
  * trigger is the page's creation age against the staleness cap, so it can
@@ -116,7 +118,11 @@ import { VALID_FROM_KEY } from "./lifecycle/temporal-replace.ts";
 import { tokenise } from "./similarity.ts";
 import { parseCitations } from "./temporal/citations.ts";
 import type { DoctorSeverity } from "./types.ts";
-import { containsIsoDate, findUndatedQuantities } from "./undated-quantity.ts";
+import {
+  containsIsoDate,
+  containsProseIsoDate,
+  findUndatedQuantities,
+} from "./undated-quantity.ts";
 import { WIKILINK_TARGET_RE, isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { ARTIFACT_MAX_BYTES, validateArtifact } from "./write-session/validate.ts";
 
@@ -575,11 +581,17 @@ function hasReadableArtifact(vault: string, ctx: LintContext, target: string): b
 /**
  * Whether the page supplies a structural date that places its quantities
  * in time. Three hatches, all structural: a `valid_from` boundary in
- * frontmatter, any ISO date or instant in the body, or a
- * `[Source: <name>, YYYY-MM-DD]` marker. The citation marker always
+ * frontmatter, an ISO date or instant in the body's claim-bearing prose,
+ * or a `[Source: <name>, YYYY-MM-DD]` marker. The citation marker always
  * carries its own ISO date, so the date hatch already covers a well-formed
  * one; it is checked explicitly through the canonical parser so the
  * contract reads as three hatches rather than a coincidence.
+ *
+ * The body hatch reads the same masked view the quantity scanner does
+ * (`containsProseIsoDate`): a date inside a fenced block, an inline code
+ * span, a table row, a URL or a wikilink target is not a claim about the
+ * vault, so it must not quiet the undated quantities around it. The scope
+ * stays page-wide - one prose date anywhere still dates the page.
  */
 function hasDatedQuantityContext(meta: FrontmatterMap, body: string): boolean {
   const declared = meta[VALID_FROM_KEY];
@@ -587,7 +599,7 @@ function hasDatedQuantityContext(meta: FrontmatterMap, body: string): boolean {
   // NAME a date. Any non-empty string ("TBD", "unknown", "soon") places
   // nothing in time, and accepting it let a placeholder quiet the lint.
   if (typeof declared === "string" && containsIsoDate(declared)) return true;
-  if (containsIsoDate(body)) return true;
+  if (containsProseIsoDate(body)) return true;
   return parseCitations(body).markers.length > 0;
 }
 
@@ -595,7 +607,11 @@ function hasDatedQuantityContext(meta: FrontmatterMap, body: string): boolean {
  * The undated-quantity findings for one written page: one warning per
  * lexeme the body states with no date on the page. The lexeme and its
  * offset are the whole evidence - the authored line is not quoted, so a
- * receipt cannot carry prose the caller did not ask it to repeat.
+ * receipt cannot carry prose the caller did not ask it to repeat. The
+ * offset is counted within the post-frontmatter body the scanner sees
+ * (neither a file offset nor an index into the raw write), and the
+ * message names that coordinate system so a reader can locate the
+ * lexeme honestly.
  */
 function undatedQuantityFindings(
   page: string,
@@ -609,7 +625,7 @@ function undatedQuantityFindings(
       UNDATED_QUANTITY_CODE,
       page,
       "body",
-      `quantity ${JSON.stringify(lexeme)} at offset ${offset} carries no date`,
+      `quantity ${JSON.stringify(lexeme)} at body offset ${offset} (after frontmatter) carries no date`,
     ),
   );
 }

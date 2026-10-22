@@ -22,22 +22,33 @@
  *   - a bare thousands-separated count (`12,400`).
  *
  * Everything else is left alone. A number inside an ISO date or instant, a
- * version string (`v1.73.0`), an ordered-list marker, a table row, an
- * inline code span, a fenced block and the frontmatter block are masked
- * before the scan, because a number there is not a claim about the vault.
- * Precision is deliberate: a missed quantity costs one advisory, a
- * hallucinated one teaches the operator to ignore the list.
+ * version string (`v1.73.0`), a URL, a Markdown link destination, a
+ * wikilink target, an ordered-list marker, a table row, an inline code
+ * span, a fenced block and the frontmatter block are masked before the
+ * scan, because a number there is not a claim about the vault. Precision
+ * is deliberate: a missed quantity costs one advisory, a hallucinated one
+ * teaches the operator to ignore the list.
  *
  * Pure and deterministic: the same body yields the same lexemes and
- * offsets. An offset is a UTF-16 code-unit index into the caller's own
- * string.
+ * offsets. An offset is a UTF-16 code-unit index into the string handed
+ * to {@link findUndatedQuantities}. On the write path that string is the
+ * page body after the frontmatter block is stripped and the remainder
+ * trimmed, so an offset is neither a file offset nor an index into the
+ * raw text a write call received; the write-time lint names that
+ * coordinate system in its message.
  */
+
+import { WIKILINK_TARGET_RE } from "./wikilink.ts";
 
 /** One quantity the authored body states without a date. */
 export interface UndatedQuantity {
   /** The matched text exactly as written. */
   readonly lexeme: string;
-  /** UTF-16 code-unit offset of the first character of {@link lexeme}. */
+  /**
+   * UTF-16 code-unit offset of the first character of {@link lexeme},
+   * counted within the string the caller passed in - after frontmatter
+   * removal on the write path, never a file offset.
+   */
   readonly offset: number;
 }
 
@@ -159,6 +170,25 @@ const QUANTITY_UNITS: ReadonlyArray<string> = Object.freeze([
   "%",
 ]);
 
+/**
+ * Units that read as units with no space before them (`359ms`, `512 MB`,
+ * `35%`): every unit of two characters or more, plus the percent sign,
+ * whose glued spelling is the common one.
+ */
+const GLUED_QUANTITY_UNITS: ReadonlyArray<string> = Object.freeze(
+  QUANTITY_UNITS.filter((unit) => unit.length > 1 || unit === "%"),
+);
+
+/**
+ * The single-letter duration and size units (`3 d`, `72 h`). They need
+ * whitespace before them: glued to the number they stop being units, and
+ * a case-blind match with an optional space turned `3D` and `2D` (a
+ * dimension) and `2b` (a plan) into quantities.
+ */
+const SPACED_QUANTITY_UNITS: ReadonlyArray<string> = Object.freeze(
+  QUANTITY_UNITS.filter((unit) => unit.length === 1 && unit !== "%"),
+);
+
 /** ISO currency codes admitted after an amount (`10 USD`). */
 const CURRENCY_CODES: ReadonlyArray<string> = Object.freeze([
   "USD",
@@ -206,29 +236,45 @@ const ISO_INSTANT_RUN =
  * A version-like dotted run: `v1.73.0`, `1.73.0`, `192.168.1.1`. Two or
  * more dots is the structural difference from a decimal (`3.14159`), so an
  * IP address and a semantic version are both excluded without a table.
+ * The leading lookbehind admits no dot before the first digit: in a run
+ * like `1.1.1.1...` every position after a dot would otherwise be a legal
+ * start, each running the whole tail - a quadratic scan of the
+ * synchronous write path.
  */
-const VERSION_RUN = /(?<![0-9A-Za-z_])v?\d+(?:\.\d+){2,}(?![0-9A-Za-z_.])/iu;
+const VERSION_RUN = /(?<![0-9A-Za-z_.])v?\d+(?:\.\d+){2,}(?![0-9A-Za-z_.])/iu;
 
 /** Currency amount led by a symbol, with an optional magnitude suffix. */
 const CURRENCY_SYMBOL_RUN =
   /(?<![0-9A-Za-z])[$€£¥]\s?\d[\d,]*(?:\.\d+)?(?:\s?[KMBT](?![A-Za-z]))?/iu;
 
-/** Currency amount followed by an ISO code. */
+/**
+ * Currency amount followed by an ISO code. The leading lookbehind admits
+ * no comma before the first digit, for the same bounded-scan reason as
+ * {@link VERSION_RUN}: in a comma-joined digit run every position after a
+ * comma would otherwise be a legal start.
+ */
 const CURRENCY_CODE_RUN = new RegExp(
-  `(?<![0-9A-Za-z_])[0-9][0-9,]*(?:\\.\\d+)?\\s?(?:${alternation(CURRENCY_CODES)})(?![A-Za-z])`,
+  `(?<![0-9A-Za-z_.,])[0-9][0-9,]*(?:\\.\\d+)?\\s?(?:${alternation(CURRENCY_CODES)})(?![A-Za-z])`,
   "iu",
 );
 
-/** Percentage. */
-const PERCENT_RUN = /(?<![0-9A-Za-z_.])\d[\d,]*(?:\.\d+)?\s?%/u;
+/** Percentage, with the same comma-guarded leading lookbehind. */
+const PERCENT_RUN = /(?<![0-9A-Za-z_.,])\d[\d,]*(?:\.\d+)?\s?%/u;
 
-/** Number followed by a unit from {@link QUANTITY_UNITS}. */
+/**
+ * Number followed by a unit from {@link QUANTITY_UNITS}, with the same
+ * comma-guarded leading lookbehind as the other run shapes. A multi-char
+ * unit (and `%`) may sit glued to the number; the single-letter units
+ * ({@link SPACED_QUANTITY_UNITS}) require whitespace.
+ */
 const NUMBER_UNIT_RUN = new RegExp(
   // The year guard: a bare four-digit 19xx/20xx number is a YEAR far
   // more often than a count ("In 2024 users doubled"), and the lint is
   // precision-first. A thousands separator (`2,024 users`) or a longer
   // digit run is a number, not a year shape, and still fires.
-  `(?<![0-9A-Za-z_.])(?!(?:19|20)\\d{2}\\b)\\d[\\d,]*(?:\\.\\d+)?\\s?(?:${alternation(QUANTITY_UNITS)})(?![0-9A-Za-z_])`,
+  `(?<![0-9A-Za-z_.,])(?!(?:19|20)\\d{2}\\b)\\d[\\d,]*(?:\\.\\d+)?` +
+    `(?:\\s?(?:${alternation(GLUED_QUANTITY_UNITS)})|\\s+(?:${alternation(SPACED_QUANTITY_UNITS)}))` +
+    `(?![0-9A-Za-z_])`,
   "iu",
 );
 
@@ -254,6 +300,19 @@ const TRIGGER_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
 export function containsIsoDate(text: string): boolean {
   return ISO_DATE_RUN.test(text) || ISO_INSTANT_RUN.test(text);
 }
+
+/**
+ * A URL run: scheme plus every non-whitespace character after it. The run
+ * ends at whitespace, so it never crosses a line.
+ */
+const URL_RUN = /https?:\/\/\S+/giu;
+
+/**
+ * A Markdown inline link: `[text](destination)`. The bracketed text is
+ * authored prose and stays scanned; only the destination is machine
+ * addressing, where a number names a file or a fragment, not a count.
+ */
+const MD_LINK_RUN = /\[[^\]\n]*\]\(([^)\n]*)\)/gu;
 
 interface Range {
   readonly start: number;
@@ -282,12 +341,16 @@ function hasTablePipe(line: string): boolean {
 }
 
 /**
- * The masked spans of a document: frontmatter, fenced blocks, table rows,
- * ordered-list markers, inline code spans, ISO dates and instants, and
- * version-like tokens. Walked line by line because every one of those
- * exclusions except the date and version shapes is a LINE property.
+ * The spans of `text` that carry no authored claim: the frontmatter
+ * block, fenced blocks, table rows, ordered-list markers, inline code
+ * spans, URL runs, Markdown link destinations and wikilink targets.
+ * Walked line by line because most of those exclusions are a LINE
+ * property. The ISO-date and version masks are deliberately NOT applied
+ * here: a date in prose is a dated claim - exactly what the escape hatch
+ * in `page-lint.ts` looks for - so {@link containsProseIsoDate} can read
+ * this view unfiltered.
  */
-function exclusionRanges(text: string): Range[] {
+function structuralExclusionRanges(text: string): Range[] {
   const ranges: Range[] = [];
 
   // Frontmatter is a leading fence closed by another fence line. An
@@ -350,10 +413,63 @@ function exclusionRanges(text: string): Range[] {
     lineStart = newline + 1;
   }
 
+  // A URL run is machine addressing: its numbers name a path, a query or
+  // a fragment, not a count of vault things.
+  maskMatches(text, URL_RUN, ranges);
+
+  // Markdown link destinations: group 1 sits immediately before the
+  // closing paren of the match.
+  for (const match of text.matchAll(globalCopy(MD_LINK_RUN))) {
+    const dest = match[1] ?? "";
+    if (dest.length === 0) continue;
+    const start = match.index! + match[0].length - 1 - dest.length;
+    ranges.push({ start, end: start + dest.length });
+  }
+
+  // Wikilink targets: group 1 follows the two-character opening bracket.
+  // Only the target is masked here; the `|` alias and `#` anchor suffixes
+  // stay unmasked by this loop, though a line carrying a pipe is already
+  // masked whole as a table row above.
+  for (const match of text.matchAll(globalCopy(WIKILINK_TARGET_RE))) {
+    const target = match[1] ?? "";
+    if (target.length === 0) continue;
+    const start = match.index! + 2;
+    ranges.push({ start, end: start + target.length });
+  }
+
+  return ranges;
+}
+
+/**
+ * The masked spans of a document: every structural exclusion plus the
+ * ISO-date, instant and version-like tokens a quantity scan must not
+ * read as claims.
+ */
+function exclusionRanges(text: string): Range[] {
+  const ranges = structuralExclusionRanges(text);
   maskMatches(text, ISO_DATE_RUN, ranges);
   maskMatches(text, ISO_INSTANT_RUN, ranges);
   maskMatches(text, VERSION_RUN, ranges);
   return ranges;
+}
+
+/**
+ * True when `text` carries an ISO date or instant in a region the scanner
+ * reads as authored prose. The escape hatch must see the page the way the
+ * trigger scan does: a date inside a fenced block, an inline code span, a
+ * table row, a URL or a wikilink target is not a claim about the vault,
+ * so it must not quiet the undated quantities around it. The scope stays
+ * page-wide - one prose date anywhere still dates the page.
+ */
+export function containsProseIsoDate(text: string): boolean {
+  const excluded = structuralExclusionRanges(text);
+  for (const pattern of [ISO_DATE_RUN, ISO_INSTANT_RUN]) {
+    for (const match of text.matchAll(globalCopy(pattern))) {
+      const start = match.index!;
+      if (!isExcluded(excluded, start, start + match[0].length)) return true;
+    }
+  }
+  return false;
 }
 
 /** True when `[start, end)` overlaps any excluded span. */

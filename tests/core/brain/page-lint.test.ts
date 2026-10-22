@@ -152,8 +152,9 @@ describe("lintWrittenPages - findings", () => {
  * The fifth detector (write-honesty, F4, t_fb442a24). A count or amount
  * with no structural date is an advisory warning on the `body` path: the
  * page states a quantity a reader cannot place in time. The escape hatches
- * are structural, never natural language - `valid_from` in frontmatter, any
- * ISO date in the body, or a `[Source: <name>, YYYY-MM-DD]` marker.
+ * are structural, never natural language - `valid_from` in frontmatter, an
+ * ISO date in the body's claim-bearing prose, or a
+ * `[Source: <name>, YYYY-MM-DD]` marker.
  */
 describe("lintWrittenPages - undated-quantity findings", () => {
   const BODY = "We onboarded 5,000 users.";
@@ -212,6 +213,35 @@ describe("lintWrittenPages - undated-quantity findings", () => {
     const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(undatedFindings(report)).toEqual([]);
     expect(pageLintField(report)).toEqual({});
+  });
+
+  test("a date inside a fence, a URL or a wikilink target silences nothing", () => {
+    // The hatch reads the masked view the scanner scans: a date in a
+    // region that carries no claim must not quiet the quantities in the
+    // prose around it.
+    const rel = writeNote(
+      "Notes/MaskedDate.md",
+      "---\ntitle: M\n---\n\n```\n2026-10-01\n```\n\n" +
+        "see https://x.com/posts/2026-10-01 and [[Report 2026-10-01]]\n\n" +
+        `${BODY}\n`,
+    );
+    const findings = undatedFindings(lintWrittenPages(vault, [rel], READ_ALL));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(JSON.stringify(QUANTITY));
+  });
+
+  test("the offset is named as a post-frontmatter body coordinate, not a file offset", () => {
+    const raw = `---\ntitle: U\n---\n\n   ${BODY}\n`;
+    const rel = writeNote("Notes/OffsetCoordinate.md", raw);
+    const finding = undatedFindings(lintWrittenPages(vault, [rel], READ_ALL))[0]!;
+    // The scanner sees the trimmed body, so the lexeme sits at its body
+    // offset; in the raw file it sits later by the frontmatter and the
+    // leading blank line and spaces. The message names the coordinate
+    // system, so the number can be located honestly.
+    expect(finding.message).toContain(
+      `at body offset ${BODY.indexOf(QUANTITY)} (after frontmatter)`,
+    );
+    expect(finding.message).not.toContain(`offset ${raw.indexOf(QUANTITY)}`);
   });
 
   test("a [Source: <name>, YYYY-MM-DD] marker silences the finding", () => {
