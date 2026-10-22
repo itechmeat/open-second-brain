@@ -178,7 +178,10 @@ function writeVectorCache(runsDir: string, entries: Record<string, ReadonlyArray
 
 /** The stored-model spelling, matching the indexer's embedding phase. */
 function storedEmbeddingModel(config: ResolvedSearchConfig): string | null {
-  return config.semantic.model ?? makeProvider(config.semantic).model;
+  return (
+    config.semantic.model ??
+    makeProvider({ ...config.semantic, configPath: config.configPath }).model
+  );
 }
 
 /** Same digest formula the indexer records alongside every vector. */
@@ -211,7 +214,7 @@ export async function embedBenchVaultIndex(opts: {
       "bench embedding: no embedding model is stored on the index; the capability path needs an indexed model to key vectors",
     );
   }
-  const provider = makeProvider(config.semantic);
+  const provider = makeProvider({ ...config.semantic, configPath: config.configPath });
   const signature = benchEmbeddingSignature(
     config.semantic.provider,
     model,
