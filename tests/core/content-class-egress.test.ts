@@ -87,6 +87,39 @@ function seedLogDay(): void {
   );
 }
 
+/**
+ * A log day with one entry of each shape: an agent-channel narrative
+ * line, a write event whose target is the left-out page, and an
+ * operator-channel entry that must ride the bundle byte-exactly. The
+ * blocks are written in the shape `renderLogEntryBlock` produces.
+ */
+function seedMixedLogDay(): void {
+  const logDir = join(vault, "Brain", "log");
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(
+    join(logDir, "2026-06-13.md"),
+    [
+      "## 12:00:00Z — note",
+      "- text: agent narrative line",
+      "- agent: claude",
+      "- origin_channel: mcp-tool",
+      "",
+      "## 12:00:01Z — note-write",
+      "- write_id: nw_20260613_1",
+      "- op: create",
+      "- target: Agent Page.md",
+      "- origin_channel: cli",
+      "",
+      "## 12:00:02Z — note",
+      "- text: operator narrative line",
+      "- agent: operator",
+      "- origin_channel: cli",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 describe("the guard seam", () => {
   const items = ["a.md", "b.md", "c.md"];
 
@@ -149,6 +182,119 @@ describe("okf-export applies the default and the override", () => {
       "Synthesised from a prompt.",
     );
     expect(r.stderr).toContain(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
+  });
+
+  test("a marked ingested source page is left out of the references lane and named", async () => {
+    await bootstrap();
+    const sourcesDir = join(vault, "Brain", "sources");
+    mkdirSync(sourcesDir, { recursive: true });
+    writeFileSync(
+      join(sourcesDir, "src-stamped.md"),
+      `---\ntitle: Ingested Source\nkind: brain-source\n${CONTENT_CLASS_FIELD}: ${CONTENT_CLASS.promptDerived}\n---\n\nAgent-written summary prose.\n`,
+      "utf8",
+    );
+    const out = join(tmp, "bundle-sources");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    expect(existsSync(join(out, "references", "src-stamped.md"))).toBe(false);
+    expect(r.stderr).toContain("Brain/sources/src-stamped.md (content_class: prompt-derived)");
+  });
+});
+
+describe("okf-export applies the class policy to the change log", () => {
+  test("agent-channel entries and entries naming a left-out page leave log.md, counted", async () => {
+    await bootstrap();
+    seedMixedLogDay();
+    const out = join(tmp, "bundle-log");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    const log = readFileSync(join(out, "log.md"), "utf8");
+    expect(log).not.toContain("agent narrative line");
+    expect(log).not.toContain("Agent Page.md");
+    expect(log).not.toContain("12:00:00Z");
+    expect(log).not.toContain("12:00:01Z");
+    // The kept entry rides byte-exactly: no reformatting of what stays.
+    expect(log).toContain(
+      "## 12:00:02Z — note\n- text: operator narrative line\n- agent: operator\n- origin_channel: cli",
+    );
+    expect(r.stderr).toContain("2 log line(s) left out by the same policy");
+    expect(r.stderr).toContain(contentClassOmissionNotice([MARKED]));
+  });
+
+  test("a day whose every entry leaves stops counting as a log day", async () => {
+    await bootstrap();
+    const logDir = join(vault, "Brain", "log");
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(
+      join(logDir, "2026-06-14.md"),
+      "## 09:00:00Z — note\n- text: only agent words\n- agent: claude\n- origin_channel: mcp-tool\n",
+      "utf8",
+    );
+    const out = join(tmp, "bundle-log-empty");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    expect(readFileSync(join(out, "log.md"), "utf8")).not.toContain("2026-06-14");
+    expect(readFileSync(join(out, "log.md"), "utf8")).not.toContain("only agent words");
+    expect(r.stdout).toContain("0 log day(s)");
+  });
+
+  test("the override keeps the log whole and names no log omission", async () => {
+    await bootstrap();
+    seedMixedLogDay();
+    const out = join(tmp, "bundle-log-override");
+    const r = await runCli(["brain", "okf-export", "--out", out, "--include-prompt-derived"], {
+      env: env(),
+    });
+    expect(r.returncode).toBe(0);
+    const log = readFileSync(join(out, "log.md"), "utf8");
+    expect(log).toContain("agent narrative line");
+    expect(log).toContain("target: Agent Page.md");
+    expect(log).toContain("operator narrative line");
+    expect(r.stderr).toContain(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
+    expect(r.stderr).not.toContain("log line(s) left out");
+  });
+});
+
+describe("okf-export drops kept pages' manifest citations to left-out pages", () => {
+  test("the citation leaves the manifest, counted; the page prose is untouched", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      '---\ntitle: Operator Page\nrelated: "[[Agent Page]]"\n---\n\nSee [[Agent Page]] and [[https://example.org/one]].\n',
+      "utf8",
+    );
+    const out = join(tmp, "bundle-citations");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(out, "okf.json"), "utf8")) as {
+      pages: ReadonlyArray<{ path: string; citations: ReadonlyArray<string> }>;
+    };
+    const operator = manifest.pages.find((p) => p.path === "Operator Page.md");
+    expect(operator?.citations).toEqual(["https://example.org/one"]);
+    // The page body is not prose-edited: the link the operator wrote stays.
+    const page = readFileSync(join(out, "concepts", "Operator Page.md"), "utf8");
+    expect(page).toContain("See [[Agent Page]] and [[https://example.org/one]].");
+    expect(r.stderr).toContain("1 citation(s) to left-out page(s) dropped");
+  });
+
+  test("the override keeps the citations", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      "---\ntitle: Operator Page\n---\n\nSee [[Agent Page]].\n",
+      "utf8",
+    );
+    const out = join(tmp, "bundle-citations-override");
+    const r = await runCli(["brain", "okf-export", "--out", out, "--include-prompt-derived"], {
+      env: env(),
+    });
+    expect(r.returncode).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(out, "okf.json"), "utf8")) as {
+      pages: ReadonlyArray<{ path: string; citations: ReadonlyArray<string> }>;
+    };
+    const operator = manifest.pages.find((p) => p.path === "Operator Page.md");
+    expect(operator?.citations).toEqual(["Agent Page"]);
+    expect(r.stderr).not.toContain("citation(s) to left-out page(s) dropped");
   });
 });
 
@@ -230,6 +376,61 @@ describe("graph-export applies the default and the override", () => {
   });
 });
 
+describe("graph-export drops kept nodes' references to left-out pages", () => {
+  test("links and relation targets naming a left-out page leave the node, counted", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      '---\ntitle: Operator Page\nrelated: "[[Agent Page]]"\n---\n\nSee [[Agent Page]] and [[Operator Journal]].\n',
+      "utf8",
+    );
+    writeFileSync(
+      join(vault, "Operator Journal.md"),
+      "---\ntitle: Operator Journal\n---\n\nOperator words.\n",
+      "utf8",
+    );
+    const out = join(tmp, "graph-refs.json");
+    const r = await runCli(["brain", "graph-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    const graph = JSON.parse(readFileSync(out, "utf8")) as {
+      nodes: ReadonlyArray<{
+        path: string;
+        links: ReadonlyArray<string>;
+        relations: Readonly<Record<string, ReadonlyArray<string>>>;
+      }>;
+    };
+    const operator = graph.nodes.find((n) => n.path === "Operator Page.md");
+    expect(operator?.links).toEqual(["Operator Journal"]);
+    // The relation left with no targets drops with them, matching the
+    // exporter's own shape of carrying only non-empty relation fields.
+    expect(operator?.relations).toEqual({});
+    expect(r.stderr).toContain(contentClassOmissionNotice([MARKED]));
+    expect(r.stderr).toContain(
+      "2 link/relation target(s) to left-out page(s) dropped from kept nodes",
+    );
+  });
+
+  test("the override keeps every target", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      "---\ntitle: Operator Page\n---\n\nSee [[Agent Page]].\n",
+      "utf8",
+    );
+    const out = join(tmp, "graph-refs-override.json");
+    const r = await runCli(["brain", "graph-export", "--out", out, "--include-prompt-derived"], {
+      env: env(),
+    });
+    expect(r.returncode).toBe(0);
+    const graph = JSON.parse(readFileSync(out, "utf8")) as {
+      nodes: ReadonlyArray<{ path: string; links: ReadonlyArray<string> }>;
+    };
+    const operator = graph.nodes.find((n) => n.path === "Operator Page.md");
+    expect(operator?.links).toEqual(["Agent Page"]);
+    expect(r.stderr).not.toContain("link/relation target(s) to left-out page(s) dropped");
+  });
+});
+
 describe("bank-export applies the default and the override", () => {
   test("a marked page leaves both page sections, named once", async () => {
     await bootstrap();
@@ -260,6 +461,60 @@ describe("bank-export applies the default and the override", () => {
     expect(bundle.graph.nodes).toHaveLength(2);
     expect(bundle.pages).toHaveLength(2);
     expect(r.stderr).toContain(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
+  });
+});
+
+describe("bank-export drops kept pages' structured references to left-out pages", () => {
+  test("graph links, relation targets and contract citations leave, counted", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      '---\ntitle: Operator Page\nrelated: "[[Agent Page]]"\n---\n\nSee [[Agent Page]].\n',
+      "utf8",
+    );
+    const out = join(tmp, "bank-refs.json");
+    const r = await runCli(["brain", "bank-export", "--out", out], { env: env() });
+    expect(r.returncode).toBe(0);
+    const bundle = JSON.parse(readFileSync(out, "utf8")) as {
+      graph: {
+        nodes: ReadonlyArray<{
+          links: ReadonlyArray<string>;
+          relations: Readonly<Record<string, ReadonlyArray<string>>>;
+        }>;
+      };
+      pages: ReadonlyArray<{ citations: ReadonlyArray<string> }>;
+    };
+    expect(bundle.graph.nodes[0]?.links).toEqual([]);
+    expect(bundle.graph.nodes[0]?.relations).toEqual({});
+    expect(bundle.pages[0]?.citations).toEqual([]);
+    // One body link, one relation target on the graph node, and one
+    // de-duplicated citation on the contract.
+    expect(r.stderr).toContain(
+      "3 link/relation/citation target(s) to left-out page(s) dropped from kept pages' structured references",
+    );
+  });
+
+  test("the override keeps every structured reference", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Operator Page.md"),
+      "---\ntitle: Operator Page\n---\n\nSee [[Agent Page]].\n",
+      "utf8",
+    );
+    const out = join(tmp, "bank-refs-override.json");
+    const r = await runCli(["brain", "bank-export", "--out", out, "--include-prompt-derived"], {
+      env: env(),
+    });
+    expect(r.returncode).toBe(0);
+    const bundle = JSON.parse(readFileSync(out, "utf8")) as {
+      graph: { nodes: ReadonlyArray<{ path: string; links: ReadonlyArray<string> }> };
+      pages: ReadonlyArray<{ path: string; citations: ReadonlyArray<string> }>;
+    };
+    const operatorNode = bundle.graph.nodes.find((n) => n.path === "Operator Page.md");
+    expect(operatorNode?.links).toEqual(["Agent Page"]);
+    const operatorPage = bundle.pages.find((p) => p.path === "Operator Page.md");
+    expect(operatorPage?.citations).toEqual(["Agent Page"]);
+    expect(r.stderr).not.toContain("dropped from kept pages' structured references");
   });
 });
 

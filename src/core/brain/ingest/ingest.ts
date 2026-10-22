@@ -44,6 +44,8 @@ import {
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { originChannelStamp } from "../../origin-channel.ts";
+import { CONTENT_CLASS_FIELD, contentClassCreationStamp } from "../provenance/content-class.ts";
 import {
   intakeExtraction,
   type ExtractionIntake,
@@ -427,6 +429,21 @@ export function ingestSource(
     updated_at: stamp,
     tags: ["brain", "brain/source"],
     ...visibilityFrontmatter(kept.visibility, derivation?.visibility),
+    // The content class, stamped server-side like every other
+    // deterministic prompt-derived writer's output (the creation merge in
+    // `createNote` is the pattern): the summary prose is the calling
+    // agent's writing, so when this ingest arrived over the MCP transport
+    // - the channel `contentClassCreationStamp` derives the class from -
+    // the page is marked and the shared exports leave it out by default.
+    // An operator-run ingest (the CLI) adds nothing. A page already
+    // carrying the key keeps it verbatim: a re-ingest REWRITES a page its
+    // first publish stamped, and re-deriving the class from the mutating
+    // channel would let a later CLI re-ingest unmark - and an MCP
+    // re-ingest overwrite - what the creating writer decided. The caller
+    // names no frontmatter on this path, so there is nothing to strip.
+    ...(kept.contentClass !== undefined
+      ? { [CONTENT_CLASS_FIELD]: kept.contentClass }
+      : stampContentClass(contentClassCreationStamp(originChannelStamp()))),
   };
 
   const body = [
@@ -999,20 +1016,39 @@ function resolvesInsideVault(vault: string, canonicalSource: string): boolean {
 interface KeptFrontmatter {
   readonly createdAt: string;
   readonly visibility?: FrontmatterMap[string];
+  /**
+   * The page's existing content class, kept verbatim on a re-ingest -
+   * the creating writer's decision, whatever it spelled.
+   */
+  readonly contentClass?: FrontmatterMap[string];
 }
 
 /**
- * Read the stable `created_at` and an operator-set `visibility` from an
- * existing summary page; `created_at` falls back to `fallback`.
+ * The frontmatter spread for a freshly derived content class, or nothing
+ * when the channel derives no class - the honest byte is NO key.
+ */
+function stampContentClass(
+  contentClass: ReturnType<typeof contentClassCreationStamp>,
+): FrontmatterMap {
+  return contentClass !== null ? { [CONTENT_CLASS_FIELD]: contentClass } : {};
+}
+
+/**
+ * Read the stable `created_at`, an operator-set `visibility`, and any
+ * existing content class from an existing summary page; `created_at`
+ * falls back to `fallback`.
  */
 function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter {
   const [meta] = parseFrontmatter(absPath);
   const value = meta["created_at"];
   const createdAt = typeof value === "string" && value.length > 0 ? value : fallback;
   const visibility = meta[VISIBILITY_FRONTMATTER_KEY];
-  return visibility === undefined || visibility === null
-    ? { createdAt }
-    : { createdAt, visibility };
+  const contentClass = meta[CONTENT_CLASS_FIELD];
+  return {
+    createdAt,
+    ...(visibility === undefined || visibility === null ? {} : { visibility }),
+    ...(contentClass === undefined ? {} : { contentClass }),
+  };
 }
 
 /**

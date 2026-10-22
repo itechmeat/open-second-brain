@@ -78,6 +78,8 @@ import {
 import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { ORIGIN_CHANNEL_FIELD, isOriginChannelStamp } from "../../origin-channel.ts";
+import { contentClassCreationStamp } from "../provenance/content-class.ts";
 import { KNOWLEDGE_PACK_FIELD, KNOWLEDGE_PACK_SHA_FIELD } from "./pack-stamp.ts";
 import { OPEN_SECOND_BRAIN_VERSION } from "../../version.ts";
 
@@ -512,9 +514,61 @@ function listMarkdown(root: string, skipDirs: ReadonlyArray<string>): string[] {
  * Shards of one day fold into ONE dated section, ordered by shard id
  * (`listLogShardFiles` sorts by name), so the bundle is byte-identical
  * whatever order Syncthing delivered the shards in.
+ *
+ * ## The content-class filter
+ *
+ * With a {@link OkfLogFilter} the log is NOT whole: the shards hold
+ * agent-written material, and a default export that carried it would
+ * undo, page by page, the omission the class policy just performed. Two
+ * kinds of entry leave, and each drop is counted into the returned
+ * `droppedEntries` so the calling verb can name the count:
+ *
+ * 1. an entry whose `origin_channel` bullet carries the channel
+ *    {@link contentClassCreationStamp} derives the reserved class from -
+ *    an entry the MCP transport appended is agent-dictated material. A
+ *    log entry carries no `content_class` of its own, so the server-
+ *    derived channel it is stamped with is the one provable marker it
+ *    can carry; a channel this build does not know marks nothing.
+ * 2. an entry whose `target` bullet names a page in the filter's omitted
+ *    set - the entry would disclose the very name the split withheld.
+ *
+ * Kept entries are preserved BYTE-EXACTLY: the shard is split at the
+ * event-block boundaries the log parser itself reads (`## ` headings),
+ * and only the dropped spans are removed - no reformatting, no
+ * re-serialisation of what stays. A shard whose every entry is dropped
+ * contributes nothing, and a day left with no contributing shard stops
+ * counting as a log day. Without a filter - and under
+ * `includePromptDerived` - each shard rides whole, exactly as before.
  */
-function buildLog(vault: string): { contents: string; days: number } {
+export interface OkfLogFilter {
+  /**
+   * The operator override: when true the log rides whole, the same
+   * decision `--include-prompt-derived` makes for pages.
+   */
+  readonly includePromptDerived: boolean;
+  /** The vault-relative paths the page split left out of the bundle. */
+  readonly omittedPaths: ReadonlySet<string>;
+}
+
+export interface OkfLog {
+  /** The date-grouped change log, ready for the `log.md` bundle file. */
+  readonly contents: string;
+  /** Count of DAYS with at least one kept entry, across every shard. */
+  readonly days: number;
+  /** Entries the content-class filter dropped; zero without a filter. */
+  readonly droppedEntries: number;
+}
+
+/**
+ * One top-level log bullet, in the shape the log parser itself reads
+ * (`- key: value`). Spelled locally because the parser does not export
+ * it and this module reads no other log syntax.
+ */
+const LOG_BULLET_RE = /^-\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/;
+
+export function buildLog(vault: string, filter?: OkfLogFilter): OkfLog {
   const bodiesByDate = new Map<string, string[]>();
+  let droppedEntries = 0;
   for (const shard of listLogShardFiles(vault)) {
     // The bundle is markdown; the JSONL sidecar of a day carries the same
     // entries in machine form and would duplicate every line.
@@ -531,14 +585,97 @@ function buildLog(vault: string): { contents: string; days: number } {
       );
     }
     if (body.length === 0) continue;
+    const text =
+      filter === undefined || filter.includePromptDerived
+        ? body
+        : filterLogShard(body, filter, (dropped) => {
+            droppedEntries += dropped;
+          });
+    if (text.length === 0) continue;
     const bodies = bodiesByDate.get(shard.date);
-    if (bodies === undefined) bodiesByDate.set(shard.date, [body]);
-    else bodies.push(body);
+    if (bodies === undefined) bodiesByDate.set(shard.date, [text]);
+    else bodies.push(text);
   }
   const sections = [...bodiesByDate.keys()]
     .toSorted()
     .map((date) => `## ${date}\n\n${bodiesByDate.get(date)!.join("\n\n")}`);
-  return { contents: sections.join("\n\n"), days: bodiesByDate.size };
+  return { contents: sections.join("\n\n"), days: bodiesByDate.size, droppedEntries };
+}
+
+/**
+ * Drop the filtered entries from one shard's text, keeping every other
+ * byte where it was. The shard is split at the `## ` event-heading
+ * boundaries the log parser reads; the text before the first heading is
+ * the shard's own frontmatter and title and always stays, and each
+ * entry's span runs to the next heading, so removing an entry removes
+ * exactly its lines and nothing else. Splitting on `\n` and rejoining on
+ * `\n` keeps a hand-edited CRLF shard's kept bytes untouched.
+ */
+function filterLogShard(
+  body: string,
+  filter: OkfLogFilter,
+  recordDrop: (dropped: number) => void,
+): string {
+  const lines = body.split("\n");
+  let firstBlock = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.startsWith("## ")) {
+      firstBlock = i;
+      break;
+    }
+  }
+  // No event headings: no entry can be provably marked, so the shard
+  // stays whole rather than being guessed about.
+  if (firstBlock < 0) return body;
+  const starts: number[] = [];
+  for (let i = firstBlock; i < lines.length; i++) {
+    if (lines[i]!.startsWith("## ")) starts.push(i);
+  }
+  const prologue = lines.slice(0, firstBlock).join("\n");
+  const kept: string[] = [];
+  for (let n = 0; n < starts.length; n++) {
+    const end = n + 1 < starts.length ? starts[n + 1]! : lines.length;
+    if (!logEntryIsFilteredOut(lines.slice(starts[n]!, end), filter)) {
+      kept.push(lines.slice(starts[n]!, end).join("\n"));
+    } else {
+      recordDrop(1);
+    }
+  }
+  // Every entry dropped: the shard has nothing left to say, and a bare
+  // frontmatter-plus-title shell would count as a log day that logs
+  // nothing.
+  if (kept.length === 0) return "";
+  return `${prologue}${kept.join("")}`.trimEnd();
+}
+
+/**
+ * Whether one event block leaves under the filter. The block's top-level
+ * bullets are read the way the log parser reads them (`- key: value`,
+ * later occurrences of a key winning), and the decision is fail-open: an
+ * entry that carries neither a known channel nor an omitted target stays.
+ */
+function logEntryIsFilteredOut(blockLines: ReadonlyArray<string>, filter: OkfLogFilter): boolean {
+  const bullets = new Map<string, string>();
+  for (const line of blockLines) {
+    const bullet = LOG_BULLET_RE.exec(line);
+    if (bullet !== null) bullets.set(bullet[1]!, bullet[2]!);
+  }
+  // The channel the creation stamp derives the reserved class from: an
+  // entry appended over the MCP transport is agent-dictated material,
+  // exactly as a page created there is. A bullet naming a channel this
+  // build does not know marks nothing.
+  const channel = bullets.get(ORIGIN_CHANNEL_FIELD);
+  if (
+    typeof channel === "string" &&
+    isOriginChannelStamp(channel) &&
+    contentClassCreationStamp(channel) !== null
+  ) {
+    return true;
+  }
+  // A write entry whose target is the page the split left out would name
+  // the omission right back into the bundle.
+  const target = bullets.get("target");
+  return typeof target === "string" && filter.omittedPaths.has(target);
 }
 
 /**
@@ -789,22 +926,33 @@ export function buildOkfSubsetBundle(vault: string, pages: ReadonlyArray<OkfPage
  * page-input entry point, but a subset bundle carries no `log.md` by
  * contract, so a caller that has ALREADY walked the vault (the shared
  * export verbs, which split the collected pages through the egress
- * content-class policy before composition) had no way to keep the
- * change log without a second walk. Composing from the caller's page
- * array closes that double-walk window: between the caller's walk and a
+ * content-class policy before composition) had no way to keep the change
+ * log without a second walk. Composing from the caller's page array
+ * closes that double-walk window: between the caller's walk and a
  * re-walk here, a page can change or appear, and the bundle would mix
  * the two reads - or, with the class policy applied to the first walk
  * only, re-admit a page the policy had just left out. The pages are
- * written as given; only the log is read from the vault here.
+ * written as given.
+ *
+ * The `log` argument is the change log to fold in, already read (and
+ * already filtered through the caller's content-class policy) by
+ * {@link buildLog}. Omitted, the log is read here unfiltered - the
+ * whole-log behavior the callers that have no split in hand rely on - so
+ * a verb that needs the filtered log passes its {@link buildLog} result
+ * through rather than re-reading the vault a second time.
  */
-export function buildOkfBundleFromPages(vault: string, pages: ReadonlyArray<OkfPage>): OkfBundle {
-  return assembleOkfBundle(vault, pages, buildLog(vault));
+export function buildOkfBundleFromPages(
+  vault: string,
+  pages: ReadonlyArray<OkfPage>,
+  log: Pick<OkfLog, "contents" | "days"> = buildLog(vault),
+): OkfBundle {
+  return assembleOkfBundle(vault, pages, log);
 }
 
 function assembleOkfBundle(
   vault: string,
   pages: ReadonlyArray<OkfPage>,
-  log: { contents: string; days: number } | null,
+  log: Pick<OkfLog, "contents" | "days"> | null,
 ): OkfBundle {
   // ONE instant for the whole bundle: the manifest's `generated_at` and
   // every page's `generated.at` share it, so whole-bundle byte equality
