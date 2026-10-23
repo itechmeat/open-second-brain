@@ -836,7 +836,7 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
       {
         code: "restamp-local-visibility",
         issueClass: "a restamped page is also reserved against default-scope local search",
-        nextCommand: "o2b search --visibility private",
+        nextCommand: "o2b search --visibility=private",
         autoRepairable: false,
       },
       // --- Doctor classes the exit census found unregistered ---

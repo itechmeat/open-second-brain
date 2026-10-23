@@ -94,7 +94,7 @@ describe("o2b brain privacy-marker-restamp emits through the advisory rail", () 
     expect(res.stdout).toContain(
       "note: after --apply each stamped page is also excluded from default-scope local search",
     );
-    expect(res.stdout).toContain("next: o2b search --visibility private\n");
+    expect(res.stdout).toContain("next: o2b search --visibility=private\n");
     // No hand-written invocation beside the rail.
     expect(res.stdout).not.toContain("reach it again with");
   });
@@ -106,7 +106,7 @@ describe("o2b brain privacy-marker-restamp emits through the advisory rail", () 
     expect(res.stdout).toContain(
       "note: each stamped page is now also excluded from default-scope local search",
     );
-    expect(res.stdout).toContain("next: o2b search --visibility private\n");
+    expect(res.stdout).toContain("next: o2b search --visibility=private\n");
   });
 
   test("the rail line stays off the machine stream", async () => {
