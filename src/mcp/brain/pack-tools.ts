@@ -17,6 +17,7 @@ import {
   resolveRecallAdequacyThresholds,
   resolveRecallGateTelemetry,
   resolveSearchFocusContextPack,
+  resolveTailTrimContextPack,
 } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { SearchError } from "../../core/search/search-error.ts";
@@ -453,6 +454,10 @@ async function toolBrainContextPack(
   // entity_facts_context_pack config key (default off) so the default
   // tool output carries no entity_facts key.
   const entityFacts = resolveEntityFactsContextPack(ctx.configPath ?? undefined);
+  // Tail-trim wiring (t_cb6a5558): gated on the tail_trim_context_pack
+  // config key (default off) so the default tool output carries no
+  // tail_trim key and no trim ever runs.
+  const tailTrim = resolveTailTrimContextPack(ctx.configPath ?? undefined);
   const agentScope = coerceAgentScope(ctx, args, true);
   // Root closure (t_sec_pack_reach): the pack reads page bodies by path,
   // outside the three read roots, so the reserved-token rule is asked per
@@ -501,6 +506,7 @@ async function toolBrainContextPack(
           ...(agentScope !== undefined ? { agentScope } : {}),
           ...(densityRanking ? { densityRanking: true } : {}),
           ...(entityFacts ? { entityFacts: true } : {}),
+          ...(tailTrim ? { tailTrim: true } : {}),
           ...(sessionFocus !== null ? { sessionFocus } : {}),
           ...(query ? { query } : {}),
           ...(queryMode !== null ? { queryMode } : {}),
@@ -608,6 +614,19 @@ async function toolBrainContextPack(
               name: e.name,
               item_ids: e.itemIds,
             })),
+          },
+        }
+      : {}),
+    // The trim block appears only when the config key resolved on AND
+    // the pack actually trimmed - the same conditional shape as
+    // `entity_facts` above. Fields project to the tool's wire casing.
+    ...(report.tailTrim
+      ? {
+          tail_trim: {
+            dropped: report.tailTrim.dropped,
+            kept_by_query_terms: report.tailTrim.keptByQueryTerms,
+            rescued: report.tailTrim.rescued,
+            tokens_saved: report.tailTrim.tokensSaved,
           },
         }
       : {}),

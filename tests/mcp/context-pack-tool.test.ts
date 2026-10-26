@@ -309,6 +309,86 @@ describe("brain_context_pack tool — round trip", () => {
     });
   });
 
+  test("tail_trim_context_pack config gate emits the trim block and skip reasons", async () => {
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\ntail_trim_context_pack: "true"\n`,
+    );
+    // Five pages whose principle carries the query verbatim, so
+    // substring mode keeps them all and recency alone decides the
+    // order; body extras shape the trim scores (1.0, 5/6, 5/8, 5/6,
+    // 5/13) the way the core pack suite pins them.
+    const QUERY = "alpha beta gamma delta epsilon";
+    const pages: Array<[string, string, string]> = [
+      ["pref-tail-a", "2026-05-05T00:00:00Z", ""],
+      ["pref-tail-b", "2026-05-04T00:00:00Z", "zeta"],
+      ["pref-tail-c", "2026-05-03T00:00:00Z", "zeta eta theta"],
+      ["pref-tail-d", "2026-05-02T00:00:00Z", "zeta"],
+      ["pref-tail-e", "2026-05-01T00:00:00Z", "zeta eta theta iota kappa lambda mu nu"],
+    ];
+    for (const [slug, created, body] of pages) {
+      writeFileSync(
+        join(vault, "Brain", "preferences", `pref-${slug}.md`),
+        `---\nid: ${slug}\ntopic: x\nprinciple: ${QUERY}\ntier: core\ncreated_at: ${created}\n---\n\n${body}\n`,
+      );
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000, query: QUERY });
+    const trim = out["tail_trim"] as {
+      dropped: number;
+      kept_by_query_terms: number;
+      rescued: number;
+      tokens_saved: number;
+    };
+    expect(trim).toBeDefined();
+    expect(trim.dropped).toBe(1);
+    expect(trim.kept_by_query_terms).toBe(1);
+    expect(trim.rescued).toBe(0);
+    expect(trim.tokens_saved).toBeGreaterThan(0);
+    // The dropped tail item names the new skip reason on the wire.
+    expect(out["skipped"]).toEqual([
+      { id: "pref-tail-e", tokens: expect.any(Number), reason: "tail-trim" },
+    ]);
+    const items = out["items"] as Array<{ id: string }>;
+    expect(items.map((i) => i.id)).toEqual([
+      "pref-tail-a",
+      "pref-tail-b",
+      "pref-tail-c",
+      "pref-tail-d",
+    ]);
+  });
+
+  test("the config key absent leaves the response without the trim member", async () => {
+    const QUERY = "alpha beta gamma delta epsilon";
+    const pages: Array<[string, string, string]> = [
+      ["pref-tail-a", "2026-05-05T00:00:00Z", ""],
+      ["pref-tail-b", "2026-05-04T00:00:00Z", "zeta"],
+      ["pref-tail-c", "2026-05-03T00:00:00Z", "zeta eta theta"],
+      ["pref-tail-d", "2026-05-02T00:00:00Z", "zeta"],
+      ["pref-tail-e", "2026-05-01T00:00:00Z", "zeta eta theta iota kappa lambda mu nu"],
+    ];
+    for (const [slug, created, body] of pages) {
+      writeFileSync(
+        join(vault, "Brain", "preferences", `pref-${slug}.md`),
+        `---\nid: ${slug}\ntopic: x\nprinciple: ${QUERY}\ntier: core\ncreated_at: ${created}\n---\n\n${body}\n`,
+      );
+    }
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000, query: QUERY });
+    expect(out["tail_trim"]).toBeUndefined();
+    expect(out["skipped"]).toEqual([]);
+    const items = out["items"] as Array<{ id: string }>;
+    expect(items.map((i) => i.id)).toEqual([
+      "pref-tail-a",
+      "pref-tail-b",
+      "pref-tail-c",
+      "pref-tail-d",
+      "pref-tail-e",
+    ]);
+  });
+
   test("rejects non-positive max_tokens via INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

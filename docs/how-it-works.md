@@ -1284,6 +1284,23 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   per-memory and total character caps, and `brain_pre_compress_pack`
   returns a budgeted top-preferences-plus-active.md addendum for
   pre-compression injection.
+- **Score-aware tail trim (config-gated).** With
+  `tail_trim_context_pack: "true"` in the machine-local main config (or
+  the env override `OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK`; the
+  default is off), `brain_context_pack` runs one score-aware trim over
+  the unified tier-and-budget walk whenever the call carries a query:
+  the top three delivered items are immune, any later item whose
+  token-overlap score against the query is at least 0.8 of the top
+  delivered score is kept (it restates the question's terms nearly as
+  fully as the top hit), and the rest drop whole with a `tail-trim` skip
+  reason - never partially re-cut. The freed budget is then offered back
+  to `over-budget` candidates in priority order, the only path by which
+  a page can cross tiers, bounded by the same `max_tokens` and never
+  reordering or dropping the synthesized attention item. The response
+  carries a conditional `tail_trim` block (`dropped`,
+  `kept_by_query_terms`, `rescued`, `tokens_saved`) only when the trim
+  ran. With the key off - the default - packs are byte-identical, and
+  the `packing_policy` branch never trims.
 - **Semantic policy.** Implicit semantic (config default) warns and
   falls back to keyword-only when sqlite-vec is unavailable, the key
   is missing, the provider is down, or no embeddings exist yet.
