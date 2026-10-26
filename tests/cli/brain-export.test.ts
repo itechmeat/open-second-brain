@@ -188,6 +188,69 @@ describe("brain export", () => {
   });
 });
 
+describe("brain export privacy omissions", () => {
+  /**
+   * Hand-add an informal privacy marker the same way an operator does:
+   * a user-tier frontmatter line on the preference file.
+   */
+  function stampMarker(slug: string, line: string): void {
+    const abs = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+  }
+
+  test("a reserved preference is omitted from the json envelope and named on stderr", async () => {
+    await bootstrap();
+    await seedPreference("alpha");
+    await seedPreference("reserved");
+    stampMarker("reserved", "access: private");
+
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      preferences: ReadonlyArray<{ id: string }>;
+      omitted?: ReadonlyArray<{ id: string; reason: string }>;
+    };
+    expect(payload.preferences.map((p) => p.id)).toEqual(["pref-alpha"]);
+    expect(payload.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    // The omission is DISCLOSED, not silent: the notice names the rule.
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("left out");
+    // stderr only - the json bytes name the omission as data, not prose.
+    expect(r.stdout).not.toContain("left out");
+  });
+
+  test("llms-txt leaves the reserved row out of the sections and names it on stderr", async () => {
+    await bootstrap();
+    await seedPreference("alpha");
+    await seedPreference("reserved");
+    stampMarker("reserved", "sensitivity: confidential");
+
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "llms-txt"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("- pref-alpha (topic: alpha, scope: writing): principle alpha");
+    expect(r.stdout).not.toContain("pref-reserved");
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("left out");
+  });
+
+  test("a vault with no reservation emits no notice and no omitted key", async () => {
+    await bootstrap();
+    await seedPreference("alpha");
+
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as { omitted?: unknown };
+    expect("omitted" in payload).toBe(false);
+    expect(r.stderr).not.toContain("left out");
+  });
+});
+
 describe("brain export --format transcripts-jsonl", () => {
   interface TranscriptFixture {
     /** Turn id of the first line - the `turn_id` a record carries. */

@@ -7,9 +7,11 @@ import {
   EXPORT_FORMAT,
   EXPORT_FORMATS,
   exportPreferencesJson,
-  exportPreferencesLlmsTxt,
+  exportPreferencesLlmsTxtDetailed,
   isExportFormat,
+  preferenceDenialNotice,
   type ExportFormat,
+  type PreferenceDenial,
 } from "../../../core/brain/export.ts";
 import {
   streamTranscriptConversations,
@@ -68,14 +70,29 @@ const EGRESS_SITE = "brain-export";
  * or streams it to stdout rather than ever holding it.
  */
 type FormatOutcome =
-  | { readonly kind: "body"; readonly body: string; readonly redacted: boolean }
+  | {
+      readonly kind: "body";
+      readonly body: string;
+      readonly redacted: boolean;
+      /**
+       * The preferences the privacy deny markers kept out of this
+       * document, named for the stderr disclosure. Empty when the vault
+       * holds no reservation - the json envelope's own `omitted` field
+       * is the machine-readable half of the same report.
+       */
+      readonly omitted: ReadonlyArray<PreferenceDenial>;
+    }
   | { readonly kind: "spooled"; readonly spool: string; readonly redacted: boolean }
   | { readonly kind: "usage"; readonly detail: string }
   | { readonly kind: "refused"; readonly detail: string };
 
 /** Lift an egress verdict over already-composed bytes into an outcome. */
-function released(body: string, redacted: boolean): FormatOutcome {
-  return { kind: "body", body, redacted };
+function released(
+  body: string,
+  redacted: boolean,
+  omitted: ReadonlyArray<PreferenceDenial> = [],
+): FormatOutcome {
+  return { kind: "body", body, redacted, omitted };
 }
 
 async function exportJson(flags: BrainVerbFlags): Promise<FormatOutcome> {
@@ -84,16 +101,23 @@ async function exportJson(flags: BrainVerbFlags): Promise<FormatOutcome> {
   if (verdict.outcome !== EGRESS_OUTCOME.released) {
     return { kind: "refused", detail: verdict.detail };
   }
-  return released(JSON.stringify(verdict.payload) + "\n", verdict.redacted);
+  // Absent-when-empty: the envelope carries the field only when a
+  // reservation held a row back.
+  return released(
+    JSON.stringify(verdict.payload) + "\n",
+    verdict.redacted,
+    verdict.payload.omitted ?? [],
+  );
 }
 
 async function exportLlmsTxt(flags: BrainVerbFlags): Promise<FormatOutcome> {
   const { vault } = brainVerbContext(flags);
-  const verdict = redactForEgress(EGRESS_SITE, exportPreferencesLlmsTxt(vault));
+  const detail = exportPreferencesLlmsTxtDetailed(vault);
+  const verdict = redactForEgress(EGRESS_SITE, detail.text);
   if (verdict.outcome !== EGRESS_OUTCOME.released) {
     return { kind: "refused", detail: verdict.detail };
   }
-  return released(verdict.payload, verdict.redacted);
+  return released(verdict.payload, verdict.redacted, detail.omitted);
 }
 
 /** `--since` / `--until` as instants, or the operator's error. */
@@ -418,6 +442,12 @@ export async function cmdBrainExport(argv: string[]): Promise<number> {
     outcome.kind === "spooled"
       ? deliverSpool(outcome.spool, outPath)
       : deliverBody(outcome.body, outPath);
+  // The omission is disclosed on stderr only, after the document is
+  // delivered: the json bytes carry the machine-readable half, and the
+  // notice is the prose half for the human reading the terminal.
+  if (code === 0 && outcome.kind === "body" && outcome.omitted.length > 0) {
+    process.stderr.write(preferenceDenialNotice(outcome.omitted));
+  }
   if (code === 0 && outcome.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
   return code;
 }

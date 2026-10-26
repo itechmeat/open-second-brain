@@ -276,6 +276,21 @@ describe("an export with nothing to redact is byte-identical", () => {
     expect(r.stdout).toBe(exportPreferencesLlmsTxt(vault));
   });
 
+  test("brain export --format json carries no omitted key when nothing is denied", async () => {
+    // The json lane has no timestamp-free byte fixture to compare against,
+    // so its byte-identity property is pinned through the envelope's
+    // shape: the `omitted` field is absent-when-empty, which is what
+    // keeps a reservation-free vault's bytes what they always were.
+    await bootstrap();
+    await seedPreference("alpha", "principle alpha");
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], ENV());
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect("omitted" in payload).toBe(false);
+    // And nothing was withheld, so the omission notice is silent too.
+    expect(r.stderr).not.toContain("left out");
+  });
+
   test("the byte-identity fixtures are not empty", () => {
     // A comparison over nothing passes for the wrong reason.
     expect(VENDOR_TOKEN.length).toBeGreaterThan(16);

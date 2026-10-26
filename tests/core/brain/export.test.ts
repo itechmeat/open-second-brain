@@ -19,6 +19,7 @@ import {
   collectPreferenceRows,
   exportPreferencesJson,
   exportPreferencesLlmsTxt,
+  exportPreferencesLlmsTxtDetailed,
   PreferenceParseError,
 } from "../../../src/core/brain/export.ts";
 import {
@@ -273,5 +274,47 @@ describe("collector privacy denial reporting", () => {
     expect(scan.failures.map((f) => f.path)).toEqual(["Brain/preferences/pref-broken.md"]);
     expect(scan.denied).toEqual([]);
     expect(() => collectExportRows(vault)).toThrow(PreferenceParseError);
+  });
+});
+
+describe("shared-lane omission reporting", () => {
+  function stampMarker(slug: string, line: string): void {
+    const abs = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+  }
+
+  test("a reserved preference leaves the json envelope and is named in omitted", () => {
+    writePreference(vault, basePref("open"));
+    writePreference(vault, basePref("reserved"));
+    stampMarker("reserved", "access: private");
+
+    const out = exportPreferencesJson(vault);
+    expect(out.preferences.map((p) => p.id)).toEqual(["pref-open"]);
+    expect(out.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    // The envelope's version is additive, not a bump: a consumer written
+    // against the field-less envelope keeps working.
+    expect(out.schema).toBe(BRAIN_EXPORT_SCHEMA_VERSION);
+  });
+
+  test("omitted is absent when nothing is denied", () => {
+    writePreference(vault, basePref("plain"));
+
+    const out = exportPreferencesJson(vault);
+    expect("omitted" in out).toBe(false);
+  });
+
+  test("the llms-txt detailed variant leaves the reserved row out of the text and names it", () => {
+    writePreference(vault, basePref("open", { scope: "writing" }));
+    writePreference(vault, basePref("reserved"));
+    stampMarker("reserved", "confidentiality: secret");
+
+    const detail = exportPreferencesLlmsTxtDetailed(vault);
+    expect(detail.text).toContain("- pref-open (topic: open, scope: writing): Principle for open");
+    expect(detail.text).not.toContain("pref-reserved");
+    expect(detail.text).not.toContain("Principle for reserved");
+    expect(detail.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    // The stable string signature delegates to the detailed one, so the
+    // two never disagree about what the document contains.
+    expect(exportPreferencesLlmsTxt(vault)).toBe(detail.text);
   });
 });

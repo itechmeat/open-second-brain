@@ -26,12 +26,13 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { toPosix } from "../path-safety.ts";
+import type { FrontmatterMap } from "../types.ts";
 import { hostPathFreeReason } from "./host-path-free.ts";
 import { parsePreference } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
 import { vaultDisplayName } from "./templates.ts";
 import { isoSecond } from "./time.ts";
-import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type FrontmatterMap } from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 import { hasPrivacyDenyMarker } from "../graph/privacy-markers.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -191,6 +192,15 @@ export interface ExportedPreferencesJson {
   readonly generated_at: string;
   readonly vault_basename: string;
   readonly preferences: ReadonlyArray<ExportedPreferenceRow>;
+  /**
+   * The preferences the privacy deny markers kept out of this export,
+   * each named with its id and reason. Absent when empty, so a vault
+   * with no reservation serialises byte-identically to the field-less
+   * envelope and the schema stays 1 - an additive field, per the module's
+   * own versioning rule. There is no override: the field reports what a
+   * shared lane must never carry, so no flag fills it back in.
+   */
+  readonly omitted?: ReadonlyArray<PreferenceDenial>;
 }
 
 /**
@@ -361,12 +371,54 @@ function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {
   });
 }
 
+/**
+ * The refusing detail path beside {@link collectExportRows}: the same
+ * walk with the same parse-failure refusal, plus the denial list, and
+ * `rows` narrowed to what a shared lane may carry.
+ *
+ * This is the composition seam for everything handed to another reader -
+ * the json envelope, the llms-txt document, the bank bundle. The
+ * collector keeps `rows` complete for the import topic maps; the shared
+ * lanes narrow here, where the omission is at hand to be named.
+ */
+export function collectSharedExportRows(vault: string): {
+  readonly rows: ReadonlyArray<ExportedPreferenceRow>;
+  readonly denied: ReadonlyArray<PreferenceDenial>;
+} {
+  const { rows, failures, denied } = collectPreferenceRows(vault);
+  if (failures.length > 0) throw new PreferenceParseError(failures);
+  const reserved = new Set(denied.map((d) => d.id));
+  return { rows: rows.filter((row) => !reserved.has(row.id)), denied };
+}
+
+/**
+ * The stderr note naming the preferences a shared lane left out on a
+ * visibility reservation, in the `contentClassOmissionNotice` shape:
+ * counted, each item named with its reason, and a remedy. The remedy
+ * names the reservation itself rather than an export flag - a reserved
+ * rule never rides a shared lane, so the only way to share it is to
+ * clear the reservation on the file, and the keys listed are the ones
+ * this module reads.
+ */
+export function preferenceDenialNotice(denied: ReadonlyArray<PreferenceDenial>): string {
+  const list = denied.map((d) => `${d.id} (${d.reason})`).join(", ");
+  return (
+    `note: ${denied.length} preference(s) left out on a visibility reservation: ${list}; ` +
+    "no export flag carries them - clear the reservation " +
+    "(visibility / access / confidentiality / sensitivity) on the preference file to share it\n"
+  );
+}
+
 export function exportPreferencesJson(vault: string): ExportedPreferencesJson {
+  const { rows, denied } = collectSharedExportRows(vault);
   return Object.freeze({
     schema: BRAIN_EXPORT_SCHEMA_VERSION,
     generated_at: isoSecond(),
     vault_basename: vaultDisplayName(vault),
-    preferences: collectExportRows(vault),
+    preferences: rows,
+    // Absent-when-empty keeps a reservation-free vault's bytes exactly
+    // what they always were.
+    ...(denied.length > 0 ? { omitted: denied } : {}),
   });
 }
 
@@ -382,15 +434,26 @@ const LLMS_TXT_SECTION_LABEL: Readonly<Record<BrainPreference["status"], string>
   [BRAIN_PREFERENCE_STATUS.quarantine]: "Quarantine",
 };
 
+/** The llms-txt document beside the omissions its privacy policy made. */
+export interface LlmsTxtExport {
+  readonly text: string;
+  readonly omitted: ReadonlyArray<PreferenceDenial>;
+}
+
 /**
  * Render the export as an [llmstxt.org](https://llmstxt.org) markdown
  * file: H1 title, blockquote summary, then an H2 per non-empty
  * status. Each preference becomes one bullet line of the form
  * `- <id> (topic: <topic>[, scope: <scope>]): <principle>`. Status
  * sections without any rows are omitted entirely.
+ *
+ * Reserved preferences (see {@link PreferenceCollection.denied}) appear
+ * in neither the sections nor the bullets; the detailed variant returns
+ * the omissions beside the text so a caller can name them, the same
+ * additive report the json envelope carries.
  */
-export function exportPreferencesLlmsTxt(vault: string): string {
-  const rows = collectExportRows(vault);
+export function exportPreferencesLlmsTxtDetailed(vault: string): LlmsTxtExport {
+  const { rows, denied } = collectSharedExportRows(vault);
   const name = vaultDisplayName(vault);
   const lines: string[] = [
     `# ${name} — Brain preferences`,
@@ -411,5 +474,14 @@ export function exportPreferencesLlmsTxt(vault: string): string {
     }
     lines.push("");
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), omitted: denied };
+}
+
+/**
+ * The stable string signature, kept for the SDK façade and every
+ * existing reader: the detailed variant's text, unchanged in shape and
+ * byte-for-byte identical when nothing is denied.
+ */
+export function exportPreferencesLlmsTxt(vault: string): string {
+  return exportPreferencesLlmsTxtDetailed(vault).text;
 }
