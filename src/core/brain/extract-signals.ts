@@ -770,6 +770,12 @@ export function commitExtractedSignals(
           },
           report: reconciliation,
           firstError: err,
+          // Schema 2 freezes the validated payload whole - the SAME
+          // payload the error message tells the caller to re-run - so
+          // recovery can re-commit it without a second model call. The
+          // items already written ride along on purpose: a re-run lets
+          // the dedup index recognize them, exactly as the message says.
+          payload: { items: [...items] },
           now: opts.now,
         }),
       });

@@ -21,10 +21,14 @@
  *   6. `tryRecordDeadLetter` never throws - it reports why it could not
  *      write - because it runs inside a catch block whose original error
  *      must survive.
+ *   7. Schema v2 freezes the failing commit's validated payload into the
+ *      record, so recovery can re-run it without a second model call; a
+ *      v1 letter parses unchanged and carries no payload; an unknown
+ *      version still refuses.
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import {
@@ -38,6 +42,8 @@ import {
   tryRecordDeadLetter,
   type DeadLetterEnvelopeIdentity,
 } from "../../../src/core/brain/dead-letter.ts";
+import { commitExtractedSignals } from "../../../src/core/brain/extract-signals.ts";
+import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
 import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import { buildReconciliationReport } from "../../../src/core/reconciliation-report.ts";
 import { tempDirs } from "../../helpers/temp-dir.ts";
@@ -267,5 +273,227 @@ describe("the recorder used inside a catch block cannot throw", () => {
       expect(existsSync(outcome.path)).toBe(true);
       expect(readDeadLetter(v, outcome.id)).not.toBeNull();
     }
+  });
+});
+
+// ----- Schema v2: the frozen payload (one-command recovery, t_50794f57) ------
+//
+//  7. The current schema version is 2, and a v2 record carries the
+//     failing commit's validated payload so recovery can re-run it
+//     without a second model call.
+//  8. A record without a payload carries no payload key at all - absent,
+//     never present-and-null.
+//  9. Parsing is strict PER VERSION: a v1 letter keeps parsing and names
+//     no payload; a v1 letter that claims a payload is refused; a v2
+//     payload that is not an object is refused; an unknown version still
+//     refuses with the same error as before.
+
+const PAYLOAD = Object.freeze({
+  items: [
+    {
+      topic: "module-names",
+      signal: "positive",
+      principle: "Never abbreviate a module name.",
+      confidence: 0.9,
+    },
+  ],
+});
+
+describe("schema v2 freezes the payload", () => {
+  test("the current schema version is 2", () => {
+    expect(DEAD_LETTER_SCHEMA_VERSION).toBe(2);
+  });
+
+  test("a v2 record round-trips with the payload", () => {
+    const v = vault();
+    const record = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:module-names"]),
+      firstError: "disk full",
+      now: NOW,
+      payload: PAYLOAD,
+    });
+    expect(record.schema_version).toBe(2);
+    expect(record.payload).toEqual(PAYLOAD);
+    const back = readDeadLetter(v, record.id);
+    expect(back).toEqual(record);
+    expect(back?.payload).toEqual(PAYLOAD);
+    expect(listDeadLetters(v)[0]?.payload).toEqual(PAYLOAD);
+  });
+
+  test("a record without a payload carries no payload key, on disk least of all", () => {
+    const v = vault();
+    const record = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:x"]),
+      firstError: "boom",
+      now: NOW,
+    });
+    expect("payload" in record).toBe(false);
+    const raw = JSON.parse(readFileSync(deadLetterPath(v, record.id), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect("payload" in raw).toBe(false);
+  });
+
+  test("the payload sits in the fixed serialized field order, after the missing list", () => {
+    const v = vault();
+    const record = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:module-names"]),
+      firstError: "disk full",
+      now: NOW,
+      payload: PAYLOAD,
+    });
+    const raw = JSON.parse(readFileSync(deadLetterPath(v, record.id), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(raw)).toEqual([
+      "schema_version",
+      "id",
+      "lane",
+      "step",
+      "reference",
+      "target",
+      "attempted",
+      "found",
+      "missing",
+      "payload",
+      "outcome",
+      "first_error",
+      "recorded_at",
+    ]);
+    expect(record.id.length).toBeGreaterThan(0);
+  });
+
+  test("two failures differing only in their payload get different ids", () => {
+    const v = vault();
+    const withPayload = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:x"]),
+      firstError: "disk full",
+      now: NOW,
+      payload: PAYLOAD,
+    });
+    const without = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:x"]),
+      firstError: "disk full",
+      now: NOW,
+    });
+    expect(without.id).not.toBe(withPayload.id);
+    expect(listDeadLetters(v)).toHaveLength(2);
+  });
+
+  test("a v1 letter parses unchanged and carries no payload", () => {
+    // Hand-written exactly as schema v1 wrote it, so the back-compat path
+    // is pinned against the real on-disk shape and not a v2 record with
+    // the version number edited.
+    const v = vault();
+    const v1: Record<string, unknown> = {
+      schema_version: 1,
+      id: "extract-signals-000000000000",
+      lane: "extract-signals",
+      step: "extract-signals",
+      reference: "sess-2026-08-23",
+      target: "Brain/inbox",
+      attempted: 2,
+      found: 1,
+      missing: ["items[1]:module-names"],
+      outcome: "partial",
+      first_error: "disk full",
+      recorded_at: "2026-08-23T10:15:00Z",
+    };
+    mkdirSync(deadLetterDir(v), { recursive: true });
+    writeFileSync(
+      deadLetterPath(v, "extract-signals-000000000000"),
+      `${JSON.stringify(v1, null, 2)}\n`,
+    );
+    const parsed = readDeadLetter(v, "extract-signals-000000000000");
+    expect(parsed).not.toBeNull();
+    expect(parsed?.schema_version).toBe(1);
+    expect("payload" in (parsed ?? {})).toBe(false);
+    expect(parsed?.missing).toEqual(["items[1]:module-names"]);
+    expect(listDeadLetters(v)).toHaveLength(1);
+  });
+
+  test("a v1 record that claims a payload is refused by name", () => {
+    const v = vault();
+    const record = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:x"]),
+      firstError: "boom",
+      now: NOW,
+    });
+    writeFileSync(
+      deadLetterPath(v, record.id),
+      JSON.stringify({ ...record, schema_version: 1, payload: PAYLOAD }),
+    );
+    expect(() => readDeadLetter(v, record.id)).toThrow(DeadLetterError);
+    expect(() => readDeadLetter(v, record.id)).toThrow(/payload/);
+    expect(() => listDeadLetters(v)).toThrow(/payload/);
+  });
+
+  test("a v2 payload that is not an object is refused by name", () => {
+    for (const bad of [[PAYLOAD], "nope", null]) {
+      const v = vault();
+      const record = recordDeadLetter(v, {
+        envelope: ENVELOPE,
+        report: report(["items[1]:x"]),
+        firstError: "boom",
+        now: NOW,
+        payload: PAYLOAD,
+      });
+      writeFileSync(deadLetterPath(v, record.id), JSON.stringify({ ...record, payload: bad }));
+      expect(() => readDeadLetter(v, record.id)).toThrow(DeadLetterError);
+      expect(() => readDeadLetter(v, record.id)).toThrow(/payload/);
+    }
+  });
+});
+
+describe("the extractor freezes its payload into the letter", () => {
+  test("the letter carries the validated items the commit failed to write", () => {
+    const v = vault();
+    mkdirSync(join(v, "Brain"), { recursive: true });
+    importSessionRecall(v, {
+      sessionId: ENVELOPE.reference,
+      turns: [
+        {
+          turnId: "t1",
+          timestamp: "2026-08-22T09:01:00Z",
+          role: "user",
+          text: "Never abbreviate a module name.",
+        },
+      ],
+      createdAt: "2026-08-22T10:00:00Z",
+    });
+    const payload = {
+      items: [
+        {
+          topic: "release-style",
+          signal: "positive",
+          principle: "Name the release theme in the heading.",
+          confidence: 0.9,
+        },
+        {
+          // A colon is not a legal slug character, so this item's write
+          // refuses and the commit fails PART WAY through the payload.
+          topic: "module:names",
+          signal: "positive",
+          principle: "Never abbreviate a module name.",
+          confidence: 0.9,
+        },
+      ],
+    };
+    expect(() =>
+      commitExtractedSignals(v, ENVELOPE.reference, payload, { agent: "tester", now: NOW }),
+    ).toThrow(/failed to write extracted signal/);
+    const letters = listDeadLetters(v);
+    expect(letters).toHaveLength(1);
+    expect(letters[0]?.schema_version).toBe(2);
+    expect(letters[0]?.payload).toEqual(payload);
+    expect(letters[0]?.missing).toEqual(["items[1]:module:names"]);
   });
 });
