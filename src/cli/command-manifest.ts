@@ -761,6 +761,29 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("payload-file", "string"),
           ],
         ),
+        command(
+          "dead-letters",
+          "Dead extraction writes: list with each row's recovery exit, show, recover (dry-run; --apply --yes to write)",
+          [],
+          [
+            command("list", "Every dead letter with its classification and recovery command", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("show", "One dead letter in full detail", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("recover", "Re-run a letter's frozen payload at current vault state", [
+              flag("vault", "string"),
+              flag("agent", "string"),
+              flag("dry-run", "boolean"),
+              flag("apply", "boolean"),
+              flag("yes", "boolean"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command("okf-export", "Write a portable Open Knowledge Format bundle"),
         command(
           "okf-import",

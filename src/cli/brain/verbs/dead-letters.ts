@@ -1,0 +1,390 @@
+/**
+ * `o2b brain dead-letters <list|show|recover>` - the dead-letter surface
+ * (one-command recovery, t_50794f57, task C3).
+ *
+ * A dead letter is the durable record of a multi-artifact write that
+ * failed part way (`src/core/brain/dead-letter.ts`). Until now it was a
+ * fact without an exit: the file sat in
+ * `<vault>/.open-second-brain/dead-letters/` and every reader worked out
+ * alone what to do. This verb is the exit. `list` (the default) renders
+ * every letter with its classification and the exact copy-paste command
+ * that resolves it; `show <id>` prints one letter in full; `recover <id>`
+ * re-runs a schema-2 letter's frozen payload through the extraction
+ * commit at CURRENT vault state - the capture boundary, the dedup index
+ * and the staging lane are re-derived at call time, so already-written
+ * items dedup away and nothing stale is ever replayed.
+ *
+ * The consent ladder is the house one for a write that has a preview:
+ * recover is dry-run by default, and `--apply` requires `--yes` under
+ * `--json` or a non-TTY stdin (the `brain lint --apply` /
+ * `brain doctor --repair --apply` rule). The record id is itself the pin
+ * - no second confirmation phrase, exactly as `brain writes revert
+ * --apply <digest>`.
+ *
+ * RETENTION is preserved: nothing here deletes a letter. A successful
+ * recovery reports success and names the file the operator may delete BY
+ * HAND once the payload is reconciled - the letter is the only surviving
+ * evidence of the partial write, and no tool sweeps it.
+ *
+ * Exit codes: 0 on success (a listing is a report, whatever it says);
+ * 1 on an operational failure - a refused apply, a non-recoverable
+ * letter asked to recover, a frozen vault; 2 on usage errors, including
+ * a named-but-unknown record id.
+ */
+
+import {
+  type DeadLetterRecord,
+  deadLetterPath,
+  listDeadLetters,
+  readDeadLetter,
+} from "../../../core/brain/dead-letter.ts";
+import {
+  DeadLetterRecoveryError,
+  applyRecovery,
+  classifyDeadLetter,
+  planRecovery,
+} from "../../../core/brain/dead-letter-recovery.ts";
+import { VaultFrozenError } from "../../../core/brain/freeze-marker.ts";
+import { assertVaultIdentityForWrite } from "../../../core/brain/vault-identity.ts";
+import {
+  brainVerbContext,
+  fail,
+  ok,
+  okJson,
+  parse,
+  resolveBrainAgent,
+  usageError,
+} from "../helpers.ts";
+
+const USAGE =
+  "usage: o2b brain dead-letters [list] [--vault <path>] [--json]\n" +
+  "       o2b brain dead-letters show <id> [--vault <path>] [--json]\n" +
+  "       o2b brain dead-letters recover <id> [--dry-run] [--apply] [--yes] [--agent <name>]\n" +
+  "                        [--vault <path>] [--json]";
+
+/** The three subcommand names, for the usage error. */
+const SUBCOMMANDS = "list | show <id> | recover <id>";
+
+export async function cmdBrainDeadLetters(argv: string[]): Promise<number> {
+  const first = argv[0];
+  // The bare verb IS the listing: a first word that is a flag (`--vault`,
+  // `--json`) is the list invocation, not a subcommand. A first word that
+  // is neither a known subcommand nor a flag is a usage error rather than
+  // a surprise listing of the vault.
+  const known = first === "list" || first === "show" || first === "recover";
+  const rest = known ? argv.slice(1) : argv;
+  if (!known && first !== undefined && !first.startsWith("-")) {
+    return usageError(`brain dead-letters requires a subcommand: ${SUBCOMMANDS}`);
+  }
+  switch (first) {
+    case "show":
+      return deadLettersShow(rest);
+    case "recover":
+      return deadLettersRecover(rest);
+    default:
+      return deadLettersList(rest);
+  }
+}
+
+// ----- Shared rendering -----------------------------------------------------
+
+/** The classification and exit of one letter, read against current vault state. */
+interface RowView {
+  readonly record: DeadLetterRecord;
+  readonly category: string;
+  readonly reason: string;
+  readonly command: string | null;
+}
+
+function rowView(vault: string, record: DeadLetterRecord): RowView {
+  const c = classifyDeadLetter(vault, record);
+  return {
+    record,
+    category: c.category,
+    reason: c.reason,
+    command: c.command,
+  };
+}
+
+function rowJson(view: RowView): Record<string, unknown> {
+  const r = view.record;
+  return {
+    id: r.id,
+    schema_version: r.schema_version,
+    lane: r.lane,
+    step: r.step,
+    reference: r.reference,
+    target: r.target,
+    attempted: r.attempted,
+    found: r.found,
+    missing: [...r.missing],
+    ...(r.payload !== undefined ? { payload: r.payload } : {}),
+    has_payload: r.payload !== undefined,
+    outcome: r.outcome,
+    first_error: r.first_error,
+    recorded_at: r.recorded_at,
+    category: view.category,
+    reason: view.reason,
+    command: view.command,
+  };
+}
+
+// ----- list ------------------------------------------------------------------
+
+function deadLettersList(argv: string[]): number {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const { vault } = brainVerbContext(flags);
+  const asJson = flags["json"] === true;
+
+  // A letter on disk this build cannot read is a hard error by the
+  // store's own contract (`listDeadLetters` refuses rather than skips) -
+  // a listing that under-reports is the failure this surface exists to
+  // prevent, so the throw propagates to the shared refusal path below.
+  const views = listDeadLetters(vault).map((record) => rowView(vault, record));
+
+  if (asJson) {
+    okJson({ ok: true, total: views.length, letters: views.map(rowJson) });
+    return 0;
+  }
+  if (views.length === 0) {
+    ok("no dead letters in this vault");
+    return 0;
+  }
+  for (const view of views) {
+    const r = view.record;
+    ok(`${r.id}  [${r.lane}]  ${view.category}`);
+    ok(
+      `  session ${r.reference} -> ${r.target}, attempted ${r.attempted}, ` +
+        `found ${r.found}, missing ${r.missing.length}`,
+    );
+    if (r.missing.length > 0) ok(`  missing: ${r.missing.join(", ")}`);
+    ok(`  reason: ${view.reason}`);
+    if (view.command !== null) ok(`  next: ${view.command}`);
+  }
+  return 0;
+}
+
+// ----- show ------------------------------------------------------------------
+
+function deadLettersShow(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  if (positional.length < 1) {
+    return usageError(`brain dead-letters show requires an <id> argument\n${USAGE}`);
+  }
+  const { vault } = brainVerbContext(flags);
+  const asJson = flags["json"] === true;
+  const id = positional[0]!;
+
+  const record = readDeadLetterQuietly(vault, id);
+  if (record === null) {
+    return unknownId(id, asJson);
+  }
+  const view = rowView(vault, record);
+
+  if (asJson) {
+    okJson({ ok: true, letter: rowJson(view) });
+    return 0;
+  }
+  const r = view.record;
+  ok(`${r.id}  [${r.lane}]  ${view.category}`);
+  ok(`  schema: ${r.schema_version}${r.payload !== undefined ? " (payload frozen)" : ""}`);
+  ok(`  step: ${r.step}`);
+  ok(`  session: ${r.reference}`);
+  ok(`  target: ${r.target}`);
+  ok(`  attempted: ${r.attempted}, found: ${r.found}, missing: ${r.missing.length}`);
+  for (const key of r.missing) ok(`  missing: ${key}`);
+  if (r.payload !== undefined) {
+    const items = r.payload["items"];
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const topic = (item as { topic?: unknown })["topic"];
+        if (typeof topic === "string") ok(`  payload item: ${topic}`);
+      }
+    }
+  }
+  ok(`  outcome: ${r.outcome}`);
+  ok(`  first error: ${r.first_error}`);
+  ok(`  recorded: ${r.recorded_at}`);
+  ok(`  reason: ${view.reason}`);
+  if (view.command !== null) ok(`  next: ${view.command}`);
+  return 0;
+}
+
+// ----- recover ---------------------------------------------------------------
+
+function deadLettersRecover(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    agent: { type: "string" },
+    "dry-run": { type: "boolean" },
+    apply: { type: "boolean" },
+    yes: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  if (positional.length < 1) {
+    return usageError(`brain dead-letters recover requires an <id> argument\n${USAGE}`);
+  }
+  const asJson = flags["json"] === true;
+  const apply = flags["apply"] === true;
+  // Dry-run is the default; --apply is the write. The headless consent
+  // rule is the `brain lint --apply` one: no prompts under --json or a
+  // non-TTY stdin, so --yes is the only consent that can be given there.
+  if (apply && flags["yes"] !== true && (asJson || !process.stdin.isTTY)) {
+    const message =
+      "brain dead-letters recover --apply requires --yes in non-interactive mode " +
+      "(dry-run is the default; --apply re-runs the recorded payload)";
+    if (asJson) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
+  }
+  const { config, vault } = brainVerbContext(flags);
+  const id = positional[0]!;
+
+  const record = readDeadLetterQuietly(vault, id);
+  if (record === null) {
+    return unknownId(id, asJson);
+  }
+
+  try {
+    if (!apply) {
+      const plan = planRecovery(vault, record);
+      if (asJson) {
+        okJson({
+          ok: true,
+          id: record.id,
+          mode: "dry-run",
+          category: plan.classification.category,
+          reason: plan.classification.reason,
+          items: plan.items.map((i) => ({
+            topic: i.topic,
+            verdict: i.verdict,
+            ...(i.reason !== undefined ? { reason: i.reason } : {}),
+          })),
+        });
+      } else {
+        ok(`dry-run recovery plan for ${record.id} (${plan.classification.category})`);
+        ok(`  reason: ${plan.classification.reason}`);
+        for (const i of plan.items) {
+          ok(
+            `  ${i.topic}: ${verdictText(i.verdict)}${i.reason !== undefined ? ` (${i.reason})` : ""}`,
+          );
+        }
+        ok("nothing written; re-run with --apply --yes to write");
+      }
+      return 0;
+    }
+
+    // The apply is a content write: the same vault guards every content
+    // writer passes - the freeze and the vault identity - refuse here
+    // FIRST, before anything is written (the freeze names `o2b brain
+    // unfreeze` as its exit).
+    assertVaultIdentityForWrite(vault);
+    const res = applyRecovery(vault, record, {
+      agent: resolveBrainAgent(flags, config),
+      now: new Date(),
+    });
+    const letterPath = deadLetterPath(vault, record.id);
+    if (asJson) {
+      okJson({
+        ok: true,
+        id: record.id,
+        mode: "apply",
+        written: res.written.map((w) => ({ id: w.id, path: w.path, topic: w.topic })),
+        staged: res.staged,
+        deduped: res.deduped,
+        durability_rejected: res.durabilityRejected,
+        rejected: res.rejected.map((r) => ({ topic: r.topic, reason: r.reason })),
+        letter_retained: true,
+        letter_path: letterPath,
+      });
+    } else {
+      ok(
+        `recovered ${record.id}: wrote ${res.written.length} signal(s), ` +
+          `deduped ${res.deduped}, durability-rejected ${res.durabilityRejected}` +
+          (res.staged > 0 ? `, staged ${res.staged} for approval` : ""),
+      );
+      for (const r of res.rejected) ok(`  rejected: ${r.topic} (${r.reason})`);
+      ok(
+        `the dead letter is retained at ${letterPath}; ` +
+          "delete it by hand once the payload is reconciled",
+      );
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof VaultFrozenError) {
+      return refused(err.message, asJson);
+    }
+    if (err instanceof DeadLetterRecoveryError) {
+      return refused(err.message, asJson);
+    }
+    const message = `brain dead-letters recover failed: ${(err as Error).message ?? String(err)}`;
+    if (asJson) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
+  }
+}
+
+/** The dry-run verdict text, in the operator's words. */
+function verdictText(verdict: string): string {
+  switch (verdict) {
+    case "write":
+      return "will write";
+    case "staged":
+      return "will stage for approval";
+    case "dedup":
+      return "already on disk (dedup)";
+    default:
+      return "refused";
+  }
+}
+
+/** An operational refusal: the message on the error channel, exit 1. */
+function refused(message: string, asJson: boolean): number {
+  if (asJson) {
+    okJson({ ok: false, message });
+    return 1;
+  }
+  return fail(message);
+}
+
+// ----- Shared refusal paths --------------------------------------------------
+
+/**
+ * The unknown-id refusal. The id was NAMED by the caller, so this is a
+ * usage error (exit 2) rather than an empty report - a silent no-op would
+ * read as "nothing to do" for a letter the caller misquoted.
+ */
+function unknownId(id: string, asJson: boolean): number {
+  const message = `brain dead-letters: no dead letter with id ${JSON.stringify(id)}`;
+  if (asJson) {
+    okJson({ ok: false, message });
+    process.stderr.write(`${message}\n`);
+    return 2;
+  }
+  process.stderr.write(`error: ${message}\n`);
+  return 2;
+}
+
+/**
+ * Read one letter, mapping a malformed id to the unknown-id refusal shape
+ * by reading the directory listing instead: `deadLetterPath` throws on an
+ * id that does not match the `<lane>-<digest>` shape, and a malformed id
+ * is one nothing was ever written under.
+ */
+function readDeadLetterQuietly(vault: string, id: string): DeadLetterRecord | null {
+  try {
+    return readDeadLetter(vault, id);
+  } catch {
+    return null;
+  }
+}

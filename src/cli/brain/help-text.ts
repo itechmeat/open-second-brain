@@ -185,6 +185,7 @@ Brain verbs (observing memory):
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
   extract-signals     Mine taste signals from an imported session's user turns (two-phase, needs-llm-step)
+  dead-letters        Dead extraction writes: list (default) | show <id> | recover <id> (dry-run; --apply --yes to write)
   design-note         One-shot design note grounded in tensions, decisions and truth records
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export ATOF/ATIF trajectories, rank records by usage decay, promote host memory writes (export and rank are read-only; promote is dry-run by default)
@@ -956,6 +957,24 @@ export const VERB_HELP: Record<string, string> = {
     "The note must weigh named alternatives and mark EXACTLY ONE recommended:\n" +
     "zero and two-plus are both refused, and the refusal states the count.\n" +
     "A note for the same topic on the same day is refused, never overwritten.\n",
+  "dead-letters":
+    "usage: o2b brain dead-letters [list] [--vault <path>] [--json]\n" +
+    "       o2b brain dead-letters show <id> [--vault <path>] [--json]\n" +
+    "       o2b brain dead-letters recover <id> [--dry-run] [--apply] [--yes]\n" +
+    "                        [--agent <name>] [--vault <path>] [--json]\n" +
+    "The exit for a dead letter - the durable record of a multi-artifact\n" +
+    "extraction write that failed part way. `list` (the default) renders\n" +
+    "every letter with its classification - recover, pending, re-extract,\n" +
+    "not_recoverable, resolved - and the exact copy-paste command that\n" +
+    "resolves it; `show <id>` prints one letter in full, missing keys and\n" +
+    "frozen payload named; `recover <id>` re-runs a schema-2 letter's\n" +
+    "frozen payload through the extraction commit at CURRENT vault state,\n" +
+    "so already-written items dedup away and nothing stale is replayed.\n" +
+    "Recover is dry-run by default and previews the per-item verdicts;\n" +
+    "--apply performs the re-run and requires --yes under --json or a\n" +
+    "non-TTY stdin. A frozen vault refuses. NOTHING here deletes a letter:\n" +
+    "a recovered letter is retained, and removing it stays an operator's\n" +
+    "hand action on the named file.\n",
   "extract-signals":
     "usage: o2b brain extract-signals <session-ref> [--vault <vault>] [--agent <name>]\n" +
     "                                  [--payload <json> | --payload-file <path>] [--json]\n" +

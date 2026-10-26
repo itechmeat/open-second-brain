@@ -198,7 +198,9 @@ export class ExtractSignalsWriteError extends Error {
 /** The dead-letter half of the message above, either way it went. */
 function describeDeadLetter(outcome: DeadLetterOutcome): string {
   return outcome.recorded
-    ? `a dead letter recording this is at ${outcome.path} (${outcome.id})`
+    ? `a dead letter recording this is at ${outcome.path} (${outcome.id}); ` +
+        "'o2b brain dead-letters' classifies it and names the recovery exit " +
+        "(diagnostic code extract-signals-dead-letter)"
     : `NO dead letter could be recorded for it (${outcome.reason})`;
 }
 

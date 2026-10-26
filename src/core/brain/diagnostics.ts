@@ -290,6 +290,19 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The dead-letter exit (t_50794f57). Spelled as a literal for the
+        // same reason `undated-quantity` above is: importing the code from
+        // `extract-signals.ts` would close an import cycle (the extractor
+        // sits inside this module's import graph). The producer and this
+        // entry are kept in step by the surface test, which resolves THIS
+        // code through `resolveNextStep` against the command the write
+        // error's message names.
+        code: "extract-signals-dead-letter",
+        issueClass: "a partial extraction write left a dead letter on disk",
+        nextCommand: "o2b brain dead-letters",
+        autoRepairable: false,
+      },
+      {
         // Issue #149. The detector has existed since the hygiene lints
         // shipped; what it never had was an exit. Recording real use is
         // the only thing that moves a cold-start rule, and the reporter
