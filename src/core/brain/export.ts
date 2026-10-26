@@ -372,12 +372,25 @@ function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {
 }
 
 /**
- * The refusing detail path beside {@link collectExportRows}: the same
- * walk with the same parse-failure refusal, plus the denial list, and
- * `rows` narrowed to what a shared lane may carry.
- *
- * This is the composition seam for everything handed to another reader -
- * the json envelope, the llms-txt document, the bank bundle. The
+ * The denying detail path beside {@link collectExportRows}: the same
+ * walk, the same parse-failure refusal, and the denial list handed back
+ * with `rows` still complete. For a caller that must see every row to
+ * answer - the knowledge pack's selector resolution, which reports a
+ * reserved rule as a named block rather than an unmatched selector.
+ */
+export function collectExportRowsWithDenials(vault: string): {
+  readonly rows: ReadonlyArray<ExportedPreferenceRow>;
+  readonly denied: ReadonlyArray<PreferenceDenial>;
+} {
+  const { rows, failures, denied } = collectPreferenceRows(vault);
+  if (failures.length > 0) throw new PreferenceParseError(failures);
+  return { rows, denied };
+}
+
+/**
+ * The composition seam for everything handed to another reader - the
+ * json envelope, the llms-txt document, the bank bundle: the denying
+ * walk with `rows` narrowed to what a shared lane may carry. The
  * collector keeps `rows` complete for the import topic maps; the shared
  * lanes narrow here, where the omission is at hand to be named.
  */
@@ -385,8 +398,7 @@ export function collectSharedExportRows(vault: string): {
   readonly rows: ReadonlyArray<ExportedPreferenceRow>;
   readonly denied: ReadonlyArray<PreferenceDenial>;
 } {
-  const { rows, failures, denied } = collectPreferenceRows(vault);
-  if (failures.length > 0) throw new PreferenceParseError(failures);
+  const { rows, denied } = collectExportRowsWithDenials(vault);
   const reserved = new Set(denied.map((d) => d.id));
   return { rows: rows.filter((row) => !reserved.has(row.id)), denied };
 }

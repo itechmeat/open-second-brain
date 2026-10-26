@@ -296,3 +296,44 @@ describe("an export with nothing to redact is byte-identical", () => {
     expect(VENDOR_TOKEN.length).toBeGreaterThan(16);
   });
 });
+
+describe("a visibility-reserved preference is left out and named by the shared lanes", () => {
+  /** Hand-add an informal privacy marker, the way an operator does. */
+  function stampPrefMarker(slug: string, line: string): void {
+    const abs = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+  }
+
+  test("bank-export omits it from the bundle and names it on stderr", async () => {
+    await bootstrap();
+    await seedPreference("reserved", "principle reserved");
+    stampPrefMarker("reserved", "access: private");
+
+    const r = await runCli(["brain", "bank-export", "--vault", vault], ENV());
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      preferences: ReadonlyArray<{ id: string }>;
+      preferences_omitted?: ReadonlyArray<{ id: string; reason: string }>;
+    };
+    expect(payload.preferences.map((p) => p.id)).toEqual([]);
+    expect(payload.preferences_omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("left out");
+    // stderr only: the bundle names the omission as data, not prose.
+    expect(r.stdout).not.toContain("left out");
+  });
+
+  test("the bank bundle carries no preferences_omitted key when nothing is denied", async () => {
+    // The bank bundle's byte-identity property, pinned through its shape:
+    // the section-scoped omission field is absent-when-empty, so a vault
+    // with no reservation serialises exactly the keys it always did.
+    await bootstrap();
+    await seedPreference("alpha", "principle alpha");
+
+    const r = await runCli(["brain", "bank-export", "--vault", vault], ENV());
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect("preferences_omitted" in payload).toBe(false);
+    expect(r.stderr).not.toContain("left out");
+  });
+});

@@ -3,7 +3,8 @@
  * Unit A).
  *
  * `exportBankBundle` composes the existing exporters - preferences
- * (`collectExportRows`), the page link-graph (`exportVaultGraph`), the
+ * (`collectSharedExportRows`, the shared lanes' denying detail of
+ * `collectExportRows`), the page link-graph (`exportVaultGraph`), the
  * page interchange contract (`projectPageContracts`), and the read-only
  * sources dashboard (`aggregateSources`) - into one schema-versioned
  * envelope for backup, cross-instance migration, or downstream-tool
@@ -41,7 +42,11 @@
  * nodes through `graph.rejected[]`.
  */
 
-import { collectExportRows, type ExportedPreferenceRow } from "../export.ts";
+import {
+  collectSharedExportRows,
+  type ExportedPreferenceRow,
+  type PreferenceDenial,
+} from "../export.ts";
 import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
 import {
@@ -63,6 +68,16 @@ export interface BankBundle {
   readonly generated_at: string;
   readonly vault_basename: string;
   readonly preferences: ReadonlyArray<ExportedPreferenceRow>;
+  /**
+   * The preferences the privacy deny markers kept out of this bundle,
+   * each named with its id and reason. Absent when empty, so a vault
+   * with no reservation serialises with exactly the keys it always
+   * carried (the schema stays "1" - additive, the module's own
+   * versioning rule). There is no override: the field reports what no
+   * shared surface may carry, and the bank-export verb turns it into its
+   * stderr omission notice.
+   */
+  readonly preferences_omitted?: ReadonlyArray<PreferenceDenial>;
   readonly graph: VaultGraph;
   readonly pages: ReadonlyArray<PageContract>;
   readonly sources: SourcesReport;
@@ -72,13 +87,22 @@ export interface BankBundle {
  * Export a whole-vault bank bundle. The content sections are
  * deterministic (each underlying exporter sorts); only `generated_at`
  * varies between runs. Pure and read-only on the vault.
+ *
+ * Preference rows the privacy deny markers reserve are left out of the
+ * preferences section and named in `preferences_omitted` - the same
+ * report the json preference export carries, so no two exporters
+ * disagree about the same directory.
  */
 export function exportBankBundle(vault: string): BankBundle {
+  const { rows, denied } = collectSharedExportRows(vault);
   return {
     schema: BANK_BUNDLE_SCHEMA_VERSION,
     generated_at: isoSecond(),
     vault_basename: vaultDisplayName(vault),
-    preferences: collectExportRows(vault),
+    preferences: rows,
+    // Absent-when-empty keeps a reservation-free vault's bytes exactly
+    // what they always were.
+    ...(denied.length > 0 ? { preferences_omitted: denied } : {}),
     graph: exportVaultGraph(vault),
     pages: projectPageContracts(vault),
     sources: aggregateSources(vault),

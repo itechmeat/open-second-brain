@@ -56,7 +56,12 @@ import {
 } from "../../redactor.ts";
 import { appendContinuitySourceInvalidation } from "../continuity/store.ts";
 import { topicKey } from "../dream-plan.ts";
-import { collectExportRows, collectPreferenceRows, type ExportedPreferenceRow } from "../export.ts";
+import {
+  collectExportRowsWithDenials,
+  collectPreferenceRows,
+  PREFERENCE_DENY_REASON,
+  type ExportedPreferenceRow,
+} from "../export.ts";
 import type { RecoverabilityVerdict } from "../gates/recoverability.ts";
 import { classifyRecoverability } from "../gates/recoverability.ts";
 import {
@@ -331,11 +336,25 @@ export function selectKnowledgePack(
   const blocked: KnowledgePackBlocked[] = [];
   const warnings: KnowledgePackWarning[] = [];
 
+  // The complete rows, so a selector naming a reserved rule is MATCHED
+  // and reported as a named block - never "matched nothing".
+  const { rows: exportRows, denied } = collectExportRowsWithDenials(vault);
+  const deniedById = new Map(denied.map((d) => [d.id, d] as const));
+
   const preferences: ExportedPreferenceRow[] = [];
-  for (const row of collectExportRows(vault)) {
+  for (const row of exportRows) {
     const hits = parsed.filter((sel) => prefMatches(sel, row));
     if (hits.length === 0) continue;
     for (const sel of hits) matched.add(sel.raw);
+    // A reserved preference cannot ride redacted - the pack carries
+    // preference rows with the body dropped but the principle line
+    // verbatim - so this is drop-and-name, under the same reason
+    // `pageBlockReason` records for pages, and ahead of the owner check
+    // with the page reason precedence (visibility > owner).
+    if (deniedById.has(row.id)) {
+      blocked.push({ kind: "preference", id: row.id, reason: PREFERENCE_DENY_REASON });
+      continue;
+    }
     if (preferenceOwner(vault, row.id) !== null) {
       blocked.push({ kind: "preference", id: row.id, reason: "owner" });
       continue;

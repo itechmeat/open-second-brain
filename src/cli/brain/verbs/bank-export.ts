@@ -1,5 +1,6 @@
 import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import { exportBankBundle } from "../../../core/brain/portability/bundle.ts";
+import { preferenceDenialNotice, type PreferenceDenial } from "../../../core/brain/export.ts";
 import {
   isPromptDerivedPage,
   omittedPageReferenceMatcher,
@@ -53,6 +54,13 @@ function referenceOmissionNotice(dropped: number): string {
  * the policy kept, so those targets drop from the bundle (counted on
  * stderr). Everything else about the kept records, their remaining
  * targets included, stays exactly as the exporters derived it.
+ *
+ * A preference the privacy deny markers reserve (`visibility: private`,
+ * or an informal marker saying the same thing) is left out of the
+ * preferences section before the guard runs - a bundle is handed to
+ * another reader, and no override flag carries a reserved rule - and the
+ * bundle's `preferences_omitted` report is disclosed on stderr beside
+ * the page omissions, in the same notice shape.
  */
 export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -66,9 +74,13 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   let json: string;
   let redacted: boolean;
   let omitted: ReadonlyArray<string> = [];
+  let preferenceOmissions: ReadonlyArray<PreferenceDenial> = [];
   let droppedReferences = 0;
   try {
     const bundle = exportBankBundle(vault);
+    // Absent-when-empty: the bundle carries the field only when a
+    // reservation held a row back.
+    preferenceOmissions = bundle.preferences_omitted ?? [];
     const nodeSplit = egressContentClassSplit(bundle.graph.nodes, classPolicy, {
       name: (node) => node.path,
       isPromptDerived: (node) => isPromptDerivedPage(vault, node.path),
@@ -126,6 +138,9 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   if (flags["include-prompt-derived"] === true) {
     process.stderr.write(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
   } else {
+    if (preferenceOmissions.length > 0) {
+      process.stderr.write(preferenceDenialNotice(preferenceOmissions));
+    }
     if (omitted.length > 0) process.stderr.write(contentClassOmissionNotice(omitted));
     if (droppedReferences > 0) process.stderr.write(referenceOmissionNotice(droppedReferences));
   }

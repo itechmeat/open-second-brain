@@ -92,6 +92,15 @@ function page(vault: string, rel: string, content: string): void {
   writeFileSync(abs, content, "utf8");
 }
 
+/**
+ * Hand-add an informal privacy marker to a written preference, the way
+ * an operator does: a user-tier frontmatter line on the file.
+ */
+function stampPrefMarker(vault: string, slug: string, line: string): void {
+  const abs = join(brainDirs(vault).preferences, `pref-${slug}.md`);
+  writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+}
+
 /** The source vault every test starts from. */
 function seedSource(): void {
   pref(src, { slug: "writing-rule", topic: "writing" });
@@ -184,6 +193,39 @@ describe("export", () => {
       reason: "visibility",
     });
     expect(JSON.stringify(selected)).not.toContain("informally marked incident notes");
+  });
+
+  test("a privacy-marked preference is blocked as visibility, not carried redacted", () => {
+    // The pack carries preferences with the body dropped but the
+    // principle line verbatim, so there is no redacted ride for a
+    // reserved rule: it is dropped from the carried rows and named in
+    // `blocked`, the same way a page carrying `visibility:` is.
+    pref(src, { slug: "writing-rule", topic: "writing" });
+    pref(src, { slug: "marked-rule", topic: "writing" });
+    stampPrefMarker(src, "marked-rule", "access: private");
+
+    const selected = selectKnowledgePack(src, ["pref-marked-rule", "pref-writing-rule"]);
+    expect(selected.preferences.map((row) => row.id)).toEqual(["pref-writing-rule"]);
+    expect(selected.blocked).toContainEqual({
+      kind: "preference",
+      id: "pref-marked-rule",
+      reason: "visibility",
+    });
+    // The selector naming the reserved rule was MATCHED - the block names
+    // it - so the run is a named omission, never "matched nothing".
+    expect(JSON.stringify(selected)).not.toContain("rule marked-rule");
+  });
+
+  test("selecting only a denied preference refuses with the every-entry-blocked error", () => {
+    pref(src, { slug: "marked-rule", topic: "writing" });
+    stampPrefMarker(src, "marked-rule", "sensitivity: confidential");
+
+    // The every-entry-blocked path must still read correctly when the
+    // only selected entry was withheld by the privacy markers rather
+    // than by an owner claim.
+    expect(() => selectKnowledgePack(src, ["pref-marked-rule"])).toThrow(
+      "every selected entry was blocked as private; nothing is left to pack",
+    );
   });
 });
 
