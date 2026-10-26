@@ -39,7 +39,10 @@ function listReceipts(argv: string[]): number {
       : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
-  const summaries = receipts.map(summarizeContextReceipt);
+  // Arrow, not point-free: summarizeContextReceipt's second parameter is
+  // the optional reply-presence join, which a point-free map would feed
+  // each row's array index into.
+  const summaries = receipts.map((receipt) => summarizeContextReceipt(receipt));
 
   if (flags["json"]) {
     process.stdout.write(

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { emitContextReceipt } from "../../src/core/brain/context-receipts.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import { emitObservedUse } from "../../src/core/brain/observed-use.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
@@ -118,6 +119,70 @@ describe("brain_context_receipts tool", () => {
     });
     expect(show["id"]).toBe(receipt.id);
     expect((show["payload"] as Record<string, unknown>)["session_id"]).toBe("session-mcp");
+  });
+
+  test("show joins the session's reply_presence record and names unjoined honestly", async () => {
+    const joined = emitContextReceipt(vault, {
+      options: {
+        host: "mcp-test",
+        trigger: "session_inject",
+        createdAt: "2026-05-20T14:00:00.000Z",
+        sessionId: "session-present",
+      },
+      finalText: "eager layer",
+      items: [{ id: "pref-alpha", path: "Brain/preferences/pref-alpha.md" }],
+    });
+    const lonely = emitContextReceipt(vault, {
+      options: {
+        host: "mcp-test",
+        trigger: "session_inject",
+        createdAt: "2026-05-20T14:05:00.000Z",
+        sessionId: "session-absent",
+      },
+      finalText: "eager layer",
+      items: [{ id: "pref-bravo", path: "Brain/preferences/pref-bravo.md" }],
+    });
+    const presence = appendContinuityRecord(vault, {
+      kind: "reply_presence",
+      createdAt: "2026-05-20T14:10:00.000Z",
+      payload: {
+        session_id: "session-present",
+        checked: 1,
+        per_note: [
+          { path: "Brain/preferences/pref-alpha.md", start_line: 2, verdict: "not-in-note" },
+        ],
+      },
+    });
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const showJoined = await callReceipts(server, { operation: "show", id: joined.id });
+    expect(showJoined["reply_presence"]).toEqual({
+      joined: true,
+      presence: {
+        record_id: presence.id,
+        created_at: "2026-05-20T14:10:00.000Z",
+        checked: 1,
+        per_note: [
+          { path: "Brain/preferences/pref-alpha.md", start_line: 2, verdict: "not-in-note" },
+        ],
+      },
+    });
+
+    // No reply_presence record for this receipt's session: the outcome is
+    // NAMED on the response, never a silent absence.
+    const showLonely = await callReceipts(server, { operation: "show", id: lonely.id });
+    expect(showLonely["reply_presence"]).toEqual({
+      joined: false,
+      reason: "unjoined",
+      session_id: "session-absent",
+    });
+
+    // The list summaries stay summaries: no per-row presence join.
+    const list = await callReceipts(server, { operation: "list", trigger: "session_inject" });
+    for (const entry of list["receipts"] as Array<Record<string, unknown>>) {
+      expect("reply_presence" in entry).toBe(false);
+    }
   });
 
   test("summary folds a session and joins the observed-use verdicts", async () => {

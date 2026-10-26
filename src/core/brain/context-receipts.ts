@@ -5,7 +5,7 @@ import {
   isCanonicalUtcTimestamp,
   listContinuityRecords,
 } from "./continuity/store.ts";
-import type { ContinuityRecord } from "./continuity/types.ts";
+import { CONTINUITY_SESSION_ID_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 
 /**
@@ -118,6 +118,14 @@ export interface ContextReceiptSummary {
     readonly action: string;
     readonly escalate: boolean;
   };
+  /**
+   * The receipt's session reply-presence join (t_f8510c55), present ONLY
+   * when the caller handed a {@link lookupReceiptReplyPresence} result in.
+   * List summaries stay summaries and omit it; a show path passes the
+   * lookup in, and the member then names either the joined per-note
+   * verdicts or the unjoined outcome - never a silent absence.
+   */
+  readonly reply_presence?: ReceiptReplyPresenceJoin;
 }
 
 export function emitContextReceipt(
@@ -464,7 +472,124 @@ export function getContextReceipt(vault: string, id: string): ContinuityRecord |
   );
 }
 
-export function summarizeContextReceipt(record: ContinuityRecord): ContextReceiptSummary {
+// ----- reply-presence join (t_f8510c55) ------------------------------------
+
+/**
+ * One injected note's presence verdict, as the answer-quote-check hook
+ * wrote it. The verdict string is the quote-check vocabulary (`verified`,
+ * `not-in-note`, `source-truncated`, `note-unavailable`, `not-text`,
+ * plus the per-note-only `absent`); the reader passes it through
+ * verbatim, so a verdict member a newer hook writes still reads here
+ * without a reader release.
+ */
+export interface ReceiptReplyPresenceNote {
+  readonly path: string;
+  readonly start_line?: number;
+  readonly end_line?: number;
+  readonly verdict: string;
+}
+
+/**
+ * The per-note presence verdicts one receipt's session produced, joined
+ * from the session's `reply_presence` continuity record. Identifiers and
+ * verdicts only - the record never carried answer text, and none is
+ * invented here.
+ */
+export interface ReceiptReplyPresence {
+  /** Continuity id of the `reply_presence` record that joined. */
+  readonly record_id: string;
+  /** When that record was written - the turn it reports on. */
+  readonly created_at: string;
+  /** How many reply spans the hook measured; `null` when it recorded none. */
+  readonly checked: number | null;
+  /** One row per injected note, writer order kept. */
+  readonly per_note: ReadonlyArray<ReceiptReplyPresenceNote>;
+  /** Hash binding the verdicts to the exact answer text checked. */
+  readonly source_hash?: string;
+}
+
+/**
+ * The outcome of joining a receipt to its session's `reply_presence`
+ * record. `joined` carries the verdicts; `unjoined` is the HONEST
+ * absence: the receipt names a session no presence record answers, or
+ * names no session at all. A missing join is never rendered as an
+ * inferred one - there is no time-window fallback - and the unjoined
+ * outcome names the key that did not match so a reader can tell a
+ * keyless receipt from an unchecked session.
+ */
+export type ReceiptReplyPresenceJoin =
+  | { readonly joined: true; readonly presence: ReceiptReplyPresence }
+  | { readonly joined: false; readonly reason: "unjoined"; readonly session_id?: string };
+
+/**
+ * Join a context receipt to its session's reply-presence record by exact
+ * {@link CONTINUITY_SESSION_ID_KEY} match (t_f8510c55).
+ *
+ * When the session checked several turns, the LATEST sibling record
+ * joins - the store reads ascending, append order breaking same-instant
+ * ties, so the last match is the newest checked turn; its `record_id`
+ * and `created_at` name it, and earlier turns remain in the ledger for
+ * the continuity reader. A receipt without a session key is unjoined
+ * before the ledger is read: there is nothing to match on, and inventing
+ * a window would answer a question the receipt never asked.
+ */
+export function lookupReceiptReplyPresence(
+  vault: string,
+  record: ContinuityRecord,
+): ReceiptReplyPresenceJoin {
+  const sessionId = record.payload[CONTINUITY_SESSION_ID_KEY];
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return Object.freeze({ joined: false as const, reason: "unjoined" });
+  }
+  const latest = listContinuityRecords(vault, { kind: "reply_presence" })
+    .filter((sibling) => sibling.payload[CONTINUITY_SESSION_ID_KEY] === sessionId)
+    .at(-1);
+  const presence = latest === undefined ? null : replyPresenceOf(latest);
+  if (latest === undefined || presence === null) {
+    return Object.freeze({
+      joined: false as const,
+      reason: "unjoined" as const,
+      session_id: sessionId,
+    });
+  }
+  return Object.freeze({ joined: true as const, presence });
+}
+
+/** Unfold one `reply_presence` record; `null` when its payload cannot be read. */
+function replyPresenceOf(record: ContinuityRecord): ReceiptReplyPresence | null {
+  const payload = record.payload;
+  const stored = payload["per_note"];
+  if (!Array.isArray(stored)) return null;
+  const perNote: ReceiptReplyPresenceNote[] = [];
+  for (const raw of stored) {
+    if (raw === null || typeof raw !== "object") continue;
+    const note = raw as Record<string, unknown>;
+    const path = note["path"];
+    const verdict = note["verdict"];
+    if (typeof path !== "string" || path.length === 0) continue;
+    if (typeof verdict !== "string" || verdict.length === 0) continue;
+    perNote.push({
+      path,
+      verdict,
+      ...(typeof note["start_line"] === "number" ? { start_line: note["start_line"] } : {}),
+      ...(typeof note["end_line"] === "number" ? { end_line: note["end_line"] } : {}),
+    });
+  }
+  const checked = payload["checked"];
+  const sourceHash = payload["source_hash"];
+  return {
+    record_id: record.id,
+    created_at: record.createdAt,
+    checked: typeof checked === "number" ? checked : null,
+    per_note: perNote,
+    ...(typeof sourceHash === "string" && sourceHash.length > 0 ? { source_hash: sourceHash } : {}),
+  };
+}
+
+export function summarizeContextReceipt(
+  record: ContinuityRecord,
+  replyPresence?: ReceiptReplyPresenceJoin,
+): ContextReceiptSummary {
   const payload = record.payload;
   return {
     id: record.id,
@@ -478,6 +603,7 @@ export function summarizeContextReceipt(record: ContinuityRecord): ContextReceip
     private: record.private,
     redacted: record.redacted,
     ...adequacySummary(payload["adequacy"]),
+    ...(replyPresence !== undefined ? { reply_presence: replyPresence } : {}),
   };
 }
 

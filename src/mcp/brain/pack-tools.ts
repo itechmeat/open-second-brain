@@ -56,6 +56,7 @@ import {
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
+  lookupReceiptReplyPresence,
   RECEIPT_ITEM_ACTIVE_BODY,
   RECEIPT_ITEM_LESSONS_BODY,
   RECEIPT_ITEM_SCOPED_RULES,
@@ -683,9 +684,13 @@ async function toolBrainContextReceipts(
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(local ? {} : { exclude: isRuleOnlyInjection }),
     });
+    // The join is show-only: summarizeContextReceipt's second parameter
+    // is the presence join, so the summaries are mapped through an arrow
+    // - a point-free `.map(summarizeContextReceipt)` would hand every
+    // row's ARRAY INDEX to that parameter.
     const summaries = receipts
       .map((receipt) => receiptAtReach(receipt, local))
-      .map(summarizeContextReceipt);
+      .map((receipt) => summarizeContextReceipt(receipt));
     const page = pageSlice(summaries, offset, limit ?? Math.max(summaries.length, 1));
     return {
       vault_path: vaultPathField(ctx),
@@ -716,6 +721,14 @@ async function toolBrainContextReceipts(
       payload: receipt.payload,
       private: receipt.private,
       redacted: receipt.redacted,
+      // The receipt's session reply-presence join (t_f8510c55): the
+      // per-note verdicts of the session's latest reply_presence record,
+      // or the named unjoined outcome - a receipt whose session checked
+      // no turn, or that names no session at all, says so instead of
+      // reading as silently absent. The lookup runs on the reach-adjusted
+      // record, so a payload redacted below local reach joins only on
+      // what it still carries.
+      reply_presence: lookupReceiptReplyPresence(ctx.vault, receipt),
     };
   }
 
