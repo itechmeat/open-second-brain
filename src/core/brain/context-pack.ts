@@ -282,10 +282,49 @@ export interface ContextPackEntityFactsReport {
  */
 export const CONTEXT_PACK_ENTITY_FACTS_MAX_ENTITIES = 3;
 
+/**
+ * Score-aware tail trim (t_cb6a5558): how many of the pack's delivered
+ * items are immune to the trim. The head of the delivery is what the
+ * tier gate already vouched for; only the tail past these items competes
+ * on query-term overlap. A named constant, not a knob.
+ */
+export const CONTEXT_PACK_TAIL_TRIM_KEEP = 3;
+
+/**
+ * Score-aware tail trim (t_cb6a5558): a tail item whose query-term
+ * overlap is at least this fraction of the top delivered score restates
+ * the question's terms nearly as fully as the top hit and stays
+ * deliverable. A named constant, not a knob.
+ */
+export const TAIL_TRIM_KEEP_FRACTION = 0.8;
+
+/**
+ * What the score-aware tail trim (t_cb6a5558) did to the delivered
+ * tail, counted whole items and tokens. Present ONLY when the caller
+ * opted in via {@link ContextPackOptions.tailTrim} AND a query was
+ * present to score against - the same conditional shape as `semantic`,
+ * `packing` and `entityFacts`.
+ */
+export interface ContextPackTailTrimReport {
+  /** Tail items dropped whole; each also carries a `"tail-trim"` skip entry. */
+  readonly dropped: number;
+  /** Tail items kept because their query-term overlap nearly matched the top hit. */
+  readonly keptByQueryTerms: number;
+  /** Former `over-budget` candidates re-admitted under the freed budget. */
+  readonly rescued: number;
+  /** Tokens the trim freed, net of the budget the rescue re-spent. */
+  readonly tokensSaved: number;
+}
+
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
-  readonly reason: "over-budget" | "filter-miss" | "guard-blocked" | "over-char-budget";
+  readonly reason:
+    | "over-budget"
+    | "filter-miss"
+    | "guard-blocked"
+    | "over-char-budget"
+    | "tail-trim";
 }
 
 /**
@@ -364,6 +403,12 @@ export interface ContextPackReport {
    * {@link ContextPackEntityFactsReport}.
    */
   readonly entityFacts?: ContextPackEntityFactsReport;
+  /**
+   * Present only when the caller opted in via
+   * {@link ContextPackOptions.tailTrim} and a query scored the tail;
+   * see {@link ContextPackTailTrimReport}.
+   */
+  readonly tailTrim?: ContextPackTailTrimReport;
 }
 
 /**
@@ -529,6 +574,22 @@ export interface ContextPackOptions {
    * `entity_facts_context_pack` config key.
    */
   readonly entityFacts?: boolean;
+  /**
+   * Score-aware tail trim for delivered evidence (t_cb6a5558). When
+   * true AND a query is present, the pack scores every delivered item
+   * against the query with the same language-agnostic token-overlap
+   * kernel the `ranked` mode ranks with, keeps its top
+   * {@link CONTEXT_PACK_TAIL_TRIM_KEEP} delivered items, keeps any tail
+   * item whose score is at least
+   * {@link TAIL_TRIM_KEEP_FRACTION} of the top delivered score (it
+   * restates the question's terms), drops the rest whole with
+   * `"tail-trim"` skip entries, and offers the freed budget back to
+   * `over-budget` candidates in priority order. The report gains a
+   * conditional `tailTrim` member. Omitted/false keeps the pack
+   * byte-identical - the trim never runs without the flag. Callers
+   * gate this on the `tail_trim_context_pack` config key.
+   */
+  readonly tailTrim?: boolean;
   /**
    * Which candidate pages the caller may see, asked with each page's
    * ABSOLUTE path. Applied to the collected candidates before ranking,

@@ -873,6 +873,23 @@ export function resolveEntityFactsContextPack(configPath?: string): boolean {
 }
 
 /**
+ * Context-pack score-aware tail-trim gate (delivered-evidence trim,
+ * t_cb6a5558). Default OFF: brain_context_pack never trims delivered
+ * items after the tier/budget walk unless `tail_trim_context_pack:
+ * "true"` (or the env override), keeping the default pack
+ * byte-identical. When on, the pack drops the low-scoring tail past its
+ * top delivered items and reports the trim in a conditional `tailTrim`
+ * report member.
+ */
+export function resolveTailTrimContextPack(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK",
+    "tail_trim_context_pack",
+    configPath,
+  );
+}
+
+/**
  * Counterparty-brief hook gate (dated commitments, t_43b0a379). Default
  * OFF: the UserPromptSubmit hook exits without output unless
  * `counterparty_brief_enabled: "true"` (or the env override), so the

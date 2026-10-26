@@ -7,12 +7,14 @@ import {
   resolveCounterpartyBriefEnabled,
   resolveCounterpartyBriefTriggers,
   resolveEntityFactsContextPack,
+  resolveTailTrimContextPack,
 } from "../../src/core/config.ts";
 
 /** Env keys these tests own outright, whatever the outer shell set. */
 const OWNED_ENV = [
   "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
   "OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK",
+  "OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK",
 ] as const;
 
 let tmp: string;
@@ -117,6 +119,36 @@ describe("resolveCounterpartyBriefTriggers", () => {
   test("duplicate entries are kept as declared, order preserved", () => {
     writeConfig({ counterparty_brief_triggers: "meet, call, meet" });
     expect(resolveCounterpartyBriefTriggers(configPath)).toEqual(["meet", "call", "meet"]);
+  });
+});
+
+describe("resolveTailTrimContextPack", () => {
+  test("defaults to false with no config and no env", () => {
+    expect(resolveTailTrimContextPack(configPath)).toBe(false);
+  });
+
+  test("turns on from the config key", () => {
+    writeConfig({ tail_trim_context_pack: "true" });
+    expect(resolveTailTrimContextPack(configPath)).toBe(true);
+  });
+
+  test("the env override wins over the config key", () => {
+    writeConfig({ tail_trim_context_pack: "false" });
+    process.env["OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK"] = "1";
+    expect(resolveTailTrimContextPack(configPath)).toBe(true);
+    process.env["OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK"] = "true";
+    expect(resolveTailTrimContextPack(configPath)).toBe(true);
+  });
+
+  test("an env override can hold the gate off against an on config", () => {
+    writeConfig({ tail_trim_context_pack: "true" });
+    process.env["OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK"] = "0";
+    expect(resolveTailTrimContextPack(configPath)).toBe(false);
+  });
+
+  test("only the truthy literals turn it on", () => {
+    writeConfig({ tail_trim_context_pack: "on" });
+    expect(resolveTailTrimContextPack(configPath)).toBe(false);
   });
 });
 
