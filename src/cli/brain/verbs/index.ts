@@ -142,6 +142,7 @@ export {
   cmdBrainSessionGrep,
 } from "./session-recall.ts";
 export { cmdBrainLint } from "./lint.ts";
+export { cmdBrainValidate } from "./validate.ts";
 export { cmdBrainActions } from "./actions.ts";
 export { cmdBrainSummary } from "./summary.ts";
 export { cmdBrainUnlinked } from "./unlinked.ts";

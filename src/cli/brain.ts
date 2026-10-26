@@ -157,6 +157,7 @@ import {
   cmdBrainSessionExpand,
   cmdBrainSessionGrep,
   cmdBrainLint,
+  cmdBrainValidate,
   cmdBrainActions,
   cmdBrainSummary,
   cmdBrainUnlinked,
@@ -523,6 +524,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSessionExpand(rest);
       case "lint":
         return await cmdBrainLint(rest);
+      case "validate":
+        return await cmdBrainValidate(rest);
       case "actions":
         return await cmdBrainActions(rest);
       case "summary":

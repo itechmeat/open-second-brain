@@ -1,0 +1,243 @@
+/**
+ * `o2b brain validate` - the standalone validation gate (t_dc782fd5,
+ * task C4). Claims pinned here:
+ *
+ *  1. Selection is exactly one of `--paths` / `--dirty`; neither or both
+ *     is a usage error (exit 2), because whole-vault validation stays
+ *     doctor's job.
+ *  2. Paths mode lints exactly the named set with the write-receipt
+ *     page-lint vocabulary: clean exits 0; an error finding exits 1.
+ *  3. Warnings are non-blocking by default and block under `--strict`
+ *     (exit 2) - byte-for-byte the doctor exit contract.
+ *  4. A named page the lint could not read is itself blocking (exit 1):
+ *     a gate that could not read what it was pointed at may not report
+ *     clean. An over-byte-cap skip is reported and non-blocking.
+ *  5. A `--paths` spelling that escapes the vault is refused by name.
+ *  6. Dirty mode lints every git-dirty Markdown note - modified, added
+ *     and untracked - and ignores dirty non-Markdown files; a vault that
+ *     is not a git worktree is a named refusal (exit 2), never a silent
+ *     clean pass.
+ *  7. The gate is report-only: no `--apply`, no fix vocabulary.
+ *  8. The verb is wired: router dispatch, `--help` usage text, manifest
+ *     row (so the derived help surfaces list it).
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { runCli } from "../helpers/run-cli.ts";
+
+const CLEAN_PAGE = "---\ntitle: Clean\n---\n\nplain prose\n";
+const ERROR_PAGE = "no frontmatter here\n";
+const WARNING_PAGE = "---\ntitle: W\n---\n\nsee [[pref-ghost]]\n";
+
+let tmp: string;
+let vault: string;
+let configPath: string;
+
+function writePage(rel: string, text: string): string {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, text, "utf8");
+  return rel;
+}
+
+/** Commit the vault's current state, making it a git worktree. */
+function gitInit(): void {
+  const run = (args: string[]) => execFileSync("git", ["-C", vault, ...args], { encoding: "utf8" });
+  run(["init", "-q"]);
+  run(["config", "user.email", "test@example.com"]);
+  run(["config", "user.name", "test"]);
+  run(["add", "-A"]);
+  run(["commit", "-q", "-m", "base"]);
+}
+
+function run(args: ReadonlyArray<string>) {
+  return runCli(["brain", "validate", ...args, "--vault", vault], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+  });
+}
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-cli-validate-"));
+  vault = join(tmp, "vault");
+  mkdirSync(join(vault, "Brain", "inbox"), { recursive: true });
+  configPath = join(tmp, "config.yaml");
+  writeFileSync(configPath, `vault: ${vault}\n`);
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("selection", () => {
+  test("neither selector is a usage error naming the rule", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    const r = await run([]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("--paths");
+    expect(r.stderr).toContain("--dirty");
+  });
+
+  test("both selectors is a usage error", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    const r = await run(["--paths", "Brain/inbox/clean.md", "--dirty"]);
+    expect(r.returncode).toBe(2);
+  });
+
+  test("a --paths spelling outside the vault is refused by name", async () => {
+    const r = await run(["--paths", "../outside.md"]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("../outside.md");
+  });
+
+  test("an empty --paths list is a usage error", async () => {
+    const r = await run(["--paths"]);
+    expect(r.returncode).toBe(2);
+  });
+});
+
+describe("paths mode", () => {
+  test("a clean named page exits 0 and says so", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    const r = await run(["--paths", "Brain/inbox/clean.md"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("ok");
+    expect(r.stdout).toContain("Brain/inbox/clean.md");
+  });
+
+  test("an error finding exits 1 and names the page and the code", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    writePage("Brain/inbox/broken.md", ERROR_PAGE);
+    // --paths is a repeatable flag (the parser's string-array convention),
+    // one flag per page.
+    const r = await run(["--paths", "Brain/inbox/clean.md", "--paths", "Brain/inbox/broken.md"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("Brain/inbox/broken.md");
+    expect(r.stdout).toContain("frontmatter-missing");
+  });
+
+  test("a warning is non-blocking by default and blocks under --strict", async () => {
+    writePage("Brain/inbox/warn.md", WARNING_PAGE);
+    const loose = await run(["--paths", "Brain/inbox/warn.md"]);
+    expect(loose.returncode).toBe(0);
+    expect(loose.stdout).toContain("broken-wikilink");
+    const strict = await run(["--paths", "Brain/inbox/warn.md", "--strict"]);
+    expect(strict.returncode).toBe(2);
+    expect(strict.stdout).toContain("broken-wikilink");
+  });
+
+  test("an unreadable named page blocks even when nothing else is wrong", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    const r = await run(["--paths", "Brain/inbox/clean.md", "--paths", "Brain/inbox/gone.md"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("Brain/inbox/gone.md");
+    expect(r.stdout).toContain("page-unreadable");
+  });
+
+  test("--json carries the page-lint report shape and the verdict", async () => {
+    writePage("Brain/inbox/warn.md", WARNING_PAGE);
+    const r = await run(["--paths", "Brain/inbox/warn.md", "--strict", "--json"]);
+    expect(r.returncode).toBe(2);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      selection: string;
+      total: number;
+      returned: number;
+      truncated: boolean;
+      findings: Array<{ code: string; page: string; severity: string; next_command?: string }>;
+      skipped: Array<{ page: string; reason: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.selection).toBe("paths");
+    expect(payload.total).toBe(1);
+    expect(payload.truncated).toBe(false);
+    expect(payload.findings[0]).toMatchObject({
+      code: "broken-wikilink",
+      page: "Brain/inbox/warn.md",
+      severity: "warning",
+    });
+    expect(payload.skipped).toEqual([]);
+  });
+
+  test("the gate is report-only: --apply is not a flag it knows", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    // Unknown flags raise the parser's CliError, which the brain router
+    // reports as `error: unknown flag: --apply` with exit 1 (the repo's
+    // one contract for a flag no verb declares).
+    const r = await run(["--paths", "Brain/inbox/clean.md", "--apply"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("unknown flag: --apply");
+  });
+});
+
+describe("dirty mode", () => {
+  test("picks up modified, added and untracked Markdown and ignores non-Markdown", async () => {
+    const base = writePage("Brain/inbox/base.md", CLEAN_PAGE);
+    gitInit();
+    // Modified...
+    writePage(base, "---\ntitle: Clean\n---\n\nmore prose\n");
+    // ...added (staged)...
+    writePage("Brain/inbox/staged.md", CLEAN_PAGE);
+    execFileSync("git", ["-C", vault, "add", "Brain/inbox/staged.md"]);
+    // ...untracked...
+    writePage("Brain/inbox/untracked.md", CLEAN_PAGE);
+    // ...and a dirty non-Markdown file that must be ignored.
+    writeFileSync(join(vault, "Brain", "scratch.txt"), "not a note\n");
+
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("Brain/inbox/base.md");
+    expect(r.stdout).toContain("Brain/inbox/staged.md");
+    expect(r.stdout).toContain("Brain/inbox/untracked.md");
+    expect(r.stdout).not.toContain("scratch.txt");
+    expect(r.stdout).toContain("3 page");
+  });
+
+  test("a dirty error page blocks with exit 1", async () => {
+    // A committed base page gives gitInit something to commit; the error
+    // page stays untracked, exactly the population --dirty targets.
+    writePage("Brain/inbox/base.md", CLEAN_PAGE);
+    gitInit();
+    writePage("Brain/inbox/untracked.md", ERROR_PAGE);
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("frontmatter-missing");
+  });
+
+  test("a vault that is not a git worktree refuses with exit 2, named", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("git");
+    expect(r.stdout).not.toContain("ok");
+  });
+
+  test("a clean worktree is a clean pass, not an error", async () => {
+    writePage("Brain/inbox/clean.md", CLEAN_PAGE);
+    gitInit();
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("ok");
+  });
+});
+
+describe("wiring", () => {
+  test("--help prints the verb's own usage", async () => {
+    const r = await runCli(["brain", "validate", "--help"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout.startsWith("usage:")).toBe(true);
+    expect(r.stdout).toContain("o2b brain validate");
+  });
+
+  test("the manifest carries the verb, so the derived help surfaces list it", async () => {
+    const help = await runCli(["help"], { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } });
+    expect(help.returncode).toBe(0);
+    expect(help.stdout).toContain("brain validate");
+  });
+});

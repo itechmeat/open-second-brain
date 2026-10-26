@@ -894,6 +894,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("yes", "boolean"),
         ]),
         command(
+          "validate",
+          "Standalone validation gate over --paths or git-dirty notes; errors exit 1, --strict warnings exit 2",
+          [
+            flag("paths", "string-array"),
+            flag("dirty", "boolean"),
+            flag("strict", "boolean"),
+            flag("vault", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command(
           "actions",
           "Ranked maintenance action list over dedup, lint, and footprint findings",
         ),

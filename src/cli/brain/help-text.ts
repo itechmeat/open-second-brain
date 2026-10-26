@@ -165,6 +165,7 @@ Brain verbs (observing memory):
                       the adaptive topic-budget report)
   session-expand      Expand a session recall node to source turns
   lint                Self-healing structural checks (--consolidate); --apply to write
+  validate            Validation gate over --paths or --dirty notes; errors exit 1, --strict warnings exit 2
   actions             Ranked maintenance action list (dedup + lint + footprint)
   summary             Operator dashboard: trust verdict, doctor/dream counts, actions
   unlinked            Raw-text mentions of an artifact's title/aliases outside [[...]]
@@ -1336,6 +1337,19 @@ export const VERB_HELP: Record<string, string> = {
     "                        older than 180 days with no recent\n" +
     "                        evidence to `_lifecycle: draft`.\n" +
     "Requires --yes in non-interactive mode (--json or non-TTY).\n",
+  validate:
+    "usage: o2b brain validate --paths <path> [--paths <path>...] [--strict] [--vault <path>] [--json]\n" +
+    "       o2b brain validate --dirty [--strict] [--vault <path>] [--json]\n" +
+    "The standalone validation gate for hook-less writers. Runs the exact\n" +
+    "write-receipt page lint over exactly one caller-named page set -\n" +
+    "--paths (vault-relative, repeatable, one flag per page) or --dirty\n" +
+    "(every git-dirty Markdown note, modified, added and untracked) - and\n" +
+    "nothing else, so it is safe inside any gate. The exit code is the\n" +
+    "product, byte-for-byte the doctor contract: an error finding exits 1,\n" +
+    "warnings exit 2 under --strict, a named page the lint could not read\n" +
+    "exits 1, clean exits 0. Report-only: the fixes stay with `brain doctor\n" +
+    "--repair --apply` and `brain lint --consolidate --apply`, which every\n" +
+    "finding's next_command names.\n",
   actions:
     "usage: o2b brain actions [--top-n <n>] [--vault <path>] [--json]\n" +
     "Ranked maintenance action list. Aggregates page-dedup, lint\n" +
