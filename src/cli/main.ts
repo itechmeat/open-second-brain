@@ -432,6 +432,19 @@ async function cmdDoctor(argv: string[]): Promise<number> {
               status: p.status,
               detail: p.detail,
               duration_ms: p.durationMs,
+              // `client_versions`' per-target rows - the only probe that
+              // sets them (t_8e49ec96). Absent on every other probe, so
+              // the payload shape of the existing probes is unchanged.
+              ...(p.rows !== undefined
+                ? {
+                    rows: p.rows.map((row) => ({
+                      target: row.target,
+                      status: row.status,
+                      version: row.version,
+                      detail: row.detail,
+                    })),
+                  }
+                : {}),
             })),
             // The counts the human shape has always printed on its summary
             // line, so a caller reading JSON is not the only one who has to
@@ -481,6 +494,26 @@ async function cmdDoctor(argv: string[]): Promise<number> {
               ? "SKIP"
               : "UNKNOWN";
       process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
+      // The per-target rows a probe reports (today, `client_versions`'):
+      // one indented line each, so an operator reading the terminal sees
+      // WHICH client answered and with what, not a summary that folded
+      // them away.
+      for (const row of p.rows ?? []) {
+        const rowTag =
+          row.status === "pass"
+            ? "PASS"
+            : row.status === "fail"
+              ? "FAIL"
+              : row.status === "skipped"
+                ? "SKIP"
+                : "UNKNOWN";
+        process.stdout.write(
+          `       ${rowTag} ${row.target}` +
+            (row.version !== null ? `: ${row.version}` : "") +
+            (row.version === null && row.detail ? ` (${row.detail})` : "") +
+            `\n`,
+        );
+      }
     }
   }
   return exitCode;

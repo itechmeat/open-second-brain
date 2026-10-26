@@ -11,6 +11,7 @@ import {
   READINESS_STATUSES,
   ReadinessTimeoutError,
   isReadinessStatus,
+  probeClientVersions,
   probeEmbeddingProvider,
   probeInstalledRuntimes,
   probeLlmKey,
@@ -20,6 +21,7 @@ import {
   runReadinessProbes,
   withReadinessTimeout,
 } from "../../src/core/doctor-readiness.ts";
+import { DOCTOR_EXIT, doctorExitCode } from "../../src/cli/main.ts";
 import { buildPayload } from "../../src/core/install/payload.ts";
 import { serializeMcpServerTable } from "../../src/core/install/grok-config.ts";
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
@@ -875,8 +877,13 @@ describe("probeWritebackContract", () => {
   test("the probe is registered in DEFAULT_PROBES beside registered_commands", () => {
     const names = DEFAULT_PROBES.map((p) => p.name);
     expect(names).toContain(READINESS_PROBE.writebackContract);
-    expect(names.indexOf(READINESS_PROBE.writebackContract)).toBe(
+    // client_versions (t_8e49ec96) slots in after registered_commands;
+    // writeback_contract follows it.
+    expect(names.indexOf(READINESS_PROBE.clientVersions)).toBe(
       names.indexOf(READINESS_PROBE.registeredCommands) + 1,
+    );
+    expect(names.indexOf(READINESS_PROBE.writebackContract)).toBe(
+      names.indexOf(READINESS_PROBE.clientVersions) + 1,
     );
   });
 
@@ -891,5 +898,181 @@ describe("probeWritebackContract", () => {
     const probe = report.probes.find((p) => p.name === READINESS_PROBE.writebackContract);
     expect(probe).toBeDefined();
     expect(probe!.status).toBe(READINESS_STATUS.skipped);
+  });
+});
+
+describe("probeClientVersions", () => {
+  /**
+   * The probe reads the install manifest and asks each recorded target's
+   * client its version through the injected `clientVersionRunner` seam,
+   * so no test spawns a real client binary and a developer shell cannot
+   * flip a verdict.
+   */
+  function versionsOpts(
+    runner: (argv: ReadonlyArray<string>) => Promise<{ exitCode: number; stdout: string }>,
+  ) {
+    return { ...installedRuntimeOpts(), clientVersionRunner: runner };
+  }
+
+  function codexManifest(): void {
+    writeManifestEntries({ codex: manifestEntry("codex", null, "codex-toml") });
+  }
+
+  test("an answered spawn passes with the raw first stdout line, never semver-parsed", async () => {
+    writeConfig("");
+    codexManifest();
+    const v = await probeClientVersions(
+      versionsOpts(async () => ({
+        exitCode: 0,
+        stdout: "codex-cli 0.9.0 (2026-10-01)\n",
+      })),
+    );
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.rows).toBeDefined();
+    expect(v.rows).toHaveLength(1);
+    expect(v.rows![0]).toMatchObject({
+      target: "codex",
+      status: READINESS_STATUS.pass,
+      version: "codex-cli 0.9.0 (2026-10-01)",
+    });
+  });
+
+  test("a runner throw yields an unknown row pointing at registered_commands, never a fail", async () => {
+    writeConfig("");
+    codexManifest();
+    const v = await probeClientVersions(
+      versionsOpts(async () => {
+        throw Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
+      }),
+    );
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.status).not.toBe(READINESS_STATUS.fail);
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.version).toBeNull();
+    expect(v.rows![0]!.detail).toContain("ENOENT");
+    // Resolvability is registered_commands' finding, not this row's.
+    expect(v.rows![0]!.detail).toContain("registered_commands");
+  });
+
+  test("a non-zero exit yields an unknown row with the stderr-shaped reason", async () => {
+    writeConfig("");
+    codexManifest();
+    const v = await probeClientVersions(
+      versionsOpts(async () => ({
+        exitCode: 1,
+        stdout: "",
+      })),
+    );
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.version).toBeNull();
+  });
+
+  test("an empty stdout with exit 0 yields an unknown row - no answer is not a version", async () => {
+    writeConfig("");
+    codexManifest();
+    const v = await probeClientVersions(
+      versionsOpts(async () => ({
+        exitCode: 0,
+        stdout: "   \n",
+      })),
+    );
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.detail.toLowerCase()).toContain("no version output");
+  });
+
+  test("a runner sleeping past the per-probe budget is cut off as unknown", async () => {
+    writeConfig("");
+    codexManifest();
+    const small = await runReadinessProbes(
+      { ...versionsOpts(() => new Promise(() => {})), perCheckTimeoutMs: 50 },
+      [{ name: READINESS_PROBE.clientVersions, fn: probeClientVersions }],
+    );
+    expect(small.failed).toBe(0);
+    const probe = small.probes[0]!;
+    expect(probe.status).toBe(READINESS_STATUS.unknown);
+    expect(probe.detail).toContain("timed out");
+    void DEFAULT_READINESS_TIMEOUT_MS;
+  });
+
+  test("a manifest recording no installs is skipped", async () => {
+    writeConfig("");
+    const v = await probeClientVersions(versionsOpts(async () => ({ exitCode: 0, stdout: "x\n" })));
+    expect(v.status).toBe(READINESS_STATUS.skipped);
+    expect(v.detail).toContain("no installs");
+  });
+
+  test("the generic target has no client binary of its own and is skipped by name", async () => {
+    writeConfig("");
+    writeManifestEntries({ generic: manifestEntry("generic", null, "manual") });
+    const v = await probeClientVersions(versionsOpts(async () => ({ exitCode: 0, stdout: "x\n" })));
+    expect(v.status).toBe(READINESS_STATUS.skipped);
+    expect(v.rows).toBeDefined();
+    expect(v.rows![0]).toMatchObject({
+      target: "generic",
+      status: READINESS_STATUS.skipped,
+      version: null,
+    });
+    expect(v.detail).toContain("generic");
+  });
+
+  test("a mixed pass/unknown aggregate reads unknown with the census", async () => {
+    writeConfig("");
+    writeManifestEntries({
+      codex: manifestEntry("codex", null, "codex-toml"),
+      cursor: manifestEntry("cursor", null, "json-merge"),
+    });
+    const v = await probeClientVersions(
+      versionsOpts(async (argv) =>
+        argv[0] === "codex"
+          ? { exitCode: 0, stdout: "codex-cli 0.9.0\n" }
+          : { exitCode: 1, stdout: "" },
+      ),
+    );
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.detail).toContain("1 pass");
+    expect(v.detail).toContain("1 unknown");
+    // Worst rows lead the detail.
+    expect(v.detail.indexOf("cursor")).toBeLessThan(v.detail.indexOf("codex"));
+  });
+
+  test("an unreadable manifest is unknown, like registered_commands", async () => {
+    writeConfig("");
+    writeInstallManifest("{ this is not json");
+    const v = await probeClientVersions(versionsOpts(async () => ({ exitCode: 0, stdout: "x\n" })));
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.detail).toContain("manifest");
+  });
+
+  test("rows ride this probe only, and a fully-unknown probe keeps the exit at 6", async () => {
+    writeConfig("");
+    codexManifest();
+    const report = await runReadinessProbes(
+      { ...versionsOpts(async () => ({ exitCode: 1, stdout: "" })), perCheckTimeoutMs: 2_000 },
+      [
+        { name: READINESS_PROBE.clientVersions, fn: probeClientVersions },
+        {
+          name: "sibling_probe",
+          fn: async () => ({ status: READINESS_STATUS.pass, detail: "sibling answered" }),
+        },
+      ],
+    );
+    const versions = report.probes.find((p) => p.name === READINESS_PROBE.clientVersions)!;
+    const sibling = report.probes.find((p) => p.name === "sibling_probe")!;
+    expect(versions.rows).toBeDefined();
+    expect(sibling.rows).toBeUndefined();
+
+    // A fully-unknown version probe is an unmeasured surface, not a broken
+    // one: the doctor exit contract keeps it at 6 (probeIncomplete), never 1.
+    // The report is fabricated because `doctorExitCode` reads only the two
+    // counts - the shape cast names exactly what is being faked.
+    const fabricated = {
+      probes: [versions],
+      failed: 0,
+      unknown: 1,
+    } as Parameters<typeof doctorExitCode>[1];
+    expect(doctorExitCode(0, fabricated)).toBe(DOCTOR_EXIT.probeIncomplete);
+    expect(doctorExitCode(0, fabricated)).not.toBe(DOCTOR_EXIT.failed);
   });
 });

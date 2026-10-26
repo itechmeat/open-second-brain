@@ -64,6 +64,12 @@
  * reported with the `o2b install <target> --apply` recovery line, never
  * rewritten.
  *
+ * The `client_versions` probe (t_8e49ec96) slots beside it and reads the
+ * SAME manifest: one fail-soft, read-only, async version ask per recorded
+ * client, graded pass/unknown/skipped and never `fail`, because a version
+ * row never proves a surface broken. Its rows travel on the verdict's
+ * optional `rows` member, which no other probe sets.
+ *
  * The `writeback_contract` probe (t_7c01bb39) is check-only in the same
  * way: it audits whether the workspace agent-instruction file(s) carry
  * the same-turn atomic-fact memory write gate. The contract itself - the
@@ -132,6 +138,7 @@ export const READINESS_PROBE = {
   runtimeAdapterWiring: "runtime_adapter_wiring",
   installedRuntimes: "installed_runtimes",
   registeredCommands: "registered_commands",
+  clientVersions: "client_versions",
   writebackContract: "writeback_contract",
   decisionModel: "decision_model",
 } as const;
@@ -303,6 +310,27 @@ export function isReadinessStatus(value: unknown): value is ReadinessStatus {
 export interface ReadinessVerdict {
   readonly status: ReadinessStatus;
   readonly detail: string;
+  /**
+   * Per-target machine rows, set ONLY by the `client_versions` probe
+   * (t_8e49ec96). Absent on every other probe. Additive and safe: the
+   * readiness JSON exists only under `--readiness`, so no byte-identical
+   * output contract is stressed, and `readiness_summary` is untouched -
+   * a fully-unknown version probe keeps the exit at
+   * `DOCTOR_EXIT.probeIncomplete`, never a `fail`.
+   */
+  readonly rows?: ReadonlyArray<ReadinessVersionRow>;
+}
+
+/** One client's answer inside a `client_versions` verdict. */
+export interface ReadinessVersionRow {
+  /** The install-manifest target the row was asked about. */
+  readonly target: string;
+  /** pass (answered), unknown (no usable answer), skipped (nothing to ask). */
+  readonly status: ReadinessStatus;
+  /** The client's own first stdout line when it answered; `null` otherwise. */
+  readonly version: string | null;
+  /** Why the row graded as it did, never empty. */
+  readonly detail: string;
 }
 
 /** A completed probe: its verdict plus the name and wall-clock duration. */
@@ -335,6 +363,16 @@ export interface ReadinessOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Per-check timeout budget; defaults to {@link DEFAULT_READINESS_TIMEOUT_MS}. */
   readonly perCheckTimeoutMs?: number;
+  /**
+   * Ask one client binary its version. Injected only by tests, which
+   * cannot install clients; the product spawns `argv` asynchronously
+   * (see {@link probeClientVersions} for why async). A throw reads
+   * `unknown`, never `fail` - the same contract
+   * {@link isWriterLockHeld}-style probes observe.
+   */
+  readonly clientVersionRunner?: (
+    argv: ReadonlyArray<string>,
+  ) => Promise<{ readonly exitCode: number; readonly stdout: string }>;
 }
 
 // ----- Timeout wrapper ------------------------------------------------------
@@ -1086,6 +1124,213 @@ function probeRegisteredEntries(
   return { target, status: worst, detail: summaries.join("; ") };
 }
 
+// ----- client_versions (t_8e49ec96) -----------------------------------------
+
+/**
+ * The version command asked of each install target's client, and the one
+ * target with no client binary of its own.
+ *
+ * A client INSTALLED but never registered through Open Second Brain is out
+ * of scope by construction: detection comes from the install manifest,
+ * exactly like `registered_commands`, so the probe asks only the clients
+ * this tool recorded.
+ *
+ * Binary names are pinned to each adapter's own spawn precedent
+ * (`copilot-cli.ts` spawns `copilot --version`; `codex.ts` resolves `codex`
+ * via `Bun.which`; `gemini-cli.ts`'s notes name `gemini`) and to each
+ * client's documented CLI. `generic` writes a user-named config and has no
+ * client binary of its own, so it is skipped by name rather than probed.
+ * A correction to a row is a one-line follow-up in this table's own module.
+ */
+const CLIENT_VERSION_COMMANDS: Readonly<Record<string, ReadonlyArray<string> | null>> =
+  Object.freeze({
+    aider: ["aider", "--version"],
+    codex: ["codex", "--version"],
+    "copilot-cli": ["copilot", "--version"],
+    cursor: ["cursor", "--version"],
+    "gemini-cli": ["gemini", "--version"],
+    grok: ["grok", "--version"],
+    kiro: ["kiro", "--version"],
+    opencode: ["opencode", "--version"],
+    pi: ["pi", "--version"],
+    generic: null,
+  });
+
+/**
+ * Clients format their version freely ("codex-cli 0.9.0", "GitHub Copilot
+ * CLI 1.0.5"), so the raw line is the value and nothing is parsed - but a
+ * runaway first line must not carry a readiness payload, so it is capped.
+ */
+const CLIENT_VERSION_MAX_LENGTH = 200;
+
+/**
+ * The product runner: an ASYNC spawn, not `spawnSync`.
+ *
+ * `probeInstalledRuntimes`' docblock records the cost of the synchronous
+ * kind: it blocks the event loop, so the timeout timer that is meant to
+ * cut a hung probe off cannot fire behind it. This probe's version ask is
+ * exactly the kind of subprocess a hung binary would wedge, so it runs on
+ * the promise machinery the per-probe budget already covers. Read-only and
+ * fail-soft: the child inherits the environment and writes nothing.
+ */
+async function spawnClientVersion(
+  argv: ReadonlyArray<string>,
+): Promise<{ exitCode: number; stdout: string }> {
+  const child = Bun.spawn({ cmd: [...argv], stdout: "pipe", stderr: "pipe" });
+  const stdout = await new Response(child.stdout).text();
+  const exitCode = await child.exited;
+  return { exitCode, stdout };
+}
+
+/** First stdout line, trimmed and length-capped - the raw line, never parsed. */
+function firstVersionLine(stdout: string): string | null {
+  const line = stdout.split("\n")[0]?.trim() ?? "";
+  if (line === "") return null;
+  return line.length > CLIENT_VERSION_MAX_LENGTH ? line.slice(0, CLIENT_VERSION_MAX_LENGTH) : line;
+}
+
+/**
+ * One manifest target's version answer, graded pass/unknown/skipped and
+ * never `fail`: "the client answered with a version" is the only measured
+ * fact here, and no version row proves a surface broken - resolvability
+ * itself is `registered_commands`' finding, and a client this doctor's
+ * PATH cannot see may still resolve for the host that spawns it. An
+ * unanswered row therefore points at that probe's finding rather than
+ * raising this one's own alarm.
+ */
+async function clientVersionRow(
+  target: string,
+  runner: (argv: ReadonlyArray<string>) => Promise<{ exitCode: number; stdout: string }>,
+): Promise<ReadinessVersionRow> {
+  const argv = CLIENT_VERSION_COMMANDS[target];
+  if (argv === undefined) {
+    // Loud, never silent: a manifest target the table does not know is a
+    // table that lags the adapter registry, and the row names the fix.
+    return {
+      target,
+      status: READINESS_STATUS.unknown,
+      version: null,
+      detail: `no version command is known for target '${target}' - extend CLIENT_VERSION_COMMANDS`,
+    };
+  }
+  if (argv === null) {
+    return {
+      target,
+      status: READINESS_STATUS.skipped,
+      version: null,
+      detail: "no client binary of its own (it writes a user-named config) - nothing to ask",
+    };
+  }
+  let answered: { exitCode: number; stdout: string };
+  try {
+    answered = await runner(argv);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const pointer = "resolvability is 'registered_commands' finding, so this row is not a fail";
+    return {
+      target,
+      status: READINESS_STATUS.unknown,
+      version: null,
+      detail:
+        code === "ENOENT"
+          ? `${argv[0]} is not on the doctor's PATH (ENOENT; the host may still resolve it); ${pointer}`
+          : `the version ask failed (${code ?? "unknown error"}): ${flattenReason((err as Error).message)}; ${pointer}`,
+    };
+  }
+  if (answered.exitCode !== 0) {
+    return {
+      target,
+      status: READINESS_STATUS.unknown,
+      version: null,
+      detail: `${argv[0]} exited ${answered.exitCode} with no version; ${argv.join(" ")} did not answer`,
+    };
+  }
+  const version = firstVersionLine(answered.stdout);
+  if (version === null) {
+    return {
+      target,
+      status: READINESS_STATUS.unknown,
+      version: null,
+      detail: `${argv[0]} answered with no version output; ${argv.join(" ")} exited 0 but printed nothing`,
+    };
+  }
+  return {
+    target,
+    status: READINESS_STATUS.pass,
+    version,
+    detail: `${argv.join(" ")} answered: ${version}`,
+  };
+}
+
+/**
+ * Which version of each detected agent client answered (t_8e49ec96).
+ *
+ * Slot beside `registered_commands` and read the SAME detection source -
+ * the install manifest - because "which clients are here" is a question
+ * that must not grow two answers. Read-only, fail-soft, and graded
+ * pass/unknown/skipped with no `fail`: a version row never proves a
+ * surface broken, so a fully-unknown probe keeps the doctor exit at
+ * `DOCTOR_EXIT.probeIncomplete` (6), never 1.
+ *
+ * There is deliberately no minimum-version table in v1: no `minVersion`
+ * column, no config surface. Adding one is a design decision (what a
+ * below-minimum row should DO to the exit code) to settle when a consumer
+ * exists, not a column to ship half-decided.
+ */
+export async function probeClientVersions(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  let manifest;
+  try {
+    manifest = readManifest(opts.vault);
+  } catch (err) {
+    return {
+      status: READINESS_STATUS.unknown,
+      detail:
+        "install manifest could not be read, so no client version could be asked: " +
+        flattenReason((err as Error).message),
+    };
+  }
+  const installs = Object.values(manifest.installs);
+  if (installs.length === 0) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail: "install manifest records no installs; no client version to ask",
+    };
+  }
+  const runner = opts.clientVersionRunner ?? spawnClientVersion;
+  const rows: ReadinessVersionRow[] = [];
+  for (const entry of installs) {
+    rows.push(await clientVersionRow(entry.target, runner));
+  }
+  const counts = countByStatus(rows.map((row) => row.status));
+  // Worst rows lead the detail; toSorted is stable, so within one bucket
+  // the manifest's own order stands - the same shape
+  // {@link probeRegisteredCommands} reports in, minus the `fail` bucket
+  // this probe never produces.
+  const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
+  const rowText = ordered.map((row) => `${row.target}: ${row.detail}`).join("; ");
+  const census = `(${counts.pass} pass, ${counts.unknown} unknown, ${counts.skipped} skipped)`;
+  const base = { rows: Object.freeze(rows) };
+  if (counts.unknown > 0) {
+    return {
+      ...base,
+      status: READINESS_STATUS.unknown,
+      detail: `could not read ${counts.unknown} client version(s) ${census}: ${rowText}`,
+    };
+  }
+  if (counts.skipped > 0) {
+    return {
+      ...base,
+      status: READINESS_STATUS.skipped,
+      detail: `nothing to ask of ${counts.skipped} of ${rows.length} target(s) ${census}: ${rowText}`,
+    };
+  }
+  return {
+    ...base,
+    status: READINESS_STATUS.pass,
+    detail: `${counts.pass} client version(s) answered ${census}: ${rowText}`,
+  };
+}
+
 function extractRegisteredCommands(raw: string): CommandExtraction {
   const fromJson = extractFromJsonConfig(raw);
   if (fromJson !== null) return fromJson;
@@ -1390,6 +1635,7 @@ export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
   { name: READINESS_PROBE.runtimeAdapterWiring, fn: probeRuntimeAdapterWiring },
   { name: READINESS_PROBE.installedRuntimes, fn: probeInstalledRuntimes },
   { name: READINESS_PROBE.registeredCommands, fn: probeRegisteredCommands },
+  { name: READINESS_PROBE.clientVersions, fn: probeClientVersions },
   { name: READINESS_PROBE.writebackContract, fn: probeWritebackContract },
   { name: READINESS_PROBE.decisionModel, fn: probeDecisionModel },
 ];
