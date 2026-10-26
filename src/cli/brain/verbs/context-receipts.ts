@@ -2,7 +2,9 @@ import {
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
+  lookupReceiptReplyPresence,
   summarizeContextReceipt,
+  type ReceiptReplyPresenceJoin,
 } from "../../../core/brain/context-receipts.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
@@ -70,13 +72,21 @@ function showReceipt(argv: string[]): number {
   const vault = brainVerbContext(flags).vault;
   const receipt = getContextReceipt(vault, id);
   if (receipt === null) throw new CliError(`brain context-receipts show: receipt not found: ${id}`);
+  // The receipt's session reply-presence join (t_f8510c55): the per-note
+  // verdicts of the session's latest reply_presence record, or the named
+  // unjoined outcome - a receipt whose session checked no turn, or that
+  // names no session at all, says so instead of reading as silently
+  // absent. Both output shapes carry it; the list stays a summary.
+  const replyPresence = lookupReceiptReplyPresence(vault, receipt);
 
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(receipt, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ...receipt, reply_presence: replyPresence }, null, 2) + "\n",
+    );
     return 0;
   }
 
-  const summary = summarizeContextReceipt(receipt);
+  const summary = summarizeContextReceipt(receipt, replyPresence);
   process.stdout.write(`id: ${summary.id}\n`);
   process.stdout.write(`created_at: ${summary.created_at}\n`);
   process.stdout.write(`trigger: ${summary.trigger ?? "unknown"}\n`);
@@ -89,7 +99,32 @@ function showReceipt(argv: string[]): number {
     const { level, action, escalate } = summary.adequacy;
     process.stdout.write(`adequacy: ${level} -> ${action}${escalate ? " (escalate)" : ""}\n`);
   }
+  if (summary.reply_presence) printReplyPresence(summary.reply_presence);
   return 0;
+}
+
+/** Render the reply-presence join; the unjoined outcome names why, never a blank. */
+function printReplyPresence(join: ReceiptReplyPresenceJoin): void {
+  if (join.joined) {
+    const { presence } = join;
+    const checked = presence.checked === null ? "" : `, checked=${presence.checked}`;
+    process.stdout.write(
+      `reply_presence: joined (record ${presence.record_id} @ ${presence.created_at}${checked})\n`,
+    );
+    for (const note of presence.per_note) {
+      const range =
+        note.start_line !== undefined && note.end_line !== undefined
+          ? `#L${note.start_line}-L${note.end_line}`
+          : "";
+      process.stdout.write(`  ${note.path}${range}: ${note.verdict}\n`);
+    }
+    return;
+  }
+  const why =
+    join.session_id !== undefined
+      ? `no reply_presence record for session ${join.session_id}`
+      : "receipt names no session";
+  process.stdout.write(`reply_presence: unjoined (${why})\n`);
 }
 
 function parsePositiveInteger(value: string | undefined, label: string): number | undefined {
