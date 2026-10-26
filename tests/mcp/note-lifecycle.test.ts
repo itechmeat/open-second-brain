@@ -64,7 +64,14 @@ describe("brain_note_lifecycle registration", () => {
     expect(tool).toBeDefined();
     expect(tool.inputSchema.required).toEqual(["action", "path"]);
     const properties = tool.inputSchema.properties as Record<string, { enum?: string[] }>;
-    expect(properties["action"]?.enum).toEqual(["rename", "move", "archive", "delete"]);
+    expect(properties["action"]?.enum).toEqual([
+      "rename",
+      "move",
+      "archive",
+      "delete",
+      "move-folder",
+      "rename-folder",
+    ]);
   });
 });
 

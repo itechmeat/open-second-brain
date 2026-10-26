@@ -506,7 +506,7 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     [
       "brain_note_lifecycle",
       { action: BOGUS },
-      "brain_note_lifecycle: 'action' must be one of rename, move, archive, delete",
+      "brain_note_lifecycle: 'action' must be one of rename, move, archive, delete, move-folder, rename-folder",
     ],
     [
       "brain_scaffold_stub",

@@ -135,9 +135,12 @@ describe("o2b doctor --readiness end to end", () => {
     const r = await runCli(["doctor", "--vault", tmp, "--readiness", "--json"], { env: env() });
     expect(r.returncode).toBe(DOCTOR_EXIT.probeIncomplete);
     const parsed = JSON.parse(r.stdout);
-    // Both readiness probes honestly report unknown for the same
-    // unreadable manifest: installed_runtimes and registered_commands.
-    expect(parsed.readiness_summary.unknown).toBe(2);
+    // All three readiness probes honestly report unknown for the same
+    // unreadable manifest: installed_runtimes, registered_commands and,
+    // since v1.95.0, client_versions - its detection source is the same
+    // install manifest, so a manifest nobody can read is a version
+    // nobody can ask (an absent manifest would read skipped instead).
+    expect(parsed.readiness_summary.unknown).toBe(3);
     expect(parsed.readiness_summary.failed).toBe(0);
     expect(
       parsed.readiness.some(

@@ -117,6 +117,11 @@ const PINNED_CONTINUITY_KINDS: ReadonlyArray<string> = Object.freeze([
   // confirmed receipt compaction. Disjoint from the Hermes
   // context-compaction kinds above by name and by producer.
   "receipt_compaction",
+  // The verified-delivery wave's additive kind (t_f8510c55): the
+  // answer-quote-check hook's per-turn fold of per-injected-note
+  // verdicts, session-keyed so the receipt read can join it. Written by
+  // the hook only; the join reads it, no truth module appends it.
+  "reply_presence",
 ]);
 
 function truthModulePaths(): ReadonlyArray<string> {
@@ -160,9 +165,11 @@ describe("claim-attribution census", () => {
   });
 
   test("(a) the continuity record-kind vocabulary is unchanged by the wave", () => {
-    // The wave introduces no new kind; the join reads existing
-    // `context_receipt` and `context_pack_outcome` rows. A new member
-    // here means a lane is minting a record kind the plan refused.
+    // The wave's one additive kind, `reply_presence`, is pinned above
+    // with its provenance; the join itself still reads existing
+    // `context_receipt` and `context_pack_outcome` rows. Any member
+    // beyond the pin means a lane is minting a record kind nothing
+    // declared.
     const kinds = continuityKindVocabulary();
     expect(kinds.toSorted()).toEqual(PINNED_CONTINUITY_KINDS.toSorted());
   });

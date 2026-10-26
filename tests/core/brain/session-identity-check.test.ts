@@ -289,6 +289,9 @@ const CONDITIONAL_STAMP_RE = /\? \{ (?:\[CONTINUITY_SESSION_ID_KEY\]|session_id\
  * through `appendContinuitySourceInvalidation`, whose `{reason}` payload
  * is fixed at the store and whose input type carries no session field.
  */
+/** The Stop hook that writes {@link kind reply_presence}, outside src. */
+const HOOK_WRITER = "../hooks/answer-quote-check.ts";
+
 const KIND_WRITERS: ReadonlyArray<{
   readonly kind: ContinuityRecordKind;
   /** Session-scoped: the writer stamps `session_id` unconditionally. */
@@ -386,6 +389,19 @@ const KIND_WRITERS: ReadonlyArray<{
     sessionScoped: false,
     writers: ["core/brain/receipts/compact.ts"],
   },
+  {
+    // The verified-delivery wave's additive kind (t_f8510c55): the
+    // answer-quote-check Stop hook's per-turn fold of per-injected-note
+    // verdicts. Written ONLY by the Stop hook, outside src - the one
+    // kind whose writer lives past the src root, named with its root so
+    // the writer-shape check reads it where it lives. The hook stamps
+    // the session key conditionally (absent when the host names no
+    // session), so it is sessionless by design exactly like the
+    // context_receipt lane above.
+    kind: "reply_presence",
+    sessionScoped: false,
+    writers: [HOOK_WRITER],
+  },
 ]);
 
 /**
@@ -482,8 +498,13 @@ describe("blank-session-identity classification census", () => {
     // Any module that binds an append primitive writes SOME kind's
     // payload; if it is not classified above, its kinds are counted (or
     // spared) by a writer this census never read. Exempted: the bench
-    // fixture, which writes throwaway ledgers for timing runs.
-    const writers = new Set(KIND_WRITERS.flatMap((row) => row.writers));
+    // fixture, which writes throwaway ledgers for timing runs, and the
+    // Stop hook, which writes `reply_presence` from outside the src
+    // tree this population walks - both named writers above, never
+    // silent ones.
+    const writers = new Set(
+      KIND_WRITERS.flatMap((row) => row.writers).filter((writer) => writer !== HOOK_WRITER),
+    );
     const population = srcModulePaths().filter((path) => {
       const code = lexSource(readFileSync(join(SRC_ROOT, path), "utf8")).code;
       return APPEND_PRIMITIVES.some((primitive) => code.includes(primitive));

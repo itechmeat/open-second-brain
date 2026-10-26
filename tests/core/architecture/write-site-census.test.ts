@@ -580,6 +580,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "reports a verdict saying the archive it took does not cover a note living " +
       "outside `Brain/`.",
   },
+  "src/core/brain/notes/folder-lifecycle.ts": {
+    categories: [C.lifecycleMove],
+    calls: ["rmdirSync"],
+    reason:
+      "the folder move's per-file relocation rides the file surface's own shared " +
+      "helpers, so the module's one direct call is the emptied-subject prune: " +
+      "`rmdirSync` removes the moved folder's directory entry only once every file " +
+      "of the move set has relocated, and refuses a non-empty directory, so a " +
+      "folder whose subtree still holds a failed file keeps it - no byte is ever " +
+      "reached, and the report names where every file stands.",
+  },
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync"],
@@ -1362,7 +1373,7 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * (`src/core/brain/pledge-intake.ts`) - one rmSync that resets the vault to
  * the pre-intake state, its re-anchor rewrite still on the shared writer.
  */
-const DIRECT_WRITE_ROWS = 85;
+const DIRECT_WRITE_ROWS = 86;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1620,7 +1631,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * (`src/core/brain/pledge-intake.ts`) - a reset to the pre-intake state
  * stamps no channel either.
  */
-const UNSTAMPED_DIRECT_ROWS = 84;
+const UNSTAMPED_DIRECT_ROWS = 85;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
