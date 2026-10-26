@@ -19,6 +19,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveSearchConfig } from "../search/index.ts";
+import { isWriterLockHeld } from "../search/store/writer-lock.ts";
 import { FREEZE_NEXT_COMMAND, readFreezeMarker, type FreezeMarker } from "./freeze-marker.ts";
 import { runDoctor } from "./doctor.ts";
 import { resolveSignal } from "./diagnostics.ts";
@@ -53,6 +54,79 @@ export interface SnapshotCounts {
   readonly retired: number;
   readonly inbox: number;
 }
+
+/**
+ * The three honest answers about the search writer lock. `unknown` is
+ * "I could not find out" - a stat that failed, a config that would not
+ * resolve - and is deliberately NOT a spelling of `free`: a caller that
+ * treats the second as the first has been told something untrue (the same
+ * rule `isWriterLockHeld` itself states).
+ */
+export const WRITER_LOCK_STATE = Object.freeze({
+  /** A live writer holds the lock right now. */
+  held: "held",
+  /** No live holder at the instant of the read. */
+  free: "free",
+  /** The state could not be measured; `writerLockReason` says what stopped it. */
+  unknown: "unknown",
+} as const);
+
+/** Closed union over {@link WRITER_LOCK_STATE}. */
+export type WriterLockState = (typeof WRITER_LOCK_STATE)[keyof typeof WRITER_LOCK_STATE];
+
+/**
+ * What this surface states about the memory store (t_cfe2ce5d).
+ *
+ * Scoped v1 to the SEARCH writer lock - the one `isWriterLockHeld`
+ * answers. The scattered brain-lane `.lock` files stay with the doctor's
+ * stale-lock probe; this group must not be read as covering both lock
+ * families.
+ *
+ * `writerLockOwner` is `null` ALWAYS in v1, and that is a measurement
+ * rather than a gap: the lock is a bare `proper-lockfile` directory whose
+ * only metadata is its mtime, refreshed by a heartbeat. It answers "is
+ * someone alive holding this"; it cannot answer "who". Naming a holder is
+ * a deferred acquire-side change (stamping identity inside the lock
+ * directory), not a field this snapshot can honestly fill today.
+ *
+ * A held lock is a live writer, not a fault: it is reported, never folded
+ * into `healthy` or `problems` - the `frozen` precedent. Crash residue is
+ * the doctor's `stale-lock` uncertain finding, which owns the "is this
+ * holder actually dead" question.
+ */
+export interface SnapshotStore {
+  /** Three-state answer about the search writer lock, fail-soft. */
+  readonly writerLock: WriterLockState;
+  /** Set when `unknown`: what stopped the measurement, errno included. */
+  readonly writerLockReason: string | null;
+  /**
+   * Age of the lock directory's mtime when `held`, in milliseconds, from
+   * the snapshot clock; `null` when free, unknown, or unmeasurable. The
+   * heartbeat refreshes the mtime, so this is a lower bound on how long
+   * the holder has been alive, never an upper bound.
+   */
+  readonly writerLockAgeMs: number | null;
+  /** `null` in v1 - the lock record carries no identity. See above. */
+  readonly writerLockOwner: string | null;
+  /**
+   * The lock path (the resolved search index path) at LOCAL reach;
+   * `null` elsewhere. The path is a resolved host path that may sit
+   * outside the vault, so the MCP surface withholds it below local reach
+   * exactly the way `stateFiles.searchIndex` answers presence without it.
+   */
+  readonly writerLockPath: string | null;
+  /**
+   * This snapshot never writes and never takes the lock. The consequence
+   * is rendered beside the flag: while `writerLock` is `held`, a write
+   * THIS caller attempted would refuse - the search lane with
+   * `INDEX_LOCKED` after its retries, the brain lane with a typed
+   * `BrainCollisionError`.
+   */
+  readonly thisCaller: typeof THIS_CALLER_READ_ONLY;
+}
+
+/** The one value `thisCaller` can honestly take: this surface writes nothing. */
+export const THIS_CALLER_READ_ONLY = "read-only";
 
 export interface OperatorSnapshot {
   readonly counts: SnapshotCounts;
@@ -92,6 +166,13 @@ export interface OperatorSnapshot {
    * self-heal leaves a pending upgrade behind and nothing else says so.
    */
   readonly selfHealUpgradeFailure: SelfHealUpgradeFailure | null;
+  /**
+   * What this snapshot can honestly state about the memory store: the
+   * search writer lock's three-state answer, its age, the absence of any
+   * owner identity on the lock record, and this caller's own read-only
+   * standing. See {@link SnapshotStore}.
+   */
+  readonly store: SnapshotStore;
 }
 
 export interface BuildOperatorSnapshotOptions {
@@ -113,6 +194,14 @@ export interface BuildOperatorSnapshotOptions {
    * read. A local caller passes nothing.
    */
   readonly keepFinding?: (finding: HygieneFinding) => boolean;
+  /**
+   * Whether the search writer lock is held at this index path. Injected
+   * only by tests - the product asks `isWriterLockHeld`, and a throw from
+   * it reads `unknown` rather than `free`, exactly as that module's
+   * contract requires. Named after `MigrationPlanInput.writerLockHeldAt`,
+   * so the two seams read as one pattern.
+   */
+  readonly writerLockHeldAt?: (dbPath: string) => boolean;
 }
 
 /**
@@ -142,6 +231,9 @@ export async function buildOperatorSnapshot(
   if (!configPresent) {
     problem("state-file", "Brain config `_brain.yaml` is missing");
   }
+
+  // --- Store ownership (t_cfe2ce5d) ---
+  const store = readStoreGroup(searchDbPath, now, opts.writerLockHeldAt);
 
   // --- Automatic upgrade ---
   const selfHealUpgradeFailure = readSelfHealUpgradeFailure(vault);
@@ -243,7 +335,82 @@ export async function buildOperatorSnapshot(
     healthy: problems.length === 0,
     frozen: readFreezeMarker(vault),
     selfHealUpgradeFailure,
+    store,
   });
+}
+
+/**
+ * Ask the search writer lock its three-state answer, wrapped fail-soft
+ * exactly like the migration preflight's `writerLockRefusal`: a probe
+ * that throws reads `unknown` with the errno in the reason, because
+ * "I could not find out" is not "the lock is free". An index path that
+ * never resolved is the same honest state - the lock could not be probed
+ * at all - so it reads `unknown` too, with the reason naming that.
+ */
+function readStoreGroup(
+  dbPath: string | null,
+  now: Date,
+  probe: ((dbPath: string) => boolean) | undefined,
+): SnapshotStore {
+  if (dbPath === null) {
+    return Object.freeze({
+      writerLock: WRITER_LOCK_STATE.unknown,
+      writerLockReason: "the search index path could not be resolved, so the lock was not probed",
+      writerLockAgeMs: null,
+      writerLockOwner: null,
+      writerLockPath: null,
+      thisCaller: THIS_CALLER_READ_ONLY,
+    });
+  }
+  let held: boolean;
+  try {
+    held = (probe ?? isWriterLockHeld)(dbPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    return Object.freeze({
+      writerLock: WRITER_LOCK_STATE.unknown,
+      writerLockReason: `the writer lock state could not be determined (${err.code ?? "unknown error"}): ${err.message}`,
+      writerLockAgeMs: null,
+      writerLockOwner: null,
+      writerLockPath: dbPath,
+      thisCaller: THIS_CALLER_READ_ONLY,
+    });
+  }
+  return Object.freeze({
+    writerLock: held ? WRITER_LOCK_STATE.held : WRITER_LOCK_STATE.free,
+    writerLockReason: null,
+    writerLockAgeMs: held ? lockAgeMs(dbPath, now) : null,
+    writerLockOwner: null,
+    writerLockPath: dbPath,
+    thisCaller: THIS_CALLER_READ_ONLY,
+  });
+}
+
+/**
+ * The held lock's mtime age against the snapshot clock, or `null` when the
+ * stat fails - a best-effort measurement beside a state that is already
+ * known, never a second chance to claim a state that is not.
+ */
+function lockAgeMs(dbPath: string, now: Date): number | null {
+  try {
+    return Math.max(0, Math.round(now.getTime() - statSync(writerLockDir(dbPath)).mtimeMs));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The lock directory `proper-lockfile` creates for an index path: a bare
+ * `${dbPath}.lock` directory whose only metadata is its mtime (`getLockFile`
+ * in `proper-lockfile/lib/lockfile.js`; `writer-lock.ts` takes it with
+ * `mkdir`). Spelled here because the age reads that directory's mtime, and
+ * the state probe (`isWriterLockHeld`) asks the same path behind the same
+ * library.
+ */
+const WRITER_LOCK_SUFFIX = ".lock";
+
+function writerLockDir(dbPath: string): string {
+  return `${dbPath}${WRITER_LOCK_SUFFIX}`;
 }
 
 /**
@@ -279,6 +446,12 @@ export function renderOperatorSnapshot(snap: OperatorSnapshot): string {
           `(${snap.frozen.reason === "" ? "no reason given" : snap.frozen.reason}); ` +
           `lift with \`${FREEZE_NEXT_COMMAND}\``,
   );
+  // Printed on BOTH branches, like the frozen line: the state an operator
+  // most needs stated is the one where nothing is writing, and "no line"
+  // would be indistinguishable from a renderer that forgot to ask. A held
+  // lock names the refusal a write would hit, so the agent reading this
+  // before writing does not learn it from the write failing.
+  out.push(`  ${renderStoreLine(snap.store)}`);
 
   if (!snap.healthy) {
     out.push("");
@@ -308,5 +481,34 @@ function countMarkdown(dir: string): number {
     return n;
   } catch {
     return 0;
+  }
+}
+
+/** Age suffix for the held-lock line; absent when the mtime was unreadable. */
+function heldForSuffix(ageMs: number | null): string {
+  return ageMs === null ? "" : ` for ${ageMs}ms`;
+}
+
+/**
+ * The one store line, rendered for every state the group can hold. The
+ * owner's absence is stated when the lock is held - the lock record
+ * carries no identity, and silence would read as a renderer that forgot
+ * to ask who - and the held line names the concrete refusal a writer
+ * hits (`INDEX_LOCKED`, the search lane's typed contention error).
+ */
+function renderStoreLine(store: SnapshotStore): string {
+  const caller = `this caller ${store.thisCaller}`;
+  switch (store.writerLock) {
+    case WRITER_LOCK_STATE.free:
+      return `store: writer lock free; ${caller}`;
+    case WRITER_LOCK_STATE.held:
+      return (
+        `store: writer lock held${heldForSuffix(store.writerLockAgeMs)} ` +
+        "(owner: unknown, the lock record carries no identity; " +
+        "a write now would refuse with INDEX_LOCKED); " +
+        caller
+      );
+    case WRITER_LOCK_STATE.unknown:
+      return `store: writer lock state unknown (${store.writerLockReason ?? "reason unavailable"}); ${caller}`;
   }
 }

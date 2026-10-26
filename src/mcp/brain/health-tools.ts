@@ -396,7 +396,16 @@ async function toolBrainStatus(
       ? {}
       : { keepFinding: (finding) => findingView.row(...findingRefs(ctx.vault, finding)) }),
   });
-  return { format, ...snapshot };
+  // Below local reach the lock PATH is withheld while every state field
+  // stays: the path is a resolved host path (the index may live outside
+  // the vault), and `state_files.search_index` already answers presence
+  // without it - the same split the collect errors above make between a
+  // local message and a closed one.
+  const store =
+    contextReach(ctx) === TRANSPORT_REACH.local
+      ? snapshot.store
+      : { ...snapshot.store, writerLockPath: null };
+  return { format, ...snapshot, store };
 }
 
 // ----- Serializers ---------------------------------------------------------

@@ -20,6 +20,7 @@ import { resolveSignal } from "../../src/core/brain/diagnostics.ts";
 import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
 
 let tmp: string;
 
@@ -96,5 +97,90 @@ describe("buildOperatorSnapshot", () => {
       expect(p.nextCommand).toBe(resolveSignal(p.code).nextCommand);
       expect(p.nextCommand.startsWith("o2b ")).toBe(true);
     }
+  });
+});
+
+describe("buildOperatorSnapshot store group (t_cfe2ce5d)", () => {
+  /** The search index path the snapshot's own probe reads, for lock staging. */
+  function dbPath(): string {
+    return resolveSearchConfig({ vault: tmp }).dbPath;
+  }
+
+  /**
+   * The lock directory `proper-lockfile` takes: `mkdirSync(`${dbPath}.lock`)`,
+   * the exact shape `lockfile.lockSync` creates (getLockFile in
+   * proper-lockfile/lib/lockfile.js).
+   */
+  function takeWriterLock(): string {
+    const lockDir = `${dbPath()}.lock`;
+    mkdirSync(lockDir, { recursive: true });
+    return lockDir;
+  }
+
+  test("no lock directory reads free", async () => {
+    const snap = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    expect(snap.store.writerLock).toBe("free");
+    expect(snap.store.writerLockReason).toBeNull();
+    expect(snap.store.writerLockAgeMs).toBeNull();
+    expect(snap.store.writerLockPath).toBe(dbPath());
+    expect(snap.store.thisCaller).toBe("read-only");
+  });
+
+  test("a lock directory created the way proper-lockfile takes the lock reads held with a non-negative age", async () => {
+    takeWriterLock();
+    const snap = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    expect(snap.store.writerLock).toBe("held");
+    expect(snap.store.writerLockAgeMs).not.toBeNull();
+    expect(snap.store.writerLockAgeMs!).toBeGreaterThanOrEqual(0);
+    // v1 truth: the lock record is a bare directory carrying no identity,
+    // so the owner field reads null rather than inventing a holder.
+    expect(snap.store.writerLockOwner).toBeNull();
+  });
+
+  test("an injected throw reads unknown with the errno in the reason", async () => {
+    const failure = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const snap = await buildOperatorSnapshot(tmp, {
+      now: new Date("2026-07-18T12:00:00Z"),
+      writerLockHeldAt: () => {
+        throw failure;
+      },
+    });
+    expect(snap.store.writerLock).toBe("unknown");
+    expect(snap.store.writerLockReason).toContain("EACCES");
+    expect(snap.store.writerLockAgeMs).toBeNull();
+  });
+
+  test("a held lock is a live writer, not a fault: healthy stays true and problems are unchanged", async () => {
+    const before = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    takeWriterLock();
+    const held = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    expect(held.healthy).toBe(true);
+    expect(held.problems).toEqual(before.problems);
+  });
+
+  test("the renderer prints the store line on both branches", async () => {
+    const clear = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    expect(renderOperatorSnapshot(clear)).toContain("store: writer lock free");
+
+    takeWriterLock();
+    const held = await buildOperatorSnapshot(tmp, { now: new Date("2026-07-18T12:00:00Z") });
+    const heldText = renderOperatorSnapshot(held);
+    expect(heldText).toContain("store: writer lock held");
+    // The owner's absence is a stated measurement, not a gap.
+    expect(heldText).toContain("carries no identity");
+    // The concrete refusal a writer hits while the lock is held, named.
+    expect(heldText).toContain("INDEX_LOCKED");
+    expect(heldText).toContain("this caller read-only");
+
+    const unclear = await buildOperatorSnapshot(tmp, {
+      now: new Date("2026-07-18T12:00:00Z"),
+      writerLockHeldAt: () => {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+    });
+    const unclearText = renderOperatorSnapshot(unclear);
+    expect(unclearText).toContain("store: writer lock state unknown");
+    expect(unclearText).toContain("EACCES");
+    expect(unclearText).toContain("this caller read-only");
   });
 });

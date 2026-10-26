@@ -33,9 +33,11 @@ import { MAINTENANCE_VERDICT, appendJournal } from "../../src/core/brain/mainten
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
+import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const maintenance = ADMIN_TOOLS.find((tool) => tool.name === "brain_maintenance")!.handler;
+const brainStatus = HEALTH_TOOLS.find((tool) => tool.name === "brain_status")!.handler;
 
 let vault: string;
 let configHome: string;
@@ -161,5 +163,44 @@ describe("brain_maintenance status journal cursor pagination", () => {
     await expect(maintenance({ ...ctx }, { operation: "status", cursor: "!!!" })).rejects.toThrow(
       /malformed cursor/,
     );
+  });
+});
+
+describe("brain_status store group at the caller's reach (t_cfe2ce5d)", () => {
+  interface StoreGroup {
+    readonly writerLock: string;
+    readonly writerLockReason: string | null;
+    readonly writerLockAgeMs: number | null;
+    readonly writerLockOwner: string | null;
+    readonly writerLockPath: string | null;
+    readonly thisCaller: string;
+  }
+
+  async function statusStore(reach: TransportReach): Promise<StoreGroup> {
+    const res = (await brainStatus({ ...ctx, reach }, {})) as Record<string, unknown>;
+    return res["store"] as StoreGroup;
+  }
+
+  test("the payload carries the store group at both reaches, with the state fields intact", async () => {
+    for (const reach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote]) {
+      const store = await statusStore(reach);
+      expect(store.writerLock).toBe("free");
+      expect(store.writerLockReason).toBeNull();
+      expect(store.writerLockOwner).toBeNull();
+      expect(store.thisCaller).toBe("read-only");
+    }
+  });
+
+  test("the lock path is withheld below local reach", async () => {
+    const local = await statusStore(TRANSPORT_REACH.local);
+    // The lock rides the resolved index path, which is inside the vault here.
+    expect(typeof local.writerLockPath).toBe("string");
+
+    const remote = await statusStore(TRANSPORT_REACH.remote);
+    // The path may live outside the vault (the resolved index path is a
+    // host path), so below local reach it reads null while every state
+    // field stays - the same split `state_files.search_index` boolean makes.
+    expect(remote.writerLockPath).toBeNull();
+    expect(remote.writerLock).toBe("free");
   });
 });

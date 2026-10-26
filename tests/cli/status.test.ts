@@ -142,3 +142,40 @@ describe("o2b status — semantic fields (--json)", () => {
     expect(parsed.semantic_hint).toBeNull();
   });
 });
+
+describe("o2b brain status — store group (t_cfe2ce5d)", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-status-store-"));
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test("--json carries the store group and the human output carries the line", async () => {
+    // `brain status` resolves its config through OPEN_SECOND_BRAIN_CONFIG
+    // (brainVerbContext reads defaultConfigPath); an absent file is fine
+    // because the vault is given explicitly.
+    const env = {
+      ...ENV_CLEAN,
+      OPEN_SECOND_BRAIN_CONFIG: join(cfgDir, "config.yaml"),
+    };
+    const r = await runCli(["brain", "status", "--vault", vault, "--json"], { env });
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.store).toBeDefined();
+    expect(parsed.store.writerLock).toBe("free");
+    expect(parsed.store.writerLockOwner).toBeNull();
+    expect(parsed.store.thisCaller).toBe("read-only");
+    // The CLI payload is the operator's own read: local reach carries the
+    // lock path so the operator can look at what holds it.
+    expect(typeof parsed.store.writerLockPath).toBe("string");
+
+    const human = await runCli(["brain", "status", "--vault", vault], { env });
+    expect(human.returncode).toBe(0);
+    expect(human.stdout).toContain("store: writer lock free");
+    expect(human.stdout).toContain("this caller read-only");
+  });
+});
