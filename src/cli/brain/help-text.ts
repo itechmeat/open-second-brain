@@ -49,7 +49,7 @@ Brain verbs (observing memory):
   note             Append a one-line narrative milestone to Brain/log/today
   lifecycle        Tombstone/supersede a memory, correct one record, resolve chain tips, curator slices
   expire           Set, change or clear a signal's or preference's expiration date
-  note-lifecycle   Note FILES: rename/move/archive/delete one, rewriting inbound links
+  note-lifecycle   Note FILES or FOLDERS: rename/move/archive/delete a file, move/rename a folder, rewriting inbound links
   scaffold-stub    Unresolved wikilink targets: list them, or materialise a stub
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
   decision         Decisions: record/outcome/show/list/similar + open questions: open/list_open/show_open/resolve/discard
@@ -329,7 +329,7 @@ export const VERB_HELP: Record<string, string> = {
     "memory. An unparseable date, or an id naming no artifact, exits 2 by name.\n" +
     "Create-time expirations come from `o2b brain feedback --expires` instead.\n",
   "note-lifecycle":
-    "usage: o2b brain note-lifecycle <rename|move|archive|delete> <path> [<to>]\n" +
+    "usage: o2b brain note-lifecycle <rename|move|archive|delete|move-folder|rename-folder> <path> [<to>]\n" +
     "  [--apply] [--confirm] [--delete-linked] [--expect <n>] [--strict] [--vault <path>]\n" +
     "  [--config <path>] [--json]\n" +
     "Note FILES, not memories: rename changes the filename in place, move changes the\n" +
@@ -345,6 +345,14 @@ export const VERB_HELP: Record<string, string> = {
     "as is a page citing a second source, as is every user note; the receipt prints\n" +
     "the deletion set and the reported set separately, names the scope it scanned,\n" +
     "and --expect then counts the deletion set.\n" +
+    "The folder actions move a WHOLE folder: move-folder relocates it under a\n" +
+    "destination parent, rename-folder renames it within its parent - the same\n" +
+    "rename/move split as the file actions, so a caller that meant one and spells\n" +
+    "the other is refused wrong_action rather than moved by accident. Every\n" +
+    "destination is checked free before the first rename, so an occupied destination\n" +
+    "refuses with nothing moved and the source untouched; the move set's inbound\n" +
+    "path-spelled links are rewritten in one pass over the successfully moved set,\n" +
+    "and a mid-set failure is named per file (moveFailures) with no rollback.\n" +
     "Inbound [[wikilinks]] are rewritten across the vault, minus what vault scope\n" +
     "excludes, minus code fences, and minus Brain/log, which is append-only. The\n" +
     "receipt names how stale the search index now is and the command that fixes it.\n" +

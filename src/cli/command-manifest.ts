@@ -660,7 +660,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ]),
         command(
           "note-lifecycle",
-          "Note FILES: rename, move, archive or delete one, rewriting inbound wikilinks",
+          "Note FILES or whole FOLDERS: rename, move, archive or delete a file, move-folder or rename-folder a folder, rewriting inbound wikilinks",
           [
             flag("vault", "string"),
             flag("config", "string"),
