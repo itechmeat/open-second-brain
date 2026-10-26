@@ -27,10 +27,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import type { PlannedFile } from "../../../core/brain/claude-memory-plan.ts";
 import { loadNormalizedContinuityRecords } from "../../../core/brain/continuity/read-model.ts";
 import { promoteHostMemory } from "../../../core/brain/continuity/promote-host-memory.ts";
 import {
   PromoteConflictsError,
+  PromoteManifestCorruptError,
   type PromoteConflictsPartialProgress,
   type PromoteHostMemoryResult,
 } from "../../../core/brain/continuity/promote-host-memory.ts";
@@ -285,6 +287,7 @@ function promoteContinuity(argv: string[]): number {
         res.conflicts,
       );
     }
+    if (res.manifestCorrupt) printManifestCorruptWarning();
     return 0;
   } catch (err) {
     if (err instanceof PromoteConflictsError) {
@@ -316,69 +319,112 @@ function promoteContinuity(argv: string[]): number {
       }
       return 2;
     }
+    if (err instanceof PromoteManifestCorruptError) {
+      return fail(`brain continuity promote: ${(err as Error).message}`);
+    }
     return fail(`brain continuity promote: ${(err as Error).message}`);
   }
 }
 
 function renderPromoteJson(month: string | undefined, res: PromoteHostMemoryResult): string {
+  return renderPromoteEnvelope({
+    mode: res.mode,
+    month,
+    total: res.total,
+    plans: res.plans,
+    applied: res.applied,
+    skipped: res.skipped,
+    skippedUnchanged: res.skippedUnchanged,
+    conflicts: res.conflicts,
+    redactedCount: res.redactedCount,
+    privateCount: res.privateCount,
+    manifestCorrupt: res.manifestCorrupt,
+    digest: res.digest,
+    snapshotRunId: res.snapshotRunId,
+  });
+}
+
+/**
+ * The one JSON envelope every promote exit spells: the same key set on
+ * the dry run, the clean apply and the conflict path, with `conflicts`
+ * always present (empty when none) and `plans` carrying the full plan
+ * even when the run stopped at exit 2 - a consumer keying on `plans`
+ * must not read zero rows off a partial run, and one keying on
+ * `conflicts` must not meet the key only on that path.
+ */
+function renderPromoteEnvelope(parts: {
+  mode: string;
+  month: string | undefined;
+  total: number;
+  plans: ReadonlyArray<PlannedFile>;
+  applied: ReadonlyArray<PlannedFile>;
+  skipped: ReadonlyArray<{ id: string; reason: string }>;
+  skippedUnchanged: ReadonlyArray<PlannedFile>;
+  conflicts: ReadonlyArray<PlannedFile>;
+  redactedCount: number;
+  privateCount: number;
+  manifestCorrupt: boolean;
+  digest: string;
+  snapshotRunId: string | null;
+}): string {
   return JSON.stringify(
     {
-      mode: res.mode,
-      month: month ?? null,
-      total: res.total,
+      mode: parts.mode,
+      month: parts.month ?? null,
+      total: parts.total,
       counts: {
-        plans: res.plans.length,
-        applied: res.applied.length,
-        skipped: res.skipped.length,
-        skipped_unchanged: res.skippedUnchanged.length,
-        conflicts: res.conflicts.length,
-        private_dropped: res.privateCount,
-        redacted: res.redactedCount,
+        plans: parts.plans.length,
+        applied: parts.applied.length,
+        skipped: parts.skipped.length,
+        skipped_unchanged: parts.skippedUnchanged.length,
+        conflicts: parts.conflicts.length,
+        private_dropped: parts.privateCount,
+        redacted: parts.redactedCount,
       },
-      digest: res.digest,
-      snapshot: res.snapshotRunId,
-      plans: res.plans.map((p) => ({ id: p.basename, pref_id: p.prefId, action: p.action })),
-      skipped: res.skipped.map((s) => ({ id: s.id, reason: s.reason })),
-      applied: res.applied.map((p) => ({ id: p.basename, pref_id: p.prefId, action: p.action })),
+      manifest_corrupt: parts.manifestCorrupt,
+      digest: parts.digest,
+      snapshot: parts.snapshotRunId,
+      plans: parts.plans.map((p) => ({ id: p.basename, pref_id: p.prefId, action: p.action })),
+      skipped: parts.skipped.map((s) => ({ id: s.id, reason: s.reason })),
+      applied: parts.applied.map((p) => ({ id: p.basename, pref_id: p.prefId, action: p.action })),
+      conflicts: parts.conflicts.map((p) => ({
+        id: p.basename,
+        pref_id: p.prefId,
+        action: p.action,
+      })),
     },
     null,
     2,
   );
 }
 
-/** The conflict-path envelope: the same keys, built from the partial progress. */
 function renderPromotePartialJson(
   month: string | undefined,
   partial: PromoteConflictsPartialProgress,
   conflicts: PromoteConflictsError["conflicts"],
 ): string {
-  return JSON.stringify(
-    {
-      mode: "apply",
-      month: month ?? null,
-      total: partial.total,
-      counts: {
-        plans: partial.applied.length + partial.skippedUnchanged.length + conflicts.length,
-        applied: partial.applied.length,
-        skipped: partial.skipped.length,
-        skipped_unchanged: partial.skippedUnchanged.length,
-        conflicts: conflicts.length,
-        private_dropped: partial.privateCount,
-        redacted: partial.redactedCount,
-      },
-      digest: partial.digest,
-      snapshot: partial.snapshotRunId,
-      plans: [],
-      skipped: partial.skipped.map((s) => ({ id: s.id, reason: s.reason })),
-      applied: partial.applied.map((p) => ({
-        id: p.basename,
-        pref_id: p.prefId,
-        action: p.action,
-      })),
-      conflicts: conflicts.map((p) => ({ id: p.basename, pref_id: p.prefId, action: p.action })),
-    },
-    null,
-    2,
+  return renderPromoteEnvelope({
+    mode: "apply",
+    month,
+    total: partial.total,
+    plans: partial.plans,
+    applied: partial.applied,
+    skipped: partial.skipped,
+    skippedUnchanged: partial.skippedUnchanged,
+    conflicts,
+    redactedCount: partial.redactedCount,
+    privateCount: partial.privateCount,
+    manifestCorrupt: partial.manifestCorrupt,
+    digest: partial.digest,
+    snapshotRunId: partial.snapshotRunId,
+  });
+}
+
+function printManifestCorruptWarning(): void {
+  process.stderr.write(
+    "warning: Brain/.imports/host-memory-promotions.json could not be read as the " +
+      "manifest shape - this plan was computed against an empty history and --apply " +
+      "refuses until the file is reconciled\n",
   );
 }
 

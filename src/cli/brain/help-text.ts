@@ -1428,9 +1428,22 @@ export const VERB_HELP: Record<string, string> = {
     "and aging inbox signals. --triggers enqueues the ranked ideas.\n",
   continuity:
     "usage: o2b brain continuity export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json]\n" +
+    "       o2b brain continuity rank [--kind <kind>] [--limit N] [--all] [--json]\n" +
+    "       o2b brain continuity promote [--month YYYY-MM] [--apply] [--approval-digest <hex>] [--json]\n" +
     "Read-only trajectory export of the continuity store. atof renders one\n" +
     "JSONL event stream; atif renders one trajectory document per session.\n" +
-    "Records flagged private are dropped; redacted text stays masked.\n",
+    "Records flagged private are dropped; redacted text stays masked.\n" +
+    "rank lists working-memory continuity records by usage-driven decay\n" +
+    "weight (freshest and most-recalled first; default kind\n" +
+    "pre_compact_extract, --kind narrows, --all ranks every kind).\n" +
+    "promote renders host_memory_write records as unconfirmed preference\n" +
+    "pages under Brain/preferences/pref-hostmem-<record-id12>.md, dry-run\n" +
+    "by default: the per-record plan, named skips and a plan digest print,\n" +
+    "and --apply lands exactly that plan - non-interactively it must carry\n" +
+    "the dry run's --approval-digest. Every record is re-scanned under the\n" +
+    "export door's strict redaction grade and the masked text is what\n" +
+    "lands. The ledger stays write-only audit substrate; export remains\n" +
+    "the full-fidelity audit path.\n",
   payload:
     "usage: o2b brain payload get <osb-payload://sha256> [--offset N] [--limit N] [--json]\n" +
     "       o2b brain payload list [--json]\n" +

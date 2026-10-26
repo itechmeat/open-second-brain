@@ -213,6 +213,32 @@ registration line indicates a version older than 1.0.1.
 > state and `o2b doctor` for the full readiness suite - together they
 > cover the same ground.
 
+## 6. Recall what Hermes wrote
+
+Hermes built-in memory writes are mirrored into the Open Second Brain
+continuity ledger, and `o2b brain continuity promote` is what makes
+those mirrored facts recallable: each becomes an ordinary preference
+page under `Brain/preferences/`, so page search finds it and the
+context pack and its confirm flow treat it like any imported host
+memory. Promote does not restore Hermes built-in memory - the ledger
+stays the durable copy, and `o2b brain continuity export` remains the
+full-fidelity audit path.
+
+Promote is dry-run by default and writes nothing. Run it, read the
+per-record plan, then apply with the approval digest it prints:
+
+```bash
+o2b brain continuity promote --vault /path/to/vault
+o2b brain continuity promote --vault /path/to/vault --apply \
+    --approval-digest <digest-from-the-dry-run>
+```
+
+`--apply` lands exactly the plan the digest seals or nothing at all; a
+non-interactive apply must carry the digest. Promoted pages land
+unconfirmed and stay under the trial window
+(`dream.unconfirmed_window_days`) until the confirm flow accepts them,
+like any other preference.
+
 ## Update
 
 ```bash

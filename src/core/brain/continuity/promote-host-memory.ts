@@ -43,6 +43,8 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { resolveAgentName } from "../../config.ts";
+import { EGRESS_REDACTION_OPTIONS } from "../../egress/guard.ts";
+import { redactStructured } from "../../redactor.ts";
 import { digestVerifies, sealWithDigest, sha256Hex } from "../../integrity/digest.ts";
 import { loadBrainConfig } from "../policy.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../policy/defaults.ts";
@@ -55,7 +57,7 @@ import {
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath, retiredPath, vaultRelative } from "../paths.ts";
 import { planAction, type PlannedFile } from "../claude-memory-plan.ts";
-import { renderPreferenceFromMemory } from "../claude-memory-render.ts";
+import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
 import { resolvedOwnerFor } from "../preference.ts";
 import { createSnapshot } from "../snapshot.ts";
 import { TagSyntaxError } from "../tag-syntax.ts";
@@ -64,7 +66,7 @@ import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { HOST_MEMORY_WRITE_KIND } from "../host-memory-write.ts";
 import { loadNormalizedContinuityRecords } from "./read-model.ts";
-import { continuityLogPath, listContinuityRecords } from "./store.ts";
+import { continuityLogPath, isCanonicalUtcTimestamp, listContinuityRecords } from "./store.ts";
 
 export interface PromoteHostMemoryOpts {
   readonly vault: string;
@@ -92,10 +94,17 @@ export interface PromoteHostMemoryResult {
   readonly conflicts: ReadonlyArray<PlannedFile>;
   readonly applied: ReadonlyArray<PlannedFile>;
   readonly skippedUnchanged: ReadonlyArray<PlannedFile>;
-  /** Records whose stored content is already write-time redaction-masked. */
+  /** Records that land in masked form: write-time redaction or the strict re-scan. */
   readonly redactedCount: number;
   /** Records the read-model dropped as private, counted through the store door. */
   readonly privateCount: number;
+  /**
+   * True when the promotion sidecar exists but could not be read as the
+   * manifest shape: the plan was computed against an empty history, every
+   * landed page will show as CONFLICT, and an apply refuses until the
+   * operator reconciles the file.
+   */
+  readonly manifestCorrupt: boolean;
   readonly snapshotRunId: string | null;
   readonly localDate: string;
   /**
@@ -182,8 +191,8 @@ export class PromoteApprovalDigestError extends Error {
     super(
       `approval digest mismatch: the plan changed since the approved dry run ` +
         `(approved ${approvalDigest}, current plan ${planDigest}); nothing was written and ` +
-        "no snapshot was taken. Re-run `o2b brain continuity promote --dry-run` to review " +
-        "the current plan, then apply with its digest.",
+        "no snapshot was taken. Re-run `o2b brain continuity promote` (the default is the " +
+        "dry run) to review the current plan, then apply with its digest.",
     );
     this.name = "PromoteApprovalDigestError";
     this.approvalDigest = approvalDigest;
@@ -191,13 +200,35 @@ export class PromoteApprovalDigestError extends Error {
   }
 }
 
+/**
+ * The apply-time refusal while the promotion sidecar is unreadable. Every
+ * landed page would plan CONFLICT against the empty history and a save
+ * would flatten whatever was still recoverable; the remedy is operator
+ * reconciliation of the file, not a write over it.
+ */
+export class PromoteManifestCorruptError extends Error {
+  constructor() {
+    super(
+      "the promotion manifest Brain/.imports/host-memory-promotions.json exists but could " +
+        "not be read as the manifest shape, so the promotion history is unavailable and the " +
+        "apply refuses. Inspect and reconcile the file (every promoted page names its record " +
+        "id in the Origin section), or remove it to rebuild the history from scratch - a " +
+        "rebuild plans CONFLICT for every landed page, which is the review that keeps another " +
+        "writer's page from being overwritten.",
+    );
+    this.name = "PromoteManifestCorruptError";
+  }
+}
+
 export interface PromoteConflictsPartialProgress {
   readonly total: number;
+  readonly plans: ReadonlyArray<PlannedFile>;
   readonly applied: ReadonlyArray<PlannedFile>;
   readonly skipped: ReadonlyArray<{ id: string; reason: string }>;
   readonly skippedUnchanged: ReadonlyArray<PlannedFile>;
   readonly redactedCount: number;
   readonly privateCount: number;
+  readonly manifestCorrupt: boolean;
   readonly snapshotRunId: string | null;
   readonly localDate: string;
   readonly digest: string;
@@ -278,7 +309,6 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     ...window,
   });
   const privateCount = rawRows.filter((record) => record.private === true).length;
-  const redactedCount = records.filter((record) => record.redacted).length;
 
   const manifest = loadPromotionsManifest(opts.vault);
   const newPromotions: Record<string, HostMemoryPromotionEntry> = { ...manifest.promotions };
@@ -295,8 +325,32 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   // share a hash tail cannot plan onto one page where the second
   // atomic write would silently overwrite the first.
   const seenTargets = new Map<string, string>();
+  // Content shas already spoken for - by the sidecar (a landed page) or
+  // by a row planned earlier this run. The record id hashes createdAt
+  // (store.ts recordId), so the same memory text written in three
+  // sessions is three records; only the first may become a page, or the
+  // context pack fills with duplicates that each run their own trial.
+  const seenContentSha = new Map<string, string>();
+  for (const [id, entry] of Object.entries(manifest.promotions)) {
+    seenContentSha.set(entry.sha256, id);
+  }
+  let redactedCount = 0;
 
   for (const record of records) {
+    // Fail-soft per row, the way the read model is: a hand-edited or
+    // foreign-written ledger row must never block every promotion. The
+    // canonical checks also pin the slug story - the filename, the
+    // retired-page guard and the frontmatter identity all derive from
+    // the id tail, and a tail that slugifies differently than it reads
+    // would land a page whose `id:` does not answer for it.
+    if (!isCanonicalUtcTimestamp(record.createdAt)) {
+      skipped.push({ id: record.id, reason: "non-canonical createdAt" });
+      continue;
+    }
+    if (!/^ctn_\d{14}_[0-9a-f]{16}$/.test(record.id)) {
+      skipped.push({ id: record.id, reason: "non-canonical record id" });
+      continue;
+    }
     const content = record.payload["content"];
     if (typeof content !== "string") {
       skipped.push({ id: record.id, reason: "content is not text" });
@@ -306,8 +360,40 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
       skipped.push({ id: record.id, reason: "empty content" });
       continue;
     }
+    // The strict re-scan (issue #277 review H1): the ledger redacts at
+    // write time under the loose defaults, so a vendor key, a bare
+    // high-entropy token or a user:pass@host URL can sit in a row whose
+    // `redacted` flag is false, and the read model never re-scans. A
+    // promotion moves the text into the indexed corpus, where the export
+    // door's own header documents what would happen to it. The MASKED
+    // text is what lands - the fact stays recallable, the credential
+    // does not leave the shape the write-time scan left or the scan
+    // produces here.
+    const scanned = redactStructured(content, EGRESS_REDACTION_OPTIONS);
+    const safeContent = scanned.value;
+    if (typeof safeContent !== "string" || safeContent.trim().length === 0) {
+      skipped.push({ id: record.id, reason: "content is empty after redaction" });
+      continue;
+    }
+    const masked = scanned.redacted;
+    if (masked || record.redacted === true) redactedCount += 1;
+    const contentSha256 = sha256Hex(safeContent);
+    const sameAs = seenContentSha.get(contentSha256);
+    if (sameAs !== undefined && sameAs !== record.id) {
+      skipped.push({ id: record.id, reason: `same content as record ${sameAs}` });
+      continue;
+    }
+    seenContentSha.set(contentSha256, record.id);
     const ref = slugRef(record.id);
-    const slug = `hostmem-${ref}`;
+    // Defence in depth over the canonical-id check above: the slug the
+    // renderer derives from `identityName` must be the slug every
+    // consumer (filename, retired guard, manifest) computes, whatever
+    // the tail contains.
+    const slug = slugifyMemoryName(`hostmem-${ref}`);
+    if (slug.length <= "hostmem-".length) {
+      skipped.push({ id: record.id, reason: "record id produces no slug" });
+      continue;
+    }
     const prefId = `pref-${slug}`;
     const seenBy = seenTargets.get(slug);
     if (seenBy !== undefined) {
@@ -333,20 +419,20 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     // first line is display text, carried by the `principle` field -
     // not the identity, which would move with every rewording.
     const firstLine =
-      content
+      safeContent
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line.length > 0) ?? "";
     const memoryPath = ledgerShardRef(opts.vault, record.createdAt);
     const renderInput = {
       name: headLine(firstLine, 60) || `Host memory ${ref}`,
-      identityName: `hostmem-${ref}`,
+      identityName: slug,
       description: headLine(firstLine, 100),
-      body: content,
+      body: safeContent,
       memoryPath,
       importedAt: promotedAt,
       unconfirmedUntil,
-      bodySha256: sha256Hex(content),
+      bodySha256: contentSha256,
       owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
       originLabel: `Promoted from host memory write \`${record.id}\` in the continuity ledger:`,
     };
@@ -363,7 +449,7 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
       continue;
     }
     rowSeals.set(record.id, {
-      content_sha256: sha256Hex(content),
+      content_sha256: contentSha256,
       // The seal's render of the SAME record under a fixed clock: the
       // approval covers the content, never the moment.
       body_sha256: sha256Hex(
@@ -378,13 +464,13 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     const plan = planAction({
       basename: record.id,
       prefId,
-      sha256: sha256Hex(content),
+      sha256: contentSha256,
       inManifest: manifestEntry ? { sha256: manifestEntry.sha256 } : null,
       prefExists: existsSync(prefFile),
     });
     plans.push(plan);
     if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
-      filesToWrite.push({ plan, body, sha256: sha256Hex(content), slug });
+      filesToWrite.push({ plan, body, sha256: contentSha256, slug });
     }
   }
 
@@ -414,6 +500,7 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
       skippedUnchanged,
       redactedCount,
       privateCount,
+      manifestCorrupt: manifest.corrupt,
       snapshotRunId: null,
       localDate,
       digest: planDigest,
@@ -426,6 +513,14 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   // never written over.
   if (opts.approvalDigest !== undefined && !digestVerifies(approvalBody, opts.approvalDigest)) {
     throw new PromoteApprovalDigestError(opts.approvalDigest, planDigest);
+  }
+
+  // A corrupt sidecar means the plan was computed against an empty
+  // history: every landed page would show CONFLICT and a save would
+  // flatten a file that was mostly recoverable. Refuse before the
+  // snapshot; reconciliation is the operator's move.
+  if (manifest.corrupt) {
+    throw new PromoteManifestCorruptError();
   }
 
   // Process the non-conflict records first; throw `PromoteConflictsError`
@@ -459,13 +554,16 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     applied.push(plan);
   }
 
-  // Only persist the manifest and emit a log event if the run actually
-  // did something (wrote pages OR observed conflicts). A no-op apply
-  // (every plan SKIP_UNCHANGED, no conflicts) should not bloat the log.
+  // The manifest is persisted only when something was applied: a
+  // conflict-only run would otherwise rewrite the file (a corrupt one to
+  // the empty set) without landing a page. The log event still records a
+  // conflict-only run, so the no-op bloat concern is about the sidecar,
+  // not the ledger.
+  if (applied.length > 0) {
+    savePromotionsManifest(opts.vault, { version: 1, promotions: newPromotions });
+  }
   const didSomething = applied.length > 0 || conflicts.length > 0;
   if (didSomething) {
-    savePromotionsManifest(opts.vault, { version: 1, promotions: newPromotions });
-
     const counts = {
       created: plans.filter((p) => p.action === "CREATE").length,
       updated: plans.filter((p) => p.action === "UPDATE").length,
@@ -498,11 +596,13 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     // progress; the CLI prints them and exits 2.
     throw new PromoteConflictsError(conflicts, {
       total: rawRows.length,
+      plans,
       applied,
       skipped,
       skippedUnchanged,
       redactedCount,
       privateCount,
+      manifestCorrupt: manifest.corrupt,
       snapshotRunId,
       localDate,
       digest: planDigest,
@@ -519,6 +619,7 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
     skippedUnchanged,
     redactedCount,
     privateCount,
+    manifestCorrupt: manifest.corrupt,
     snapshotRunId,
     localDate,
     digest: planDigest,

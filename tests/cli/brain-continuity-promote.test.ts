@@ -37,6 +37,10 @@ afterEach(() => {
 
 const env = () => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
+function writeHostMemory(v: string, content: string, createdAt: string) {
+  recordHostMemoryWrite(v, { action: "add", target: "user", content, createdAt });
+}
+
 const PROMOTE = ["brain", "continuity", "promote"];
 
 describe("o2b brain continuity promote", () => {
@@ -82,8 +86,10 @@ describe("o2b brain continuity promote", () => {
     expect(Object.keys(parsed).toSorted()).toEqual(
       [
         "applied",
+        "conflicts",
         "counts",
         "digest",
+        "manifest_corrupt",
         "mode",
         "month",
         "plans",
@@ -126,9 +132,75 @@ describe("o2b brain continuity promote", () => {
   });
 
   test("non-interactive --apply without a digest is refused", async () => {
-    const out = await runCli([...PROMOTE, "--apply"], { env: env() });
+    // A subprocess with a piped stdin, NOT the in-process form: the
+    // guard reads process.stdin.isTTY, which in-process is inherited
+    // from the runner and turns this test into a pass-on-CI /
+    // fail-in-a-terminal flip (review M8).
+    const out = await runCli([...PROMOTE, "--apply"], { env: env(), stdin: "" });
     expect(out.returncode).toBe(2);
     expect(out.stderr).toContain("--apply requires --approval-digest in non-interactive");
+    // The refusal wrote nothing.
+    expect(
+      readdirSync(join(vault, "Brain", "preferences")).filter((name) =>
+        name.startsWith("pref-hostmem-"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the exit-2 conflict path spells the same envelope, plans included (review M7)", async () => {
+    // Land a page, then drop the sidecar: the next run plans CONFLICT
+    // for the orphaned page, and the conflict apply exits 2 after the
+    // safe writes land.
+    const dry = await runCli([...PROMOTE, "--json"], { env: env() });
+    const digest = (JSON.parse(dry.stdout) as { digest: string }).digest;
+    await runCli([...PROMOTE, "--apply", "--approval-digest", digest], { env: env() });
+    rmSync(join(vault, "Brain", ".imports", "host-memory-promotions.json"));
+    writeHostMemory(vault, "A second fact", "2026-06-21T10:00:00Z");
+
+    const dry2 = await runCli([...PROMOTE, "--json"], { env: env() });
+    const dry2Parsed = JSON.parse(dry2.stdout) as {
+      plans: Array<Record<string, unknown>>;
+      conflicts: Array<Record<string, unknown>>;
+    };
+    expect(dry2Parsed.plans).toHaveLength(2);
+    expect(dry2Parsed.conflicts).toHaveLength(1);
+    expect(dry2Parsed.plans.some((p) => p["action"] === "CONFLICT")).toBe(true);
+
+    const digest2 = (JSON.parse(dry2.stdout) as { digest: string }).digest;
+    // The snapshot run-id embeds the second; two applies inside one
+    // second collide on the archive name and the second refuses. The
+    // CLI surface cannot pin a clock the way the core tests do, so the
+    // run boundary is the test's clock.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const out = await runCli([...PROMOTE, "--apply", "--json", "--approval-digest", digest2], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(2);
+    const parsed = JSON.parse(out.stdout) as {
+      mode: string;
+      plans: Array<Record<string, unknown>>;
+      conflicts: Array<Record<string, unknown>>;
+      counts: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed).toSorted()).toEqual(
+      [
+        "applied",
+        "conflicts",
+        "counts",
+        "digest",
+        "manifest_corrupt",
+        "mode",
+        "month",
+        "plans",
+        "skipped",
+        "snapshot",
+        "total",
+      ].toSorted(),
+    );
+    // The consumer keying on `plans` sees the conflict row, not zero.
+    expect(parsed.plans).toHaveLength(2);
+    expect(parsed.conflicts).toHaveLength(1);
+    expect(parsed.counts["applied"]).toBe(1);
   });
 
   test("an unknown subcommand fails with the USAGE block", async () => {

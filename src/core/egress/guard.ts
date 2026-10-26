@@ -137,8 +137,13 @@ export type EgressVerdict<T> = EgressReleased<T> | EgressRefused;
  * The redaction policy for every path that writes outside the vault. One
  * constant, because six paths with six policies is the drift this unit
  * exists to remove.
+ *
+ * Exported for the one in-vault writer that needs the same grade without
+ * an egress site: the continuity promotion re-scans ledger text before it
+ * becomes an indexed page, and a second policy spelled next to this one
+ * would drift exactly the way the shared constant exists to prevent.
  */
-const EGRESS_REDACTION_OPTIONS: RedactRawOutputOptions = Object.freeze({
+export const EGRESS_REDACTION_OPTIONS: RedactRawOutputOptions = Object.freeze({
   redactTokens: true,
   redactUrlCredentials: true,
 });

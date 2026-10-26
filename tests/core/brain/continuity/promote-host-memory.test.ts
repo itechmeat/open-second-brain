@@ -22,8 +22,10 @@ import { appendContinuityRecord } from "../../../../src/core/brain/continuity/st
 import {
   PromoteApprovalDigestError,
   PromoteConflictsError,
+  PromoteManifestCorruptError,
   promoteHostMemory,
 } from "../../../../src/core/brain/continuity/promote-host-memory.ts";
+import { REDACTION_PLACEHOLDER, redactStructured } from "../../../../src/core/redactor.ts";
 import { loadPromotionsManifest } from "../../../../src/core/brain/host-memory-promotions.ts";
 import {
   HOST_MEMORY_WRITE_KIND,
@@ -36,7 +38,11 @@ import { resolvedOwnerFor } from "../../../../src/core/brain/preference.ts";
 import { isoSecond } from "../../../../src/core/brain/time.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { sha256Hex } from "../../../../src/core/integrity/digest.ts";
-import { FAKE_PROVIDER_KEY } from "../../../helpers/fake-credentials.ts";
+import {
+  FAKE_PROVIDER_KEY,
+  FAKE_VENDOR_KEY,
+  fakeCredential,
+} from "../../../helpers/fake-credentials.ts";
 
 let vault: string;
 let savedEnv: Record<string, string | undefined>;
@@ -94,6 +100,10 @@ function writeRawHostRecord(id: string, content: string, createdAt = "2026-06-20
     redacted: false,
   };
   writeFileSync(join(dir, "2026-06.jsonl"), `${JSON.stringify(row)}\n`, { flag: "a" });
+}
+
+function writeRawHostRecordWithCreatedAt(id: string, content: string, createdAt: string) {
+  writeRawHostRecord(id, content, createdAt);
 }
 
 function promotionOf(recordId: string) {
@@ -329,6 +339,14 @@ describe("promoteHostMemory", () => {
     expect(() =>
       promoteHostMemory({ vault, mode: "apply", approvalDigest: dry.digest, now: NOW }),
     ).toThrow(PromoteApprovalDigestError);
+    try {
+      promoteHostMemory({ vault, mode: "apply", approvalDigest: dry.digest, now: NOW });
+    } catch (err) {
+      // The remedy must be a command that exists: the verb has no
+      // --dry-run flag, the default IS the dry run (M5).
+      expect((err as Error).message).toContain("(the default is the dry run)");
+      expect((err as Error).message).not.toContain("--dry-run");
+    }
     expect(existsSync(preferencePath(vault, hostRef(record.id)))).toBe(false);
     expect(promoteSnapshots()).toEqual([]);
     expect(promotionOf(record.id)).toBeUndefined();
@@ -371,9 +389,9 @@ describe("promoteHostMemory", () => {
   test("two records whose hash tails collide plan onto one named skip, not one overwrite", () => {
     // The store derives ids from content, so the collision fixture seeds
     // raw ledger rows whose ids deliberately share a 12-character tail.
-    const shared = "aaaaaaaaaaaa";
-    writeRawHostRecord(`ctn_0000000000000_${shared}`, "First fact");
-    writeRawHostRecord(`ctn_0000000000001_${shared}`, "Second fact");
+    const shared = "aaaaaaaaaaaaaaaa";
+    writeRawHostRecord(`ctn_20260620000000_${shared}`, "First fact");
+    writeRawHostRecord(`ctn_20260621000000_${shared}`, "Second fact");
     const res = promoteHostMemory({ vault, mode: "dry-run", now: NOW });
     expect(res.plans).toHaveLength(1);
     expect(res.skipped).toHaveLength(1);
@@ -407,6 +425,86 @@ describe("promoteHostMemory", () => {
     expect(log).toContain("created: 1");
     expect(log).toContain("private_dropped: 0");
     expect(log).toContain("redacted: 0");
+  });
+
+  test("credential-shaped content is re-scanned and lands masked (review H1)", () => {
+    const urlCred = `postgres://deploy:${fakeCredential("Hunter2", "-Fake")}@db.example.test:5432/app`;
+    const content = `DB is ${urlCred} and the key is ${FAKE_VENDOR_KEY}`;
+    const record = writeHostMemory(content);
+    const res = promoteHostMemory({ vault, mode: "apply", now: NOW });
+
+    // The write-time flag stays false (the ledger redacts under the loose
+    // defaults), and the strict re-scan is what caught these.
+    expect(record.redacted).toBe(false);
+    expect(res.redactedCount).toBe(1);
+
+    const masked = redactStructured(content, {
+      redactTokens: true,
+      redactUrlCredentials: true,
+    }).value as string;
+    const page = readFileSync(preferencePath(vault, hostRef(record.id)), "utf8");
+    expect(page).not.toContain(FAKE_VENDOR_KEY);
+    expect(page).not.toContain("Hunter2-Fake");
+    expect(page).toContain(REDACTION_PLACEHOLDER);
+    // The plan binding covers the masked text: the sidecar's sha is the
+    // sha of what landed, so a re-run stays idempotent.
+    expect(promotionOf(record.id)?.sha256).toBe(sha256Hex(masked));
+    expect(page).toContain(masked.split("\n")[0]!.slice(0, 20));
+  });
+
+  test("a malformed row skips by name and never aborts the run (review M1)", () => {
+    const good = writeHostMemory("User prefers dark mode", "2026-06-20T10:00:00Z");
+    writeRawHostRecordWithCreatedAt(
+      "ctn_20260622000000_feeddadfeeddad0",
+      "Bad date row",
+      "June 23",
+    );
+    writeRawHostRecord("ctn_20260623!:000000_feeddadfeeddad1", "Bad id row");
+    const res = promoteHostMemory({ vault, mode: "dry-run", now: NOW });
+    expect(res.plans.map((p) => p.action)).toEqual(["CREATE"]);
+    expect(res.plans[0]!.basename).toBe(good.id);
+    const reasons = res.skipped.map((s) => s.reason).toSorted();
+    expect(reasons).toEqual(["non-canonical createdAt", "non-canonical record id"]);
+  });
+
+  test("a corrupt promotion manifest is reported on dry run and refused on apply (review M3)", () => {
+    writeHostMemory("User prefers dark mode");
+    mkdirSync(join(vault, "Brain", ".imports"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", ".imports", "host-memory-promotions.json"),
+      '{"version": 1, "promotions": {"ctn_2026',
+      "utf8",
+    );
+    const dry = promoteHostMemory({ vault, mode: "dry-run", now: NOW });
+    expect(dry.manifestCorrupt).toBe(true);
+    // The plan computed against the empty history names the loss: the
+    // landed page (none here) would show CONFLICT, the row plans CREATE.
+    expect(dry.plans.map((p) => p.action)).toEqual(["CREATE"]);
+
+    expect(() => promoteHostMemory({ vault, mode: "apply", now: NOW })).toThrow(
+      PromoteManifestCorruptError,
+    );
+    expect(promoteSnapshots()).toEqual([]);
+    // The garbage file is not flattened to an empty set by the run.
+    expect(
+      readFileSync(join(vault, "Brain", ".imports", "host-memory-promotions.json"), "utf8"),
+    ).toBe('{"version": 1, "promotions": {"ctn_2026');
+  });
+
+  test("identical content from repeated writes promotes once (review M4)", () => {
+    writeHostMemory("User prefers dark mode", "2026-06-20T10:00:00Z");
+    writeHostMemory("User prefers dark mode", "2026-06-21T10:00:00Z");
+    writeHostMemory("User prefers dark mode", "2026-06-22T10:00:00Z");
+    const res = promoteHostMemory({ vault, mode: "apply", now: NOW });
+    expect(res.plans).toHaveLength(1);
+    expect(res.skipped).toHaveLength(2);
+    for (const skip of res.skipped) {
+      expect(skip.reason).toMatch(/^same content as record ctn_/);
+    }
+    const pages = readdirSync(join(vault, "Brain", "preferences")).filter((name) =>
+      name.startsWith("pref-hostmem-"),
+    );
+    expect(pages).toHaveLength(1);
   });
 
   test("the same content seals identically across runs - the approval binds the plan", () => {
