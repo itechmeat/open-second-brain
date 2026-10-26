@@ -54,6 +54,14 @@ export const ANSWER_QUOTE_VERDICT = Object.freeze({
   noteUnavailable: "note-unavailable",
   /** The evidence bytes are not valid UTF-8 text. */
   notText: "not-text",
+  /**
+   * Per-note presence only (reply-presence receipts, t_f8510c55): no
+   * reply span was ever checked against this note - it was injected into
+   * context and no quoted span of the answer was measured against it.
+   * Never a span verdict: every span gets one of the five above, so a
+   * consumer reading a per-span outcome never sees this member.
+   */
+  absent: "absent",
 } as const);
 
 /** Closed union over {@link ANSWER_QUOTE_VERDICT}. */

@@ -189,6 +189,11 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
  *     cutoff would collapse a skill's usage to its last window and
  *     reorder the offers (its payload carries `agent`, not `agent_id`, so
  *     the clip-key rule never protected it either).
+ *   - `reply_presence` - the per-turn reply-presence verdicts (t_f8510c55)
+ *     the context-receipt read surface joins by `session_id`; a fold
+ *     would sever the receipt-to-presence join for every record past the
+ *     cutoff, turning "checked and verified/missed" into an
+ *     `unjoined` read.
  */
 export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
   "source_invalidation",
@@ -207,6 +212,7 @@ export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object
   "negative_recall",
   "receipt_compaction",
   "skill_invoked",
+  "reply_presence",
 ]);
 
 /** One shard selected for compaction, as a scan reported it. */

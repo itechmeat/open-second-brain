@@ -37,6 +37,16 @@
  * them: fail-open silence, kept deliberately, with the `enforce`
  * Brain-log trail as the one finding surface that survives the session.
  *
+ * Reply presence (t_f8510c55). Wherever a transcript exists - annotation
+ * rendering or not - every checked turn also appends exactly one
+ * `reply_presence` continuity record: per injected note, whether a
+ * quoted span verified against it, its strongest miss verdict, or
+ * `absent` when no span was ever measured against it. The record is
+ * keyed by session id and joined to the session's context receipts on
+ * read; identifiers and verdicts only, never answer text. The presence
+ * record rides the same per-phase modes: every phase `off` writes
+ * nothing.
+ *
  * Bounded, fail-open. The step reads at most
  * {@link ANSWER_QUOTE_TAIL_BYTES} of the transcript, the last
  * {@link ANSWER_QUOTE_MAX_MESSAGES} assistant messages of the turn,
@@ -58,6 +68,7 @@ import {
   readSync,
   statSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 
 import {
   resolveAnswerQuoteCheckActive,
@@ -87,6 +98,8 @@ import {
 import { appendLogEvent } from "../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../src/core/brain/types.ts";
 import { isoSecond } from "../src/core/brain/time.ts";
+import { appendContinuityRecord } from "../src/core/brain/continuity/store.ts";
+import { CONTINUITY_SESSION_ID_KEY } from "../src/core/brain/continuity/types.ts";
 import { ensureInsideVault } from "../src/core/path-safety.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import {
@@ -457,8 +470,16 @@ function compareCandidates(
   return (a.startLine ?? 0) - (b.startLine ?? 0) || (a.endLine ?? 0) - (b.endLine ?? 0);
 }
 
-/** The dedup key of one candidate view: the path, plus any range it names. */
-function candidateKey(candidate: LedgerCandidate): string {
+/**
+ * The dedup key of one candidate view: the path, plus any range it names.
+ * Takes the shape both the ledger candidates and the merged views share,
+ * so the reply-presence fold can key its measured verdicts by it too.
+ */
+function candidateKey(candidate: {
+  readonly path: string;
+  readonly startLine?: number;
+  readonly endLine?: number;
+}): string {
   return candidate.startLine === undefined || candidate.endLine === undefined
     ? candidate.path
     : `${candidate.path}\0${candidate.startLine}-${candidate.endLine}`;
@@ -639,6 +660,12 @@ function ledgerCandidates(
 
 // ----- the check ------------------------------------------------------------
 
+/** One candidate's verdict for one span, kept for the reply-presence fold. */
+interface SpanCandidateOutcome {
+  readonly candidate: MergedCandidate;
+  readonly verdict: AnswerQuoteVerdict;
+}
+
 /** One span's outcome under the resolved evidence, inside the budget. */
 interface SpanOutcome {
   readonly verdict: AnswerQuoteVerdict;
@@ -655,6 +682,15 @@ interface SpanOutcome {
    * and enforced only when one of those running phases enforces.
    */
   readonly decidingPhases: ReadonlyArray<AnswerQuoteCheckPhase>;
+  /**
+   * The verdict every candidate actually checked for this span, in check
+   * order - the reply-presence fold's raw material (t_f8510c55). A
+   * candidate past an early `verified` break was never measured and
+   * appears here for no span, which the fold reads as `absent`; a
+   * candidate the budget cut reads `note-unavailable`, never `absent`,
+   * so an unspent budget can never masquerade as an untouched note.
+   */
+  readonly candidateOutcomes: ReadonlyArray<SpanCandidateOutcome>;
 }
 
 /** One span's verdict under the resolved evidence, inside the budget. */
@@ -679,6 +715,7 @@ function checkSpan(
       verdict: outcomes[0]!.verdict,
       preview: outcomes[0]!.span,
       decidingPhases: [],
+      candidateOutcomes: [],
     };
   }
   if (candidates.length === 0) {
@@ -686,16 +723,31 @@ function checkSpan(
       verdict: mergeAnswerQuoteVerdicts([]),
       preview: previewAnswerQuoteSpan(span.inner),
       decidingPhases: [],
+      candidateOutcomes: [],
     };
   }
   const verdicts: AnswerQuoteVerdict[] = [];
   const decidingPhases: AnswerQuoteCheckPhase[] = [];
+  const candidateOutcomes: SpanCandidateOutcome[] = [];
   let preview = previewAnswerQuoteSpan(span.inner);
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     if (Date.now() > deadline) {
       // Budget spent with unread candidates left: the check did not
-      // finish, so it never reports a readable-miss verdict.
-      return { verdict: ANSWER_QUOTE_VERDICT.noteUnavailable, preview, decidingPhases };
+      // finish, so it never reports a readable-miss verdict. Every
+      // unread candidate is recorded as `note-unavailable` for this
+      // span - checked-and-unresolved, never silently untouched.
+      return {
+        verdict: ANSWER_QUOTE_VERDICT.noteUnavailable,
+        preview,
+        decidingPhases,
+        candidateOutcomes: [
+          ...candidateOutcomes,
+          ...candidates.slice(index).map((unread) => ({
+            candidate: unread,
+            verdict: ANSWER_QUOTE_VERDICT.noteUnavailable,
+          })),
+        ],
+      };
     }
     const mark: CitationMark = {
       at: -1,
@@ -719,10 +771,51 @@ function checkSpan(
     const verdict = outcomes[0]!.verdict;
     preview = outcomes[0]!.span;
     verdicts.push(verdict);
+    candidateOutcomes.push({ candidate, verdict });
     for (const phase of candidate.phases) decidingPhases.push(phase);
     if (verdict === ANSWER_QUOTE_VERDICT.verified) break;
   }
-  return { verdict: mergeAnswerQuoteVerdicts(verdicts), preview, decidingPhases };
+  return {
+    verdict: mergeAnswerQuoteVerdicts(verdicts),
+    preview,
+    decidingPhases,
+    candidateOutcomes,
+  };
+}
+
+/**
+ * The per-note presence verdicts of one checked turn (t_f8510c55), one
+ * row per candidate the injection ledger offered: `verified` when at
+ * least one quoted span of the reply checked out against the note;
+ * otherwise the strongest miss verdict across the spans that measured
+ * it - the check module's own merge ladder, so degradation still
+ * outranks a readable miss per note exactly as it does per turn; and
+ * {@link ANSWER_QUOTE_VERDICT.absent} for a note no span was ever
+ * measured against - injected into context, never surfaced in the
+ * answer, the row this record exists to surface. Rows carry
+ * identifiers and verdicts only; no answer text rides the record.
+ */
+function foldReplyPresence(
+  candidates: ReadonlyArray<MergedCandidate>,
+  outcomes: ReadonlyArray<SpanCandidateOutcome>,
+): ReadonlyArray<Record<string, unknown>> {
+  const measured = new Map<string, AnswerQuoteVerdict[]>();
+  for (const outcome of outcomes) {
+    const key = candidateKey(outcome.candidate);
+    const verdicts = measured.get(key);
+    if (verdicts === undefined) measured.set(key, [outcome.verdict]);
+    else verdicts.push(outcome.verdict);
+  }
+  return candidates.map((candidate) => {
+    const verdicts = measured.get(candidateKey(candidate));
+    return {
+      path: candidate.path,
+      ...(candidate.startLine !== undefined ? { start_line: candidate.startLine } : {}),
+      ...(candidate.endLine !== undefined ? { end_line: candidate.endLine } : {}),
+      verdict:
+        verdicts === undefined ? ANSWER_QUOTE_VERDICT.absent : mergeAnswerQuoteVerdicts(verdicts),
+    };
+  });
 }
 
 /** `origin` label of the annotation's framing line for the quoted spans. */
@@ -860,6 +953,7 @@ async function main(): Promise<void> {
 
   const messages = lastAssistantMessages(transcriptPath);
   const findings: Array<AnswerQuoteSpanFinding> = [];
+  const presenceOutcomes: SpanCandidateOutcome[] = [];
   let checked = 0;
   let enforceable = 0;
   outer: for (const [messageIndex, message] of messages.entries()) {
@@ -879,6 +973,7 @@ async function main(): Promise<void> {
         close: span.close,
       };
       const outcome = checkSpan(quoted, marks, candidates, vault, deadline);
+      presenceOutcomes.push(...outcome.candidateOutcomes);
       if (outcome.verdict !== ANSWER_QUOTE_VERDICT.verified) {
         // Attribution: the phases whose candidates decided this miss. A
         // miss decided only by a phase switched to `off` is not this
@@ -895,6 +990,37 @@ async function main(): Promise<void> {
       }
     }
   }
+  // The reply-presence record (t_f8510c55): exactly one per checked
+  // turn, whatever the findings - a turn whose every span verified still
+  // owes its per-note verdicts, and a note no span touched reads
+  // `absent`, the row this record exists to surface. A turn with no
+  // injected candidate writes nothing: with no note to report on, an
+  // empty verdict list would say nothing the absence of a record does
+  // not say already. Fail-open like every arm: a failed append names
+  // itself on the audit line and the annotation still goes out.
+  if (candidates.length > 0) {
+    try {
+      appendContinuityRecord(vault, {
+        kind: "reply_presence",
+        createdAt: isoSecond(new Date()),
+        payload: {
+          ...(sessionId !== null ? { [CONTINUITY_SESSION_ID_KEY]: sessionId } : {}),
+          checked,
+          per_note: foldReplyPresence(candidates, presenceOutcomes),
+          // The hash binds the verdicts to the exact answer text checked;
+          // it carries no answer text itself.
+          ...(messages.length > 0
+            ? {
+                source_hash: createHash("sha256").update(messages.join("\n"), "utf8").digest("hex"),
+              }
+            : {}),
+        },
+      });
+    } catch (err) {
+      process.stderr.write(`${AUDIT_PREFIX} ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
   const unique = dedupeFindings(findings);
   if (unique.length === 0) return;
 

@@ -96,6 +96,18 @@ export type ContinuityRecordKind =
    */
   | "decision_model_eval_grade"
   /**
+   * One checked turn's reply-presence verdicts (t_f8510c55), written by
+   * the answer-quote-check Stop hook: per injected note, whether at
+   * least one quoted span of the turn's reply verified against it
+   * (`verified`), the strongest miss verdict when spans were checked and
+   * all missed, or `absent` when no span was ever measured against it -
+   * the row this kind exists to surface (rendered into context, never
+   * surfaced in the answer). Joined to the session's `context_receipt`
+   * records by `session_id` on read; identifiers and verdicts only,
+   * never answer text.
+   */
+  | "reply_presence"
+  /**
    * One mined entity mention from a session turn (recall-quality wave,
    * Lane B): one record per (family, key, sessionRef), where family is a
    * precision detector family (`symbol` | `url` | `path` |
@@ -158,6 +170,7 @@ export const CONTINUITY_RECORD_KINDS: ReadonlyArray<ContinuityRecordKind> = Obje
   "decision_model_call",
   "decision_model_extract_commit",
   "decision_model_eval_grade",
+  "reply_presence",
   "session_entity_mention",
   "receipt_compaction",
 ]);
