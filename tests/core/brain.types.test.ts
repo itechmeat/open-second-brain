@@ -83,6 +83,8 @@ describe("BRAIN_* const enums", () => {
       "upgrade",
       // §3 import-claude-memory (agent-discipline-tail)
       "import-claude-memory",
+      // host-memory readback (issue #277) promotion-run audit
+      "promote-host-memory",
       // §32B (v0.10.8) brain_note narrative milestones
       "note",
       // Brain lifecycle suite (v0.21.0) reconcile-phase open questions

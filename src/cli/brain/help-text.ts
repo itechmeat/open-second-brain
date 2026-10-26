@@ -187,7 +187,7 @@ Brain verbs (observing memory):
   extract-signals     Mine taste signals from an imported session's user turns (two-phase, needs-llm-step)
   design-note         One-shot design note grounded in tensions, decisions and truth records
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
-  continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
+  continuity          Export ATOF/ATIF trajectories, rank records by usage decay, promote host memory writes (export and rank are read-only; promote is dry-run by default)
   payload             Externalized session payloads: get (paged), list, gc (dry-run by default)
   bench               Memory quality benchmark over a disposable fixture vault
   git                 Git history as project memory: ingest, status, find, mine

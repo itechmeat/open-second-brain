@@ -153,8 +153,13 @@ export class ApprovalDigestError extends Error {
  *
  * Fields preserved: _applied_count, _violated_count, _evidenced_by,
  * _last_evidence_at, _confirmed_at, unconfirmed_until, pinned, scope.
+ *
+ * Exported rather than copied because the continuity host-memory promotion
+ * renders through the same preference shape and must preserve the same
+ * evidence fields on UPDATE; a second copy of this decision is how the
+ * two UPDATE paths drift.
  */
-function mergePreservingEvidence(existingBody: string, freshBody: string): string {
+export function mergePreservingEvidence(existingBody: string, freshBody: string): string {
   const PRESERVED = [
     "_applied_count",
     "_violated_count",

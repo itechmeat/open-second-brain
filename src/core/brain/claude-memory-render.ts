@@ -16,6 +16,27 @@ export interface RenderMemoryInput {
   readonly bodySha256: string;
   /** Owner token for the rendered page; omitted renders no `owner:`. */
   readonly owner?: string | undefined;
+  /**
+   * First line of the rendered Origin section. Defaults to the Claude
+   * Code MEMORY label, byte-identical to the pre-field output; a caller
+   * that renders from a different substrate (the continuity ledger's
+   * host-memory promotion) passes its own so the page never claims a
+   * source it did not come from.
+   */
+  readonly originLabel?: string;
+  /**
+   * The name the page's IDENTITY derives from (the `id:` frontmatter and
+   * the `topic` tag, both slugified). Defaults to `name`, byte-identical
+   * to the import, where the display name and the identity are the same
+   * string. A caller whose target filename is keyed by something other
+   * than the display name - the continuity ledger's host-memory
+   * promotion, whose pages are named after the record id so the target
+   * never moves - passes its stable identity here and keeps its display
+   * text in `name`; a mismatched `id:` and basename would otherwise send
+   * every id-keyed lookup (evidence appends, confirmation) to a page
+   * that does not exist.
+   */
+  readonly identityName?: string;
 }
 
 /**
@@ -53,7 +74,7 @@ function isoDay(iso: string): string {
 }
 
 export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
-  const slug = slugifyMemoryName(input.name);
+  const slug = slugifyMemoryName(input.identityName ?? input.name);
   if (!slug) {
     // Punctuation-only / whitespace-only names produce an empty slug,
     // which would yield the bare `pref-` id and a blank `topic:` field.
@@ -110,7 +131,7 @@ export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
     "",
     "## Origin",
     "",
-    "Imported from Claude Code MEMORY:",
+    input.originLabel ?? "Imported from Claude Code MEMORY:",
     `\`${input.memoryPath}\``,
     `on ${isoDay(input.importedAt)}.`,
     "",

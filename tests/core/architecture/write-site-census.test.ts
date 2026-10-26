@@ -1516,8 +1516,15 @@ const DIRECT_WRITE_ROWS = 85;
  * page's `visibility:` line through the same helper on its apply arm - a
  * dry-run-by-default repair pass over existing pages, writing no page of
  * its own.
+ *
+ * 130 -> 132, from the host-memory readback wave and nothing else: the
+ * continuity promote verb (`src/core/brain/continuity/promote-host-memory.ts`)
+ * lands its rendered preference pages through the shared atomic writer,
+ * and its manifest sidecar (`src/core/brain/host-memory-promotions.ts`)
+ * commits `Brain/.imports/host-memory-promotions.json` through the same
+ * helper - both under the apply arm only, the dry run writes nothing.
  */
-const SHARED_HELPER_ROWS = 130;
+const SHARED_HELPER_ROWS = 132;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1680,8 +1687,12 @@ const UNSTAMPED_DIRECT_ROWS = 84;
  * rewrite existing pages through the shared atomic writer, and neither
  * stamps an origin channel - one writes a class the writer derives, the
  * other a visibility token the page's own informal marker declares.
+ * 126 -> 128 is the same wave as the shared-helper pin above: the
+ * continuity promote verb and its promotion manifest both commit through
+ * the shared atomic writer, and a ledger readback stamps no origin
+ * channel - the pages it lands are vault pages, not channel records.
  */
-const UNSTAMPED_SHARED_ROWS = 126;
+const UNSTAMPED_SHARED_ROWS = 128;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

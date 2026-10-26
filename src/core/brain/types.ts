@@ -253,6 +253,14 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   importClaudeMemory: "import-claude-memory",
   /**
+   * `promote-host-memory` — operator promoted continuity host_memory_write
+   * records via `o2b brain continuity promote --apply` (issue #277). One
+   * log block per promotion run; payload carries counters for created,
+   * updated, recreated, and skipped records, plus conflict, privacy-drop
+   * and redaction counts, and snapshot information.
+   */
+  promoteHostMemory: "promote-host-memory",
+  /**
    * `note` (§32B, v0.10.8) — one narrative-milestone line written by
    * the `brain_note` MCP tool. Payload carries `text` (one-line
    * description) and `agent`. Not consumed by the dream pass beyond
@@ -689,6 +697,12 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
   upgrade: "upgrade",
   /** Pre-write point taken before Claude Code memory is imported. */
   importClaudeMemory: "import-claude-memory",
+  /**
+   * Pre-write point taken before continuity host_memory_write records are
+   * promoted into preference pages (issue #277). Kebab-case like its
+   * siblings because the value doubles as the archive's filename prefix.
+   */
+  promoteHostMemory: "promote-host-memory",
   /** Pre-deletion point taken before a source's derived material is removed. */
   deleteBySource: "delete-by-source",
   /** Pre-prune point taken before malformed entity notes are deleted. */

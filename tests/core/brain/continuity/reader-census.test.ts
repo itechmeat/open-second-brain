@@ -5,11 +5,11 @@
  * `docs/observability.md` described the read-model's masking policy as if
  * it governed the read side: `private` records dropped by default, kept
  * only on explicit request. The read-model does exactly that - and almost
- * nothing goes through it. Four modules call
- * `loadNormalizedContinuityRecords`; twenty call `listContinuityRecords`
- * straight off the store, where no `private` drop, no schema-version
- * dispatch, and now no declared-scope filter applies. A policy sentence
- * cannot notice that; a census can.
+ * nothing goes through it. Five modules call
+ * `loadNormalizedContinuityRecords`; twenty-nine call
+ * `listContinuityRecords` straight off the store, where no `private`
+ * drop, no schema-version dispatch, and now no declared-scope filter
+ * applies. A policy sentence cannot notice that; a census can.
  *
  * So the split is asserted rather than described. Each side is an explicit
  * inventory: a module that starts reading continuity records - through
@@ -67,6 +67,10 @@ const READ_MODEL_READERS: Readonly<Record<string, string>> = Object.freeze({
     "`o2b brain continuity export|list` - ATOF/ATIF trajectory export and the " +
     "usage-decay-ranked listing.",
   "src/core/bench/phases.ts": "memory bench harness; replays `session_turn` records per question.",
+  "src/core/brain/continuity/promote-host-memory.ts":
+    "`o2b brain continuity promote` (issue #277) - the host-memory readback; the " +
+    "read-model door is the promotion payload, with `private` records dropped and " +
+    "redacted text never un-masked.",
   "src/core/brain/event-trace.ts":
     "joins Brain-log events to their continuity records; passes `keepPrivate` " +
     "through from the caller rather than deciding it.",
@@ -87,6 +91,10 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
     "complement the two recorded sets fold against.",
   "src/core/brain/context-pack-outcome.ts": "reads `context_pack_outcome` for the outcome ledger.",
   "src/core/brain/context-receipts.ts": "reads `context_receipt` for list, summary and show.",
+  "src/core/brain/continuity/promote-host-memory.ts":
+    "counts the `private` `host_memory_write` rows the read-model drops, so the " +
+    "promote report states how many records it did not see instead of silently " +
+    "shortening the run.",
   "src/core/brain/dedup-telemetry.ts":
     "reads `ingest_dedup` rollups. Carries a literal NUL byte, so text tools " +
     "that classify by content type do not see it at all.",
@@ -145,7 +153,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * these say how far the counts may fall before the split stops describing
  * anything.
  *
- * Four modules read through the read-model and twenty-three read the
+ * Five modules read through the read-model and twenty-nine read the
  * store directly. Both numbers are EQUALITIES, not floors.
  *
  * The direct floor used to sit at twenty against a reality of
@@ -158,14 +166,17 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * reader has to be added to one of them regardless and the number costs
  * nothing extra to keep true.
  */
-const READ_MODEL_READER_COUNT = 4;
+const READ_MODEL_READER_COUNT = 5;
+// 28 -> 29: the host-memory readback (issue #277) registers the promotion
+// core (`continuity/promote-host-memory.ts`), which counts the private rows
+// the read-model drops through the raw store door.
 // 26 -> 27: the answer-trust wave registers the blank-session-identity
 // doctor check (`doctor/session-identity-check.ts`), which reads the whole
 // store once to count records per kind that name no session.
 // 27 -> 28: the session-mining-economy wave registers the explorer console
 // collector (`explorer-console.ts`), which reads every kind inside the
 // 30-day window for the written-per-day histogram.
-const DIRECT_STORE_READER_COUNT = 28;
+const DIRECT_STORE_READER_COUNT = 29;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 
