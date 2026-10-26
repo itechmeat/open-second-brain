@@ -622,7 +622,7 @@ function ledgerCandidates(
   const seen = new Set<string>();
   const candidates: LedgerCandidate[] = [];
   const add = (candidate: Omit<LedgerCandidate, "phase">): void => {
-    const key = candidateKey({ ...candidate, phase });
+    const key = candidateKey(candidate);
     if (seen.has(key)) return;
     seen.add(key);
     candidates.push({ ...candidate, phase });
