@@ -172,12 +172,16 @@ import { resolveNoteTarget, type ResolvedNoteTarget } from "./create-note.ts";
 // ----- What a caller may ask for --------------------------------------------
 
 /**
- * The four operations. `rename` and `move` are one relocation under the
+ * The six operations. `rename` and `move` are one relocation under the
  * hood and are kept apart at the surface deliberately: a caller that
  * meant to change a note's NAME and accidentally changed its FOLDER has
  * made a mistake no path check would catch, because both spellings are
  * perfectly legal destinations. Declaring which one was intended lets the
- * other be refused.
+ * other be refused. The folder actions (`move-folder`, `rename-folder`)
+ * split the same way at folder granularity - see
+ * `./folder-lifecycle.ts`, the module that runs them - so a caller that
+ * meant to rename a folder and accidentally moved it across parents is
+ * caught by the same discipline instead of by the consequences.
  */
 export const NOTE_LIFECYCLE_ACTION = Object.freeze({
   /** Change the filename, keeping the note in its directory. */
@@ -188,6 +192,17 @@ export const NOTE_LIFECYCLE_ACTION = Object.freeze({
   archive: "archive",
   /** Remove the note. The one operation here that destroys bytes. */
   delete: "delete",
+  /**
+   * Move a whole folder under a destination parent. A file action
+   * (`rename`/`move`/`archive`/`delete`) refuses a folder subject, and
+   * this action runs in `./folder-lifecycle.ts`.
+   */
+  moveFolder: "move-folder",
+  /**
+   * Rename a whole folder within its parent. Split from `move-folder`
+   * for the same reason `rename` is split from `move`.
+   */
+  renameFolder: "rename-folder",
 } as const);
 
 /** Closed union over {@link NOTE_LIFECYCLE_ACTION}. */
@@ -702,8 +717,12 @@ function statOrNull(target: string): Stats | null {
  * front of it rather than by a `process.platform` string, and the branch
  * is reachable on Linux too, where a hardlinked destination has exactly
  * this shape.
+ *
+ * Exported for the folder lifecycle, whose occupancy pre-flight asks the
+ * same question of the destination FOLDER and of every destination FILE
+ * in a case-only folder rename.
  */
-function namesSameEntry(a: string, b: string): boolean {
+export function namesSameEntry(a: string, b: string): boolean {
   const left = bigintStatOrNull(a);
   const right = bigintStatOrNull(b);
   if (left === null || right === null) return false;
@@ -785,30 +804,45 @@ function relocateBytes(
   destination: ResolvedNoteTarget,
   sameEntry: boolean,
 ): void {
-  mkdirSync(dirname(destination.abs), { recursive: true });
+  relocateFileBytes(source.abs, destination.abs, destination.relPath, sameEntry);
+}
+
+/**
+ * The byte relocation itself, on absolute paths - the exact machinery
+ * {@link relocateBytes} runs, shared with the folder lifecycle, which
+ * relocates whole sets of files that never went through
+ * {@link resolveNoteTarget} (a folder path has no `.md` rung to pass).
+ * One implementation, so the byte-preservation and refuse-to-overwrite
+ * guarantees cannot come to mean two things on the two surfaces.
+ */
+export function relocateFileBytes(
+  fromAbs: string,
+  toAbs: string,
+  label: string,
+  sameEntry: boolean,
+): void {
+  mkdirSync(dirname(toAbs), { recursive: true });
   if (sameEntry) {
-    const staged = `${destination.abs}.${process.pid}.${Date.now()}.relocating`;
-    linkOneName(source.abs, staged, destination.relPath);
+    const staged = `${toAbs}.${process.pid}.${Date.now()}.relocating`;
+    linkOneName(fromAbs, staged, label);
     // Destroys nothing: `staged` is a second name for this very inode,
     // so the bytes outlive the name being dropped here. Declared for the
     // destructive-site census, which reads sites and not files.
-    unlinkSync(source.abs);
-    renameWithRetry(staged, destination.abs);
+    unlinkSync(fromAbs);
+    renameWithRetry(staged, toAbs);
   } else {
-    linkOneName(source.abs, destination.abs, destination.relPath);
-    if (!existsSync(destination.abs)) {
-      throw new Error(
-        `noteLifecycle: write of ${destination.relPath} reported success but the file is absent`,
-      );
+    linkOneName(fromAbs, toAbs, label);
+    if (!existsSync(toAbs)) {
+      throw new Error(`noteLifecycle: write of ${label} reported success but the file is absent`);
     }
     // Destroys nothing: the assertion above has just confirmed the same
     // bytes are reachable at the destination, so this drops a name and
     // not a file. Declared for the destructive-site census.
-    unlinkSync(source.abs);
+    unlinkSync(fromAbs);
   }
-  if (!existsSync(destination.abs)) {
+  if (!existsSync(toAbs)) {
     throw new Error(
-      `noteLifecycle: relocation of ${destination.relPath} reported success but the file is absent`,
+      `noteLifecycle: relocation of ${label} reported success but the file is absent`,
     );
   }
 }
@@ -837,6 +871,23 @@ export async function noteLifecycle(
   assertVaultIdentityForWrite(vault);
 
   const action = input.action;
+  if (
+    action === NOTE_LIFECYCLE_ACTION.moveFolder ||
+    action === NOTE_LIFECYCLE_ACTION.renameFolder
+  ) {
+    // Refused rather than dispatched, the mirror of the folder surface's
+    // refusal of the file actions: the vocabulary is ONE constant (the
+    // CLI guard, the MCP enum and the manifest read it together), but the
+    // machinery is two modules, and a folder action that fell through to
+    // the file envelope would report a one-file result for a many-file
+    // operation. The caller that owns the dispatch - the verb surface,
+    // the MCP tool - sends folder actions to `./folder-lifecycle.ts`.
+    throw new NoteLifecycleError(
+      "wrong_action",
+      `the note-file lifecycle runs rename | move | archive | delete; ` +
+        `'${action}' is a folder action and runs in the folder lifecycle`,
+    );
+  }
   const source = resolveNoteTarget(vault, input.path);
   // `isFile`, not merely `exists`: a DIRECTORY named `Notes.md` is a
   // perfectly legal thing for a vault to contain, and checking existence
