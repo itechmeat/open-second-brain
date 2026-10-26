@@ -60,7 +60,7 @@
  * the file surface - no destructive snapshot is taken for a move.
  */
 
-import { mkdirSync, readdirSync, rmdirSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, rmdirSync, statSync, type Stats } from "node:fs";
 import { join, posix, sep, win32 } from "node:path";
 
 import { checkWriteBinding } from "../../write-binding/index.ts";
@@ -401,7 +401,7 @@ function withoutSuffix(relPath: string): string {
 }
 
 /** `statSync`, or `null` when the path is not there or cannot be read. */
-function statOrNull(target: string): ReturnType<typeof statSync> | null {
+function statOrNull(target: string): Stats | null {
   try {
     return statSync(target);
   } catch {
