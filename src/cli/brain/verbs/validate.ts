@@ -79,7 +79,9 @@ export async function cmdBrainValidate(argv: string[]): Promise<number> {
   });
   const asJson = flags["json"] === true;
   const strict = flags["strict"] === true;
-  const paths = flags["paths"];
+  // The schema declares `paths` a string-array; the flags record's value
+  // union is wider, so the read narrows it the way every sibling verb does.
+  const paths = flags["paths"] as string[] | undefined;
   const dirty = flags["dirty"] === true;
   if (paths !== undefined && paths.length > 0 && dirty) {
     return usageError(`${SELECTION_RULE}, never both\n\n${USAGE}`);
