@@ -4,6 +4,12 @@
  * (`confirmed | unconfirmed | quarantine`) are included; retired
  * and signal artifacts are deliberately excluded.
  *
+ * A preference the privacy deny markers reserve (`visibility: private`,
+ * or an informal `access` / `confidentiality` / `sensitivity` marker) is
+ * still collected and reported - in {@link PreferenceCollection.denied} -
+ * but the shared lanes built on this module leave it out and name the
+ * omission; there is no flag that carries a reserved rule through.
+ *
  * llms-txt follows the [llmstxt.org](https://llmstxt.org) shape;
  * empty status sections are omitted so a single-status vault
  * renders one H2 rather than three.
@@ -25,10 +31,29 @@ import { parsePreference } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
 import { vaultDisplayName } from "./templates.ts";
 import { isoSecond } from "./time.ts";
-import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type FrontmatterMap } from "./types.ts";
+import { hasPrivacyDenyMarker } from "../graph/privacy-markers.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
 import { parseFrontmatter } from "../vault.ts";
 
 export const BRAIN_EXPORT_SCHEMA_VERSION = 1 as const;
+
+/**
+ * Why the collector denied a preference from the shared lanes. One value
+ * today, matching `pageBlockReason`'s vocabulary in
+ * `portability/knowledge-pack.ts`: a deny here is a visibility
+ * reservation - the reserved token declared under `visibility:`, or an
+ * informal privacy marker saying the same thing - and never a content
+ * class, which this lane does not read.
+ */
+export const PREFERENCE_DENY_REASON = "visibility" as const;
+
+/** One preference a shared lane leaves out, named the way the rows name them. */
+export interface PreferenceDenial {
+  /** The denied row's id (`pref-<slug>`), as it appears in `rows`. */
+  readonly id: string;
+  readonly reason: typeof PREFERENCE_DENY_REASON;
+}
 
 /** How many unreadable files the error names before it stops listing. */
 const MAX_NAMED_PARSE_FAILURES = 10;
@@ -169,16 +194,37 @@ export interface ExportedPreferencesJson {
 }
 
 /**
- * Every row the walk produced, and every file it could not read.
+ * Every row the walk produced, every file it could not read, and every
+ * row the privacy deny markers keep out of the SHARED lanes.
  *
- * The pair, never one of them: a caller holding this has been told both
- * how much it got and how much it missed, which is the property
- * {@link collectExportRows}' refusal enforces for callers that cannot use
- * a partial answer.
+ * The triple, never one of them alone: a caller holding this has been
+ * told how much it got, how much it missed, and what it must not carry.
+ * `rows` stays complete on purpose - the import-side topic maps
+ * (`preference-restore.ts`, `knowledge-pack.ts`) read the DESTINATION
+ * vault to learn which topics existing rules claim, and a marker on a
+ * rule does not unmake the rule - so denial is a report beside the rows,
+ * not a filter inside the collector. The shared lanes filter at their
+ * own composition seam and name what they leave out.
  */
 export interface PreferenceCollection {
   readonly rows: ReadonlyArray<ExportedPreferenceRow>;
   readonly failures: ReadonlyArray<PreferenceParseFailure>;
+  readonly denied: ReadonlyArray<PreferenceDenial>;
+}
+
+/**
+ * Does this frontmatter deny the preference a shared lane would carry?
+ *
+ * The same judgment `pageBlockReason` makes for pages in the knowledge
+ * pack, read once here from the frontmatter map the collector already
+ * parsed: a `visibility:` declaration carrying the reserved token, or an
+ * informal privacy marker (`access: private` and its siblings) saying
+ * what the reserved token says. A preference that declares only a
+ * caller-scope token is a shared decision, not a reservation, and is
+ * carried.
+ */
+function deniedByVisibility(meta: FrontmatterMap): boolean {
+  return hasPrivacyDenyMarker(meta) || pageVisibility(meta).includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
 
 /**
@@ -218,12 +264,17 @@ export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferen
  * The directory LISTING failure still raises: it is a permission or
  * filesystem fault over the whole directory, not a per-file parse, and no
  * partial answer exists to give.
+ *
+ * A row the privacy deny markers reserve is reported in `denied` while
+ * still parsed whole into `rows`; see {@link PreferenceCollection} for
+ * why the split lives beside the rows and not inside them.
  */
 export function collectPreferenceRows(vault: string): PreferenceCollection {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return { rows: [], failures: [] };
+  if (!existsSync(dir)) return { rows: [], failures: [], denied: [] };
   const rows: ExportedPreferenceRow[] = [];
   const failures: PreferenceParseFailure[] = [];
+  const denied: PreferenceDenial[] = [];
   let entries: ReadonlyArray<string>;
   try {
     entries = readdirSync(dir);
@@ -264,18 +315,23 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     // consumer wants when sharing or system-prompt-injecting the
     // rule. A read failure here is the same defect as a frontmatter
     // one: the row would go out missing what the agent wrote.
+    // The frontmatter map is already in hand at this line, so the
+    // deny judgment reads it here rather than paying a second read.
     let body = "";
+    let meta: FrontmatterMap = {};
     try {
-      const [, parsedBody] = parseFrontmatter(abs);
+      const [parsedMeta, parsedBody] = parseFrontmatter(abs);
+      meta = parsedMeta;
       body = parsedBody;
     } catch (err) {
       record(err);
       continue;
     }
+    if (deniedByVisibility(meta)) denied.push({ id: pref.id, reason: PREFERENCE_DENY_REASON });
     rows.push(toRow(pref, body));
   }
   rows.sort((a, b) => a.id.localeCompare(b.id));
-  return { rows, failures };
+  return { rows, failures, denied };
 }
 
 function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {

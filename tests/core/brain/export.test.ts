@@ -9,15 +9,23 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   BRAIN_EXPORT_SCHEMA_VERSION,
+  collectExportRows,
+  collectPreferenceRows,
   exportPreferencesJson,
   exportPreferencesLlmsTxt,
+  PreferenceParseError,
 } from "../../../src/core/brain/export.ts";
+import {
+  PRIVACY_DENY_MARKER_VALUES,
+  PRIVACY_MARKER_KEYS,
+} from "../../../src/core/graph/privacy-markers.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 import {
   moveToRetired,
   writePreference,
@@ -201,5 +209,69 @@ describe("exportPreferencesLlmsTxt", () => {
     const txt = exportPreferencesLlmsTxt(vault);
     expect(txt).toContain("- pref-scoped (topic: scoped, scope: writing): Principle for scoped");
     expect(txt).toContain("- pref-unscoped (topic: unscoped): Principle for unscoped");
+  });
+});
+
+describe("collector privacy denial reporting", () => {
+  /**
+   * Stamp one extra frontmatter line onto a written preference file.
+   * The informal markers (`access:` and siblings) have no write-input
+   * field - they are hand-added user-tier lines - so the test adds one
+   * the same way an operator does.
+   */
+  function stampMarker(slug: string, line: string): void {
+    const abs = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+  }
+
+  test("every informal marker key times deny value denies, and rows stay complete", () => {
+    // One unmarked control row plus one file per marker key x deny value.
+    // Denial is a report BESIDE the rows: the collector's `rows` stay
+    // complete because the import-side topic maps must keep seeing every
+    // rule, marker or not.
+    writePreference(vault, basePref("open"));
+    const marked: string[] = [];
+    for (const key of PRIVACY_MARKER_KEYS) {
+      for (const value of PRIVACY_DENY_MARKER_VALUES) {
+        const slug = `marked-${key}-${value}`;
+        writePreference(vault, basePref(slug));
+        stampMarker(slug, `${key}: ${value}`);
+        marked.push(`pref-${slug}`);
+      }
+    }
+
+    const out = collectPreferenceRows(vault);
+    expect(out.rows).toHaveLength(1 + marked.length);
+    expect(out.rows.map((r) => r.id)).toContain("pref-open");
+    expect(out.denied.map((d) => d.id).toSorted()).toEqual(marked.toSorted());
+    for (const d of out.denied) expect(d.reason).toBe("visibility");
+  });
+
+  test("visibility: private denies the row", () => {
+    writePreference(vault, basePref("reserved", { visibility: [REMOTE_DENY_VISIBILITY_TOKEN] }));
+    writePreference(vault, basePref("open"));
+
+    const out = collectPreferenceRows(vault);
+    expect(out.denied).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    // Denied rows ride beside the kept ones, never inside them.
+    expect(out.rows.map((r) => r.id).toSorted()).toEqual(["pref-open", "pref-reserved"]);
+  });
+
+  test("a vault without reservations denies nothing", () => {
+    writePreference(vault, basePref("plain"));
+
+    const out = collectPreferenceRows(vault);
+    expect(out.denied).toEqual([]);
+    expect(out.rows).toHaveLength(1);
+  });
+
+  test("parse refusals behave exactly as before denial reporting", () => {
+    writePreference(vault, basePref("good"));
+    writeFileSync(join(vault, "Brain", "preferences", "pref-broken.md"), "no frontmatter here\n");
+
+    const scan = collectPreferenceRows(vault);
+    expect(scan.failures.map((f) => f.path)).toEqual(["Brain/preferences/pref-broken.md"]);
+    expect(scan.denied).toEqual([]);
+    expect(() => collectExportRows(vault)).toThrow(PreferenceParseError);
   });
 });
