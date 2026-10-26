@@ -282,6 +282,7 @@ async function main(): Promise<void> {
       context,
       meter,
       reground: delivery.meter,
+      sessionId: isRealSessionId(payload.session_id) ? payload.session_id : undefined,
     });
   } finally {
     disarm();
@@ -550,6 +551,15 @@ interface RecordInjectionSizeInput {
   readonly context: string;
   readonly meter: InjectionMeter;
   readonly reground: RegroundMeter | null;
+  /**
+   * The hook payload's session id, already validated by the caller -
+   * the join key the receipt's `session_id` payload member carries
+   * (t_f8510c55), so the read surface can join this receipt to the
+   * session's `reply_presence` records by exact key. `undefined` when
+   * the host sent nothing real; the key then stays absent, never
+   * invented.
+   */
+  readonly sessionId: string | undefined;
 }
 
 /**
@@ -584,7 +594,13 @@ function recordInjectionSize(vault: string, input: RecordInjectionSizeInput): vo
     const measured = input.loaderSource === "fresh";
     const totalBytes = byteLength(input.context);
     emitContextReceipt(vault, {
-      options: { host: "hook", trigger: "session_inject" },
+      options: {
+        host: "hook",
+        trigger: "session_inject",
+        // The receipt-to-presence join key (t_f8510c55): recorded when the
+        // host named a session, absent otherwise.
+        ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      },
       items: input.meter.sources
         .filter((source) => measured || source.outsideBoundary)
         .map((source) => ({
