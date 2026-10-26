@@ -57,13 +57,14 @@ function verdictOf(answer: string, evidence: AnswerQuoteEvidence = TEXT): string
 }
 
 describe("ANSWER_QUOTE_VERDICT vocabulary", () => {
-  test("carries exactly the five pinned verdicts, in order", () => {
+  test("carries exactly the six pinned verdicts, in order", () => {
     expect(ANSWER_QUOTE_VERDICT).toEqual({
       verified: "verified",
       notInNote: "not-in-note",
       sourceTruncated: "source-truncated",
       noteUnavailable: "note-unavailable",
       notText: "not-text",
+      absent: "absent",
     });
     expect(ANSWER_QUOTE_VERDICTS).toEqual([
       "verified",
@@ -71,6 +72,7 @@ describe("ANSWER_QUOTE_VERDICT vocabulary", () => {
       "source-truncated",
       "note-unavailable",
       "not-text",
+      "absent",
     ]);
   });
 
