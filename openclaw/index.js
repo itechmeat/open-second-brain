@@ -2310,6 +2310,7 @@ __export(exports_config, {
   resolveSkillsAttachTriggers: () => resolveSkillsAttachTriggers,
   resolveSkillsAttachUsageOrdering: () => resolveSkillsAttachUsageOrdering,
   resolveSkillsDir: () => resolveSkillsDir,
+  resolveTailTrimContextPack: () => resolveTailTrimContextPack,
   resolveTelegramBotToken: () => resolveTelegramBotToken,
   resolveTelegramCaptureAllowlist: () => resolveTelegramCaptureAllowlist,
   resolveTimezone: () => resolveTimezone,
@@ -2627,6 +2628,9 @@ function resolveDensityRankingContextPack(configPath) {
 }
 function resolveEntityFactsContextPack(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK", "entity_facts_context_pack", configPath);
+}
+function resolveTailTrimContextPack(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK", "tail_trim_context_pack", configPath);
 }
 function resolveCounterpartyBriefEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED", "counterparty_brief_enabled", configPath);
