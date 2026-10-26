@@ -118,6 +118,20 @@ const ID_RE = new RegExp(`^[a-z][a-z0-9-]*-[0-9a-f]{${ID_DIGEST_CHARS}}$`);
  */
 export type DeadLetterLane = "extract-signals";
 
+/**
+ * The lane union at runtime, for readers of records from disk: a record's
+ * `lane` field is a string from JSON, and a lane this build does not know
+ * has to be nameable as such rather than silently treated as one it does.
+ * A new member joining {@link DeadLetterLane} is added here in the same
+ * edit.
+ */
+export const DEAD_LETTER_LANES: ReadonlyArray<DeadLetterLane> = Object.freeze(["extract-signals"]);
+
+/** Whether `value` names a lane this build commits multi-artifact writes in. */
+export function isDeadLetterLane(value: string): value is DeadLetterLane {
+  return (DEAD_LETTER_LANES as ReadonlyArray<string>).includes(value);
+}
+
 /** Which payload, from which lane, the unwritten items belonged to. */
 export interface DeadLetterEnvelopeIdentity {
   readonly lane: DeadLetterLane;
