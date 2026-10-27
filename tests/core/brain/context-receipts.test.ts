@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import {
   appendContinuityRecord,
@@ -16,10 +16,12 @@ import {
   lookupReceiptReplyPresence,
   summarizeContextReceipt,
 } from "../../../src/core/brain/context-receipts.ts";
+import { reachView } from "../../../src/core/brain/reach-view.ts";
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 
 let vault: string;
 
@@ -242,6 +244,75 @@ describe("receipt reply-presence join", () => {
     expect(join.presence.checked).toBe(2);
   });
 
+  test("a page reserved against remote reads drops its row below local reach, counted as withheld", () => {
+    const receipt = emitReceipt("session-reserved");
+    // The page the Stop hook recorded: one public, one that reserves
+    // itself against remote reads with the formal token.
+    writePage("Brain/preferences/pref-alpha.md", "Public body.\n");
+    writePage(
+      "Brain/notes/withheld-plan.md",
+      "---\nvisibility: private\n---\n\nWithheld plan body.\n",
+    );
+    appendPresence("session-reserved", "2026-05-31T12:05:00.000Z", [
+      { path: "Brain/preferences/pref-alpha.md", verdict: "verified" },
+      {
+        path: "Brain/notes/withheld-plan.md",
+        start_line: 3,
+        end_line: 4,
+        verdict: "verified",
+      },
+    ]);
+
+    const below = lookupReceiptReplyPresence(
+      vault,
+      receipt,
+      reachView(vault, TRANSPORT_REACH.remote),
+    );
+    if (!below.joined) throw new Error("expected the sibling record to join");
+    expect(below.presence.per_note.map((note) => note.path)).toEqual([
+      "Brain/preferences/pref-alpha.md",
+    ]);
+    // The drop is reported, never silent: the caller can tell a truncated
+    // join from a session that checked one note.
+    expect(below.presence.withheld).toBe(1);
+
+    // Local reach keeps everything, and names no withholding.
+    const local = lookupReceiptReplyPresence(
+      vault,
+      receipt,
+      reachView(vault, TRANSPORT_REACH.local),
+    );
+    if (!local.joined) throw new Error("expected the sibling record to join");
+    expect(local.presence.per_note.map((note) => note.path)).toEqual([
+      "Brain/preferences/pref-alpha.md",
+      "Brain/notes/withheld-plan.md",
+    ]);
+    expect("withheld" in local.presence).toBe(false);
+  });
+
+  test("a row whose page cannot be read is withheld below local reach too, never shown", () => {
+    // The fail-closed half of the same predicate: a path no file answers
+    // (deleted or renamed since the hook recorded it) has an unknowable
+    // visibility, and an unknowable claim is not the absence of one.
+    const receipt = emitReceipt("session-unmeasurable");
+    writePage("Brain/preferences/pref-alpha.md", "Public body.\n");
+    appendPresence("session-unmeasurable", "2026-05-31T12:05:00.000Z", [
+      { path: "Brain/preferences/pref-alpha.md", verdict: "verified" },
+      { path: "Brain/notes/deleted-since.md", verdict: "not-in-note" },
+    ]);
+
+    const below = lookupReceiptReplyPresence(
+      vault,
+      receipt,
+      reachView(vault, TRANSPORT_REACH.remote),
+    );
+    if (!below.joined) throw new Error("expected the sibling record to join");
+    expect(below.presence.per_note.map((note) => note.path)).toEqual([
+      "Brain/preferences/pref-alpha.md",
+    ]);
+    expect(below.presence.withheld).toBe(1);
+  });
+
   test("the summary carries the join only when one is handed to it", () => {
     const receipt = emitReceipt("session-summary");
     const join = lookupReceiptReplyPresence(vault, receipt);
@@ -298,6 +369,13 @@ function appendPresence(
       per_note: perNote,
     },
   });
+}
+
+/** A plain vault page at a vault-relative path, frontmatter and all. */
+function writePage(rel: string, body: string): void {
+  const abs = join(vault, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, body, "utf8");
 }
 
 function writePref(slug: string, topic: string, principle: string, body: string): void {

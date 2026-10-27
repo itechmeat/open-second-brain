@@ -7,6 +7,7 @@ import {
 } from "./continuity/store.ts";
 import { CONTINUITY_SESSION_ID_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
+import type { ReachView } from "./reach-view.ts";
 
 /**
  * What produced the injected context a receipt accounts for.
@@ -504,6 +505,14 @@ export interface ReceiptReplyPresence {
   readonly checked: number | null;
   /** One row per injected note, writer order kept. */
   readonly per_note: ReadonlyArray<ReceiptReplyPresenceNote>;
+  /**
+   * How many of the record's note rows were WITHHELD below the caller's
+   * reach, by the same {@link isPathReadableAtReach} verdict every surface
+   * resolves a path with. Present only when rows were dropped, so a join
+   * that withheld nothing stays byte-identical - and a truncated join can
+   * never read as a session that checked fewer notes.
+   */
+  readonly withheld?: number;
   /** Hash binding the verdicts to the exact answer text checked. */
   readonly source_hash?: string;
 }
@@ -532,10 +541,18 @@ export type ReceiptReplyPresenceJoin =
  * the continuity reader. A receipt without a session key is unjoined
  * before the ledger is read: there is nothing to match on, and inventing
  * a window would answer a question the receipt never asked.
+ *
+ * `view` is the caller's reach view ({@link reachView}); every joined
+ * note row whose path it hides is DROPPED from `per_note` and counted in
+ * `withheld`, so a caller below local reach reads neither the path, the
+ * line range nor the verdict of a page reserved against it - the same
+ * shaping the receipt record itself undergoes. Absent (the CLI, which
+ * runs at local reach by construction) withholds nothing.
  */
 export function lookupReceiptReplyPresence(
   vault: string,
   record: ContinuityRecord,
+  view?: ReachView,
 ): ReceiptReplyPresenceJoin {
   const sessionId = record.payload[CONTINUITY_SESSION_ID_KEY];
   if (typeof sessionId !== "string" || sessionId.length === 0) {
@@ -544,7 +561,7 @@ export function lookupReceiptReplyPresence(
   const latest = listContinuityRecords(vault, { kind: "reply_presence" })
     .filter((sibling) => sibling.payload[CONTINUITY_SESSION_ID_KEY] === sessionId)
     .at(-1);
-  const presence = latest === undefined ? null : replyPresenceOf(latest);
+  const presence = latest === undefined ? null : replyPresenceOf(latest, view);
   if (latest === undefined || presence === null) {
     return Object.freeze({
       joined: false as const,
@@ -555,12 +572,18 @@ export function lookupReceiptReplyPresence(
   return Object.freeze({ joined: true as const, presence });
 }
 
-/** Unfold one `reply_presence` record; `null` when its payload cannot be read. */
-function replyPresenceOf(record: ContinuityRecord): ReceiptReplyPresence | null {
+/**
+ * Unfold one `reply_presence` record; `null` when its payload cannot be
+ * read. Each note row the `view` hides is dropped and counted - the count
+ * is the honest residue, absent when nothing was dropped.
+ */
+function replyPresenceOf(record: ContinuityRecord, view?: ReachView): ReceiptReplyPresence | null {
   const payload = record.payload;
   const stored = payload["per_note"];
   if (!Array.isArray(stored)) return null;
+  const visible = view?.visible ?? (() => true);
   const perNote: ReceiptReplyPresenceNote[] = [];
+  let withheld = 0;
   for (const raw of stored) {
     if (raw === null || typeof raw !== "object") continue;
     const note = raw as Record<string, unknown>;
@@ -568,6 +591,13 @@ function replyPresenceOf(record: ContinuityRecord): ReceiptReplyPresence | null 
     const verdict = note["verdict"];
     if (typeof path !== "string" || path.length === 0) continue;
     if (typeof verdict !== "string" || verdict.length === 0) continue;
+    // The reach verdict runs on the row's path BEFORE anything from it is
+    // kept, and a hidden row counts: reporting the drop is what keeps a
+    // filtered join honest instead of reading as a smaller check.
+    if (!visible(path)) {
+      withheld += 1;
+      continue;
+    }
     perNote.push({
       path,
       verdict,
@@ -582,6 +612,7 @@ function replyPresenceOf(record: ContinuityRecord): ReceiptReplyPresence | null 
     created_at: record.createdAt,
     checked: typeof checked === "number" ? checked : null,
     per_note: perNote,
+    ...(withheld > 0 ? { withheld } : {}),
     ...(typeof sourceHash === "string" && sourceHash.length > 0 ? { source_hash: sourceHash } : {}),
   };
 }

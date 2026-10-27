@@ -727,8 +727,15 @@ async function toolBrainContextReceipts(
       // no turn, or that names no session at all, says so instead of
       // reading as silently absent. The lookup runs on the reach-adjusted
       // record, so a payload redacted below local reach joins only on
-      // what it still carries.
-      reply_presence: lookupReceiptReplyPresence(ctx.vault, receipt),
+      // what it still carries - and through the caller's reach view, so
+      // a note row naming a page reserved below local reach drops from
+      // `per_note` (counted in `withheld`) instead of disclosing its
+      // path, range and verdict to a caller the page withheld itself from.
+      reply_presence: lookupReceiptReplyPresence(
+        ctx.vault,
+        receipt,
+        reachView(ctx.vault, contextReach(ctx)),
+      ),
     };
   }
 
