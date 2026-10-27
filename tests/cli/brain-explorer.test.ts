@@ -299,9 +299,23 @@ describe("o2b brain explorer (live)", () => {
           healthy: boolean;
           counts: { preferences: number };
           activeProfile: string | null;
+          store: {
+            writerLock: string;
+            writerLockPath: string | null;
+            writerLockOwner: string | null;
+            thisCaller: string;
+          };
         };
         expect(typeof status.healthy).toBe("boolean");
         expect(status.counts.preferences).toBe(1);
+        // The explorer serves browsers, not the operator's own reach, so
+        // the lock PATH is withheld the way the MCP surface withholds it
+        // below local reach (a resolved host path is not a browser
+        // client's fact) - while the rest of the store group stays. The
+        // local CLI status keeps the path; that is pinned in status.test.
+        expect(status.store.writerLockPath).toBeNull();
+        expect(typeof status.store.writerLock).toBe("string");
+        expect(status.store.thisCaller).toBe("read-only");
         // The verb threads its resolved config path into the server, so
         // the operator snapshot sees this run's profile registry.
         writeFileSync(

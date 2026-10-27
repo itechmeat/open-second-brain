@@ -476,7 +476,17 @@ export function buildLiveServer(
       if (url.pathname === "/status.json") {
         try {
           const snapshot = await buildOperatorSnapshot(vault, snapshotOptions);
-          return jsonResponse(JSON.stringify(snapshot));
+          // The explorer serves browsers, so the store group answers the
+          // way the MCP surface answers below local reach: the writer
+          // lock PATH is withheld - it is a resolved host path the index
+          // may keep outside the vault - while every state field stays,
+          // and `state_files.search_index` still answers presence.
+          return jsonResponse(
+            JSON.stringify({
+              ...snapshot,
+              store: { ...snapshot.store, writerLockPath: null },
+            }),
+          );
         } catch (err) {
           return errorResponse("/status.json", err);
         }
