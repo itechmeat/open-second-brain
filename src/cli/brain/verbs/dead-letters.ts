@@ -207,7 +207,7 @@ function deadLettersShow(argv: string[]): number {
     throw err;
   }
   if (record === null) {
-    return unknownId(id, asJson);
+    return unknownId(id);
   }
   const view = rowView(vault, record);
 
@@ -293,7 +293,7 @@ function deadLettersRecover(argv: string[]): number {
     throw err;
   }
   if (record === null) {
-    return unknownId(id, asJson);
+    return unknownId(id);
   }
 
   try {
@@ -427,17 +427,12 @@ function refused(message: string, asJson: boolean): number {
 /**
  * The unknown-id refusal. The id was NAMED by the caller, so this is a
  * usage error (exit 2) rather than an empty report - a silent no-op would
- * read as "nothing to do" for a letter the caller misquoted.
+ * read as "nothing to do" for a letter the caller misquoted. A usage
+ * error is plain text on stderr in both modes: the `{ ok: false }`
+ * envelope is reserved for operational refusals (exit 1).
  */
-function unknownId(id: string, asJson: boolean): number {
-  const message = `brain dead-letters: no dead letter with id ${JSON.stringify(id)}`;
-  if (asJson) {
-    okJson({ ok: false, message });
-    process.stderr.write(`${message}\n`);
-    return 2;
-  }
-  process.stderr.write(`error: ${message}\n`);
-  return 2;
+function unknownId(id: string): number {
+  return usageError(`brain dead-letters: no dead letter with id ${JSON.stringify(id)}`);
 }
 
 /**

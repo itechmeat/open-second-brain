@@ -233,6 +233,18 @@ describe("dead-letters show", () => {
     expect(r.stderr).toContain("extract-signals-0123456789ab");
   });
 
+  test("an unknown id under --json stays a plain-text usage error on stderr", async () => {
+    // Usage errors are exit 2 plain text on stderr in BOTH modes; the
+    // { ok: false } envelope is reserved for operational refusals (exit
+    // 1), so a misquoted id must not mint one on stdout.
+    for (const subcommand of ["show", "recover"] as const) {
+      const r = await run([subcommand, "extract-signals-0123456789ab", "--json"]);
+      expect(r.returncode).toBe(2);
+      expect(r.stderr).toContain("no dead letter with id");
+      expect(r.stdout).toBe("");
+    }
+  });
+
   test("a missing id argument is a usage error", async () => {
     const r = await run(["show"]);
     expect(r.returncode).toBe(2);
