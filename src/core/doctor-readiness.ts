@@ -1172,14 +1172,38 @@ const CLIENT_VERSION_MAX_LENGTH = 200;
  * exactly the kind of subprocess a hung binary would wedge, so it runs on
  * the promise machinery the per-probe budget already covers. Read-only and
  * fail-soft: the child inherits the environment and writes nothing.
+ *
+ * The ask carries a child-level budget of its own (defaulting to the
+ * per-probe budget, {@link DEFAULT_READINESS_TIMEOUT_MS}): the probe-level
+ * wrapper can only abandon the promise it awaits, so a hung `--version`
+ * child would otherwise survive the cut as an orphan. The child's exit is
+ * raced against the timer here, and the child itself is killed when the
+ * timer wins. stderr is ignored, not piped: nothing observes it, and a
+ * pipe a chatty child fills unread would block the child on write.
  */
-async function spawnClientVersion(
+export async function spawnClientVersion(
   argv: ReadonlyArray<string>,
+  timeoutMs: number = DEFAULT_READINESS_TIMEOUT_MS,
 ): Promise<{ exitCode: number; stdout: string }> {
-  const child = Bun.spawn({ cmd: [...argv], stdout: "pipe", stderr: "pipe" });
-  const stdout = await new Response(child.stdout).text();
-  const exitCode = await child.exited;
-  return { exitCode, stdout };
+  const child = Bun.spawn({ cmd: [...argv], stdout: "pipe", stderr: "ignore" });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      child.kill();
+      reject(new ReadinessTimeoutError(`client version ${argv[0]}`, timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const stdout = await new Response(child.stdout).text();
+        return { exitCode: await child.exited, stdout };
+      })(),
+      budget,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** First stdout line, trimmed and length-capped - the raw line, never parsed. */

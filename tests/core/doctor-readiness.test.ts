@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -19,6 +19,7 @@ import {
   probeRuntimeAdapterWiring,
   probeWritebackContract,
   runReadinessProbes,
+  spawnClientVersion,
   withReadinessTimeout,
 } from "../../src/core/doctor-readiness.ts";
 import { DOCTOR_EXIT, doctorExitCode } from "../../src/cli/main.ts";
@@ -918,6 +919,24 @@ describe("probeClientVersions", () => {
     writeManifestEntries({ codex: manifestEntry("codex", null, "codex-toml") });
   }
 
+  /**
+   * Poll a pid's liveness by signal 0 until it is gone, bounded - the
+   * kill a timeout issues is asynchronous, so the reap lands a tick
+   * after the runner's promise rejects.
+   */
+  async function pollUntilGone(pid: number, deadlineMs: number): Promise<boolean> {
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    if (!alive) return true;
+    if (Date.now() > deadlineMs) return false;
+    await Bun.sleep(25);
+    return pollUntilGone(pid, deadlineMs);
+  }
+
   test("an answered spawn passes with the raw first stdout line, never semver-parsed", async () => {
     writeConfig("");
     codexManifest();
@@ -995,6 +1014,30 @@ describe("probeClientVersions", () => {
     expect(probe.detail).toContain("timed out");
     void DEFAULT_READINESS_TIMEOUT_MS;
   });
+
+  test("a hung version child is killed at its ask's budget, never orphaned", async () => {
+    writeConfig("");
+    codexManifest();
+    const pidFile = join(tmp, "version-child.pid");
+    // The production runner itself, through the same seam every other
+    // row is graded by, at a test-sized budget, against a child that
+    // would sleep far past it: `exec` replaces the shell with the
+    // sleeper in place, so the pid the script wrote is the one process
+    // that must die when the budget cuts the ask off.
+    const v = await probeClientVersions(
+      versionsOpts(() =>
+        spawnClientVersion(["sh", "-c", `echo $$ > '${pidFile}'; exec sleep 30`], 150),
+      ),
+    );
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.detail).toContain("timed out");
+    const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    expect(Number.isInteger(pid)).toBe(true);
+    // The kill is issued asynchronously: poll until the pid is gone,
+    // bounded, rather than sleeping a fixed grace period.
+    const gone = await pollUntilGone(pid, Date.now() + 5_000);
+    expect(gone).toBe(true);
+  }, 20000);
 
   test("a manifest recording no installs is skipped", async () => {
     writeConfig("");
