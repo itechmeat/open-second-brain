@@ -249,9 +249,20 @@ describe("the recovery classifier", () => {
     writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
     const handEdited = readDeadLetter(vault, letter.id);
     if (handEdited === null) throw new Error("the hand-edited fixture letter did not parse");
-    expect(classifyDeadLetter(vault, handEdited).category).toBe(
-      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
-    );
+    const c = classifyDeadLetter(vault, handEdited);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
+    expect(c.reason).toContain("repeats an earlier key");
+  });
+
+  test("one signal page answers one v1 key, not every key naming its topic", () => {
+    // Two keys may name one topic - two payload items on one subject, a
+    // shape a real commit can produce, or a hand-edit. One page on disk
+    // answers ONE of them; counting the topic once per key read a
+    // half-delivered letter resolved.
+    commitExtractedSignals(vault, SESSION, { items: [item()] }, { agent: AGENT, now: NOW });
+    const letter = v1Letter(["items[0]:release-notes-style", "items[1]:release-notes-style"]);
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.reExtract);
   });
 
   test("a session whose items sit staged in the write-approval queue classifies pending", () => {

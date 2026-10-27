@@ -263,41 +263,53 @@ function itemDedupHash(item: ExtractedSignalItem): string {
 
 /**
  * The inbox topics a payload-less (schema-1) letter can be re-measured
- * against: the `topic` frontmatter of the session's OWN signal pages -
+ * against, with how many of the session's OWN signal pages carry each:
  * the pages the dedup index walks whose `session_ref` names this
  * letter's session. A signal from another session confirms nothing
  * about what THIS session's commit delivered, and counting it would
  * read a real partial write as resolved. A page that carries no
  * readable topic confirms nothing either.
  */
-function inboxSignalTopics(
+function inboxSignalTopicCounts(
   dedup: ReturnType<typeof buildDedupIndex>,
   sessionRef: string,
-): ReadonlySet<string> {
-  const topics = new Set<string>();
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
   for (const entry of dedup.values()) {
     try {
       const meta = parseFrontmatterText(readFileSync(entry.path, "utf8"))[0];
       if (meta["session_ref"] !== sessionRef) continue;
       const topic = meta["topic"];
-      if (typeof topic === "string") topics.add(topic);
+      if (typeof topic === "string") counts.set(topic, (counts.get(topic) ?? 0) + 1);
     } catch {
       // A signal page that cannot be read cannot confirm a topic. That
       // is the conservative direction: the row stays actionable.
     }
   }
-  return topics;
+  return counts;
 }
 
+/**
+ * One page on disk answers ONE missing key: the keys are consumed
+ * against the page counts, so two keys naming one topic - two payload
+ * items on one subject, or a hand-edit - are satisfied only by two
+ * pages, never twice by the same one.
+ */
 function countDeliveredByTopic(
   missing: ReadonlyArray<string>,
-  topics: ReadonlySet<string>,
+  topicCounts: ReadonlyMap<string, number>,
 ): number {
+  const remaining = new Map(topicCounts);
   let delivered = 0;
   for (const key of missing) {
     const match = MISSING_KEY_RE.exec(key);
     if (match === null) continue;
-    if (topics.has(match[2] ?? "")) delivered += 1;
+    const topic = match[2] ?? "";
+    const left = remaining.get(topic) ?? 0;
+    if (left > 0) {
+      remaining.set(topic, left - 1);
+      delivered += 1;
+    }
   }
   return delivered;
 }
@@ -372,7 +384,7 @@ export function classifyDeadLetter(
   const delivered =
     payload !== null && resolvedMissing !== null
       ? resolvedMissing.items.filter((item) => dedup.has(itemDedupHash(item))).length
-      : countDeliveredByTopic(record.missing, inboxSignalTopics(dedup, record.reference));
+      : countDeliveredByTopic(record.missing, inboxSignalTopicCounts(dedup, record.reference));
   if (record.missing.length > 0 && delivered === record.missing.length) {
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.resolved,
