@@ -1204,6 +1204,37 @@ describe("answer-quote-check hook - reply presence records", () => {
     ]);
   }, 20000);
 
+  test("a ranged citation of a whole-delivered note reads the check verdict, never absent", async () => {
+    // The ledger delivered the note whole (the subagent lane) and by
+    // range (recall); the merge folds every range of a path away once
+    // the whole view exists, so the only candidate left is the whole
+    // note. A citation that names a line range must still credit that
+    // candidate: its key is the path alone, and the path is what the
+    // reply surfaced - folding it `absent` would deny content the turn
+    // delivered and cited.
+    writeConfigFor({ recall: "shadow", active: "off", subagent: "shadow" });
+    writeNote("Brain/notes/restaking.md", "First line about staking.\nSecond line about risk.\n");
+    expect(recordRecallInjected(vault, SESSION, ["local:Brain/notes/restaking.md#L1-L1"])).toBe(
+      true,
+    );
+    expect(
+      recordSubagentDeliveredId(vault, SESSION, "agent-cccc", ["Brain/notes/restaking.md"]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('The note says "First line about staking" (Brain/notes/restaking.md:L1-L1).'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["checked"]).toBe(1);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/restaking.md", verdict: "verified" },
+    ]);
+  }, 20000);
+
   test("a turn whose reply text never arrived reads note-unavailable, never absent", async () => {
     // The tail window holds no assistant message after the last user
     // boundary - the host never flushed a reply. No span was measured,

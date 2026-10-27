@@ -740,7 +740,13 @@ function checkSpan(
     const cited = candidates.filter(
       (candidate) =>
         candidate.path === mark.path &&
-        (mark.startLine === undefined || candidateKey(candidate) === candidateKey(mark)),
+        (mark.startLine === undefined ||
+          // A whole-note candidate is the note itself: any citation of
+          // its path names content it delivered. (The merge also folds
+          // every range of a path away once the whole note was
+          // delivered, so a range-only match would miss it.)
+          candidate.startLine === undefined ||
+          candidateKey(candidate) === candidateKey(mark)),
     );
     return {
       verdict: outcomes[0]!.verdict,
