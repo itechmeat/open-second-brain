@@ -535,10 +535,14 @@ export type ReceiptReplyPresenceJoin =
  * {@link CONTINUITY_SESSION_ID_KEY} match (t_f8510c55).
  *
  * When the session checked several turns, the LATEST sibling record
- * joins - the store reads ascending, append order breaking same-instant
- * ties, so the last match is the newest checked turn; its `record_id`
- * and `created_at` name it, and earlier turns remain in the ledger for
- * the continuity reader. A receipt without a session key is unjoined
+ * whose payload reads joins - the store reads ascending, append order
+ * breaking same-instant ties, so the walk starts at the last match and
+ * moves back only past records a corrupt or hand-edited payload made
+ * unreadable; the record that joins names itself (`record_id`,
+ * `created_at`), and earlier turns remain in the ledger for the
+ * continuity reader. A session whose every sibling is unreadable reads
+ * `unjoined` with its key, the same named absence a session with no
+ * record gets. A receipt without a session key is unjoined
  * before the ledger is read: there is nothing to match on, and inventing
  * a window would answer a question the receipt never asked.
  *
@@ -558,18 +562,25 @@ export function lookupReceiptReplyPresence(
   if (typeof sessionId !== "string" || sessionId.length === 0) {
     return Object.freeze({ joined: false as const, reason: "unjoined" });
   }
-  const latest = listContinuityRecords(vault, { kind: "reply_presence" })
-    .filter((sibling) => sibling.payload[CONTINUITY_SESSION_ID_KEY] === sessionId)
-    .at(-1);
-  const presence = latest === undefined ? null : replyPresenceOf(latest, view);
-  if (latest === undefined || presence === null) {
-    return Object.freeze({
-      joined: false as const,
-      reason: "unjoined" as const,
-      session_id: sessionId,
-    });
+  // Newest sibling first, and the newest one whose payload READS joins:
+  // a corrupt or hand-edited line must not orphan the session's earlier,
+  // readable records behind it, and must not be reported as "no record
+  // for this session" when a record plainly exists.
+  const siblings = listContinuityRecords(vault, { kind: "reply_presence" }).filter(
+    (sibling) => sibling.payload[CONTINUITY_SESSION_ID_KEY] === sessionId,
+  );
+  for (let i = siblings.length - 1; i >= 0; i--) {
+    const presence = replyPresenceOf(siblings[i]!, view);
+    if (presence !== null) return Object.freeze({ joined: true as const, presence });
   }
-  return Object.freeze({ joined: true as const, presence });
+  // No sibling at all, or none whose payload reads: either way the
+  // honest answer is the named absence, keyed on the session that did
+  // not produce a readable record.
+  return Object.freeze({
+    joined: false as const,
+    reason: "unjoined" as const,
+    session_id: sessionId,
+  });
 }
 
 /**

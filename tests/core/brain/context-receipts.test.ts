@@ -313,6 +313,49 @@ describe("receipt reply-presence join", () => {
     expect(below.presence.withheld).toBe(1);
   });
 
+  test("a corrupt latest sibling walks back to the latest readable one", () => {
+    const receipt = emitReceipt("session-corrupt");
+    appendPresence("session-corrupt", "2026-05-31T12:01:00.000Z", [
+      { path: "Brain/preferences/pref-alpha.md", verdict: "verified" },
+    ]);
+    // A hand-edited or truncated line: the record exists and names the
+    // session, but its payload carries no readable per-note list.
+    appendContinuityRecord(vault, {
+      kind: "reply_presence",
+      createdAt: "2026-05-31T12:09:00.000Z",
+      payload: {
+        session_id: "session-corrupt",
+        checked: 3,
+        per_note: "not-an-array",
+      },
+    });
+
+    const join = lookupReceiptReplyPresence(vault, receipt);
+    if (!join.joined) throw new Error("expected the readable sibling to join");
+    expect(join.presence.created_at).toBe("2026-05-31T12:01:00.000Z");
+    expect(join.presence.per_note.map((note) => note.verdict)).toEqual(["verified"]);
+  });
+
+  test("a session whose every sibling is unreadable reads unjoined, keyed", () => {
+    const receipt = emitReceipt("session-all-corrupt");
+    appendContinuityRecord(vault, {
+      kind: "reply_presence",
+      createdAt: "2026-05-31T12:09:00.000Z",
+      payload: {
+        session_id: "session-all-corrupt",
+        checked: 1,
+        per_note: { broken: true },
+      },
+    });
+
+    const join = lookupReceiptReplyPresence(vault, receipt);
+    expect(join).toEqual({
+      joined: false,
+      reason: "unjoined",
+      session_id: "session-all-corrupt",
+    });
+  });
+
   test("the summary carries the join only when one is handed to it", () => {
     const receipt = emitReceipt("session-summary");
     const join = lookupReceiptReplyPresence(vault, receipt);
