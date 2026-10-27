@@ -420,6 +420,14 @@ async function toolBrainStatus(
                 snapshot.store.writerLockReason,
                 ctx.vault,
                 contextReach(ctx),
+                // The resolved index path may sit outside every root the
+                // redactor knows (a custom index location) - the fs error
+                // embeds its `.lock` spelling verbatim, and the path is
+                // already resolved here, so it goes to the scrubber as a
+                // literal beside the roots.
+                snapshot.store.writerLockPath !== null
+                  ? [snapshot.store.writerLockPath, `${snapshot.store.writerLockPath}.lock`]
+                  : [],
               ),
             }
           : {}),

@@ -7,7 +7,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -218,6 +226,69 @@ describe("o2b brain explorer --export", () => {
       expect(r.stderr).toContain("invalid --port");
     }
   });
+});
+
+describe("o2b brain explorer (live) store group", () => {
+  test("a failed lock probe keeps the errno and drops the host path from the reason", async () => {
+    await bootstrap();
+    seedOnePref();
+    // A lock path that cannot even be stat'd: a symlink loop where the
+    // lock directory would sit - the throw shape whose fs message
+    // embeds the full resolved host path.
+    const { resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    const lockPath = `${resolveSearchConfig({ vault, configPath: config }).dbPath}.lock`;
+    mkdirSync(dirname(lockPath), { recursive: true });
+    symlinkSync(lockPath, lockPath);
+
+    const port = pickPort();
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "src/cli/main.ts",
+        "brain",
+        "explorer",
+        "--vault",
+        vault,
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: config },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    try {
+      const banner = await readUntil(proc.stdout, "Live explorer at ");
+      if (!banner.found) {
+        const stderr = await new Response(proc.stderr).text();
+        throw new Error(`explorer exited before listening:\n${banner.text}${stderr}`);
+      }
+      const res = await fetch(`http://127.0.0.1:${port}/status.json`);
+      expect(res.ok).toBe(true);
+      const status = JSON.parse(await res.text()) as {
+        store: {
+          writerLock: string;
+          writerLockPath: string | null;
+          writerLockReason: string | null;
+        };
+      };
+      // The path is withheld from the field AND from the reason: the
+      // browser surface answers below local reach for the whole store
+      // group, not for one field of it. The errno stays - "could not
+      // find out, and here is why".
+      expect(status.store.writerLock).toBe("unknown");
+      expect(status.store.writerLockPath).toBeNull();
+      expect(status.store.writerLockReason).toContain("ELOOP");
+      expect(status.store.writerLockReason).not.toContain(lockPath);
+      expect(status.store.writerLockReason).not.toContain(tmpdir());
+    } finally {
+      proc.kill("SIGINT");
+      await proc.exited;
+    }
+  }, 20000);
 });
 
 describe("o2b brain explorer (live)", () => {

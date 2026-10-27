@@ -38,6 +38,8 @@ import {
 } from "./types.ts";
 import { collectExplorerConsole } from "./explorer-console.ts";
 import { buildOperatorSnapshot } from "./operator-snapshot.ts";
+import { redactRawOutput } from "../redactor.ts";
+import { sortedDistinctLiterals } from "../secret-ref.ts";
 
 export const EXPLORER_SCHEMA_VERSION = 1 as const;
 
@@ -481,12 +483,20 @@ export function buildLiveServer(
           // lock PATH is withheld - it is a resolved host path the index
           // may keep outside the vault - while every state field stays,
           // and `state_files.search_index` still answers presence.
-          return jsonResponse(
-            JSON.stringify({
-              ...snapshot,
-              store: { ...snapshot.store, writerLockPath: null },
-            }),
-          );
+          const store = { ...snapshot.store, writerLockPath: null };
+          // The probe's failure reason can embed the same resolved host
+          // path this field withholds (proper-lockfile's fs errors carry
+          // it verbatim), so the path - in both its spellings - is
+          // scrubbed from the reason too: the browser surface answers
+          // below local reach for the whole store group, not for one
+          // field of it.
+          if (store.writerLockReason !== null && snapshot.store.writerLockPath !== null) {
+            const index = snapshot.store.writerLockPath;
+            store.writerLockReason = redactRawOutput(store.writerLockReason, {
+              literals: sortedDistinctLiterals([index, `${index}.lock`]),
+            });
+          }
+          return jsonResponse(JSON.stringify({ ...snapshot, store }));
         } catch (err) {
           return errorResponse("/status.json", err);
         }
