@@ -23,15 +23,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { MAINTENANCE_VERDICT, appendJournal } from "../../src/core/brain/maintenance/journal.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -202,5 +203,33 @@ describe("brain_status store group at the caller's reach (t_cfe2ce5d)", () => {
     // field stays - the same split `state_files.search_index` boolean makes.
     expect(remote.writerLockPath).toBeNull();
     expect(remote.writerLock).toBe("free");
+  });
+
+  test("below local reach a failed lock probe keeps the errno but not the host path", async () => {
+    // A lock path that cannot even be stat'd: a symlink loop where the
+    // lock directory would sit. `isWriterLockHeld`'s contract names this
+    // throw shape (ELOOP, beside the EACCES the audit quotes) and the
+    // snapshot reads it `unknown` with the reason carrying the fs error -
+    // whose message embeds the full host path.
+    const lockPath = `${resolveSearchConfig({ vault, configPath: ctx.configPath ?? undefined }).dbPath}.lock`;
+    mkdirSync(dirname(lockPath), { recursive: true });
+    symlinkSync(lockPath, lockPath);
+
+    // At local reach the reason is the operator's own diagnostic: the
+    // errno and the path the probe failed on, verbatim.
+    const local = await statusStore(TRANSPORT_REACH.local);
+    expect(local.writerLock).toBe("unknown");
+    expect(local.writerLockReason).toContain("ELOOP");
+    expect(local.writerLockReason).toContain(lockPath);
+
+    // Below local reach the errno keeps - "I could not find out, and
+    // here is why" - while the host path goes the way every other error
+    // leaving the process goes: through the redactor.
+    const remote = await statusStore(TRANSPORT_REACH.remote);
+    expect(remote.writerLock).toBe("unknown");
+    expect(remote.writerLockReason).toContain("ELOOP");
+    expect(remote.writerLockReason).not.toContain(lockPath);
+    expect(remote.writerLockReason).not.toContain(tmpdir());
+    expect(remote.writerLockPath).toBeNull();
   });
 });
