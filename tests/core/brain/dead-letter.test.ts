@@ -37,6 +37,7 @@ import {
   deadLetterDir,
   deadLetterPath,
   listDeadLetters,
+  PARSED_DEAD_LETTER_SCHEMA_VERSIONS,
   readDeadLetter,
   recordDeadLetter,
   tryRecordDeadLetter,
@@ -450,6 +451,40 @@ describe("schema v2 freezes the payload", () => {
       expect(() => readDeadLetter(v, record.id)).toThrow(DeadLetterError);
       expect(() => readDeadLetter(v, record.id)).toThrow(/payload/);
     }
+  });
+
+  test("the version gate admits exactly the PARSED_DEAD_LETTER_SCHEMA_VERSIONS list", () => {
+    // Derived from the constant, not from literals: a version joining the
+    // list must parse the day it lands, and anything outside it must
+    // keep refusing - the gate and the list cannot drift apart.
+    for (const version of PARSED_DEAD_LETTER_SCHEMA_VERSIONS) {
+      const v = vault();
+      const record = recordDeadLetter(v, {
+        envelope: ENVELOPE,
+        report: report(["items[1]:x"]),
+        firstError: "boom",
+        now: NOW,
+      });
+      writeFileSync(
+        deadLetterPath(v, record.id),
+        JSON.stringify({ ...record, schema_version: version }),
+      );
+      expect(readDeadLetter(v, record.id)?.schema_version).toBe(version);
+    }
+    const outside = Math.max(...PARSED_DEAD_LETTER_SCHEMA_VERSIONS) + 1;
+    const v = vault();
+    const record = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[1]:x"]),
+      firstError: "boom",
+      now: NOW,
+    });
+    writeFileSync(
+      deadLetterPath(v, record.id),
+      JSON.stringify({ ...record, schema_version: outside }),
+    );
+    expect(() => readDeadLetter(v, record.id)).toThrow(DeadLetterError);
+    expect(() => readDeadLetter(v, record.id)).toThrow(/schema_version/);
   });
 });
 

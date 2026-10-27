@@ -131,6 +131,16 @@ export class DeadLetterRecoveryError extends Error {
   }
 }
 
+/**
+ * The classification's copy-paste command, appended to a refusal that
+ * names the classification: the operator (or agent) holding the error
+ * alone gets the same exit the listing would have rendered, instead of
+ * having to re-derive it. Null for the states that carry no command.
+ */
+function nextCommandSuffix(command: string | null): string {
+  return command !== null ? ` (next: ${command})` : "";
+}
+
 // ----- Command spelling -----------------------------------------------------
 
 /**
@@ -366,7 +376,8 @@ export function planRecovery(
   if (classification.category !== DEAD_LETTER_RECOVERY_CATEGORY.recover) {
     throw new DeadLetterRecoveryError(
       `dead letter ${record.id} is classified '${classification.category}' and carries no ` +
-        `payload to plan a recovery for: ${classification.reason}`,
+        `payload to plan a recovery for: ${classification.reason}` +
+        nextCommandSuffix(classification.command),
       classification.category,
     );
   }
@@ -428,7 +439,8 @@ export function applyRecovery(
   if (classification.category !== DEAD_LETTER_RECOVERY_CATEGORY.recover) {
     throw new DeadLetterRecoveryError(
       `dead letter ${record.id} cannot be recovered by re-running a payload: classified ` +
-        `'${classification.category}' (${classification.reason})`,
+        `'${classification.category}' (${classification.reason})` +
+        nextCommandSuffix(classification.command),
       classification.category,
     );
   }

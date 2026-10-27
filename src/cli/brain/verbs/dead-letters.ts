@@ -44,6 +44,8 @@ import {
   readDeadLetter,
 } from "../../../core/brain/dead-letter.ts";
 import {
+  DEAD_LETTER_ITEM_VERDICT,
+  type DeadLetterRecoveryItemVerdict,
   DeadLetterRecoveryError,
   applyRecovery,
   classifyDeadLetter,
@@ -368,18 +370,32 @@ function deadLettersRecover(argv: string[]): number {
   }
 }
 
-/** The dry-run verdict text, in the operator's words. */
-function verdictText(verdict: string): string {
-  switch (verdict) {
-    case "write":
-      return "will write";
-    case "staged":
-      return "will stage for approval";
-    case "dedup":
-      return "already on disk (dedup)";
-    default:
-      return "refused";
+/**
+ * The dry-run verdict text, in the operator's words, enumerated per known
+ * verdict: the table's exhaustive key type makes a verdict joining
+ * `DEAD_LETTER_ITEM_VERDICT` a compile error until it is given its own
+ * words here, so a future verdict can never silently render as another
+ * verdict's - "quarantined" reading as "refused" would tell the operator
+ * the wrong thing.
+ */
+const VERDICT_TEXT: Readonly<Record<DeadLetterRecoveryItemVerdict, string>> = Object.freeze({
+  [DEAD_LETTER_ITEM_VERDICT.write]: "will write",
+  [DEAD_LETTER_ITEM_VERDICT.staged]: "will stage for approval",
+  [DEAD_LETTER_ITEM_VERDICT.dedup]: "already on disk (dedup)",
+  [DEAD_LETTER_ITEM_VERDICT.refused]: "refused",
+});
+
+/**
+ * The text for one verdict, refusing an unknown one by name. Unreachable
+ * through the typed plan in this build; the named refusal is the guard
+ * for a verdict that reaches this surface unrendered.
+ */
+export function verdictText(verdict: string): string {
+  const text = VERDICT_TEXT[verdict as DeadLetterRecoveryItemVerdict];
+  if (text === undefined) {
+    throw new Error(`dead-letters: unknown recovery item verdict ${JSON.stringify(verdict)}`);
   }
+  return text;
 }
 
 /** An operational refusal: the message on the error channel, exit 1. */

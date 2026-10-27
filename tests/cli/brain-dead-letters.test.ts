@@ -33,6 +33,8 @@ import {
   recordDeadLetter,
   type DeadLetterEnvelopeIdentity,
 } from "../../src/core/brain/dead-letter.ts";
+import { DEAD_LETTER_ITEM_VERDICT } from "../../src/core/brain/dead-letter-recovery.ts";
+import { verdictText } from "../../src/cli/brain/verbs/dead-letters.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { freezeVault } from "../../src/core/brain/freeze.ts";
 import { resetFreezeMarkerCache } from "../../src/core/brain/freeze-marker.ts";
@@ -444,6 +446,20 @@ describe("dead-letters recover", () => {
   test("a missing id argument is a usage error", async () => {
     const r = await run(["recover"]);
     expect(r.returncode).toBe(2);
+  });
+});
+
+describe("the dry-run verdict rendering", () => {
+  test("every known verdict renders its own words; an unknown one refuses by name", () => {
+    // Enumerated against the vocabulary constant: a verdict joining
+    // DEAD_LETTER_ITEM_VERDICT must be given its own words here, never
+    // silently rendered as another verdict's - "quarantined" reading as
+    // "refused" would tell the operator the wrong thing.
+    expect(verdictText(DEAD_LETTER_ITEM_VERDICT.write)).toBe("will write");
+    expect(verdictText(DEAD_LETTER_ITEM_VERDICT.staged)).toBe("will stage for approval");
+    expect(verdictText(DEAD_LETTER_ITEM_VERDICT.dedup)).toBe("already on disk (dedup)");
+    expect(verdictText(DEAD_LETTER_ITEM_VERDICT.refused)).toBe("refused");
+    expect(() => verdictText("quarantined")).toThrow(/quarantined/);
   });
 });
 

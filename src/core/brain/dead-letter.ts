@@ -101,6 +101,17 @@ export const PARSED_DEAD_LETTER_SCHEMA_VERSIONS = Object.freeze([
 /** A schema version a record on disk may carry. */
 export type DeadLetterSchemaVersion = (typeof PARSED_DEAD_LETTER_SCHEMA_VERSIONS)[number];
 
+/**
+ * Whether `value` is a schema version this build parses. The reader's
+ * version gate: the guard is the list itself, so a version the constant
+ * admits parses the day it lands and the gate cannot drift behind the
+ * type; what each accepted version carries is still a decision per
+ * version, made by the parser's own branches.
+ */
+function isParsedDeadLetterSchemaVersion(value: unknown): value is DeadLetterSchemaVersion {
+  return (PARSED_DEAD_LETTER_SCHEMA_VERSIONS as ReadonlyArray<unknown>).includes(value);
+}
+
 /** Subdirectory under the machine-artifact root holding one JSON per record. */
 const DEAD_LETTER_DIR = "dead-letters";
 
@@ -344,7 +355,7 @@ function parseRecord(path: string): DeadLetterRecord {
   }
   const obj = parsed as Record<string, unknown>;
   const version = obj["schema_version"];
-  if (version !== 1 && version !== DEAD_LETTER_SCHEMA_VERSION) {
+  if (!isParsedDeadLetterSchemaVersion(version)) {
     throw new DeadLetterError(
       `dead letter schema_version ${String(version)} not supported ` +
         `(expected ${DEAD_LETTER_SCHEMA_VERSION}): ${path}`,

@@ -342,6 +342,31 @@ describe("the apply", () => {
     expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(/re-extract/);
   });
 
+  test("a refusal carries the classification's own command, so the row stays actionable", () => {
+    // A pending letter refuses both the plan and the apply; the refusal
+    // names the exact command the classifier computed for the state, the
+    // same copy-paste row the listing renders - an operator holding the
+    // error alone should not have to re-derive the exit.
+    const staged = commitExtractedSignals(
+      vault,
+      SESSION,
+      { items: [item()] },
+      { agent: AGENT, now: NOW, writeApprovalEnabled: true },
+    );
+    const letter = v2Letter([item(), item({ topic: "module-names" })], ["items[1]:module-names"]);
+    const stagedId = staged.written[0]?.id ?? "never";
+    expect(classifyDeadLetter(vault, letter).command).toBe(`o2b brain pending apply ${stagedId}`);
+    expect(() => planRecovery(vault, letter)).toThrow(DeadLetterRecoveryError);
+    expect(() => planRecovery(vault, letter)).toThrow(/o2b brain pending apply/);
+    expect(() => planRecovery(vault, letter)).toThrow(new RegExp(stagedId));
+    expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+      DeadLetterRecoveryError,
+    );
+    expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+      /o2b brain pending apply/,
+    );
+  });
+
   test("nothing in the apply deletes the letter", () => {
     const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
     applyRecovery(vault, letter, { agent: AGENT, now: NOW });
