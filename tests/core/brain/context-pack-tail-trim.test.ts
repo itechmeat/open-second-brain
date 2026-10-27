@@ -288,6 +288,100 @@ describe("packContext tailTrim trim and keep rules", () => {
   });
 });
 
+describe("packContext tailTrim counters under the char ceiling and the freed budget", () => {
+  test("the char ceiling cutting rescued items recounts the trim report", () => {
+    writePref("p1", { principle: QUERY, created_at: "2026-05-06T00:00:00Z" });
+    writePref("p2", {
+      principle: QUERY,
+      created_at: "2026-05-05T00:00:00Z",
+      body: "x1 x2 x3 x4",
+    });
+    writePref("p3", {
+      principle: QUERY,
+      created_at: "2026-05-04T00:00:00Z",
+      body: "y1 y2 y3 y4",
+    });
+    writePref("p4", { principle: QUERY, created_at: "2026-05-03T00:00:00Z", body: "z1 z2" });
+    writePref("p5", { principle: QUERY, created_at: "2026-05-02T00:00:00Z", body: "z1" });
+    writePref("p6", { principle: QUERY, created_at: "2026-05-01T00:00:00Z", body: "z1" });
+    // The uncapped pack: p4 dropped whole (freed 2), p5 and p6 rescued
+    // at the tail - where the char ceiling later cuts from.
+    const uncapped = packContext(vault, { maxTokens: 8, query: QUERY, tailTrim: true });
+    expect(uncapped.tailTrim).toEqual({
+      dropped: 1,
+      keptByQueryTerms: 0,
+      rescued: 2,
+      tokensSaved: 0,
+    });
+    const headChars = uncapped.items.slice(0, 3).reduce((sum, item) => sum + item.body.length, 0);
+    const drop = uncapped.skipped.find((skip) => skip.reason === "tail-trim")!;
+
+    // A char budget that keeps exactly the head: both rescued items are
+    // cut from the emitted set, and the report must describe what
+    // actually shipped - the trim rescued nothing that survived.
+    const r = packContext(vault, {
+      maxTokens: 8,
+      query: QUERY,
+      tailTrim: true,
+      maxTotalChars: headChars,
+    });
+    expect(r.items.map((i) => i.id)).toEqual(["pref-p1", "pref-p2", "pref-p3"]);
+    expect(r.skipped.map((s) => ({ id: s.id, reason: s.reason }))).toEqual([
+      { id: "pref-p4", reason: "tail-trim" },
+      { id: "pref-p5", reason: "over-char-budget" },
+      { id: "pref-p6", reason: "over-char-budget" },
+    ]);
+    expect(r.tailTrim).toEqual({
+      dropped: 1,
+      keptByQueryTerms: 0,
+      rescued: 0,
+      tokensSaved: drop.tokens,
+    });
+  });
+
+  test("the rescue spends the freed budget, never the walk's leftover slack", () => {
+    // q1..q3 are the immune head; q4 scores below the bar and drops
+    // whole (the freed budget); q5 and q6 restate enough to clear the
+    // rescue bar. The walk cap leaves q5 and q6 over-budget with one
+    // token of slack, and the two rescued together would re-spend MORE
+    // than the trim freed - the freed budget is the rescue's whole
+    // allowance, so only q5 fits and tokensSaved never goes negative.
+    writePref("q1", { principle: QUERY, created_at: "2026-05-06T00:00:00Z", body: "aaa" });
+    writePref("q2", { principle: QUERY, created_at: "2026-05-05T00:00:00Z", body: "aaa" });
+    writePref("q3", { principle: QUERY, created_at: "2026-05-04T00:00:00Z", body: "aaa" });
+    writePref("q4", {
+      principle: QUERY,
+      created_at: "2026-05-03T00:00:00Z",
+      body: "aaa bbb ccc",
+    });
+    writePref("q5", { principle: QUERY, created_at: "2026-05-02T00:00:00Z", body: "aaa bbb" });
+    writePref("q6", { principle: QUERY, created_at: "2026-05-01T00:00:00Z", body: "aaa bbb" });
+    const probe = packContext(vault, { maxTokens: 10_000, query: QUERY, tailTrim: false });
+    const tokens = new Map(probe.items.map((item) => [item.id, item.tokens]));
+    const freed = tokens.get("pref-q4")!;
+    const candidate = tokens.get("pref-q5")!;
+    expect(freed).toBe(3);
+    expect(candidate).toBe(2);
+    // q1..q4 deliver; q5 goes over the cap by exactly its last token.
+    const delivered = probe.items.slice(0, 4).reduce((sum, item) => sum + item.tokens, 0);
+    const maxTokens = delivered + candidate - 1;
+
+    const r = packContext(vault, { maxTokens, query: QUERY, tailTrim: true });
+    expect(r.items.map((i) => i.id)).toEqual(["pref-q1", "pref-q2", "pref-q3", "pref-q5"]);
+    expect(r.skipped.map((s) => ({ id: s.id, reason: s.reason }))).toEqual([
+      { id: "pref-q6", reason: "over-budget" },
+      { id: "pref-q4", reason: "tail-trim" },
+    ]);
+    expect(r.tailTrim).toEqual({
+      dropped: 1,
+      keptByQueryTerms: 0,
+      rescued: 1,
+      tokensSaved: freed - candidate,
+    });
+    expect(r.tokensUsed).toBeLessThanOrEqual(maxTokens);
+  });
+});
+
 describe("packContext tailTrim rescue", () => {
   test("freed budget is offered to over-budget candidates in priority order within maxTokens", () => {
     // Substring mode keeps every page (the principle carries the query)

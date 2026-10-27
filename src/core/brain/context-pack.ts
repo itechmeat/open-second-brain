@@ -1383,7 +1383,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // Score-aware tail trim (t_cb6a5558): runs once the delivered set is
   // complete (attention item included, at the head), before the total
   // char ceiling so that ceiling stays the final word on the emitted set.
-  let tailTrimReport: ContextPackTailTrimReport | null = null;
+  let tailTrim: TailTrimCounters | null = null;
   if (tailTrimActive) {
     const trimmed = applyTailTrim(
       items,
@@ -1398,7 +1398,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     items = [...trimmed.items];
     used = trimmed.used;
     skipped = [...trimmed.skipped];
-    tailTrimReport = trimmed.report;
+    tailTrim = trimmed.counters;
   }
 
   // Total recall character cap (v0.20.0): a second ceiling over the
@@ -1441,7 +1441,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
         startedAtMs,
         ownerScopeWarnings,
         withheldIds,
-        tailTrimReport,
+        tailTrim === null ? null : tailTrimReportOf(tailTrim, new Set(keptItems.map((i) => i.id))),
       );
     }
   }
@@ -1462,7 +1462,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     startedAtMs,
     ownerScopeWarnings,
     withheldIds,
-    tailTrimReport,
+    tailTrim === null ? null : tailTrimReportOf(tailTrim, new Set(finalItems.map((i) => i.id))),
   );
 }
 
@@ -1512,9 +1512,13 @@ function semanticRelevanceFor(opts: ContextPackOptions): ReadonlyMap<string, num
  * to `over-budget` candidates in walk (priority) order: one that clears
  * the same bar is re-admitted as a normal item - its `over-budget` skip
  * is retracted, since it was delivered - and one that does not clear the
- * bar, or does not fit inside `maxTokens`, keeps its skip. Returns the
- * trimmed item list in delivery order (head, kept tail, rescued), the
- * re spent and the counters.
+ * bar, or that does not fit inside the budget the trim freed, keeps its
+ * skip - the rescue re-spends what the trim freed, never the slack the
+ * walk happened to leave under `maxTokens`. Returns the trimmed item
+ * list in delivery order (head, kept tail, rescued), the tokens now
+ * spent (`used`), and the raw counters the report is computed from - so
+ * a later ceiling that cuts the trim's own output can recount it against
+ * what actually shipped.
  */
 function applyTailTrim(
   items: ReadonlyArray<ContextPackItem>,
@@ -1529,7 +1533,7 @@ function applyTailTrim(
   readonly items: ReadonlyArray<ContextPackItem>;
   readonly used: number;
   readonly skipped: ReadonlyArray<ContextPackSkipped>;
-  readonly report: ContextPackTailTrimReport;
+  readonly counters: TailTrimCounters;
 } {
   const keepCount = Math.min(CONTEXT_PACK_TAIL_TRIM_KEEP, items.length);
   const head = items.slice(0, keepCount);
@@ -1552,7 +1556,11 @@ function applyTailTrim(
   let rescuedTokens = 0;
   for (const entry of rescueCandidates) {
     if ((scoreById.get(entry.candidate.id) ?? 0) < keepBar) continue;
-    if (keptUsed + rescuedTokens + entry.tokens > maxTokens) continue;
+    // The freed budget is the rescue's whole allowance: the trim dropped
+    // these tokens, and re-admission may spend them and no more. (This
+    // also keeps the maxTokens bound, which every kept item already fits
+    // and the freed tokens never exceed.)
+    if (rescuedTokens + entry.tokens > freedTokens) continue;
     rescuedItems.push(
       toContextPackItem(
         entry.candidate,
@@ -1577,13 +1585,60 @@ function applyTailTrim(
         reason: TAIL_TRIM_SKIP_REASON,
       })),
     ],
-    report: Object.freeze({
+    counters: Object.freeze({
       dropped: dropped.length,
-      keptByQueryTerms: keptTail.length,
-      rescued: rescuedItems.length,
-      tokensSaved: freedTokens - rescuedTokens,
+      freedTokens,
+      keptTailTokens: new Map(keptTail.map((item) => [item.id, item.tokens])),
+      rescuedTokens: new Map(rescuedItems.map((item) => [item.id, item.tokens])),
     }),
   };
+}
+
+/**
+ * What one lane's trim delivered, in ids and tokens rather than finished
+ * counts: a ceiling that runs after the trim can cut the trim's own
+ * rescued or kept-tail items, and the report must then describe what
+ * actually shipped, not what the trim alone decided.
+ */
+interface TailTrimCounters {
+  /** Tail items the trim dropped whole; never reduced by a later ceiling. */
+  readonly dropped: number;
+  /** Tokens the trim freed. */
+  readonly freedTokens: number;
+  /** Kept-tail items by id, with their token cost. */
+  readonly keptTailTokens: ReadonlyMap<string, number>;
+  /** Rescued items by id, with the tokens re-admitting each cost. */
+  readonly rescuedTokens: ReadonlyMap<string, number>;
+}
+
+/**
+ * The trim report over the set that actually ships: kept-tail and
+ * rescued counters count only ids still present in `keptIds`, and
+ * `tokensSaved` nets the re-spend of the rescued survivors against the
+ * freed tokens - never negative, since the rescue's whole allowance is
+ * the freed budget.
+ */
+function tailTrimReportOf(
+  trim: TailTrimCounters,
+  keptIds: ReadonlySet<string>,
+): ContextPackTailTrimReport {
+  let keptByQueryTerms = 0;
+  for (const id of trim.keptTailTokens.keys()) {
+    if (keptIds.has(id)) keptByQueryTerms += 1;
+  }
+  let rescued = 0;
+  let reSpent = 0;
+  for (const [id, tokens] of trim.rescuedTokens) {
+    if (!keptIds.has(id)) continue;
+    rescued += 1;
+    reSpent += tokens;
+  }
+  return Object.freeze({
+    dropped: trim.dropped,
+    keptByQueryTerms,
+    rescued,
+    tokensSaved: trim.freedTokens - reSpent,
+  });
 }
 
 /**
