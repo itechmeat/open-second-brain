@@ -145,6 +145,9 @@ function renderFolderResult(res: FolderLifecycleResult): Record<string, unknown>
     applied: res.applied,
     moved: res.moved.map((m) => ({ from: m.from, to: m.to })),
     move_failures: res.moveFailures.map((f) => ({ path: f.path, reason: f.reason })),
+    // Absent-when-empty: a move that emptied its source folder carried
+    // nothing through, so the key's presence is the signal.
+    ...(res.leftBehind.length > 0 ? { left_behind: [...res.leftBehind] } : {}),
     recoverability: {
       state: res.recoverability.state,
       coverage: [...res.recoverability.coverage],

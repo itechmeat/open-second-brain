@@ -118,6 +118,31 @@ describe("folder actions through the tool", () => {
     expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
   });
 
+  test("move-folder names non-Markdown residue and omits the field when clean", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    writeFileSync(join(vault, "Projects/Old/img.png"), "png\n");
+
+    const res = await call({
+      action: "move-folder",
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+    expect(res["left_behind"]).toEqual(["img.png"]);
+    expect(existsSync(join(vault, "Projects/Old/img.png"))).toBe(true);
+
+    // Absent-when-empty: the rename-folder response of a move that
+    // empties its folder carries no left_behind key at all.
+    note("Other/Sub/b.md", "beta\n");
+    const clean = await call({
+      action: "move-folder",
+      path: "Other/Sub",
+      to: "Archive2",
+      apply: true,
+    });
+    expect("left_behind" in clean).toBe(false);
+  });
+
   test("rename-folder renames within the parent through the same tool", async () => {
     note("Projects/Old/a.md", "alpha\n");
     const res = await call({

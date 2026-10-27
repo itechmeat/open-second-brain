@@ -324,10 +324,51 @@ test("move-folder relocates the folder and renders the move report as JSON", asy
   expect(body.move_failures).toEqual([]);
   // A relocation destroys nothing, so no snapshot rides the receipt.
   expect(body.snapshot).toBeNull();
+  // Absent-when-empty: a clean move left nothing behind, so the key is
+  // not on the receipt at all - its presence is the signal.
+  expect("left_behind" in body).toBe(false);
   expect(body.references.files_rewritten).toBe(1);
   expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
   expect(existsSync(join(vault, "Archive/Old/b.md"))).toBe(true);
   expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
+});
+
+test("move-folder names non-Markdown residue and omits the field when clean", async () => {
+  note("Projects/Old/a.md", "alpha\n");
+  writeFileSync(join(vault, "Projects/Old/img.png"), "png\n");
+
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Old",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as { left_behind?: string[] };
+  expect(body.left_behind).toEqual(["img.png"]);
+
+  // The human receipt names the residue too, in place. The folder holds
+  // a note as well, so there is a move set; only the image stays.
+  note("Projects/Ignored/a.md", "alpha\n");
+  note("Projects/Ignored/keep.png", "png\n");
+  const residueRun = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Ignored",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+  ]);
+  expect(residueRun.returncode).toBe(0);
+  expect(residueRun.stdout).toContain("left behind (still in Projects/Ignored):");
+  expect(residueRun.stdout).toContain("keep.png");
 });
 
 test("move-folder renders the moved list and failures on the human receipt too", async () => {

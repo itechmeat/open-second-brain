@@ -500,6 +500,37 @@ describe("move-folder", () => {
     ).rejects.toThrow(/move_set_empty|not empty on disk/);
   });
 
+  test("non-Markdown residue in the source folder is named, not silently clean", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    writeFileSync(join(vault, "Projects/Old/img.png"), "png\n");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    // The note relocated; the image is not a note and did not move - and
+    // the result names what stayed in the source folder after the prune.
+    expect(res.leftBehind).toEqual(["img.png"]);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/img.png"))).toBe(true);
+
+    // A move that genuinely empties its source folder names nothing.
+    note("Other/Sub/b.md", "beta\n");
+    const clean = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Other/Sub",
+      to: "Archive",
+      apply: true,
+    });
+    expect(clean.leftBehind).toEqual([]);
+    expect(existsSync(join(vault, "Other/Sub"))).toBe(false);
+  });
+
   test("dry run is the default: it reports the full plan and writes nothing", async () => {
     note("Projects/Old/a.md", "alpha\n");
     note("Notes/Ref.md", "[[Projects/Old/a]]\n");
@@ -546,6 +577,9 @@ describe("move-folder", () => {
       expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
       expect(res.moveFailures).toHaveLength(1);
       expect(res.moveFailures[0]!.path).toBe("Projects/Old/sub/b.md");
+      // The prune could not empty the source, and the residue names what
+      // is still sitting in it.
+      expect(res.leftBehind).toEqual(["sub"]);
       // The residue is exactly where the report says: `a.md` is at its
       // new path, `b.md` stays at its old one.
       expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);

@@ -121,6 +121,9 @@ function renderFolderJson(res: FolderLifecycleResult): Record<string, unknown> {
     // relocated, and the per-file list of what did not and why.
     moved: res.moved.map((m) => ({ from: m.from, to: m.to })),
     move_failures: res.moveFailures.map((f) => ({ path: f.path, reason: f.reason })),
+    // Absent-when-empty: a move that emptied its source folder carried
+    // nothing through, so the key's presence is the signal.
+    ...(res.leftBehind.length > 0 ? { left_behind: [...res.leftBehind] } : {}),
     recoverability: {
       state: res.recoverability.state,
       coverage: [...res.recoverability.coverage],
@@ -209,10 +212,18 @@ function renderFolderText(res: FolderLifecycleResult): string {
       ? ""
       : `  NOT moved (still at their old paths):\n` +
         res.moveFailures.map((f) => `    ${f.path}: ${f.reason}\n`).join("");
+  // Non-Markdown residue is not a failure and not a count - it is named,
+  // in place, so a receipt that reads clean really is clean.
+  const residue =
+    res.leftBehind.length === 0
+      ? ""
+      : `  left behind (still in ${res.from}):\n` +
+        res.leftBehind.map((p) => `    ${p}\n`).join("");
   return (
     `${mode}: ${res.from} -> ${res.to}\n` +
     moved +
     split +
+    residue +
     `  inbound references: ${refs.inboundFiles.length} file(s) of ${refs.filesScanned} scanned, ` +
     `${refs.filesRewritten} rewritten (basename: ${refs.basename})\n` +
     `  recoverability: ${res.recoverability.state}` +

@@ -216,6 +216,18 @@ export interface FolderLifecycleResult {
    * back - see the module header for why that is the better half-state.
    */
   readonly moveFailures: ReadonlyArray<FolderMoveFailure>;
+  /**
+   * What stayed in the source folder after the prune, from a readdir of
+   * it once the prune had done its best. The move set is the vault's
+   * MARKDOWN, so a subtree that also holds anything else - an image
+   * beside the notes, a file the moves could not relocate - keeps its
+   * source folder, and without this field the result would read as if
+   * the folder went with its notes. Empty (and absent on the rendered
+   * surfaces) means nothing was left behind: the folder itself is gone.
+   * A plan-only run relocates nothing, so it leaves nothing behind
+   * either.
+   */
+  readonly leftBehind: ReadonlyArray<string>;
   /** What the recovery point (if any) is worth for THIS operation. */
   readonly recoverability: RecoverabilityVerdict;
   /**
@@ -700,6 +712,8 @@ export async function folderLifecycle(
       // the full planned set and writes nothing).
       planned.map((move) => ({ from: move.fromRel, to: move.toRel }));
   let moveFailures: FolderMoveFailure[] = [];
+  // Nothing has been left behind until something has been moved.
+  let leftBehind: ReadonlyArray<string> = [];
   let rewritten: ReadonlyArray<string> = [];
   let rewriteFailures: ReadonlyArray<{ readonly path: string; readonly reason: string }> = [];
   let appliedPairs: ReadonlyArray<{ readonly from: string; readonly to: string }> = [];
@@ -731,6 +745,11 @@ export async function folderLifecycle(
     // zero-file set is handled by the same prune - the source folder
     // itself is last.
     pruneEmptiedFolders(vault, source.relPath);
+    // Whatever the prune could not remove is exactly what stayed - a
+    // non-Markdown file beside the notes, or a failed file's folder -
+    // and the report names it rather than reading as if the source
+    // folder went with its notes.
+    leftBehind = (readdirOrNull(source.abs) ?? []).toSorted();
     // ONE rewrite pass over the SUCCESSFULLY moved set's pairs, under the
     // destination. A failed file's pairs are excluded, which is the
     // correct outcome: its inbound links still resolve to where its
@@ -797,6 +816,7 @@ export async function folderLifecycle(
     moveFailures: Object.freeze(
       moveFailures.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     ),
+    leftBehind: Object.freeze([...leftBehind]),
     recoverability,
     snapshot: null,
     references: Object.freeze({
