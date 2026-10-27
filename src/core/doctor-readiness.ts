@@ -1320,38 +1320,46 @@ export async function probeClientVersions(opts: ReadinessOptions): Promise<Readi
       detail: "install manifest records no installs; no client version to ask",
     };
   }
-  const runner = opts.clientVersionRunner ?? spawnClientVersion;
-  const rows: ReadinessVersionRow[] = [];
-  for (const entry of installs) {
-    rows.push(await clientVersionRow(entry.target, runner));
-  }
+  // The asks run TOGETHER, and each child's own budget stays below the
+  // probe's, so a verdict that carries the rows always wins the race
+  // against the probe-level cutoff. Sequential asks could spend the
+  // whole probe budget on the first slow client - the cutoff would then
+  // replace every answered row with a bare timeout while the loop kept
+  // spawning children nobody awaited any more.
+  const probeBudgetMs = opts.perCheckTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const childBudgetMs = Math.max(50, Math.floor(probeBudgetMs * 0.8));
+  const ask =
+    opts.clientVersionRunner ??
+    ((argv: ReadonlyArray<string>) => spawnClientVersion(argv, childBudgetMs));
+  // Promise.all preserves the manifest's order, whichever ask settles first.
+  const rows: ReadinessVersionRow[] = await Promise.all(
+    installs.map((entry) => clientVersionRow(entry.target, ask)),
+  );
   const counts = countByStatus(rows.map((row) => row.status));
-  // Worst rows lead the detail; toSorted is stable, so within one bucket
-  // the manifest's own order stands - the same shape
-  // {@link probeRegisteredCommands} reports in, minus the `fail` bucket
-  // this probe never produces.
-  const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
-  const rowText = ordered.map((row) => `${row.target}: ${row.detail}`).join("; ");
+  // The rows carry every client's own answer on every surface that reads
+  // this verdict - the human renderer prints one line per row, and the
+  // JSON report carries the rows array - so the detail stays the census
+  // and never repeats what the rows already say.
   const census = `(${counts.pass} pass, ${counts.unknown} unknown, ${counts.skipped} skipped)`;
   const base = { rows: Object.freeze(rows) };
   if (counts.unknown > 0) {
     return {
       ...base,
       status: READINESS_STATUS.unknown,
-      detail: `could not read ${counts.unknown} client version(s) ${census}: ${rowText}`,
+      detail: `could not read ${counts.unknown} client version(s) ${census} - each row names its own`,
     };
   }
   if (counts.skipped > 0) {
     return {
       ...base,
       status: READINESS_STATUS.skipped,
-      detail: `nothing to ask of ${counts.skipped} of ${rows.length} target(s) ${census}: ${rowText}`,
+      detail: `nothing to ask of ${counts.skipped} of ${rows.length} target(s) ${census}`,
     };
   }
   return {
     ...base,
     status: READINESS_STATUS.pass,
-    detail: `${counts.pass} client version(s) answered ${census}: ${rowText}`,
+    detail: `${counts.pass} client version(s) answered ${census}`,
   };
 }
 

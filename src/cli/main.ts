@@ -29,7 +29,12 @@ import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { checkSelfHealUpgrade } from "../core/maintenance/self-heal-upgrade-state.ts";
 import { doctor } from "../core/doctor.ts";
 import { checkHermesResolverParity } from "../core/doctor-hermes-parity.ts";
-import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
+import {
+  runReadinessProbes,
+  READINESS_STATUS,
+  type ReadinessReport,
+  type ReadinessStatus,
+} from "../core/doctor-readiness.ts";
 import {
   runDoctorSelftest,
   selftestJsonPayload,
@@ -408,6 +413,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       return failed > 0 ? DOCTOR_EXIT.failed : DOCTOR_EXIT.probeIncomplete;
     }
   }
+
+  /** The terminal tag for one readiness status - probe lines and row lines alike. */
+  const READINESS_TAG: Record<ReadinessStatus, string> = {
+    [READINESS_STATUS.pass]: "PASS",
+    [READINESS_STATUS.fail]: "FAIL",
+    [READINESS_STATUS.skipped]: "SKIP",
+    [READINESS_STATUS.unknown]: "UNKNOWN",
+  };
   const exitCode = doctorExitCode(failed, readiness);
 
   if (flags["json"]) {
@@ -485,30 +498,15 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       // one direction. Only the new member gets a new tag - the three that
       // already existed keep their exact spelling, so a reader sees a
       // byte-identical line for every outcome it already knew.
-      const tag =
-        p.status === "pass"
-          ? "PASS"
-          : p.status === "fail"
-            ? "FAIL"
-            : p.status === "skipped"
-              ? "SKIP"
-              : "UNKNOWN";
+      const tag = READINESS_TAG[p.status];
       process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
       // The per-target rows a probe reports (today, `client_versions`'):
       // one indented line each, so an operator reading the terminal sees
-      // WHICH client answered and with what, not a summary that folded
-      // them away.
+      // WHICH client answered and with what. The probe's own detail is
+      // the census only, so this is where each client's answer is named.
       for (const row of p.rows ?? []) {
-        const rowTag =
-          row.status === "pass"
-            ? "PASS"
-            : row.status === "fail"
-              ? "FAIL"
-              : row.status === "skipped"
-                ? "SKIP"
-                : "UNKNOWN";
         process.stdout.write(
-          `       ${rowTag} ${row.target}` +
+          `       ${READINESS_TAG[row.status]} ${row.target}` +
             (row.version !== null ? `: ${row.version}` : "") +
             (row.version === null && row.detail ? ` (${row.detail})` : "") +
             `\n`,

@@ -973,7 +973,7 @@ describe("probeClientVersions", () => {
     expect(v.rows![0]!.detail).toContain("registered_commands");
   });
 
-  test("a non-zero exit yields an unknown row with the stderr-shaped reason", async () => {
+  test("a non-zero exit yields an unknown row naming the exit code", async () => {
     writeConfig("");
     codexManifest();
     const v = await probeClientVersions(
@@ -985,6 +985,9 @@ describe("probeClientVersions", () => {
     expect(v.status).toBe(READINESS_STATUS.unknown);
     expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
     expect(v.rows![0]!.version).toBeNull();
+    // The runner contract carries exit code and stdout only - stderr is
+    // ignored - so the row's reason names the exit it saw.
+    expect(v.rows![0]!.detail).toContain("exited 1");
   });
 
   test("an empty stdout with exit 0 yields an unknown row - no answer is not a version", async () => {
@@ -1012,7 +1015,6 @@ describe("probeClientVersions", () => {
     const probe = small.probes[0]!;
     expect(probe.status).toBe(READINESS_STATUS.unknown);
     expect(probe.detail).toContain("timed out");
-    void DEFAULT_READINESS_TIMEOUT_MS;
   });
 
   test("a hung version child is killed at its ask's budget, never orphaned", async () => {
@@ -1046,6 +1048,56 @@ describe("probeClientVersions", () => {
     expect(v.detail).toContain("no installs");
   });
 
+  test("the version asks run together, not one per wait", async () => {
+    writeConfig("");
+    writeManifestEntries({
+      codex: manifestEntry("codex", null, "codex-toml"),
+      cursor: manifestEntry("cursor", null, "json-merge"),
+    });
+    let inFlight = 0;
+    let peak = 0;
+    const v = await probeClientVersions(
+      versionsOpts(async (argv) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        inFlight -= 1;
+        return { exitCode: 0, stdout: `${String(argv[0])} 1.0\n` };
+      }),
+    );
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(peak).toBe(2);
+  });
+
+  test("slow asks inside one probe budget deliver their rows, not a bare timeout", async () => {
+    writeConfig("");
+    writeManifestEntries({
+      codex: manifestEntry("codex", null, "codex-toml"),
+      cursor: manifestEntry("cursor", null, "json-merge"),
+    });
+    // Two asks of 300ms each inside a 500ms probe budget: asked one at a
+    // time they overrun the budget and the probe-level cutoff replaces
+    // every row with a bare timeout; asked together they settle inside
+    // it and the verdict carries both rows.
+    const report = await runReadinessProbes(
+      {
+        ...versionsOpts(
+          (argv) =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ exitCode: 0, stdout: `${String(argv[0])} 1.0\n` }), 300),
+            ),
+        ),
+        perCheckTimeoutMs: 500,
+      },
+      [{ name: READINESS_PROBE.clientVersions, fn: probeClientVersions }],
+    );
+    const probe = report.probes[0]!;
+    expect(probe.detail).not.toContain("timed out after 500");
+    expect(probe.rows).toBeDefined();
+    expect(probe.rows).toHaveLength(2);
+    expect(probe.status).toBe(READINESS_STATUS.pass);
+  });
+
   test("the generic target has no client binary of its own and is skipped by name", async () => {
     writeConfig("");
     writeManifestEntries({ generic: manifestEntry("generic", null, "manual") });
@@ -1057,7 +1109,9 @@ describe("probeClientVersions", () => {
       status: READINESS_STATUS.skipped,
       version: null,
     });
-    expect(v.detail).toContain("generic");
+    // The row, not the census detail, names the target and why.
+    expect(v.rows![0]!.detail).toContain("no client binary of its own");
+    expect(v.detail).toContain("1 of 1");
   });
 
   test("a mixed pass/unknown aggregate reads unknown with the census", async () => {
@@ -1076,8 +1130,9 @@ describe("probeClientVersions", () => {
     expect(v.status).toBe(READINESS_STATUS.unknown);
     expect(v.detail).toContain("1 pass");
     expect(v.detail).toContain("1 unknown");
-    // Worst rows lead the detail.
-    expect(v.detail.indexOf("cursor")).toBeLessThan(v.detail.indexOf("codex"));
+    // The detail is the census; the rows name each client and its answer.
+    expect(v.rows!.map((row) => row.target)).toEqual(["codex", "cursor"]);
+    expect(v.rows!.find((row) => row.target === "cursor")!.detail).toContain("exited 1");
   });
 
   test("an unreadable manifest is unknown, like registered_commands", async () => {
