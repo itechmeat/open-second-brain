@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -228,6 +228,84 @@ describe("dead-letters show", () => {
     const r = await run(["show"]);
     expect(r.returncode).toBe(2);
   });
+
+  test("a malformed id reads as unknown too - nothing was ever written under it", async () => {
+    const r = await run(["show", "garbage"]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("no dead letter with id");
+  });
+});
+
+describe("a letter the store refuses to parse is exit 1, never unknown-id", () => {
+  // A letter whose bytes this build cannot read is a hard error by the
+  // store's own contract (`dead-letter.ts`: reading refuses rather than
+  // skips) - a surface that turned it into "no dead letter with id" would
+  // under-report the exact failure the store exists to prevent.
+  const CORRUPT_ID = "extract-signals-001122334455";
+  const UNKNOWN_VERSION_ID = "extract-signals-ff0011223344";
+
+  function writeCorruptLetter(): void {
+    mkdirSync(deadLetterDir(vault), { recursive: true });
+    writeFileSync(deadLetterPath(vault, CORRUPT_ID), "{ not json");
+  }
+
+  function writeUnknownVersionLetter(): void {
+    mkdirSync(deadLetterDir(vault), { recursive: true });
+    writeFileSync(
+      deadLetterPath(vault, UNKNOWN_VERSION_ID),
+      `${JSON.stringify(
+        {
+          schema_version: 99,
+          id: UNKNOWN_VERSION_ID,
+          lane: "extract-signals",
+          step: "extract-signals",
+          reference: SESSION,
+          target: "Brain/inbox",
+          attempted: 1,
+          found: 0,
+          missing: ["items[0]:x"],
+          outcome: "partial",
+          first_error: "disk full",
+          recorded_at: "2026-08-23T10:15:00Z",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+
+  test("show names the store's corrupt-JSON error at exit 1", async () => {
+    writeCorruptLetter();
+    const r = await run(["show", CORRUPT_ID]);
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("corrupt");
+    expect(r.stderr).not.toContain("no dead letter with id");
+  });
+
+  test("show --json refuses typed at exit 1", async () => {
+    writeCorruptLetter();
+    const r = await run(["show", CORRUPT_ID, "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("corrupt");
+  });
+
+  test("show names an unsupported schema_version at exit 1", async () => {
+    writeUnknownVersionLetter();
+    const r = await run(["show", UNKNOWN_VERSION_ID]);
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("schema_version");
+    expect(r.stderr).not.toContain("no dead letter with id");
+  });
+
+  test("recover names the store's refusal at exit 1 and writes nothing", async () => {
+    writeCorruptLetter();
+    const r = await run(["recover", CORRUPT_ID, "--apply", "--yes"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("corrupt");
+    expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
+  });
 });
 
 describe("dead-letters recover", () => {
@@ -280,6 +358,18 @@ describe("dead-letters recover", () => {
     const r = await run(["recover", letter.id, "--apply"]);
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("--yes");
+  });
+
+  test("--dry-run and --apply together refuse as a usage error and write nothing", async () => {
+    const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
+    const r = await run(["recover", letter.id, "--dry-run", "--apply", "--yes"]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("--dry-run");
+    expect(r.stderr).toContain("--apply");
+    // The refusal precedes every write: the letter's item never reached
+    // the inbox, and no new letter was recorded either.
+    expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
+    expect(listDeadLetters(vault).length).toBe(1);
   });
 
   test("--apply --yes re-runs the payload; already-written items dedup away", async () => {

@@ -28,12 +28,17 @@
  *
  * Exit codes: 0 on success (a listing is a report, whatever it says);
  * 1 on an operational failure - a refused apply, a non-recoverable
- * letter asked to recover, a frozen vault; 2 on usage errors, including
- * a named-but-unknown record id.
+ * letter asked to recover, a frozen vault, a letter the store refuses to
+ * read (corrupt JSON, an unknown schema_version); 2 on usage errors,
+ * including a named-but-unknown record id and a `--dry-run` beside an
+ * `--apply`.
  */
+
+import { existsSync } from "node:fs";
 
 import {
   type DeadLetterRecord,
+  DeadLetterError,
   deadLetterPath,
   listDeadLetters,
   readDeadLetter,
@@ -181,7 +186,17 @@ function deadLettersShow(argv: string[]): number {
   const asJson = flags["json"] === true;
   const id = positional[0]!;
 
-  const record = readDeadLetterQuietly(vault, id);
+  let record: DeadLetterRecord | null;
+  try {
+    record = readDeadLetterQuietly(vault, id);
+  } catch (err) {
+    // The store refused to read the letter (corrupt JSON, an unknown
+    // schema_version): the named error at exit 1, never the unknown-id
+    // usage shape at exit 2 - a letter this build cannot read exists,
+    // and saying otherwise under-reports it.
+    if (err instanceof DeadLetterError) return refused(err.message, asJson);
+    throw err;
+  }
   if (record === null) {
     return unknownId(id, asJson);
   }
@@ -232,6 +247,17 @@ function deadLettersRecover(argv: string[]): number {
   }
   const asJson = flags["json"] === true;
   const apply = flags["apply"] === true;
+  // The two flags name opposite modes - an explicit `--dry-run` beside an
+  // explicit `--apply` is a caller mistake, refused as a usage error
+  // rather than resolved in favor of whichever the verb felt like: a
+  // write that ignored the caller's dry-run request would be exactly the
+  // dishonesty this verb exists to prevent.
+  if (flags["dry-run"] === true && apply) {
+    return usageError(
+      "brain dead-letters recover: --dry-run and --apply are mutually exclusive " +
+        "(dry-run is the default; drop one of the two flags)",
+    );
+  }
   // Dry-run is the default; --apply is the write. The headless consent
   // rule is the `brain lint --apply` one: no prompts under --json or a
   // non-TTY stdin, so --yes is the only consent that can be given there.
@@ -248,7 +274,15 @@ function deadLettersRecover(argv: string[]): number {
   const { config, vault } = brainVerbContext(flags);
   const id = positional[0]!;
 
-  const record = readDeadLetterQuietly(vault, id);
+  let record: DeadLetterRecord | null;
+  try {
+    record = readDeadLetterQuietly(vault, id);
+  } catch (err) {
+    // The store refused to read the letter: the named error at exit 1,
+    // never the unknown-id usage shape - same contract as `show`.
+    if (err instanceof DeadLetterError) return refused(err.message, asJson);
+    throw err;
+  }
   if (record === null) {
     return unknownId(id, asJson);
   }
@@ -376,15 +410,26 @@ function unknownId(id: string, asJson: boolean): number {
 }
 
 /**
- * Read one letter, mapping a malformed id to the unknown-id refusal shape
- * by reading the directory listing instead: `deadLetterPath` throws on an
- * id that does not match the `<lane>-<digest>` shape, and a malformed id
- * is one nothing was ever written under.
+ * Read one letter for the `show`/`recover` reads, mapping a malformed id
+ * to the unknown-id refusal shape: `deadLetterPath` throws on an id that
+ * does not match the `<lane>-<digest>` shape, and a malformed id is one
+ * nothing was ever written under.
+ *
+ * EVERY other store refusal propagates: a corrupt file or an unknown
+ * `schema_version` is a hard error by the store's own contract
+ * (`dead-letter.ts`: reading refuses rather than skips), and a caller
+ * hearing "no dead letter with id" for an unreadable record would be
+ * told the partial write does not exist - the under-report this surface
+ * exists to prevent. The store's error reaches the operator at exit 1
+ * through the shared refusal path each subcommand renders it with.
  */
 function readDeadLetterQuietly(vault: string, id: string): DeadLetterRecord | null {
+  let path: string;
   try {
-    return readDeadLetter(vault, id);
+    path = deadLetterPath(vault, id);
   } catch {
     return null;
   }
+  if (!existsSync(path)) return null;
+  return readDeadLetter(vault, id);
 }
