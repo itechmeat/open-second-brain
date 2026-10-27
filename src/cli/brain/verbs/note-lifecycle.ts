@@ -26,6 +26,14 @@
  * mentions it in prose is reported, never deleted. The receipt then
  * prints two lists rather than a count: what will go, and what is
  * reported and stays.
+ *
+ * A folder action moves MARKDOWN ONLY - the move set is the same note
+ * population every lifecycle surface addresses - and the folder receipt
+ * says what that honestly costs: attachments and other non-Notes files
+ * are named in `left_behind`, and a moved note's relative Markdown links
+ * or images whose target stayed behind are named in
+ * `dangling_relative_links` (rendered on the human receipt beside the
+ * residue, with the "only Markdown moves" statement in the line).
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
@@ -124,6 +132,18 @@ function renderFolderJson(res: FolderLifecycleResult): Record<string, unknown> {
     // Absent-when-empty: a move that emptied its source folder carried
     // nothing through, so the key's presence is the signal.
     ...(res.leftBehind.length > 0 ? { left_behind: [...res.leftBehind] } : {}),
+    // Absent-when-empty: the relative Markdown links and images the move
+    // left pointing at nothing, named per note and target - a folder move
+    // is a MARKDOWN move, and without this a `files_rewritten: 0` would
+    // read as "nothing broke" while every relative embed dangled.
+    ...(res.danglingRelativeLinks.length > 0
+      ? {
+          dangling_relative_links: res.danglingRelativeLinks.map((l) => ({
+            note: l.note,
+            target: l.target,
+          })),
+        }
+      : {}),
     recoverability: {
       state: res.recoverability.state,
       coverage: [...res.recoverability.coverage],
@@ -219,11 +239,20 @@ function renderFolderText(res: FolderLifecycleResult): string {
       ? ""
       : `  left behind (still in ${res.from}):\n` +
         res.leftBehind.map((p) => `    ${p}\n`).join("");
+  // A relative embed the move broke is named in full, not counted - and
+  // the line says what a folder move IS, so the residue reads as the
+  // settled cost of a Markdown-only move rather than as an omission.
+  const dangling =
+    res.danglingRelativeLinks.length === 0
+      ? ""
+      : `  relative links now dangling (only Markdown moves; the target stayed behind):\n` +
+        res.danglingRelativeLinks.map((l) => `    ${l.note}: ${l.target}\n`).join("");
   return (
     `${mode}: ${res.from} -> ${res.to}\n` +
     moved +
     split +
     residue +
+    dangling +
     `  inbound references: ${refs.inboundFiles.length} file(s) of ${refs.filesScanned} scanned, ` +
     `${refs.filesRewritten} rewritten (basename: ${refs.basename})\n` +
     `  recoverability: ${res.recoverability.state}` +

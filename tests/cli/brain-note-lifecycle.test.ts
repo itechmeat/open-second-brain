@@ -327,6 +327,9 @@ test("move-folder relocates the folder and renders the move report as JSON", asy
   // Absent-when-empty: a clean move left nothing behind, so the key is
   // not on the receipt at all - its presence is the signal.
   expect("left_behind" in body).toBe(false);
+  // No relative link broke either: every target the moved notes name is
+  // a note that moved with the folder.
+  expect("dangling_relative_links" in body).toBe(false);
   expect(body.references.files_rewritten).toBe(1);
   expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
   expect(existsSync(join(vault, "Archive/Old/b.md"))).toBe(true);
@@ -410,6 +413,51 @@ test("move-folder renders the moved list and failures on the human receipt too",
   expect(res.stdout).toContain("move-folder: Projects/Old -> Archive/Old");
   expect(res.stdout).toContain("moved (1):");
   expect(res.stdout).toContain("Projects/Old/a.md -> Archive/Old/a.md");
+});
+
+test("move-folder names the relative embeds a Markdown-only move leaves dangling", async () => {
+  note("Projects/Old/a.md", "![pic](diagram.png)\n");
+  writeFileSync(join(vault, "Projects/Old/diagram.png"), "png\n");
+
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Old",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as {
+    dangling_relative_links?: Array<{ note: string; target: string }>;
+    left_behind?: string[];
+  };
+  // The JSON receipt names the pair, and the attachment is in the
+  // residue: only Markdown moves, and the receipt says what that cost.
+  expect(body.dangling_relative_links).toEqual([
+    { note: "Archive/Old/a.md", target: "diagram.png" },
+  ]);
+  expect(body.left_behind).toEqual(["diagram.png"]);
+
+  // The human receipt names the dangling spelling in place too.
+  note("Projects/Embedded/a.md", "![pic](diagram.png)\n");
+  writeFileSync(join(vault, "Projects/Embedded/diagram.png"), "png\n");
+  const text = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Embedded",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+  ]);
+  expect(text.returncode).toBe(0);
+  expect(text.stdout).toContain("relative links now dangling");
+  expect(text.stdout).toContain("Archive/Embedded/a.md: diagram.png");
 });
 
 test("rename-folder runs in the folder lifecycle through the same verb", async () => {

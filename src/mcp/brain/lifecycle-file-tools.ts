@@ -148,6 +148,19 @@ function renderFolderResult(res: FolderLifecycleResult): Record<string, unknown>
     // Absent-when-empty: a move that emptied its source folder carried
     // nothing through, so the key's presence is the signal.
     ...(res.leftBehind.length > 0 ? { left_behind: [...res.leftBehind] } : {}),
+    // Absent-when-empty: the moved notes' relative Markdown links and
+    // images whose target stayed behind, named per note and target. The
+    // wikilink pass repairs [[path]] spellings only, so without this a
+    // files_rewritten: 0 would read as "nothing broke" while every
+    // relative embed in the moved notes pointed at nothing.
+    ...(res.danglingRelativeLinks.length > 0
+      ? {
+          dangling_relative_links: res.danglingRelativeLinks.map((l) => ({
+            note: l.note,
+            target: l.target,
+          })),
+        }
+      : {}),
     recoverability: {
       state: res.recoverability.state,
       coverage: [...res.recoverability.coverage],

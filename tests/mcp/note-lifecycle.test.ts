@@ -172,6 +172,37 @@ describe("folder actions through the tool", () => {
     expect("left_behind" in clean).toBe(false);
   });
 
+  test("move-folder names the relative embeds whose targets stayed behind (M17)", async () => {
+    note("Projects/Old/a.md", "![pic](diagram.png)\n");
+    writeFileSync(join(vault, "Projects/Old/diagram.png"), "png\n");
+
+    const res = await call({
+      action: "move-folder",
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+    // The wikilink pass rewrites [[path]] spellings only; a relative
+    // image depends on the note's directory, so the response names the
+    // pair instead of letting files_rewritten: 0 read as "nothing broke".
+    expect(res["dangling_relative_links"]).toEqual([
+      { note: "Archive/Old/a.md", target: "diagram.png" },
+    ]);
+    expect(res["left_behind"]).toEqual(["diagram.png"]);
+
+    // Absent-when-empty: a move whose relative targets move with the
+    // folder carries no dangling_relative_links key at all.
+    note("Whole/Sub/b.md", "[link](kept.md)\n");
+    note("Whole/Sub/kept.md", "the target is a note; it moves too\n");
+    const clean = await call({
+      action: "move-folder",
+      path: "Whole/Sub",
+      to: "Archive3",
+      apply: true,
+    });
+    expect("dangling_relative_links" in clean).toBe(false);
+  });
+
   test("rename-folder renames within the parent through the same tool", async () => {
     note("Projects/Old/a.md", "alpha\n");
     const res = await call({
