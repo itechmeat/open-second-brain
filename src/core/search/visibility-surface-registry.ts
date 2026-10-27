@@ -556,7 +556,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "is left, and summary folds without the rule items, so a degraded injection that kept " +
       "only the rules counts as an empty receipt. A measured injection receipt whose every item " +
       "was a rule block (isRuleOnlyInjection) is withheld whole: list and summary exclude it " +
-      "before their limit and fold bound, and show answers it as an unknown id.",
+      "before their limit and fold bound, and show answers it as an unknown id. The show " +
+      "payload also carries the session's reply-presence join (lookupReceiptReplyPresence, " +
+      "context-receipts.ts), and that join runs at the caller's reach: a per-note row naming a " +
+      "path the caller's reach view cannot read is withheld from per_note and counted in " +
+      "withheld - absent when nothing was withheld - so a reserved page's path, line range and " +
+      "verdict never reach a caller the page withheld itself from, and a filtered join cannot " +
+      "read as a session that checked fewer notes.",
   },
   {
     surface: "brain_event_trace",
