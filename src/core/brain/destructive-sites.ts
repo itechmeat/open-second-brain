@@ -504,14 +504,17 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
     },
 
     "src/core/brain/notes/folder-lifecycle.ts": {
-      calls: ["rmdirSync"],
+      calls: ["rmdirSync", "unlinkSync"],
       recovery: EMPTY_SHELL_ONLY,
       reason:
-        "prunes the moved folder's own directory entry after every file of the move set " +
+        "prunes the moved folder's own emptied directories after every file of the move set " +
         "has relocated: `rmdirSync` refuses a non-empty directory, so a folder whose " +
         "subtree still holds a failed file - or any file this surface does not address - " +
-        "keeps it, which is exactly where the report says the bytes are. No file bytes " +
-        "are ever reached: the removal is the empty shell the move left behind.",
+        "keeps it, which is exactly where the report says the bytes are. The one " +
+        "`unlinkSync` drops a destination name a mid-set fault linked after the source " +
+        "name's own drop had already failed: the source name still holds that inode, so " +
+        "the bytes outlive the removal and the failure report's kept-path claim stays " +
+        "true. No file bytes are ever reached: both removals take names, never bytes.",
     },
 
     // --- Outside the vault entirely --------------------------------------

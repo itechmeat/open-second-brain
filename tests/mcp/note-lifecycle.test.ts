@@ -89,6 +89,17 @@ describe("brain_note_lifecycle registration", () => {
 });
 
 describe("folder actions through the tool", () => {
+  test("a folder action refuses confirm and delete_linked instead of dropping them", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    for (const extra of [{ confirm: true }, { delete_linked: true }]) {
+      await expect(
+        call({ action: "move-folder", path: "Projects/Old", to: "Archive", ...extra }),
+      ).rejects.toThrow(/takes neither confirm nor delete_linked/);
+    }
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive"))).toBe(false);
+  });
+
   test("a folder holding a note the caller's reach denies refuses exactly as a missing one", async () => {
     note("Projects/Old/a.md", "alpha\n");
     note("Projects/Old/quiet.md", "---\nvisibility: private\n---\nreserved\n");

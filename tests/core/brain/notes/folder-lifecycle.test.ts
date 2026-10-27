@@ -641,8 +641,112 @@ describe("move-folder", () => {
       // resolves to where the bytes actually are.
       expect(read("Notes/A.md")).toBe("moves [[a]]\n");
       expect(read("Notes/B.md")).toBe("moves [[Projects/Old/sub/b]]\n");
+      // The failed move leaves exactly one name for the file: the fault
+      // struck after the destination name was linked, and that second
+      // name was dropped - the report's "never moved" stays true.
+      expect(existsSync(join(vault, "Archive/Old/sub/b.md"))).toBe(false);
     },
   );
+
+  test("a top-level folder moves under a sibling top-level directory", async () => {
+    note("Old/a.md", "alpha\n");
+    mkdirSync(join(vault, "Archive"), { recursive: true });
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.from).toBe("Old");
+    expect(res.to).toBe("Archive/Old");
+    expect(res.moved).toEqual([{ from: "Old/a.md", to: "Archive/Old/a.md" }]);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Old"))).toBe(false);
+  });
+
+  test("a clean nested move leaves no empty skeleton and names no residue", async () => {
+    note("Projects/Old/sub/deep/b.md", "beta\n");
+    note("Projects/Old/a.md", "alpha\n");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.moveFailures).toEqual([]);
+    expect(res.leftBehind).toEqual([]);
+    expect(existsSync(join(vault, "Projects/Old"))).toBe(false);
+    expect(existsSync(join(vault, "Projects/Old/sub"))).toBe(false);
+    expect(existsSync(join(vault, "Archive/Old/sub/deep/b.md"))).toBe(true);
+  });
+
+  test("a case-only folder rename is refused rather than half-reported", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    // The refusal exists for the host that folds case: there the two
+    // spellings name one directory entry, which moving files cannot
+    // re-case. A host that tells them apart reaches an ordinary rename
+    // instead, so this test answers for the folding hosts only.
+    const foldsCase = (() => {
+      try {
+        const source = statSync(join(vault, "Projects/Old"));
+        const folded = statSync(join(vault, "projects/old"));
+        return source.dev === folded.dev && source.ino === folded.ino;
+      } catch {
+        return false;
+      }
+    })();
+    if (!foldsCase) return;
+
+    await expect(
+      folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.renameFolder,
+        path: "Projects/Old",
+        to: "old",
+        apply: true,
+      }),
+    ).rejects.toThrow(/destination_unchanged|case-only/);
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+  });
+
+  test("a folder holding only attachments moves an empty set and keeps its contents", async () => {
+    mkdirSync(join(vault, "Assets/img"), { recursive: true });
+    writeFileSync(join(vault, "Assets/img/logo.png"), "png\n");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Assets/img",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.moved).toEqual([]);
+    expect(res.moveFailures).toEqual([]);
+    expect(res.leftBehind).toEqual(["logo.png"]);
+    expect(existsSync(join(vault, "Assets/img/logo.png"))).toBe(true);
+    expect(existsSync(join(vault, "Archive/img/logo.png"))).toBe(false);
+  });
+
+  test("a dry run reports the spellings the apply would write", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Notes/Ref.md", "pathed [[Projects/Old/a]]\n");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Elsewhere",
+    });
+
+    expect(res.applied).toBe(false);
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Elsewhere/Old/a.md" }]);
+    expect(res.references.rewrittenSpellings).toEqual([
+      { from: "Projects/Old/a.md", to: "a" },
+      { from: "Projects/Old/a", to: "a" },
+    ]);
+  });
 });
 
 describe("rename-folder", () => {

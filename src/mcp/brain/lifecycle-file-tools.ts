@@ -186,6 +186,18 @@ async function toolBrainNoteLifecycle(
     // `wrong_action` - the action exists and the caller named it
     // correctly, so it runs where it lives.
     if (isFolderLifecycleAction(action)) {
+      // Refused rather than dropped, the file surface's own rule for a
+      // flag whose action cannot honour it: a folder action is never a
+      // delete, so neither flag has anything to extend - honouring them
+      // silently would tell a caller that asked for a cascade that it
+      // got one.
+      if (confirm !== undefined || deleteLinked !== undefined) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `${TOOL}: ${action} takes neither confirm nor delete_linked: a folder action is never a delete`,
+          { code: "cascade_forbidden" },
+        );
+      }
       const res = await folderLifecycle(ctx.vault, {
         action,
         path,

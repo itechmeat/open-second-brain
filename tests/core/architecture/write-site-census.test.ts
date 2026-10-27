@@ -582,14 +582,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/notes/folder-lifecycle.ts": {
     categories: [C.lifecycleMove],
-    calls: ["rmdirSync"],
+    calls: ["rmdirSync", "unlinkSync"],
     reason:
       "the folder move's per-file relocation rides the file surface's own shared " +
-      "helpers, so the module's one direct call is the emptied-subject prune: " +
-      "`rmdirSync` removes the moved folder's directory entry only once every file " +
-      "of the move set has relocated, and refuses a non-empty directory, so a " +
-      "folder whose subtree still holds a failed file keeps it - no byte is ever " +
-      "reached, and the report names where every file stands.",
+      "helpers, so the module's direct calls are the emptied-directories prune and " +
+      "one fault cleanup: `rmdirSync` removes each directory the moves emptied, " +
+      "deepest first, and refuses a non-empty directory, so a folder whose subtree " +
+      "still holds a failed file keeps it; the one `unlinkSync` drops a destination " +
+      "name a mid-set fault linked after the source name's drop had already failed, " +
+      "with the source name still holding that inode. No byte is ever reached, and " +
+      "the report names where every file stands.",
   },
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],

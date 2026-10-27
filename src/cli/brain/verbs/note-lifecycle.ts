@@ -276,6 +276,15 @@ export async function cmdBrainNoteLifecycle(argv: string[]): Promise<number> {
     // `wrong_action` - the action exists and the caller named it
     // correctly, so it runs where it lives.
     if (isFolderLifecycleAction(action)) {
+      // Refused rather than dropped, the file surface's own rule for a
+      // flag its action cannot honour: a folder action is never a
+      // delete, so neither flag has anything to extend.
+      if (flags["confirm"] !== undefined || flags["delete-linked"] !== undefined) {
+        return usageError(
+          `brain note-lifecycle ${action} takes neither --confirm nor --delete-linked: ` +
+            "a folder action is never a delete",
+        );
+      }
       const res = await folderLifecycle(vault, {
         action,
         path,

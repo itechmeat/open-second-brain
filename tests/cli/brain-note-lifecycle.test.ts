@@ -333,6 +333,29 @@ test("move-folder relocates the folder and renders the move report as JSON", asy
   expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
 });
 
+test("a folder action refuses --confirm and --delete-linked instead of dropping them", async () => {
+  note("Projects/Old/a.md", "alpha\n");
+  for (const flag of ["--confirm", "--delete-linked"]) {
+    const res = await runCli([
+      "brain",
+      "note-lifecycle",
+      "move-folder",
+      "Projects/Old",
+      "Archive",
+      flag,
+      "--vault",
+      vault,
+      "--json",
+    ]);
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain("takes neither");
+    expect(res.stderr).toContain("never a delete");
+  }
+  // The refusal answered instead of the move: nothing was applied.
+  expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+  expect(existsSync(join(vault, "Archive"))).toBe(false);
+});
+
 test("move-folder names non-Markdown residue and omits the field when clean", async () => {
   note("Projects/Old/a.md", "alpha\n");
   writeFileSync(join(vault, "Projects/Old/img.png"), "png\n");

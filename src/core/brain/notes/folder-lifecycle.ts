@@ -60,7 +60,7 @@
  * the file surface - no destructive snapshot is taken for a move.
  */
 
-import { mkdirSync, readdirSync, rmdirSync, statSync, type Stats } from "node:fs";
+import { mkdirSync, readdirSync, rmdirSync, statSync, unlinkSync, type Stats } from "node:fs";
 import { join, posix, sep, win32 } from "node:path";
 
 import { checkWriteBinding } from "../../write-binding/index.ts";
@@ -469,7 +469,11 @@ interface PlannedMove {
  * directory that sits in the source's own parent is refused as the
  * spelling of a RENAME intent - a caller reading `to` as the folder's
  * new full path, which is exactly the mistake no path check would
- * otherwise catch, because both spellings name legal destinations.
+ * otherwise catch, because both spellings name legal destinations. The
+ * heuristic exempts the top level: a rename there spells a single
+ * segment, so `Old` under `Archive` can only ever mean the move it
+ * asked for, and refusing it would leave every top-level folder
+ * unmovable into a sibling top-level directory.
  */
 function resolveFolderDestination(
   vault: string,
@@ -522,7 +526,10 @@ function resolveFolderDestination(
         `${action} destination is the source folder: ${source.relPath}`,
       );
     }
-    if (folderParent(destinationDirectory.relPath) === folderParent(source.relPath)) {
+    if (
+      folderParent(source.relPath) !== "" &&
+      folderParent(destinationDirectory.relPath) === folderParent(source.relPath)
+    ) {
       throw new NoteLifecycleError(
         "wrong_action",
         `move-folder changes the folder's parent; ${destinationDirectory.relPath} sits in ` +
@@ -572,12 +579,13 @@ function assertDestinationsFree(
   const destinationStat = statOrNull(destination.abs);
   if (destinationStat !== null && !destinationStat.isDirectory()) {
     collisions.push(destination.relPath);
-  } else if (
-    destinationStat !== null &&
-    !namesSameEntry(sourceAbs, destination.abs) &&
-    readdirSync(destination.abs).length > 0
-  ) {
-    collisions.push(`${destination.relPath} (not empty)`);
+  } else if (destinationStat !== null && !namesSameEntry(sourceAbs, destination.abs)) {
+    // An unreadable destination directory states nothing about emptiness,
+    // so it is an occupancy too - a move into it cannot be verified free,
+    // and a refusal names the directory rather than guessing.
+    const entries = readdirOrNull(destination.abs);
+    if (entries === null) collisions.push(`${destination.relPath} (could not be read)`);
+    else if (entries.length > 0) collisions.push(`${destination.relPath} (not empty)`);
   }
   for (const move of planned) {
     const destinationStat = statOrNull(move.toAbs);
@@ -629,6 +637,20 @@ export async function folderLifecycle(
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
   const destination = resolveFolderDestination(vault, input, source);
+  // A destination that IS the source's directory entry - the case-only
+  // folder rename on a host that folds case - cannot be performed by
+  // re-homing the folder's files: the entry keeps its spelling, the
+  // prune cannot remove it, and the receipt would name a move that
+  // never happened. Refused before anything is planned, on the plan
+  // too: a dry run that previews a move it cannot perform is a lie.
+  if (namesSameEntry(source.abs, destination.abs)) {
+    throw new NoteLifecycleError(
+      "destination_unchanged",
+      `${action} destination ${destination.relPath} is the source folder's own directory ` +
+        "entry on this host (a case-only spelling); moving the folder's files cannot " +
+        "re-case the entry - rename the directory itself",
+    );
+  }
   const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
 
   // Pass one: walk the whole vault once. This is the move set's source,
@@ -652,25 +674,33 @@ export async function folderLifecycle(
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
   // An empty move set over a folder the disk says is non-empty is not a
-  // quiet success waiting to happen - it is a spelling that matched
-  // nothing. The move set is a STRING prefix match of the caller's
-  // spelling of the source against the walk's own spellings, so a path
-  // whose case (or Unicode normalization form) differs from the vault's
-  // real names stats fine on a case-insensitive host and yet matches no
-  // walked file: the operation would report applied:true with an empty
-  // `moved` and leave the whole tree standing. Refused instead, naming
-  // the suspicion. A directory this process cannot read states nothing
-  // about emptiness, so it does not refuse here - the per-file machinery
-  // names the fault if the move really is attempted.
+  // quiet success waiting to happen when the spelling is the fault: a
+  // path whose case (or Unicode normalization form) differs from the
+  // vault's real names stats fine on a case-insensitive host and yet
+  // matches no walked file, and the operation would report applied:true
+  // with an empty `moved` over notes that are really there. That shape
+  // is recognisable - the walk holds a file under a case-folded spelling
+  // of the caller's path - and refused, naming the suspicion. A folder
+  // the walk has NOTHING under, whatever it holds on disk, is simply not
+  // a Markdown subject: an attachments-only or empty-subtree folder
+  // moves an empty set, keeps its contents, and the residue report says
+  // so. A directory this process cannot read states nothing about
+  // emptiness either, so it does not refuse here - the per-file
+  // machinery names the fault if the move really is attempted.
   const sourceEntries = readdirOrNull(source.abs);
   if (movingSet.length === 0 && sourceEntries !== null && sourceEntries.length > 0) {
-    throw new NoteLifecycleError(
-      "move_set_empty",
-      `no Markdown moves from ${source.relPath} but the folder is not empty on disk: ` +
-        `the walk saw ${vaultFiles.length} Markdown file(s) and none sits under the path as ` +
-        "spelled - check the spelling, casing and character normalization of the path " +
-        "against the vault's own names",
-    );
+    const fold = (rel: string): string => `${rel.normalize("NFC").toLowerCase()}/`;
+    const foldedSource = fold(source.relPath);
+    const spellingMatchesElsewhere = vaultFiles.some((rel) => fold(rel).startsWith(foldedSource));
+    if (spellingMatchesElsewhere) {
+      throw new NoteLifecycleError(
+        "move_set_empty",
+        `no Markdown moves from ${source.relPath} but the folder is not empty on disk: ` +
+          `the walk saw ${vaultFiles.length} Markdown file(s) and none sits under the path as ` +
+          "spelled - check the spelling, casing and character normalization of the path " +
+          "against the vault's own names",
+      );
+    }
   }
   const planned: PlannedMove[] = movingSet.map((fromRel) => {
     const toRel = `${destination.relPath}${fromRel.slice(source.relPath.length)}`;
@@ -748,10 +778,22 @@ export async function folderLifecycle(
         relocateFileBytes(move.fromAbs, move.toAbs, move.toRel, move.sameEntry);
         moved.push({ from: move.fromRel, to: move.toRel });
       } catch (err) {
-        moveFailures.push({
-          path: move.fromRel,
-          reason: err instanceof Error ? err.message : String(err),
-        });
+        let reason = err instanceof Error ? err.message : String(err);
+        // A fault AFTER the destination name was linked leaves two names
+        // for one inode, while the report is about to say this path
+        // "never moved". The source name still holds the bytes, so the
+        // extra destination name is dropped before the failure is
+        // reported; if even that fails, the failure says so.
+        if (!move.sameEntry && namesSameEntry(move.fromAbs, move.toAbs)) {
+          try {
+            unlinkSync(move.toAbs);
+          } catch (cleanup) {
+            reason +=
+              `; the destination name ${move.toRel} was linked before the fault and ` +
+              `could not be dropped either (${cleanup instanceof Error ? cleanup.message : String(cleanup)})`;
+          }
+        }
+        moveFailures.push({ path: move.fromRel, reason });
       }
     }
     // The folders the moves emptied go with their files: bottom-up, and
@@ -838,7 +880,7 @@ export async function folderLifecycle(
       filesScanned,
       inboundFiles: Object.freeze([...inboundFiles]),
       filesRewritten: rewritten.length,
-      rewrittenSpellings: Object.freeze(appliedPairs.filter((pair) => pair.from.length > 0)),
+      rewrittenSpellings: Object.freeze([...(apply ? appliedPairs : plannedPairs)]),
       rewriteFailures: Object.freeze([...rewriteFailures]),
       basename: BASENAME_REWRITE.notNeeded,
       index,
@@ -849,20 +891,42 @@ export async function folderLifecycle(
 }
 
 /**
- * Remove the subject folder when the moves genuinely emptied it.
+ * Remove the directories the moves genuinely emptied, deepest first.
  * `rmdirSync` removes only an empty directory, so a folder whose subtree
  * still holds a failed file - or any file this surface does not address -
  * keeps it, which is exactly where the report says the bytes are. The
- * prune is bounded at the subject: the folders ABOVE it are not this
- * operation's to delete, and an emptied `Projects/` left behind reads as
- * the ordinary residue a file move leaves too.
+ * walk is bounded at the subject: every directory under it is offered to
+ * `rmdirSync` bottom-up, so a nested source leaves no empty skeleton
+ * behind a root that failed to empty for a child's sake, while the
+ * folders ABOVE the subject are not this operation's to delete, and an
+ * emptied `Projects/` left behind reads as the ordinary residue a file
+ * move leaves too.
  */
 function pruneEmptiedFolders(vault: string, fromRel: string): void {
-  try {
-    const abs = ensureInsideVault(join(vault, fromRel), vault);
-    rmdirSync(abs);
-  } catch {
-    // The folder is not empty (or not removable): the residue stands, and
-    // the report already names where every file is.
+  const rootAbs = ensureInsideVault(join(vault, fromRel), vault);
+  const deepestFirst: string[] = [];
+  const pending: string[] = [rootAbs];
+  for (;;) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    deepestFirst.push(current);
+    for (const entry of readdirOrNull(current) ?? []) {
+      const child = join(current, entry);
+      let stats: Stats | null;
+      try {
+        stats = statSync(child);
+      } catch {
+        stats = null;
+      }
+      if (stats !== null && stats.isDirectory()) pending.push(child);
+    }
+  }
+  for (const dir of deepestFirst.reverse()) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      // The directory is not empty (or not removable): the residue
+      // stands, and the report already names where every file is.
+    }
   }
 }
