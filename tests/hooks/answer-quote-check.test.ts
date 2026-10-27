@@ -1172,6 +1172,78 @@ describe("answer-quote-check hook - reply presence records", () => {
     ]);
   }, 20000);
 
+  test("a note the reply cites reads its check verdict, never absent", async () => {
+    // The span sits under a wikilink mark naming the injected note: the
+    // check measured the span against that note's evidence, so the note
+    // rides the outcome - citing an injected note is the most explicit
+    // way to surface it, and folding it `absent` would invert the signal
+    // the record exists to carry.
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeNote("Brain/notes/elsewhere.md", "Elsewhere collects unrelated facts.\n");
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/elsewhere.md#L1-L1",
+        "local:Brain/notes/restaking.md#L1-L1",
+      ]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('Per [[Brain/notes/restaking]], "reuses staked capital" holds.'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["checked"]).toBe(1);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/elsewhere.md", start_line: 1, end_line: 1, verdict: "absent" },
+      { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "verified" },
+    ]);
+  }, 20000);
+
+  test("a turn whose reply text never arrived reads note-unavailable, never absent", async () => {
+    // The tail window holds no assistant message after the last user
+    // boundary - the host never flushed a reply. No span was measured,
+    // and not because the notes were unused: the fold answers
+    // `note-unavailable` for every injected note instead of claiming
+    // they were never surfaced.
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeNote("Brain/notes/elsewhere.md", "Elsewhere collects unrelated facts.\n");
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/elsewhere.md#L1-L1",
+        "local:Brain/notes/restaking.md#L1-L1",
+      ]),
+    ).toBe(true);
+    writeTranscript([ccUser("summarize")]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["checked"]).toBe(0);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      {
+        path: "Brain/notes/elsewhere.md",
+        start_line: 1,
+        end_line: 1,
+        verdict: "note-unavailable",
+      },
+      {
+        path: "Brain/notes/restaking.md",
+        start_line: 1,
+        end_line: 1,
+        verdict: "note-unavailable",
+      },
+    ]);
+    // No reply text was read, so the payload binds no answer hash.
+    expect(records[0]!.payload["source_hash"]).toBeUndefined();
+  }, 20000);
+
   test("stop_hook_active silence writes no record", async () => {
     writeConfig("shadow");
     writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");

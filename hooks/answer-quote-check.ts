@@ -729,11 +729,27 @@ function checkSpan(
       spans: [span.inner],
       evidence: evidenceFor(vault, mark),
     });
+    // The span was MEASURED against the cited note's evidence, so every
+    // ledger candidate naming the cited note records the outcome -
+    // citing an injected note is the most explicit way to surface it,
+    // and an empty outcome list here would fold that note `absent`
+    // ("injected, never surfaced") against what the reply just did.
+    // A mark with a line range rides only on the candidate whose
+    // delivered view is that same range; a whole-note candidate matches
+    // any citation of its note.
+    const cited = candidates.filter(
+      (candidate) =>
+        candidate.path === mark.path &&
+        (mark.startLine === undefined || candidateKey(candidate) === candidateKey(mark)),
+    );
     return {
       verdict: outcomes[0]!.verdict,
       preview: outcomes[0]!.span,
       decidingPhases: [],
-      candidateOutcomes: [],
+      candidateOutcomes: cited.map((candidate) => ({
+        candidate,
+        verdict: outcomes[0]!.verdict,
+      })),
     };
   }
   if (candidates.length === 0) {
@@ -821,6 +837,7 @@ function foldReplyPresence(
   candidates: ReadonlyArray<MergedCandidate>,
   outcomes: ReadonlyArray<SpanCandidateOutcome>,
   budgetExhausted: boolean,
+  replyRead: boolean,
 ): ReadonlyArray<Record<string, unknown>> {
   const measured = new Map<string, AnswerQuoteVerdict[]>();
   for (const outcome of outcomes) {
@@ -837,12 +854,25 @@ function foldReplyPresence(
       ...(candidate.endLine !== undefined ? { end_line: candidate.endLine } : {}),
       verdict:
         verdicts === undefined
-          ? budgetExhausted
-            ? ANSWER_QUOTE_VERDICT.noteUnavailable
-            : ANSWER_QUOTE_VERDICT.absent
+          ? unmeasuredPresenceVerdict(budgetExhausted, replyRead)
           : mergeAnswerQuoteVerdicts(verdicts),
     };
   });
+}
+
+/**
+ * The verdict for a note no span ever measured. When the walk's budget
+ * ran out, or the reply text was never readable in the first place,
+ * nothing was measured FOR A REASON - `note-unavailable`, the
+ * checked-and-unresolved answer - never `absent`, which claims the reply
+ * had every chance to touch the note and did not.
+ */
+function unmeasuredPresenceVerdict(
+  budgetExhausted: boolean,
+  replyRead: boolean,
+): AnswerQuoteVerdict {
+  if (budgetExhausted || !replyRead) return ANSWER_QUOTE_VERDICT.noteUnavailable;
+  return ANSWER_QUOTE_VERDICT.absent;
 }
 
 /** `origin` label of the annotation's framing line for the quoted spans. */
@@ -1032,22 +1062,29 @@ async function main(): Promise<void> {
   // turn, whatever the findings - a turn whose every span verified still
   // owes its per-note verdicts, and a note no span touched reads
   // `absent`, the row this record exists to surface - except when the
-  // budget cut the walk, where an untouched note reads
-  // `note-unavailable` (the fold's own doc names the distinction). A
-  // turn with no injected candidate writes nothing: with no note to
+  // budget cut the walk or the reply text never arrived, where an
+  // unmeasured note reads `note-unavailable` (the fold's own doc names
+  // the distinction: an unmeasured note never reads as an unused one).
+  // A turn with no injected candidate writes nothing: with no note to
   // report on, an empty verdict list would say nothing the absence of a
-  // record does not say already. Fail-open like every arm: a failed
-  // append names itself on the audit line and the annotation still goes
-  // out.
-  if (candidates.length > 0) {
+  // record does not say already - and the session id rides every record,
+  // since the ledger candidates are unreachable without one. Fail-open
+  // like every arm: a failed append names itself on the audit line and
+  // the annotation still goes out.
+  if (candidates.length > 0 && sessionId !== null) {
     try {
       appendContinuityRecord(vault, {
         kind: "reply_presence",
         createdAt: isoSecond(new Date()),
         payload: {
-          ...(sessionId !== null ? { [CONTINUITY_SESSION_ID_KEY]: sessionId } : {}),
+          [CONTINUITY_SESSION_ID_KEY]: sessionId,
           checked,
-          per_note: foldReplyPresence(candidates, presenceOutcomes, budgetExhausted),
+          per_note: foldReplyPresence(
+            candidates,
+            presenceOutcomes,
+            budgetExhausted,
+            messages.length > 0,
+          ),
           // The hash binds the verdicts to the exact answer text checked;
           // it carries no answer text itself.
           ...(messages.length > 0
