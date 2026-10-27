@@ -408,6 +408,8 @@ export type NoteLifecycleErrorCode =
   | "destination_occupied"
   /** Source and destination are the same path. */
   | "destination_unchanged"
+  /** A move whose destination directory sits inside the source subtree. */
+  | "destination_inside_source"
   /** A `rename` that changes the directory, or a `move` that does not. */
   | "wrong_action"
   /** A delete reached the mutating path without an explicit confirmation. */

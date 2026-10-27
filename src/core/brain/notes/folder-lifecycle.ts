@@ -471,6 +471,22 @@ function resolveFolderDestination(
   }
   if (action === FOLDER_LIFECYCLE_ACTION.moveFolder) {
     const destinationDirectory = resolveFolderTarget(vault, input.to, { allowVaultRoot: true });
+    // A destination directory inside the source's own subtree nests the
+    // tree inside itself: every planned path stays a strict descendant of
+    // the source, so the file-surface refusals (same path, same parent)
+    // all pass while the operation folds the folder into its own
+    // descendant. Refused on the destination DIRECTORY the caller named -
+    // the computed landing path is necessarily deeper still.
+    if (
+      destinationDirectory.relPath === source.relPath ||
+      destinationDirectory.relPath.startsWith(`${source.relPath}/`)
+    ) {
+      throw new NoteLifecycleError(
+        "destination_inside_source",
+        `${action} destination ${destinationDirectory.relPath} sits inside the source folder ` +
+          `${source.relPath}; the folder would nest inside itself`,
+      );
+    }
     const destination = resolveFolderTarget(
       vault,
       posix.join(destinationDirectory.relPath, folderBasename(source.relPath)),

@@ -346,6 +346,42 @@ describe("move-folder", () => {
     expect(existsSync(join(vault, "Projects/Old"))).toBe(false);
   });
 
+  test("a destination inside the source subtree is refused - the folder would nest inside itself", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    mkdirSync(join(vault, "Projects/Sub"), { recursive: true });
+
+    let caught: unknown;
+    try {
+      await folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.moveFolder,
+        path: "Projects",
+        to: "Projects/Sub",
+        apply: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(NoteLifecycleError);
+    const refusal = caught as NoteLifecycleError;
+    expect(refusal.code).toBe("destination_inside_source");
+    // The refusal names both paths, so the caller can see the collision.
+    expect(refusal.message).toContain("Projects/Sub");
+    expect(refusal.message).toContain("Projects");
+    // Deeper nesting is the same refusal.
+    await expect(
+      folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.moveFolder,
+        path: "Projects",
+        to: "Projects/Sub/Deeper",
+        apply: true,
+      }),
+    ).rejects.toThrow(NoteLifecycleError);
+    // Nothing moved: the tree is exactly where it was.
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Sub/Projects"))).toBe(false);
+  });
+
   test("a destination that collapses onto the source folder is refused as unchanged", async () => {
     note("Projects/Old/a.md", "x\n");
     await expect(
