@@ -283,15 +283,15 @@ const UNCONDITIONAL_STAMP_RE = /session_id: [A-Za-z$_]/;
  */
 const CONDITIONAL_STAMP_RE = /\? \{ (?:\[CONTINUITY_SESSION_ID_KEY\]|session_id\b)/;
 
+/** The Stop hook that writes `reply_presence`, outside src. */
+const HOOK_WRITER = "../hooks/answer-quote-check.ts";
+
 /**
  * Every kind the census classifies, with the module(s) whose code shapes
  * that kind's payload. The writers of `source_invalidation` all funnel
  * through `appendContinuitySourceInvalidation`, whose `{reason}` payload
  * is fixed at the store and whose input type carries no session field.
  */
-/** The Stop hook that writes {@link kind reply_presence}, outside src. */
-const HOOK_WRITER = "../hooks/answer-quote-check.ts";
-
 const KIND_WRITERS: ReadonlyArray<{
   readonly kind: ContinuityRecordKind;
   /** Session-scoped: the writer stamps `session_id` unconditionally. */
