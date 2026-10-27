@@ -19,7 +19,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { writePreference } from "../../src/core/brain/preference.ts";
+import { collectExplorerData, renderExportedHtml } from "../../src/core/brain/explorer.ts";
+import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
+import { BRAIN_RETIRED_REASON } from "../../src/core/brain/types.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -225,6 +227,118 @@ describe("o2b brain explorer --export", () => {
       expect(r.returncode).toBe(1);
       expect(r.stderr).toContain("invalid --port");
     }
+  });
+});
+
+describe("o2b brain explorer --export privacy denials", () => {
+  /**
+   * Hand-add an informal privacy marker the same way an operator does:
+   * a user-tier frontmatter line on the node's file.
+   */
+  function stampMarker(relPath: string, line: string): void {
+    const abs = join(vault, relPath);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
+  }
+
+  function seedReservedPref(): void {
+    writePreference(vault, {
+      slug: "reserved",
+      topic: "reserved",
+      principle: "Reserved principle",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: "confirmed",
+      evidenced_by: ["[[sig-2026-05-01-reserved]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: "high",
+      confidence_value: 0.8,
+      pinned: false,
+    });
+    stampMarker("Brain/preferences/pref-reserved.md", "access: private");
+  }
+
+  test("a reserved preference is absent from the HTML and named on stderr", async () => {
+    await bootstrap();
+    seedOnePref();
+    seedReservedPref();
+    const out = join(tmp, "brain.html");
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const body = readFileSync(out, "utf8");
+    expect(body).not.toContain("pref-reserved");
+    expect(body).not.toContain("Reserved principle");
+    // The unmarked rule still ships.
+    expect(body).toContain("pref-explorer-seed");
+    // The omission is disclosed on stderr, with the key that denied it.
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("(access)");
+    expect(r.stderr).toContain("left out");
+    // stderr only: the HTML names the omission as absence, not prose.
+    expect(r.stdout).not.toContain("left out");
+    // The count answers for what was written: one node exported, one
+    // named as withheld on stderr.
+    expect(r.stdout).toContain("exported 1 ");
+  });
+
+  test("a reserved retired entry is absent too", async () => {
+    await bootstrap();
+    seedOnePref();
+    writePreference(vault, {
+      slug: "old-reserved",
+      topic: "old-reserved",
+      principle: "Old reserved principle",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: "confirmed",
+      evidenced_by: ["[[sig-2026-05-01-old-reserved]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: "high",
+      confidence_value: 0.8,
+      pinned: false,
+    });
+    const deadPath = join(vault, "Brain", "preferences", "pref-old-reserved.md");
+    moveToRetired(vault, deadPath, BRAIN_RETIRED_REASON.staleNoEvidence, {
+      now: new Date("2026-05-10T00:00:00Z"),
+      retired_by: "[[Brain/log/2026-05-10]]",
+    });
+    stampMarker("Brain/retired/ret-old-reserved.md", "sensitivity: confidential");
+
+    const out = join(tmp, "brain.html");
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const body = readFileSync(out, "utf8");
+    expect(body).not.toContain("ret-old-reserved");
+    expect(body).not.toContain("Old reserved principle");
+    expect(r.stderr).toContain("ret-old-reserved");
+    expect(r.stderr).toContain("(sensitivity)");
+  });
+
+  test("an unmarked vault exports byte-identically to the shared collector's rendering", async () => {
+    await bootstrap();
+    seedOnePref();
+    const out = join(tmp, "brain.html");
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    // No reservation held anything back, so the file is exactly what the
+    // pre-denial pipeline rendered - the denial pass changed no bytes.
+    const stripTimestamp = (s: string): string =>
+      s.replace(/"generated_at":"[^"]*"/, '"generated_at":"X"');
+    expect(stripTimestamp(readFileSync(out, "utf8"))).toBe(
+      stripTimestamp(renderExportedHtml(collectExplorerData(vault))),
+    );
+    expect(r.stderr).not.toContain("left out");
   });
 });
 

@@ -3,11 +3,13 @@ import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import {
   buildLiveServer,
   collectExplorerData,
+  collectExplorerDenials,
   renderExportedHtml,
   type ExplorerGraph,
   type ExplorerParseFailure,
   type LiveServerHandle,
 } from "../../../core/brain/explorer.ts";
+import { preferenceDenialNotice, type PreferenceDenial } from "../../../core/brain/export.ts";
 import {
   EGRESS_OUTCOME,
   EGRESS_REDACTION_NOTICE,
@@ -67,18 +69,41 @@ export async function cmdBrainExplorer(argv: string[]): Promise<number> {
       return fail(`${exportPath} exists; pass --force to overwrite`);
     const collected = collectOrRefuse(vault);
     if (typeof collected === "number") return collected;
+    // The shared lanes' denial judgment, applied to the explorer's own
+    // node kinds: a preference or retired file the privacy deny markers
+    // reserve is withheld from the file - the export is handed to another
+    // reader, and the live view (the operator's own) keeps every node.
+    const denials = collectExplorerDenials(vault);
+    const reserved = new Set(denials.map((d) => d.id));
+    const shared: ExplorerGraph =
+      reserved.size > 0
+        ? { ...collected, nodes: collected.nodes.filter((node) => !reserved.has(node.id)) }
+        : collected;
     // Registry entry `brain-explorer-export`. The scan runs over the graph
     // TREE and the template substitution happens afterwards, so redaction
     // can never disturb the document's own quoting.
-    const verdict = redactForEgress("brain-explorer-export", collected);
+    const verdict = redactForEgress("brain-explorer-export", shared);
     if (verdict.outcome !== EGRESS_OUTCOME.released) return fail(verdict.detail);
+    // The denial names ride the same guard as the llms-txt lane's
+    // omission list: the notice names each denied id in the scrubbed form
+    // the boundary released, never a raw hand-edited frontmatter value.
+    let noticeDenials: ReadonlyArray<PreferenceDenial> = denials;
+    if (denials.length > 0) {
+      const denialVerdict = redactForEgress("brain-explorer-export", denials);
+      if (denialVerdict.outcome !== EGRESS_OUTCOME.released) return fail(denialVerdict.detail);
+      noticeDenials = denialVerdict.payload;
+    }
     const html = renderExportedHtml(verdict.payload);
     try {
       atomicWriteFileSync(exportPath, html);
     } catch (err) {
       return fail(`failed to write ${exportPath}: ${(err as Error).message ?? err}`);
     }
+    // The count answers for what was written: the withheld nodes are not
+    // in the file, so they are not in the number either - what stayed out
+    // is named on stderr beside the notice.
     ok(`exported ${verdict.payload.nodes.length} nodes to ${exportPath}`);
+    if (noticeDenials.length > 0) process.stderr.write(preferenceDenialNotice(noticeDenials));
     if (verdict.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
     return 0;
   }
