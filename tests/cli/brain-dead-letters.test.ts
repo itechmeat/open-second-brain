@@ -299,8 +299,10 @@ describe("a letter the store refuses to parse is exit 1, never unknown-id", () =
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("corrupt");
     // A typed refusal, never an uncaught stack: the listing under-reports
-    // nothing and the operator gets the same sentence show gives.
-    expect(r.stderr).not.toContain("at ");
+    // nothing and the operator gets the same sentence show gives. The
+    // frame shape is matched, not the substring "at " - a refusal
+    // sentence that happens to contain " at " is not a stack trace.
+    expect(r.stderr).not.toMatch(/^\s+at\s/m);
   });
 
   test("list --json refuses typed at exit 1", async () => {
