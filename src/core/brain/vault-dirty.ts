@@ -97,7 +97,9 @@ export function listDirtyMarkdownPaths(vault: string): ReadonlyArray<string> {
     prefix = execFileSync("git", ["-C", resolve(vault), "rev-parse", "--show-prefix"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+      // Only the trailing newline goes: a leading space is a real
+      // character of a top-level directory's name.
+    }).replace(/\r?\n$/, "");
   } catch (err) {
     throw new VaultDirtyError(
       `${NOT_A_WORKTREE_MESSAGE} (git show-prefix failed: ${firstLine(err)})`,
@@ -121,7 +123,11 @@ export function listDirtyMarkdownPaths(vault: string): ReadonlyArray<string> {
     // the destination, the spelling a commit would contain, and the
     // origin field is consumed here and names nothing to lint.
     if (xy.includes("R") || xy.includes("C")) {
-      i++;
+      i++; // consume the origin field
+      // The destination can be deleted from the worktree just like a
+      // plain entry (a staged rename whose destination was then removed
+      // reports `RD`): no file on disk, nothing to lint.
+      if (xy[1] === "D") continue;
       const destination = inVault(entry.slice(3));
       if (destination !== null && destination.endsWith(".md")) dirty.push(destination);
       continue;

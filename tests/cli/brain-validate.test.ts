@@ -254,6 +254,42 @@ describe("dirty mode", () => {
     expect(r.stdout).not.toContain("gone.md");
   });
 
+  test("a staged rename whose destination is then deleted leaves nothing to lint", async () => {
+    writePage("Brain/inbox/old-name.md", CLEAN_PAGE);
+    gitInit();
+    // Staged rename, then the destination removed from the worktree: the
+    // entry reads "RD", and neither spelling names a page a commit could
+    // contain - the origin is gone by the rename, the destination by the
+    // removal. Linting the destination spelled a page that is not on
+    // disk, and the gate blocked on `page-unreadable`.
+    execFileSync("git", ["-C", vault, "mv", "Brain/inbox/old-name.md", "Brain/inbox/new-name.md"]);
+    rmSync(join(vault, "Brain", "inbox", "new-name.md"));
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("ok");
+    expect(r.stdout).not.toContain("page-unreadable");
+  });
+
+  test("a vault whose top-level directory name starts with a space still lints its dirt", async () => {
+    // The show-prefix is stripped of its trailing newline only: `.trim()`
+    // would also strip the leading space of a top-level directory's
+    // name, so no repo-relative path would match the prefix and the gate
+    // would pass silently over the vault's real dirt.
+    const repo = join(tmp, "repo");
+    mkdirSync(join(repo, " notes", "Brain", "inbox"), { recursive: true });
+    vault = join(repo, " notes");
+    writeFileSync(configPath, `vault: ${vault}\n`);
+    writePage("Brain/inbox/dirty.md", ERROR_PAGE);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "test"]);
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("Brain/inbox/dirty.md");
+  });
+
   test("a vault nested in a larger repository lints only the vault's own dirty pages", async () => {
     // The repo root is tmp, one level above the vault: git reports
     // repo-relative paths, so the gate must rebase them onto the vault
