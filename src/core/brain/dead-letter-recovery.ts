@@ -186,25 +186,29 @@ const MISSING_KEY_RE = /^items\[(\d+)\]:(.+)$/;
 /**
  * Resolve the letter's `missing` keys against the frozen payload - the
  * ONLY items a recovery plans or re-runs. Each key must parse, name an
- * index the payload carries, and name that item's own topic: a key that
- * fails any rung is a letter this build cannot recover faithfully
- * (hand-edited, truncated, or written by a future format), and guessing
- * would replay the wrong item - or nothing at all, silently. `null`
- * means at least one key did not resolve; the message names the first
- * key that failed.
+ * index the payload carries, name that item's own topic, and name it
+ * ONCE: a key that fails any rung is a letter this build cannot recover
+ * faithfully (hand-edited, truncated, or written by a future format) -
+ * a repeated key is the same hand-edit shape, and counting its item
+ * twice could read a half-delivered letter resolved or hand the commit
+ * the same item twice - and guessing would replay the wrong item, or
+ * nothing at all, silently. `null` means every key resolved; otherwise
+ * the message names the first key that failed.
  */
 function resolveMissingItems(
   missing: ReadonlyArray<string>,
   items: ReadonlyArray<ExtractedSignalItem>,
 ): { items: ReadonlyArray<ExtractedSignalItem>; unresolved: string | null } {
   const resolved: ExtractedSignalItem[] = [];
+  const seen = new Set<number>();
   for (const key of missing) {
     const match = MISSING_KEY_RE.exec(key);
     const index = match === null ? Number.NaN : Number(match[1]);
     const item = Number.isInteger(index) ? items[index] : undefined;
-    if (item === undefined || (match !== null && item.topic !== match[2])) {
+    if (item === undefined || (match !== null && item.topic !== match[2]) || seen.has(index)) {
       return { items: resolved, unresolved: key };
     }
+    seen.add(index);
     resolved.push(item);
   }
   return { items: resolved, unresolved: null };
@@ -375,6 +379,28 @@ export function classifyDeadLetter(
 
 // ----- Plan and apply -------------------------------------------------------
 
+/**
+ * The resolved missing items behind a plan or an apply, in key order. The
+ * classifier has already refused any letter whose keys do not resolve, so
+ * on this path the resolution cannot fail; the throw is an invariant
+ * check for a caller that skipped the classification, not a second code
+ * path - one refusal, shared, so the two surfaces cannot drift.
+ */
+function resolvedMissingItemsOrThrow(
+  record: DeadLetterRecord,
+  items: ReadonlyArray<ExtractedSignalItem>,
+): ReadonlyArray<ExtractedSignalItem> {
+  const resolved = resolveMissingItems(record.missing, items);
+  if (resolved.unresolved !== null) {
+    throw new DeadLetterRecoveryError(
+      `dead letter ${record.id} cannot name its missing items: missing key ` +
+        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
+      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+    );
+  }
+  return resolved.items;
+}
+
 /** Test and caller seams for {@link planRecovery}, mirroring the commit's own options. */
 export interface PlanRecoveryOptions {
   /** Pre-compiled durability denylist; resolved from config when omitted. */
@@ -423,19 +449,12 @@ export function planRecovery(
   // any one an operator removed afterwards (a deleted signal, a
   // rejected queue row the dedup index never walked). A missing key
   // that names no payload item is a letter this build cannot recover
-  // faithfully, and is refused rather than silently planning nothing.
-  const resolved = resolveMissingItems(record.missing, payload.items);
-  if (resolved.unresolved !== null) {
-    throw new DeadLetterRecoveryError(
-      `dead letter ${record.id} cannot be planned as a payload re-run: missing key ` +
-        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
-      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
-    );
-  }
+  // faithfully, and the classifier has already refused it above.
+  const replayItems = resolvedMissingItemsOrThrow(record, payload.items);
   return Object.freeze({
     classification,
     items: Object.freeze(
-      resolved.items.map((item) => {
+      replayItems.map((item) => {
         if (dedup.has(itemDedupHash(item))) {
           return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
         }
@@ -498,20 +517,14 @@ export function applyRecovery(
   // removed afterwards - a deleted signal, or a rejected queue row,
   // neither of which the dedup index walks. "Nothing stale is replayed"
   // is the module's own promise - and so is never reporting success over
-  // a re-run that would write nothing: a missing key naming no payload
-  // item is refused, not silently skipped.
-  const resolved = resolveMissingItems(record.missing, payload.items);
-  if (resolved.unresolved !== null) {
-    throw new DeadLetterRecoveryError(
-      `dead letter ${record.id} cannot be recovered by re-running a payload: missing key ` +
-        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
-      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
-    );
-  }
+  // a re-run that would write nothing: the classifier has already
+  // refused any letter whose missing keys do not resolve, and the shared
+  // refusal keeps that true on this path too.
+  const replayItems = resolvedMissingItemsOrThrow(record, payload.items);
   return commitExtractedSignals(
     vault,
     record.reference,
-    { items: resolved.items },
+    { items: replayItems },
     {
       agent: opts.agent,
       now: opts.now,

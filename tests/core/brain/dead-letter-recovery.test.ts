@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -201,6 +201,29 @@ describe("the recovery classifier", () => {
     const c = classifyDeadLetter(vault, letter);
     expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
     expect(c.reason).toContain("items[0]:module-names");
+  });
+
+  test("a repeated missing key is a hand-edit and refuses, never double-counts", () => {
+    // The commit's own report builder refuses duplicate keys, so a
+    // letter with a repeated key on disk is a hand-edit - exactly the
+    // input this module must not guess over. The same key twice used to
+    // count its item twice: a letter with one real missing item read
+    // resolved (both "keys" on disk), and the apply handed the commit
+    // the same item twice. A repeated key is refused like a key that
+    // names nothing.
+    const letter = v2Letter(
+      [item(), item({ topic: "module-names" })],
+      ["items[0]:release-notes-style"],
+    );
+    const path = deadLetterPath(vault, letter.id);
+    const body = JSON.parse(readFileSync(path, "utf8")) as { missing: string[] };
+    body.missing = ["items[0]:release-notes-style", "items[0]:release-notes-style"];
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+    const handEdited = readDeadLetter(vault, letter.id);
+    if (handEdited === null) throw new Error("the hand-edited fixture letter did not parse");
+    const c = classifyDeadLetter(vault, handEdited);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
+    expect(c.reason).toContain("items[0]:release-notes-style");
   });
 
   test("a session whose items sit staged in the write-approval queue classifies pending", () => {
