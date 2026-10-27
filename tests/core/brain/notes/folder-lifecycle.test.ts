@@ -203,6 +203,58 @@ describe("the folder envelope", () => {
   });
 });
 
+describe("the caller's reach over the folder", () => {
+  test("a move set the caller may not read refuses exactly as a missing folder", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    for (const apply of [false, true]) {
+      let caught: unknown;
+      try {
+        await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Archive",
+          apply,
+          readable: () => false,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(NoteLifecycleError);
+      expect((caught as NoteLifecycleError).code).toBe("source_missing");
+    }
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive"))).toBe(false);
+  });
+
+  test("a folder holding one note the caller may not read refuses without naming it", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Projects/Old/quiet.md", "reserved\n");
+    for (const apply of [false, true]) {
+      let caught: unknown;
+      try {
+        await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Archive",
+          apply,
+          readable: (rel) => !rel.endsWith("quiet.md"),
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(NoteLifecycleError);
+      const refusal = caught as NoteLifecycleError;
+      expect(refusal.code).toBe("source_missing");
+      // The refusal reads exactly as a missing folder's: the denied
+      // note's path names nothing the caller could otherwise learn.
+      expect(refusal.message).not.toContain("quiet");
+    }
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/quiet.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive"))).toBe(false);
+  });
+});
+
 describe("move-folder", () => {
   test("moves every file and rewrites path-spelled inbound links to the minimal spelling", async () => {
     note("Projects/Old/a.md", "alpha\n");

@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { INDEX_EVIDENCE, INDEX_REFRESH } from "../../src/core/brain/notes/lifecycle.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { LIFECYCLE_FILE_TOOLS } from "../../src/mcp/brain/lifecycle-file-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -88,6 +89,23 @@ describe("brain_note_lifecycle registration", () => {
 });
 
 describe("folder actions through the tool", () => {
+  test("a folder holding a note the caller's reach denies refuses exactly as a missing one", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Projects/Old/quiet.md", "---\nvisibility: private\n---\nreserved\n");
+    const remote = { ...ctx, reach: TRANSPORT_REACH.remote };
+
+    for (const apply of [false, true]) {
+      await expect(
+        tool.handler(remote, { action: "move-folder", path: "Projects/Old", to: "Archive", apply }),
+      ).rejects.toThrow(/no note folder/);
+    }
+    // Nothing was planned, moved or renamed on either run, and the
+    // refusal never names the denied page.
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/quiet.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive"))).toBe(false);
+  });
+
   test("move-folder relocates the folder and renders the move report", async () => {
     note("Projects/Old/a.md", "alpha\n");
     note("Notes/Ref.md", "pathed [[Projects/Old/a]]\n");

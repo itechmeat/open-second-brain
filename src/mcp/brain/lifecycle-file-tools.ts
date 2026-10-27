@@ -193,8 +193,10 @@ async function toolBrainNoteLifecycle(
         ...(apply !== undefined ? { apply } : {}),
         expect,
         strict,
-        // A folder the caller may not read at its reach is refused
-        // exactly as a missing one.
+        // A folder holding a note the caller may not read at its reach
+        // is refused exactly as a missing one - the folder lifecycle
+        // judges its move set by the same predicate the file surface
+        // judges its subject by.
         readable: readableAtContextReach(ctx),
         ...(ctx.configPath !== null ? { refreshConfigPath: ctx.configPath } : {}),
       });

@@ -161,10 +161,14 @@ export interface FolderLifecycleInput {
   readonly now?: Date;
   /**
    * May the caller read the vault file at this vault-relative path? One
-   * it may not read is reported as a vault without it would be - absent
+   * they may not is reported as a vault without it would be - absent
    * from `inboundFiles`, `filesScanned` and `rewriteFailures` - the same
-   * rule the file surface's `readable` documents. Absent, every file
-   * counts (the CLI, which reads the vault directly).
+   * rule the file surface's `readable` documents. The reach judges the
+   * MOVE SET as well: a folder holding any note the caller may not read
+   * is refused exactly as a missing folder, so neither the plan nor the
+   * apply can name, count or relocate a page past the caller's reach. A
+   * folder with no Markdown at all has no page to judge and moves.
+   * Absent, every file counts (the CLI, which reads the vault directly).
    */
   readonly readable?: (rel: string) => boolean;
   /** Test seam: replaces the detached spawn of the post-write index refresh. */
@@ -636,6 +640,17 @@ export async function folderLifecycle(
   const underSource = (rel: string): boolean =>
     rel === source.relPath || rel.startsWith(`${source.relPath}/`);
   const movingSet = vaultFiles.filter(underSource).toSorted();
+  // The caller's reach judges the MOVE SET: one note under the folder
+  // that the caller may not read refuses the WHOLE operation, exactly as
+  // a missing folder refuses (a folder is not itself a page, so its
+  // notes are what the reach predicate can judge). Skipping the denied
+  // files would still leak them - through the occupancy pre-flight, the
+  // rewrite pairs and the residue report - and moving them would
+  // relocate pages the caller cannot read, so the refusal reads exactly
+  // as the file surface's missing-note one.
+  if (movingSet.some((rel) => input.readable?.(rel) === false)) {
+    throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
+  }
   // An empty move set over a folder the disk says is non-empty is not a
   // quiet success waiting to happen - it is a spelling that matched
   // nothing. The move set is a STRING prefix match of the caller's
