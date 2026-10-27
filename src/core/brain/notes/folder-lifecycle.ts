@@ -60,8 +60,16 @@
  * the file surface - no destructive snapshot is taken for a move.
  */
 
-import { mkdirSync, readdirSync, rmdirSync, statSync, unlinkSync, type Stats } from "node:fs";
-import { join, posix, sep, win32 } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmdirSync,
+  statSync,
+  unlinkSync,
+  type Stats,
+} from "node:fs";
+import { dirname, join, posix, sep, win32 } from "node:path";
 
 import { checkWriteBinding } from "../../write-binding/index.ts";
 import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
@@ -636,6 +644,31 @@ export async function folderLifecycle(
   if (sourceStat === null || !sourceStat.isDirectory()) {
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
+  // Pass one: walk the whole vault once. This is the move set's source,
+  // the post-move population the minimal spellings are computed against,
+  // and the filesScanned denominator - one walk, so no two of those can
+  // see different vaults.
+  const walk = retargetWikilinks(vault, [], { root: VAULT_ROOT_REL, apply: false });
+  const vaultFiles = walk.files;
+  const underSource = (rel: string): boolean =>
+    rel === source.relPath || rel.startsWith(`${source.relPath}/`);
+  const movingSet = vaultFiles.filter(underSource).toSorted();
+  // The caller's reach judges the MOVE SET, and it judges BEFORE the
+  // destination is resolved: one note under the folder that the caller
+  // may not read refuses the WHOLE operation as a missing folder, on
+  // every later error path too - a denied folder that answers a
+  // destination mistake with `wrong_action` while a truly missing one
+  // answers `source_missing` would be an existence oracle. Skipping the
+  // denied files would still leak them - through the occupancy
+  // pre-flight, the rewrite pairs and the residue report - and moving
+  // them would relocate pages the caller cannot read, so the refusal
+  // reads exactly as the file surface's missing-note one. (A folder is
+  // not itself a page, so its notes are what the reach predicate can
+  // judge.)
+  if (movingSet.some((rel) => input.readable?.(rel) === false)) {
+    throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
+  }
+  const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
   const destination = resolveFolderDestination(vault, input, source);
   // A destination that IS the source's directory entry - the case-only
   // folder rename on a host that folds case - cannot be performed by
@@ -650,28 +683,6 @@ export async function folderLifecycle(
         "entry on this host (a case-only spelling); moving the folder's files cannot " +
         "re-case the entry - rename the directory itself",
     );
-  }
-  const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
-
-  // Pass one: walk the whole vault once. This is the move set's source,
-  // the post-move population the minimal spellings are computed against,
-  // and the filesScanned denominator - one walk, so no two of those can
-  // see different vaults.
-  const walk = retargetWikilinks(vault, [], { root: VAULT_ROOT_REL, apply: false });
-  const vaultFiles = walk.files;
-  const underSource = (rel: string): boolean =>
-    rel === source.relPath || rel.startsWith(`${source.relPath}/`);
-  const movingSet = vaultFiles.filter(underSource).toSorted();
-  // The caller's reach judges the MOVE SET: one note under the folder
-  // that the caller may not read refuses the WHOLE operation, exactly as
-  // a missing folder refuses (a folder is not itself a page, so its
-  // notes are what the reach predicate can judge). Skipping the denied
-  // files would still leak them - through the occupancy pre-flight, the
-  // rewrite pairs and the residue report - and moving them would
-  // relocate pages the caller cannot read, so the refusal reads exactly
-  // as the file surface's missing-note one.
-  if (movingSet.some((rel) => input.readable?.(rel) === false)) {
-    throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
   // An empty move set over a folder the disk says is non-empty is not a
   // quiet success waiting to happen when the spelling is the fault: a
@@ -765,10 +776,14 @@ export async function folderLifecycle(
 
   if (apply) {
     // The destination folder exists before the first relocation, so a
-    // zero-file move set (an empty folder) still lands somewhere: the
-    // per-file machinery below mkdirs the same parents, and the pre-
-    // flight has already approved or refused this exact path.
-    mkdirSync(destination.abs, { recursive: true });
+    // zero-file move set still lands somewhere when the SOURCE folder
+    // was itself empty (the pre-flight has already approved or refused
+    // this exact path). A folder that KEEPS entries - the attachments-
+    // only case - creates nothing: its destination directory would hold
+    // no file and no folder, just residue this operation invented.
+    if (planned.length > 0 || sourceEntries === null || sourceEntries.length === 0) {
+      mkdirSync(destination.abs, { recursive: true });
+    }
     // The moves run in sorted order and the set continues past a failure:
     // by the time one file cannot relocate, others already have, and
     // undoing them would unlink destination names - new destructive
@@ -779,29 +794,52 @@ export async function folderLifecycle(
         moved.push({ from: move.fromRel, to: move.toRel });
       } catch (err) {
         let reason = err instanceof Error ? err.message : String(err);
-        // A fault AFTER the destination name was linked leaves two names
-        // for one inode, while the report is about to say this path
-        // "never moved". The source name still holds the bytes, so the
-        // extra destination name is dropped before the failure is
-        // reported; if even that fails, the failure says so.
-        if (!move.sameEntry && namesSameEntry(move.fromAbs, move.toAbs)) {
-          try {
-            unlinkSync(move.toAbs);
-          } catch (cleanup) {
-            reason +=
-              `; the destination name ${move.toRel} was linked before the fault and ` +
-              `could not be dropped either (${cleanup instanceof Error ? cleanup.message : String(cleanup)})`;
+        // A fault AFTER the destination name was created - a linked name
+        // (same inode) or a cross-device copy the fallback wrote - leaves
+        // bytes at `toRel` while the report is about to say this path
+        // "never moved". The source name still holds the original bytes
+        // whenever it exists, so the extra destination name is dropped
+        // before the failure is reported; if even that fails, the
+        // failure says so. A source that no longer exists means the
+        // unlink SUCCEEDED and a later step threw - the file moved, and
+        // the destination name is the only copy, so it stays.
+        if (!move.sameEntry && existsSync(move.toAbs)) {
+          if (existsSync(move.fromAbs)) {
+            try {
+              unlinkSync(move.toAbs);
+            } catch (cleanup) {
+              reason +=
+                `; the destination name ${move.toRel} was written before the fault and ` +
+                `could not be dropped either (${cleanup instanceof Error ? cleanup.message : String(cleanup)})`;
+            }
+          } else {
+            reason += `; the destination name ${move.toRel} holds the moved bytes`;
           }
         }
         moveFailures.push({ path: move.fromRel, reason });
       }
     }
-    // The folders the moves emptied go with their files: bottom-up, and
-    // only while genuinely empty, so a failed file's parent stays exactly
-    // where the report says its bytes are. An empty folder moved with a
-    // zero-file set is handled by the same prune - the source folder
-    // itself is last.
-    pruneEmptiedFolders(vault, source.relPath);
+    // The folders the moves emptied go with their files: every ancestor
+    // of a successfully moved file, up to and including the subject, is
+    // offered to rmdirSync deepest-first, and only genuinely empty ones
+    // go - so a failed file's parent stays exactly where the report says
+    // its bytes are, and directories the move never touched (empty
+    // siblings, a subtree that held no Markdown) are not this operation's
+    // to delete.
+    pruneEmptiedFolders(vault, source.relPath, moved);
+    // An EMPTY folder's move is the directory entry itself: nothing was
+    // relocated, so the prune has no moved file whose ancestors name the
+    // subject, and the entry is dropped by hand - but only while the disk
+    // still says the source is empty, and never when the source keeps
+    // entries it was never going to move (the attachments-only case).
+    if (planned.length === 0 && (readdirOrNull(source.abs) ?? []).length === 0) {
+      try {
+        rmdirSync(source.abs);
+      } catch {
+        // The entry is not removable (or re-appeared between the read and
+        // the removal): the residue report names what stayed.
+      }
+    }
     // Whatever the prune could not remove is exactly what stayed - a
     // non-Markdown file beside the notes, or a failed file's folder -
     // and the report names it rather than reading as if the source
@@ -895,35 +933,38 @@ export async function folderLifecycle(
  * `rmdirSync` removes only an empty directory, so a folder whose subtree
  * still holds a failed file - or any file this surface does not address -
  * keeps it, which is exactly where the report says the bytes are. The
- * walk is bounded at the subject: every directory under it is offered to
- * `rmdirSync` bottom-up, so a nested source leaves no empty skeleton
- * behind a root that failed to empty for a child's sake, while the
- * folders ABOVE the subject are not this operation's to delete, and an
- * emptied `Projects/` left behind reads as the ordinary residue a file
- * move leaves too.
+ * candidate set is derived from the MOVED FILES' ancestor chains up to
+ * the subject - never from a walk of the subject's subtree - so a
+ * symlinked directory anywhere under the source is neither followed nor
+ * removed, and directories the move never touched (empty siblings, a
+ * no-Markdown subtree) are not this operation's to delete. The folders
+ * ABOVE the subject are not its business either, and an emptied
+ * `Projects/` left behind reads as the ordinary residue a file move
+ * leaves too.
  */
-function pruneEmptiedFolders(vault: string, fromRel: string): void {
-  const rootAbs = ensureInsideVault(join(vault, fromRel), vault);
-  const deepestFirst: string[] = [];
-  const pending: string[] = [rootAbs];
-  for (;;) {
-    const current = pending.pop();
-    if (current === undefined) break;
-    deepestFirst.push(current);
-    for (const entry of readdirOrNull(current) ?? []) {
-      const child = join(current, entry);
-      let stats: Stats | null;
-      try {
-        stats = statSync(child);
-      } catch {
-        stats = null;
-      }
-      if (stats !== null && stats.isDirectory()) pending.push(child);
+function pruneEmptiedFolders(
+  vault: string,
+  fromRel: string,
+  moved: ReadonlyArray<FolderMovedPath>,
+): void {
+  const candidates = new Set<string>();
+  for (const file of moved) {
+    let dir = dirname(file.from);
+    // Walk the ancestor chain in VAULT-RELATIVE spellings - the move
+    // report's own paths, never names resolved through the filesystem -
+    // and stop at the subject itself.
+    candidates.add(dir);
+    while (dir !== fromRel) {
+      dir = dirname(dir);
+      candidates.add(dir);
     }
   }
-  for (const dir of deepestFirst.reverse()) {
+  const deepestFirst = [...candidates]
+    .filter((rel) => rel === fromRel || rel.startsWith(`${fromRel}/`))
+    .toSorted((a, b) => b.length - a.length);
+  for (const rel of deepestFirst) {
     try {
-      rmdirSync(dir);
+      rmdirSync(ensureInsideVault(join(vault, rel), vault));
     } catch {
       // The directory is not empty (or not removable): the residue
       // stands, and the report already names where every file is.

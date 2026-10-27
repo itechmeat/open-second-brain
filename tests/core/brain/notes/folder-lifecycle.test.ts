@@ -28,6 +28,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,6 +54,26 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 let vault: string;
 let configHome: string;
 let configPath: string;
+
+/**
+ * Whether the filesystem hosting the test tmpdir folds case in names:
+ * probed once, at load, because `test.skipIf` decides at declaration -
+ * before any per-test vault exists - and the folding behavior belongs to
+ * the volume, not to the process.
+ */
+const FOLDS_CASE = (() => {
+  const probe = mkdtempSync(join(tmpdir(), "o2b-case-probe-"));
+  try {
+    mkdirSync(join(probe, "Fold"));
+    const plain = statSync(join(probe, "Fold"));
+    const folded = statSync(join(probe, "fold"));
+    return plain.dev === folded.dev && plain.ino === folded.ino;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-folder-lifecycle-"));
@@ -252,6 +273,33 @@ describe("the caller's reach over the folder", () => {
     expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
     expect(existsSync(join(vault, "Projects/Old/quiet.md"))).toBe(true);
     expect(existsSync(join(vault, "Archive"))).toBe(false);
+  });
+
+  test("a denied folder answers a destination mistake as a missing folder, never the destination's error", async () => {
+    // The reach check runs BEFORE the destination is resolved: a folder
+    // holding a note the caller may not read answers every later error
+    // path as a missing folder too. A destination refusal would let a
+    // deliberately bad `to` tell an existing-but-denied folder apart
+    // from a missing one - an existence oracle.
+    note("Projects/Old/quiet.md", "reserved\n");
+    for (const apply of [false, true]) {
+      let caught: unknown;
+      try {
+        await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Projects/Old/nested",
+          apply,
+          readable: () => false,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(NoteLifecycleError);
+      expect((caught as NoteLifecycleError).code).toBe("source_missing");
+    }
+    expect(existsSync(join(vault, "Projects/Old/quiet.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/nested"))).toBe(false);
   });
 });
 
@@ -684,33 +732,75 @@ describe("move-folder", () => {
     expect(existsSync(join(vault, "Archive/Old/sub/deep/b.md"))).toBe(true);
   });
 
-  test("a case-only folder rename is refused rather than half-reported", async () => {
+  test("directories the move never touched keep standing after a partial prune", async () => {
+    // One note moves; a no-Markdown subtree and a pre-existing empty
+    // sibling stay. The prune's candidates are the MOVED files' ancestor
+    // chains, so the removal cannot walk the source's subtree and delete
+    // directories this operation never touched - and the source folder
+    // itself stands because the untouched residue still fills it.
     note("Projects/Old/a.md", "alpha\n");
-    // The refusal exists for the host that folds case: there the two
-    // spellings name one directory entry, which moving files cannot
-    // re-case. A host that tells them apart reaches an ordinary rename
-    // instead, so this test answers for the folding hosts only.
-    const foldsCase = (() => {
-      try {
-        const source = statSync(join(vault, "Projects/Old"));
-        const folded = statSync(join(vault, "projects/old"));
-        return source.dev === folded.dev && source.ino === folded.ino;
-      } catch {
-        return false;
-      }
-    })();
-    if (!foldsCase) return;
+    mkdirSync(join(vault, "Projects/Old/sub"), { recursive: true });
+    writeFileSync(join(vault, "Projects/Old/sub/img.png"), "png\n");
+    mkdirSync(join(vault, "Projects/Old/empty"), { recursive: true });
 
-    await expect(
-      folderLifecycle(vault, {
-        action: NOTE_LIFECYCLE_ACTION.renameFolder,
-        path: "Projects/Old",
-        to: "old",
-        apply: true,
-      }),
-    ).rejects.toThrow(/destination_unchanged|case-only/);
-    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    expect(res.leftBehind).toEqual(["empty", "sub"]);
+    expect(existsSync(join(vault, "Projects/Old"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/sub/img.png"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/empty"))).toBe(true);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
   });
+
+  test("the prune never follows a symlinked directory out of the source", async () => {
+    // The candidates are derived from moved files' vault-relative
+    // spellings, never from a filesystem walk of the source: a linked
+    // directory under the source is neither descended into nor offered
+    // to the removal, so nothing outside the source - here a real empty
+    // directory the link resolves to - is this operation's to delete.
+    note("Projects/Old/a.md", "alpha\n");
+    mkdirSync(join(vault, "Outside/inner"), { recursive: true });
+    symlinkSync(join(vault, "Outside"), join(vault, "Projects/Old/link"), "dir");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    expect(existsSync(join(vault, "Outside/inner"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/link"))).toBe(true);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+  });
+
+  test.skipIf(!FOLDS_CASE)(
+    "a case-only folder rename is refused rather than half-reported",
+    async () => {
+      note("Projects/Old/a.md", "alpha\n");
+      // The refusal exists for the host that folds case: there the two
+      // spellings name one directory entry, which moving files cannot
+      // re-case. A host that tells them apart reaches an ordinary rename
+      // instead, so the test is SKIPPED there - reported as a skip, never
+      // a silent early pass.
+      await expect(
+        folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.renameFolder,
+          path: "Projects/Old",
+          to: "old",
+          apply: true,
+        }),
+      ).rejects.toThrow(/destination_unchanged|case-only/);
+      expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    },
+  );
 
   test("a folder holding only attachments moves an empty set and keeps its contents", async () => {
     mkdirSync(join(vault, "Assets/img"), { recursive: true });
@@ -728,6 +818,9 @@ describe("move-folder", () => {
     expect(res.leftBehind).toEqual(["logo.png"]);
     expect(existsSync(join(vault, "Assets/img/logo.png"))).toBe(true);
     expect(existsSync(join(vault, "Archive/img/logo.png"))).toBe(false);
+    // A folder that keeps its entries creates nothing at the destination:
+    // an empty directory the move invented is residue in the vault.
+    expect(existsSync(join(vault, "Archive/img"))).toBe(false);
   });
 
   test("a dry run reports the spellings the apply would write", async () => {
