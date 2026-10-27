@@ -347,6 +347,11 @@ function deadLettersRecover(argv: string[]): number {
         rejected: res.rejected.map((r) => ({ topic: r.topic, reason: r.reason })),
         letter_retained: true,
         letter_path: letterPath,
+        // The commit result's contract: the failure rides here by name,
+        // absent when the mining record landed.
+        ...(res.miningLedgerFailure !== undefined
+          ? { mining_ledger_failure: res.miningLedgerFailure }
+          : {}),
       });
     } else {
       ok(
@@ -355,6 +360,9 @@ function deadLettersRecover(argv: string[]): number {
           (res.staged > 0 ? `, staged ${res.staged} for approval` : ""),
       );
       for (const r of res.rejected) ok(`  rejected: ${r.topic} (${r.reason})`);
+      if (res.miningLedgerFailure !== undefined) {
+        ok(`mining ledger not updated: ${res.miningLedgerFailure}`);
+      }
       ok(
         `the dead letter is retained at ${letterPath}; ` +
           "delete it by hand once the payload is reconciled",

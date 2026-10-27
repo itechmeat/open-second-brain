@@ -24,7 +24,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   deadLetterDir,
@@ -45,6 +45,7 @@ import {
   type ExtractedSignalItem,
 } from "../../src/core/brain/extract-signals.ts";
 import { buildReconciliationReport } from "../../src/core/reconciliation-report.ts";
+import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 const NOW = new Date("2026-08-23T10:15:00Z");
@@ -94,6 +95,12 @@ function run(args: ReadonlyArray<string>) {
   return runCli(["brain", "dead-letters", ...args, "--vault", vault], {
     env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
   });
+}
+
+/** Corrupt the session mining ledger the way a truncated write leaves it. */
+function corruptMiningLedger(): void {
+  mkdirSync(dirname(sessionMiningLedgerPath(vault)), { recursive: true });
+  writeFileSync(sessionMiningLedgerPath(vault), "{ truncated");
 }
 
 beforeEach(() => {
@@ -416,6 +423,42 @@ describe("dead-letters recover", () => {
     expect(payload.written.map((w) => w.topic)).toEqual(["module-names"]);
     expect(payload.deduped).toBe(1);
     expect(payload.letter_retained).toBe(true);
+  });
+
+  test("a mining-ledger failure on a written apply rides the JSON output by name", async () => {
+    // The commit result's contract (`extract-signals.ts`): the failure
+    // "rides here by name, and on both surface outputs" - a recovery that
+    // wrote its signals but lost the mining record must never read as a
+    // clean run.
+    const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
+    corruptMiningLedger();
+    const r = await run(["recover", letter.id, "--apply", "--yes", "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      mining_ledger_failure?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.mining_ledger_failure).toContain("session mining ledger is corrupted JSON");
+  });
+
+  test("the same failure prints on the human-readable apply output", async () => {
+    const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
+    corruptMiningLedger();
+    const r = await run(["recover", letter.id, "--apply", "--yes"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("mining ledger not updated:");
+    expect(r.stdout).toContain("session mining ledger is corrupted JSON");
+  });
+
+  test("a clean apply carries no mining_ledger_failure key", async () => {
+    // Absent-when-empty: a recovery whose mining record landed names no
+    // failure, so the JSON shape stays what it always was.
+    const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
+    const r = await run(["recover", letter.id, "--apply", "--yes", "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as { mining_ledger_failure?: string };
+    expect(payload.mining_ledger_failure).toBeUndefined();
   });
 
   test("nothing ever deletes the letter, and the verb says the removal is by hand", async () => {
