@@ -728,6 +728,72 @@ describe("move-folder", () => {
     },
   );
 
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a fully-failed set cleans its invented subtree and spares a pre-existing destination parent",
+    async () => {
+      // Nested source: the per-file machinery creates Archive/Old/sub for
+      // the failed move, and the cleanup takes the whole invented branch,
+      // not just the destination folder itself. An EMPTY Archive that was
+      // already here stays - a directory that existed before is not this
+      // operation's to remove, and the move lands under it.
+      note("Projects/Old/sub/a.md", "alpha\n");
+      mkdirSync(join(vault, "Archive"), { recursive: true });
+      chmodSync(join(vault, "Projects/Old/sub"), 0o500);
+      let res;
+      try {
+        res = await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Archive",
+          apply: true,
+        });
+      } finally {
+        chmodSync(join(vault, "Projects/Old/sub"), 0o700);
+      }
+
+      expect(res.applied).toBe(true);
+      expect(res.moved).toEqual([]);
+      expect(res.moveFailures).toHaveLength(1);
+      // The invented branch is gone down to the destination folder; the
+      // pre-existing parent stands, and the source is exactly where the
+      // report says its bytes are.
+      expect(existsSync(join(vault, "Archive/Old"))).toBe(false);
+      expect(isDir("Archive")).toBe(true);
+      expect(existsSync(join(vault, "Projects/Old/sub/a.md"))).toBe(true);
+    },
+  );
+
+  test("a foreign file at a cleared destination name survives the move's fault", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    // The pre-flight cleared the destination name; a foreign file appears
+    // there before the link - the race the occupied-name guard exists
+    // for, produced through the relocation seam. The refusal is the move's
+    // own, and the cleanup must not unlink bytes it did not write.
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+      relocate: (_fromAbs, toAbs, label) => {
+        writeFileSync(toAbs, "foreign bytes\n");
+        throw new NoteLifecycleError(
+          "destination_occupied",
+          `destination already exists: ${label}`,
+        );
+      },
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.moved).toEqual([]);
+    expect(res.moveFailures).toHaveLength(1);
+    expect(res.moveFailures[0]!.path).toBe("Projects/Old/a.md");
+    expect(res.moveFailures[0]!.reason).toContain("destination already exists");
+    // The foreign file stands, and the invented branch around it stands
+    // with it; the source still holds the note.
+    expect(readFileSync(join(vault, "Archive/Old/a.md"), "utf8")).toBe("foreign bytes\n");
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+  });
+
   test("a top-level folder moves under a sibling top-level directory", async () => {
     note("Old/a.md", "alpha\n");
     mkdirSync(join(vault, "Archive"), { recursive: true });

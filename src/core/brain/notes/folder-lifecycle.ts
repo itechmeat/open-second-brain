@@ -182,6 +182,14 @@ export interface FolderLifecycleInput {
   /** Test seam: replaces the detached spawn of the post-write index refresh. */
   readonly refreshSpawn?: (argv: string[]) => void;
   /**
+   * Test seam: the byte relocation itself, defaulting to the shared
+   * {@link relocateFileBytes}. A stand-in produces faults the host cannot
+   * schedule deterministically - a foreign file appearing at a destination
+   * name the pre-flight had cleared, the exact race the occupied-name
+   * guard exists for.
+   */
+  readonly relocate?: typeof relocateFileBytes;
+  /**
    * The config file the post-write refresh resolves the search config
    * through - the caller's `--config` (or the MCP server's config path).
    */
@@ -782,33 +790,42 @@ export async function folderLifecycle(
     // only case - creates nothing: its destination directory would hold
     // no file and no folder, just residue this operation invented.
     const destinationExisted = statOrNull(destination.abs) !== null;
-    // The shallowest ancestor of the destination that is already on
-    // disk: the chain of directories the recursive mkdir invents stops
-    // there, and that is as far as any cleanup of an invented chain may
-    // walk - a directory that was already here is not this operation's
-    // to remove.
-    let inventedUpTo = dirname(destination.relPath);
-    while (
-      !destinationExisted &&
-      statOrNull(ensureInsideVault(join(vault, inventedUpTo), vault)) === null
-    ) {
-      const parentRel = dirname(inventedUpTo);
-      if (parentRel === inventedUpTo || parentRel === ".") break;
-      inventedUpTo = parentRel;
+    // The deepest ancestor of the destination that is already on disk
+    // ("." when that is the vault root): the directories this apply
+    // invents all sit strictly below it, and the cleanup of an invented
+    // chain stops AT it - before removing anything. A directory that was
+    // already here is not this operation's to remove, empty or not.
+    let existingAncestor = ".";
+    if (!destinationExisted) {
+      let probe = dirname(destination.relPath);
+      while (probe !== ".") {
+        if (statOrNull(ensureInsideVault(join(vault, probe), vault)) !== null) {
+          existingAncestor = probe;
+          break;
+        }
+        const parentRel = dirname(probe);
+        if (parentRel === probe) break;
+        probe = parentRel;
+      }
     }
     if (planned.length > 0 || sourceEntries === null || sourceEntries.length === 0) {
       mkdirSync(destination.abs, { recursive: true });
     }
+    // The destination spellings the per-file machinery created for moves
+    // that then failed: the invented subtree the cleanup below offers
+    // back to the filesystem.
+    const failedDestinations: string[] = [];
     // The moves run in sorted order and the set continues past a failure:
     // by the time one file cannot relocate, others already have, and
     // undoing them would unlink destination names - new destructive
     // behavior no gate covers. The report names the split instead.
     for (const move of planned) {
       try {
-        relocateFileBytes(move.fromAbs, move.toAbs, move.toRel, move.sameEntry);
+        (input.relocate ?? relocateFileBytes)(move.fromAbs, move.toAbs, move.toRel, move.sameEntry);
         moved.push({ from: move.fromRel, to: move.toRel });
       } catch (err) {
         let reason = err instanceof Error ? err.message : String(err);
+        failedDestinations.push(move.toRel);
         // A fault AFTER the destination name was created - a linked name
         // (same inode) or a cross-device copy the fallback wrote - leaves
         // bytes at `toRel` while the report is about to say this path
@@ -841,24 +858,44 @@ export async function folderLifecycle(
       }
     }
     // A set where NOTHING moved - every relocation failed - must not
-    // leave the destination folder this apply created standing empty
-    // beside a report that says nothing moved. The invented chain goes
-    // deepest-first, only while genuinely empty, and never past the
-    // first directory that was already here; a destination that existed
-    // before, or one an empty-source move deliberately created, is not
-    // this cleanup's business.
+    // leave the directories this apply invented standing empty beside a
+    // report that says nothing moved. The failed moves' own destination
+    // spellings name the subtree the per-file machinery created for
+    // them; it is offered to rmdirSync deepest-first, then the
+    // destination folder, each only while genuinely empty - so a foreign
+    // name inside keeps its branch standing - and never at or above the
+    // ancestor that was already here. A destination that existed before,
+    // or one an empty-source move deliberately created, is not this
+    // cleanup's business.
     if (moved.length === 0 && planned.length > 0 && !destinationExisted) {
-      let rel = destination.relPath;
-      for (;;) {
+      const doomed = new Set<string>([destination.relPath]);
+      for (const toRel of failedDestinations) {
+        let dir = dirname(toRel);
+        while (dir !== destination.relPath && dir !== ".") {
+          doomed.add(dir);
+          const parentRel = dirname(dir);
+          if (parentRel === dir) break;
+          dir = parentRel;
+        }
+      }
+      // The chain above the destination that the recursive mkdir invented,
+      // up to - never including - the ancestor that was already here.
+      let up = dirname(destination.relPath);
+      while (up !== "." && up !== existingAncestor) {
+        doomed.add(up);
+        const parentRel = dirname(up);
+        if (parentRel === up) break;
+        up = parentRel;
+      }
+      const deepestFirst = [...doomed].toSorted((a, b) => b.length - a.length);
+      for (const rel of deepestFirst) {
         try {
           rmdirSync(ensureInsideVault(join(vault, rel), vault));
         } catch {
-          break;
+          // Not empty (a foreign name, or a name that could not be
+          // dropped) or not removable: what stands, stands, and the
+          // report already names where every file is.
         }
-        if (rel === inventedUpTo) break;
-        const parentRel = dirname(rel);
-        if (parentRel === rel || parentRel === ".") break;
-        rel = parentRel;
       }
     }
     // The folders the moves emptied go with their files: every ancestor
