@@ -209,8 +209,9 @@ describe("the recovery classifier", () => {
     // input this module must not guess over. The same key twice used to
     // count its item twice: a letter with one real missing item read
     // resolved (both "keys" on disk), and the apply handed the commit
-    // the same item twice. A repeated key is refused like a key that
-    // names nothing.
+    // the same item twice. The refusal names the repetition as the
+    // cause - the key names a real item, it just names it twice - on
+    // the classifier and on the plan and apply that lean on it.
     const letter = v2Letter(
       [item(), item({ topic: "module-names" })],
       ["items[0]:release-notes-style"],
@@ -224,6 +225,15 @@ describe("the recovery classifier", () => {
     const c = classifyDeadLetter(vault, handEdited);
     expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
     expect(c.reason).toContain("items[0]:release-notes-style");
+    expect(c.reason).toContain("repeats an earlier key");
+    expect(() => planRecovery(vault, handEdited)).toThrow(DeadLetterRecoveryError);
+    expect(() => planRecovery(vault, handEdited)).toThrow(/repeats an earlier key/);
+    expect(() => applyRecovery(vault, handEdited, { agent: AGENT, now: NOW })).toThrow(
+      DeadLetterRecoveryError,
+    );
+    expect(() => applyRecovery(vault, handEdited, { agent: AGENT, now: NOW })).toThrow(
+      /repeats an earlier key/,
+    );
   });
 
   test("a session whose items sit staged in the write-approval queue classifies pending", () => {

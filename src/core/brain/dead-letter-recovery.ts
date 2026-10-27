@@ -184,6 +184,16 @@ function recoverablePayload(record: DeadLetterRecord): {
 const MISSING_KEY_RE = /^items\[(\d+)\]:(.+)$/;
 
 /**
+ * Why one missing key did not resolve - the cause the refusal names, so
+ * an operator is pointed at the actual problem instead of one refusal
+ * that assumes why.
+ */
+interface UnresolvedMissingKey {
+  readonly key: string;
+  readonly why: string;
+}
+
+/**
  * Resolve the letter's `missing` keys against the frozen payload - the
  * ONLY items a recovery plans or re-runs. Each key must parse, name an
  * index the payload carries, name that item's own topic, and name it
@@ -193,20 +203,35 @@ const MISSING_KEY_RE = /^items\[(\d+)\]:(.+)$/;
  * twice could read a half-delivered letter resolved or hand the commit
  * the same item twice - and guessing would replay the wrong item, or
  * nothing at all, silently. `null` means every key resolved; otherwise
- * the message names the first key that failed.
+ * the first key that failed is named WITH its own cause.
  */
 function resolveMissingItems(
   missing: ReadonlyArray<string>,
   items: ReadonlyArray<ExtractedSignalItem>,
-): { items: ReadonlyArray<ExtractedSignalItem>; unresolved: string | null } {
+): { items: ReadonlyArray<ExtractedSignalItem>; unresolved: UnresolvedMissingKey | null } {
   const resolved: ExtractedSignalItem[] = [];
   const seen = new Set<number>();
   for (const key of missing) {
     const match = MISSING_KEY_RE.exec(key);
     const index = match === null ? Number.NaN : Number(match[1]);
     const item = Number.isInteger(index) ? items[index] : undefined;
-    if (item === undefined || (match !== null && item.topic !== match[2]) || seen.has(index)) {
-      return { items: resolved, unresolved: key };
+    if (item === undefined) {
+      return {
+        items: resolved,
+        unresolved: { key, why: "names no item the frozen payload carries" },
+      };
+    }
+    if (match === null || item.topic !== match[2]) {
+      return {
+        items: resolved,
+        unresolved: { key, why: "does not name that item's own topic" },
+      };
+    }
+    if (seen.has(index)) {
+      return {
+        items: resolved,
+        unresolved: { key, why: "repeats an earlier key's item" },
+      };
     }
     seen.add(index);
     resolved.push(item);
@@ -296,6 +321,22 @@ export function classifyDeadLetter(
     });
   }
 
+  // A repeated missing key is a hand-edit on either schema: the commit's
+  // own report builder refuses duplicates, and counting a repeated key
+  // against the key count - by topic on a v1 letter as much as by item on
+  // a v2 one - could read a half-delivered letter resolved or hand the
+  // re-run the same item twice. The record does not vouch for itself.
+  const repeatKey = record.missing.find((key, index) => record.missing.indexOf(key) !== index);
+  if (repeatKey !== undefined) {
+    return Object.freeze({
+      category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+      reason:
+        `missing key ${JSON.stringify(repeatKey)} repeats an earlier key; the record may be ` +
+        "hand-edited or from a different build",
+      command: null,
+    });
+  }
+
   // The resolved re-measure needs no session state: it answers whether
   // the letter's subject - its missing items - exists on disk, which is
   // true even if the session has since been ignored or forgotten.
@@ -307,9 +348,8 @@ export function classifyDeadLetter(
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
       reason:
-        `missing key ${JSON.stringify(resolvedMissing.unresolved)} names no item this ` +
-        "letter's frozen payload carries; the record may be hand-edited or from a " +
-        "different build",
+        `missing key ${JSON.stringify(resolvedMissing.unresolved.key)} ${resolvedMissing.unresolved.why}; ` +
+        "the record may be hand-edited or from a different build",
       command: null,
     });
   }
@@ -394,7 +434,7 @@ function resolvedMissingItemsOrThrow(
   if (resolved.unresolved !== null) {
     throw new DeadLetterRecoveryError(
       `dead letter ${record.id} cannot name its missing items: missing key ` +
-        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
+        `${JSON.stringify(resolved.unresolved.key)} ${resolved.unresolved.why}`,
       DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
     );
   }
