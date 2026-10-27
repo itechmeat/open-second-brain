@@ -446,7 +446,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
   {
     name: TOOL,
     description:
-      "Note lifecycle: rename, move, archive (displaces the note under Archive/), delete address a note file; move-folder and rename-folder address a whole folder and run in the folder lifecycle. Dry-run unless apply; delete needs confirm. Rewrites inbound [[wikilinks]] to the minimal spelling that still resolves; applied writes claim a detached index refresh (references.refresh: claimed, not landed).",
+      "Note lifecycle: rename, move, archive, delete take a note file; move-folder/rename-folder run the folder lifecycle. Dry-run unless apply; delete needs confirm. Rewrites inbound [[wikilinks]] minimally so they still resolve; applied writes claim the detached refresh (claimed, not landed).",
     inputSchema: {
       type: "object",
       properties: {
@@ -463,7 +463,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
         to: {
           type: "string",
           description:
-            "rename/move: vault-relative destination. move-folder: the destination DIRECTORY the folder lands under; rename-folder: the new single-segment name. Forbidden for archive (it picks its own) and delete.",
+            "rename/move: vault-relative destination. move-folder: the DIRECTORY the folder lands in; rename-folder: the new single-segment name. Forbidden for archive and delete.",
         },
         apply: {
           type: "boolean",
