@@ -1178,31 +1178,118 @@ const CLIENT_VERSION_MAX_LENGTH = 200;
  * wrapper can only abandon the promise it awaits, so a hung `--version`
  * child would otherwise survive the cut as an orphan. The child's exit is
  * raced against the timer here, and the child itself is killed when the
- * timer wins. stderr is ignored, not piped: nothing observes it, and a
- * pipe a chatty child fills unread would block the child on write.
+ * timer wins - SIGTERM first, then SIGKILL after a short grace
+ * ({@link CLIENT_KILL_GRACE_MS}), because a client that traps or ignores
+ * TERM would otherwise outlive doctor together with everything it
+ * spawned. stderr is ignored, not piped: nothing observes it, and a pipe
+ * a chatty child fills unread would block the child on write.
+ *
+ * stdout is drained INCREMENTALLY, never as one await of EOF: a client
+ * whose `--version` forks a background helper that inherits stdout (an
+ * update checker, a daemon) prints its version and exits 0 while the
+ * helper keeps the pipe open, so an EOF-await would time out an ask that
+ * was actually answered. The drain settles at the first newline - the
+ * only thing the grader reads - or at EOF, or, once the child has
+ * exited, at a short bounded window ({@link STDOUT_DRAIN_WINDOW_MS})
+ * over whatever stdout has already buffered.
  */
 export async function spawnClientVersion(
   argv: ReadonlyArray<string>,
   timeoutMs: number = DEFAULT_READINESS_TIMEOUT_MS,
 ): Promise<{ exitCode: number; stdout: string }> {
   const child = Bun.spawn({ cmd: [...argv], stdout: "pipe", stderr: "ignore" });
+  let exited = false;
+  void child.exited.then(() => {
+    exited = true;
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      child.kill();
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+      // SIGTERM can be trapped or ignored, and the escalation must
+      // outlive this function - the budget rejects now, the grace timer
+      // keeps its appointment regardless. A child that answered in
+      // between is already reaped and is left alone.
+      setTimeout(() => {
+        if (!exited) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      }, CLIENT_KILL_GRACE_MS);
       reject(new ReadinessTimeoutError(`client version ${argv[0]}`, timeoutMs));
     }, timeoutMs);
   });
   try {
     return await Promise.race([
       (async () => {
-        const stdout = await new Response(child.stdout).text();
-        return { exitCode: await child.exited, stdout };
+        // The drain starts immediately so a child writing past the pipe
+        // buffer is consumed rather than wedged on write, but the ask
+        // settles on the child's EXIT, not on the pipe closing.
+        const drained = drainVersionStdout(child.stdout, child.exited);
+        const exitCode = await child.exited;
+        const stdout = await drained;
+        return { exitCode, stdout };
       })(),
       budget,
     ]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * How long the drain keeps reading past the child's exit before
+ * returning what stdout has buffered: a helper holding the pipe can keep
+ * EOF from ever arriving, and the buffered bytes are already there - the
+ * window is the bound that turns them into an answer instead of a
+ * timeout. Long enough to be a rounding error on a real spawn, short
+ * enough to never matter against the ask's budget.
+ */
+const STDOUT_DRAIN_WINDOW_MS = 250;
+
+/** The gap between the budget's SIGTERM and its SIGKILL follow-up. */
+const CLIENT_KILL_GRACE_MS = 250;
+
+/**
+ * Read the child's stdout incrementally, settling at the first newline
+ * (the version is graded from the raw first line and nothing beyond it),
+ * at EOF, or - once `exited` resolves - at the bounded window, returning
+ * whatever has buffered by then. A read that rejects (the stream erroring
+ * while a helper still holds the pipe) returns what buffered too, never
+ * rejects the ask.
+ */
+async function drainVersionStdout(
+  stream: ReadableStream<Uint8Array>,
+  exited: Promise<unknown>,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  // Armed once per ask: the window opens when the child exits, not when
+  // the drain starts, so a child that answers late is not penalized.
+  const windowCloses: Promise<null> = exited
+    .then(
+      () => Bun.sleep(STDOUT_DRAIN_WINDOW_MS),
+      () => Bun.sleep(STDOUT_DRAIN_WINDOW_MS),
+    )
+    .then(() => null);
+  for (;;) {
+    const read = reader.read().then(
+      (chunk) => ({ chunk }),
+      () => null,
+    );
+    const settled = await Promise.race([read, windowCloses]);
+    if (settled === null) return text;
+    if (settled.chunk.done || settled.chunk.value === undefined) return text;
+    text += decoder.decode(settled.chunk.value, { stream: true });
+    if (text.includes("\n")) return text;
   }
 }
 

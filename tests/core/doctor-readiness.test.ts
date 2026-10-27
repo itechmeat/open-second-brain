@@ -1042,6 +1042,49 @@ describe("probeClientVersions", () => {
     expect(gone).toBe(true);
   }, 20000);
 
+  test("a client whose helper holds stdout still delivers the version it printed", async () => {
+    writeConfig("");
+    codexManifest();
+    // The M9 shape: a client whose `--version` prints the answer, forks a
+    // background helper that INHERITS stdout (an update checker, a
+    // daemon), and exits 0. The pipe's write end stays open in the
+    // helper, so an await of stdout EOF never returns even though the
+    // child answered - the ask must settle on the child's exit and read
+    // what stdout buffered, not on the pipe closing.
+    const v = await probeClientVersions(
+      versionsOpts(() =>
+        spawnClientVersion(["sh", "-c", "printf 'codex-cli 9.9.9\\n'; sleep 5 &"], 1000),
+      ),
+    );
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.pass);
+    expect(v.rows![0]!.version).toBe("codex-cli 9.9.9");
+  }, 20000);
+
+  test("a TERM-ignoring version child is escalated to SIGKILL and reaped", async () => {
+    writeConfig("");
+    codexManifest();
+    const pidFile = join(tmp, "term-child.pid");
+    // The M10 shape: a client that ignores SIGTERM (`trap "" TERM` keeps
+    // the disposition across `exec`, so the sleeper itself never dies of
+    // the first kill) outlived doctor together with its children, because
+    // the budget's cut was one SIGTERM with no follow-up. The sleeper is
+    // bounded at 8s so a regression cannot leak an unbounded orphan.
+    const v = await probeClientVersions(
+      versionsOpts(() =>
+        spawnClientVersion(["sh", "-c", `echo $$ > '${pidFile}'; trap "" TERM; exec sleep 8`], 150),
+      ),
+    );
+    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(v.rows![0]!.detail).toContain("timed out");
+    const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    expect(Number.isInteger(pid)).toBe(true);
+    // The escalation lands a grace period after the SIGTERM: poll until
+    // the pid is gone, bounded, rather than sleeping a fixed window.
+    const gone = await pollUntilGone(pid, Date.now() + 5_000);
+    expect(gone).toBe(true);
+  }, 20000);
+
   test("a manifest recording no installs is skipped", async () => {
     writeConfig("");
     const v = await probeClientVersions(versionsOpts(async () => ({ exitCode: 0, stdout: "x\n" })));
