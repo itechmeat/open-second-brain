@@ -181,6 +181,28 @@ describe("the recovery classifier", () => {
     expect(c.command).toBeNull();
   });
 
+  test("a missing key the frozen payload cannot resolve classifies not_recoverable, by name", () => {
+    // The key names an index the payload does not carry: a hand-edited,
+    // truncated or foreign letter. Counting the key undelivered would
+    // classify `recover`, and the apply would then re-run an empty plan
+    // and report success over a write that never happened.
+    const letter = v2Letter([item()], ["items[3]:release-notes-style"]);
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
+    expect(c.reason).toContain("items[3]:release-notes-style");
+    expect(c.command).toBeNull();
+  });
+
+  test("a missing key naming another item's topic classifies not_recoverable too", () => {
+    // The index exists, but the key's topic is not that item's own: the
+    // letter does not vouch for the item, so replaying it would be a
+    // guess at which content was lost.
+    const letter = v2Letter([item()], ["items[0]:module-names"]);
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
+    expect(c.reason).toContain("items[0]:module-names");
+  });
+
   test("a session whose items sit staged in the write-approval queue classifies pending", () => {
     // Write approval was on when the commit ran: the item that LANDED is
     // staged in Brain/pending/ carrying the session_ref, and the letter's
@@ -319,6 +341,15 @@ describe("the recovery plan", () => {
     const plan = planRecovery(vault, letter, { writeApprovalEnabled: true });
     expect(plan.items[0]?.verdict).toBe("staged");
   });
+
+  test("a plan refuses a missing key the payload cannot resolve", () => {
+    // A plan over an unresolvable key set would list no items - a
+    // forecast of nothing, one refusal away from an apply that reports
+    // success over it.
+    const letter = v2Letter([item()], ["items[2]:release-notes-style"]);
+    expect(() => planRecovery(vault, letter)).toThrow(DeadLetterRecoveryError);
+    expect(() => planRecovery(vault, letter)).toThrow(/items\[2\]:release-notes-style/);
+  });
 });
 
 describe("the apply", () => {
@@ -423,6 +454,22 @@ describe("the apply", () => {
     const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
     applyRecovery(vault, letter, { agent: AGENT, now: NOW });
     expect(readDeadLetter(vault, letter.id)).not.toBeNull();
+  });
+
+  test("an apply refuses a missing key the payload cannot resolve instead of writing nothing", () => {
+    // The exact success-over-nothing shape: an unresolvable key set used
+    // to classify `recover`, the apply re-ran an empty plan, and the
+    // commit returned cleanly - a green exit over a write that never
+    // happened. The refusal keeps the row's truth on the record.
+    const letter = v2Letter([item()], ["items[1]:release-notes-style"]);
+    expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+      DeadLetterRecoveryError,
+    );
+    expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+      /items\[1\]:release-notes-style/,
+    );
+    // Nothing was written under the letter's session either.
+    expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
   });
 });
 

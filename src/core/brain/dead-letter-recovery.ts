@@ -184,17 +184,30 @@ function recoverablePayload(record: DeadLetterRecord): {
 const MISSING_KEY_RE = /^items\[(\d+)\]:(.+)$/;
 
 /**
- * The payload indices the letter's `missing` keys name - the only items
- * a recovery plans or re-runs. Keys this build cannot parse name no
- * item and contribute nothing.
+ * Resolve the letter's `missing` keys against the frozen payload - the
+ * ONLY items a recovery plans or re-runs. Each key must parse, name an
+ * index the payload carries, and name that item's own topic: a key that
+ * fails any rung is a letter this build cannot recover faithfully
+ * (hand-edited, truncated, or written by a future format), and guessing
+ * would replay the wrong item - or nothing at all, silently. `null`
+ * means at least one key did not resolve; the message names the first
+ * key that failed.
  */
-function missingItemIndices(missing: ReadonlyArray<string>): ReadonlySet<number> {
-  const indices = new Set<number>();
+function resolveMissingItems(
+  missing: ReadonlyArray<string>,
+  items: ReadonlyArray<ExtractedSignalItem>,
+): { items: ReadonlyArray<ExtractedSignalItem>; unresolved: string | null } {
+  const resolved: ExtractedSignalItem[] = [];
   for (const key of missing) {
     const match = MISSING_KEY_RE.exec(key);
-    if (match !== null) indices.add(Number(match[1]));
+    const index = match === null ? Number.NaN : Number(match[1]);
+    const item = Number.isInteger(index) ? items[index] : undefined;
+    if (item === undefined || (match !== null && item.topic !== match[2])) {
+      return { items: resolved, unresolved: key };
+    }
+    resolved.push(item);
   }
-  return indices;
+  return { items: resolved, unresolved: null };
 }
 
 /**
@@ -211,29 +224,6 @@ function itemDedupHash(item: ExtractedSignalItem): string {
     principle: item.principle,
     ...(scope ? { scope } : {}),
   });
-}
-
-/**
- * Every delivered missing key, measured against the dedup index - the
- * project's own definition of "this signal content exists". A missing
- * key whose index or topic does not resolve to a recorded item is
- * undelivered: a key this letter's payload cannot vouch for is not
- * confirmed by a guess.
- */
-function countDeliveredByHash(
-  missing: ReadonlyArray<string>,
-  items: ReadonlyArray<ExtractedSignalItem>,
-  dedup: ReadonlyMap<string, unknown>,
-): number {
-  let delivered = 0;
-  for (const key of missing) {
-    const match = MISSING_KEY_RE.exec(key);
-    if (match === null) continue;
-    const item = items[Number(match[1])];
-    if (item === undefined) continue;
-    if (dedup.has(itemDedupHash(item))) delivered += 1;
-  }
-  return delivered;
 }
 
 /**
@@ -307,9 +297,21 @@ export function classifyDeadLetter(
   // true even if the session has since been ignored or forgotten.
   const payload = recoverablePayload(record);
   const dedup = buildDedupIndex(vault);
+  const resolvedMissing =
+    payload !== null ? resolveMissingItems(record.missing, payload.items) : null;
+  if (payload !== null && resolvedMissing !== null && resolvedMissing.unresolved !== null) {
+    return Object.freeze({
+      category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+      reason:
+        `missing key ${JSON.stringify(resolvedMissing.unresolved)} names no item this ` +
+        "letter's frozen payload carries; the record may be hand-edited or from a " +
+        "different build",
+      command: null,
+    });
+  }
   const delivered =
-    payload !== null
-      ? countDeliveredByHash(record.missing, payload.items, dedup)
+    payload !== null && resolvedMissing !== null
+      ? resolvedMissing.items.filter((item) => dedup.has(itemDedupHash(item))).length
       : countDeliveredByTopic(record.missing, inboxSignalTopics(dedup, record.reference));
   if (record.missing.length > 0 && delivered === record.missing.length) {
     return Object.freeze({
@@ -419,31 +421,37 @@ export function planRecovery(
   // items, never the whole payload. The items that landed before the
   // failure are not recovery's input - replaying them would resurrect
   // any one an operator removed afterwards (a deleted signal, a
-  // rejected queue row the dedup index never walked).
-  const missingIndices = missingItemIndices(record.missing);
+  // rejected queue row the dedup index never walked). A missing key
+  // that names no payload item is a letter this build cannot recover
+  // faithfully, and is refused rather than silently planning nothing.
+  const resolved = resolveMissingItems(record.missing, payload.items);
+  if (resolved.unresolved !== null) {
+    throw new DeadLetterRecoveryError(
+      `dead letter ${record.id} cannot be planned as a payload re-run: missing key ` +
+        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
+      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+    );
+  }
   return Object.freeze({
     classification,
     items: Object.freeze(
-      payload.items
-        .map((item, index) => ({ item, index }))
-        .filter(({ index }) => missingIndices.has(index))
-        .map(({ item }) => {
-          if (dedup.has(itemDedupHash(item))) {
-            return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
-          }
-          const verdict = classifyDurability(item.principle, { denylist });
-          if (!verdict.durable) {
-            return Object.freeze({
-              topic: item.topic,
-              verdict: DEAD_LETTER_ITEM_VERDICT.refused,
-              ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
-            });
-          }
+      resolved.items.map((item) => {
+        if (dedup.has(itemDedupHash(item))) {
+          return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
+        }
+        const verdict = classifyDurability(item.principle, { denylist });
+        if (!verdict.durable) {
           return Object.freeze({
             topic: item.topic,
-            verdict: staged ? DEAD_LETTER_ITEM_VERDICT.staged : DEAD_LETTER_ITEM_VERDICT.write,
+            verdict: DEAD_LETTER_ITEM_VERDICT.refused,
+            ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
           });
-        }),
+        }
+        return Object.freeze({
+          topic: item.topic,
+          verdict: staged ? DEAD_LETTER_ITEM_VERDICT.staged : DEAD_LETTER_ITEM_VERDICT.write,
+        });
+      }),
     ),
   });
 }
@@ -489,13 +497,21 @@ export function applyRecovery(
   // input, and replaying them would resurrect any one an operator
   // removed afterwards - a deleted signal, or a rejected queue row,
   // neither of which the dedup index walks. "Nothing stale is replayed"
-  // is the module's own promise.
-  const missingIndices = missingItemIndices(record.missing);
-  const toReplay = payload.items.filter((_, index) => missingIndices.has(index));
+  // is the module's own promise - and so is never reporting success over
+  // a re-run that would write nothing: a missing key naming no payload
+  // item is refused, not silently skipped.
+  const resolved = resolveMissingItems(record.missing, payload.items);
+  if (resolved.unresolved !== null) {
+    throw new DeadLetterRecoveryError(
+      `dead letter ${record.id} cannot be recovered by re-running a payload: missing key ` +
+        `${JSON.stringify(resolved.unresolved)} names no item its frozen payload carries`,
+      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+    );
+  }
   return commitExtractedSignals(
     vault,
     record.reference,
-    { items: toReplay },
+    { items: resolved.items },
     {
       agent: opts.agent,
       now: opts.now,
