@@ -66,7 +66,7 @@ import {
 const USAGE =
   "usage: o2b brain dead-letters [list] [--vault <path>] [--json]\n" +
   "       o2b brain dead-letters show <id> [--vault <path>] [--json]\n" +
-  "       o2b brain dead-letters recover <id> [--dry-run] [--apply] [--yes] [--agent <name>]\n" +
+  "       o2b brain dead-letters recover <id> [--dry-run | --apply] [--yes] [--agent <name>]\n" +
   "                        [--vault <path>] [--json]";
 
 /** The three subcommand names, for the usage error. */
