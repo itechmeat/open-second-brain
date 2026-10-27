@@ -292,7 +292,8 @@ export const CONTEXT_PACK_TAIL_TRIM_KEEP = 3;
 
 /**
  * Score-aware tail trim (t_cb6a5558): a tail item whose query-term
- * overlap is at least this fraction of the top delivered score restates
+ * coverage - the fraction of the query's tokens it carries - is at
+ * least this fraction of the top delivered item's coverage restates
  * the question's terms nearly as fully as the top hit and stays
  * deliverable. A named constant, not a knob.
  */
@@ -324,7 +325,7 @@ interface TailTrimRescueCandidate {
 export interface ContextPackTailTrimReport {
   /** Tail items dropped whole; each also carries a `"tail-trim"` skip entry. */
   readonly dropped: number;
-  /** Tail items kept because their query-term overlap nearly matched the top hit. */
+  /** Tail items kept because their query-term coverage nearly matched the top hit's. */
   readonly keptByQueryTerms: number;
   /** Former `over-budget` candidates re-admitted under the freed budget. */
   readonly rescued: number;
@@ -592,12 +593,12 @@ export interface ContextPackOptions {
   readonly entityFacts?: boolean;
   /**
    * Score-aware tail trim for delivered evidence (t_cb6a5558). When
-   * true AND a query is present, the pack scores every delivered item
-   * against the query with the same language-agnostic token-overlap
-   * kernel the `ranked` mode ranks with, keeps its top
+   * true AND a query is present, the pack scores every delivered item's
+   * query-term coverage - the fraction of the query's tokens the item
+   * carries, in every query mode - keeps its top
    * {@link CONTEXT_PACK_TAIL_TRIM_KEEP} delivered items, keeps any tail
-   * item whose score is at least
-   * {@link TAIL_TRIM_KEEP_FRACTION} of the top delivered score (it
+   * item whose coverage is at least
+   * {@link TAIL_TRIM_KEEP_FRACTION} of the top delivered item's (it
    * restates the question's terms), drops the rest whole with
    * `"tail-trim"` skip entries, and offers the freed budget back to
    * `over-budget` candidates in priority order. The report gains a
@@ -1277,25 +1278,22 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   const trimQueryTokens =
     opts.tailTrim === true && opts.query !== undefined ? tokenise(opts.query) : null;
   const tailTrimActive = trimQueryTokens !== null && trimQueryTokens.size > 0;
-  // Per-candidate restatement scores for the trim. In `ranked` mode the
-  // comparator already scored every candidate with the same jaccard
-  // kernel against the same query, so the map is reused verbatim; in
-  // every other mode the scores are computed here, under the flag only,
-  // so the off-path work does not change.
+  // Per-candidate restatement scores for the trim: query-term coverage
+  // in EVERY mode. The ranked comparator's jaccard kernel is not
+  // reusable here - its union grows with the page's own vocabulary, so
+  // a long body that carries every query term scores a fraction of the
+  // page that is only the query, and the trim would keep the short
+  // ones rather than the restating ones. Coverage's denominator is the
+  // query alone, which is the keep rule's own measure; the scores are
+  // computed here, under the flag only, so the off-path work does not
+  // change.
   const tailTrimScoreById = new Map<string, number>();
   if (tailTrimActive) {
-    if (rankedQuery !== null) {
-      for (const c of candidates) {
-        const score = relevanceById.get(c.id);
-        if (score !== undefined) tailTrimScoreById.set(c.id, score);
-      }
-    } else {
-      for (const c of candidates) {
-        tailTrimScoreById.set(
-          c.id,
-          jaccard(trimQueryTokens, tokenise(`${c.topic} ${c.principle} ${c.body}`)),
-        );
-      }
+    for (const c of candidates) {
+      tailTrimScoreById.set(
+        c.id,
+        queryTermCoverage(trimQueryTokens, tokenise(`${c.topic} ${c.principle} ${c.body}`)),
+      );
     }
   }
 
@@ -1501,24 +1499,44 @@ function semanticRelevanceFor(opts: ContextPackOptions): ReadonlyMap<string, num
 }
 
 /**
+ * Query-term coverage: the fraction of the query's tokens the document
+ * carries - |q ∩ d| / |q| - the measure the trim's keep rule and its
+ * `kept_by_query_terms` counter name ("restates the question's terms
+ * nearly as fully"). The denominator is the query alone, so a long
+ * body that carries every query term scores 1 where the ranked
+ * comparator's jaccard kernel (|q ∩ d| / |q ∪ d|) scores it a fraction
+ * of the page that is only the query. A tokenless query covers
+ * nothing.
+ */
+function queryTermCoverage(
+  queryTokens: ReadonlySet<string>,
+  docTokens: ReadonlySet<string>,
+): number {
+  if (queryTokens.size === 0) return 0;
+  let hits = 0;
+  for (const token of queryTokens) if (docTokens.has(token)) hits += 1;
+  return hits / queryTokens.size;
+}
+
+/**
  * The score-aware tail trim (t_cb6a5558), applied once to the unified
  * walk's delivered set. The first {@link CONTEXT_PACK_TAIL_TRIM_KEEP}
  * items are immune - position, not score, shields the head, so the
  * synthesized attention item (always unshifted first) is never scored,
- * dropped or reordered. Every later item whose restatement score is at
- * least {@link TAIL_TRIM_KEEP_FRACTION} of the top delivered score is
- * kept; the rest drop WHOLE - never partially re-cut - each becoming a
- * {@link TAIL_TRIM_SKIP_REASON} skip. The freed budget is then offered
- * to `over-budget` candidates in walk (priority) order: one that clears
- * the same bar is re-admitted as a normal item - its `over-budget` skip
- * is retracted, since it was delivered - and one that does not clear the
- * bar, or that does not fit inside the budget the trim freed, keeps its
- * skip - the rescue re-spends what the trim freed, never the slack the
- * walk happened to leave under `maxTokens`. Returns the trimmed item
- * list in delivery order (head, kept tail, rescued), the tokens now
- * spent (`used`), and the raw counters the report is computed from - so
- * a later ceiling that cuts the trim's own output can recount it against
- * what actually shipped.
+ * dropped or reordered. Every later item whose query-term coverage is
+ * at least {@link TAIL_TRIM_KEEP_FRACTION} of the top delivered item's
+ * is kept; the rest drop WHOLE - never partially re-cut - each becoming
+ * a {@link TAIL_TRIM_SKIP_REASON} skip. The freed budget is then
+ * offered to `over-budget` candidates in walk (priority) order: one
+ * that clears the same bar is re-admitted as a normal item - its
+ * `over-budget` skip is retracted, since it was delivered - and one
+ * that does not clear the bar, or that does not fit inside the budget
+ * the trim freed, keeps its skip - the rescue re-spends what the trim
+ * freed, never the slack the walk happened to leave under `maxTokens`.
+ * Returns the trimmed item list in delivery order (head, kept tail,
+ * rescued), the tokens now spent (`used`), and the raw counters the
+ * report is computed from - so a later ceiling that cuts the trim's
+ * own output can recount it against what actually shipped.
  */
 function applyTailTrim(
   items: ReadonlyArray<ContextPackItem>,
