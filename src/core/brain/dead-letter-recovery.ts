@@ -213,15 +213,21 @@ function resolveMissingItems(
   const seen = new Set<number>();
   for (const key of missing) {
     const match = MISSING_KEY_RE.exec(key);
-    const index = match === null ? Number.NaN : Number(match[1]);
-    const item = Number.isInteger(index) ? items[index] : undefined;
+    if (match === null) {
+      return {
+        items: resolved,
+        unresolved: { key, why: "is not an items[<index>]:<topic> key" },
+      };
+    }
+    const index = Number(match[1]);
+    const item = items[index];
     if (item === undefined) {
       return {
         items: resolved,
         unresolved: { key, why: "names no item the frozen payload carries" },
       };
     }
-    if (match === null || item.topic !== match[2]) {
+    if (item.topic !== match[2]) {
       return {
         items: resolved,
         unresolved: { key, why: "does not name that item's own topic" },
@@ -326,7 +332,17 @@ export function classifyDeadLetter(
   // against the key count - by topic on a v1 letter as much as by item on
   // a v2 one - could read a half-delivered letter resolved or hand the
   // re-run the same item twice. The record does not vouch for itself.
-  const repeatKey = record.missing.find((key, index) => record.missing.indexOf(key) !== index);
+  // The keys compare in CANONICAL form - parsed index plus topic - so a
+  // zero-padded respelling of the same key does not slip past an exact
+  // string match; a key that parses no further compares as written.
+  const canonicalKeys = record.missing.map((key) => {
+    const match = MISSING_KEY_RE.exec(key);
+    return match === null ? key : `items[${Number(match[1])}]:${match[2]}`;
+  });
+  const repeatKey = record.missing.find((_, index) => {
+    const canonical = canonicalKeys[index];
+    return canonical !== undefined && canonicalKeys.indexOf(canonical) !== index;
+  });
   if (repeatKey !== undefined) {
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,

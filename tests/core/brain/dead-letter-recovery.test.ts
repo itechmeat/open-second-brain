@@ -236,6 +236,24 @@ describe("the recovery classifier", () => {
     );
   });
 
+  test("a zero-padded respelling of a missing key is the same hand-edit", () => {
+    // items[00]:a parses to the same item as items[0]:a; an exact string
+    // compare let the pair through and the v1 topic count read a
+    // half-delivered letter resolved (both "keys" answered by the one
+    // topic on disk). The keys compare in canonical form.
+    commitExtractedSignals(vault, SESSION, { items: [item()] }, { agent: AGENT, now: NOW });
+    const letter = v1Letter(["items[0]:release-notes-style", "items[1]:module-names"]);
+    const path = deadLetterPath(vault, letter.id);
+    const body = JSON.parse(readFileSync(path, "utf8")) as { missing: string[] };
+    body.missing = ["items[0]:release-notes-style", "items[00]:release-notes-style"];
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+    const handEdited = readDeadLetter(vault, letter.id);
+    if (handEdited === null) throw new Error("the hand-edited fixture letter did not parse");
+    expect(classifyDeadLetter(vault, handEdited).category).toBe(
+      DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+    );
+  });
+
   test("a session whose items sit staged in the write-approval queue classifies pending", () => {
     // Write approval was on when the commit ran: the item that LANDED is
     // staged in Brain/pending/ carrying the session_ref, and the letter's
