@@ -2815,9 +2815,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   flips the snapshot unhealthy. Below local reach the lock PATH is
   withheld (a resolved host path may sit outside the vault) while every
   state field stays.
-- Since v1.95.0 the receipt join and the new gates have no MCP tools by
-  design: `brain_context_receipts` `show` gains the `reply_presence`
-  join (see the table above), the dead-letter exit
+- Since v1.95.0 the receipt join and the new gates add no MCP tool of
+  their own by design: `brain_context_receipts` `show` gains the
+  `reply_presence` join on its existing tool (see the table above), the
+  dead-letter exit
   (`o2b brain dead-letters` list / show / recover) stays CLI-only, and a
   hook-less agent that needs a commit-blocking validation gate runs
   `o2b brain validate --paths <page>... | --dirty [--strict]` - the same
