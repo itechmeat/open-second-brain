@@ -10,6 +10,7 @@ import {
   READINESS_STATUS,
   READINESS_STATUSES,
   ReadinessTimeoutError,
+  clientAskBudgetMs,
   isReadinessStatus,
   probeClientVersions,
   probeEmbeddingProvider,
@@ -1096,6 +1097,27 @@ describe("probeClientVersions", () => {
     expect(probe.rows).toBeDefined();
     expect(probe.rows).toHaveLength(2);
     expect(probe.status).toBe(READINESS_STATUS.pass);
+  });
+
+  test("the ask's own budget stays strictly below the probe's, at every budget", () => {
+    // The 50 ms floor once clamped the child budget ABOVE a probe budget
+    // under ~63 ms: the wrapper's cutoff then fired first and replaced
+    // the rows with a bare timeout - the exact loss asking together
+    // exists to prevent. The cap at the probe budget minus one keeps the
+    // ask's timer ahead of the wrapper's at every budget, so the verdict
+    // always carries its rows, each naming its own timeout.
+    for (const probeBudgetMs of [0, 1, 2, 40, 50, 62, 63, 64, 100, DEFAULT_READINESS_TIMEOUT_MS]) {
+      expect(clientAskBudgetMs(probeBudgetMs)).toBeLessThan(probeBudgetMs);
+    }
+    // Normal budgets keep the 80% share's headroom between the two
+    // timers, and the 50 ms floor stands whenever the probe budget
+    // allows it.
+    expect(clientAskBudgetMs(DEFAULT_READINESS_TIMEOUT_MS)).toBe(
+      Math.floor(DEFAULT_READINESS_TIMEOUT_MS * 0.8),
+    );
+    expect(clientAskBudgetMs(500)).toBe(400);
+    // A budget under the floor: the ask dies one tick before the wrapper.
+    expect(clientAskBudgetMs(40)).toBe(39);
   });
 
   test("the generic target has no client binary of its own and is skipped by name", async () => {

@@ -1206,6 +1206,21 @@ export async function spawnClientVersion(
   }
 }
 
+/**
+ * The normal ask keeps a fifth of the probe budget in reserve (the 80%
+ * share), floored at 50 ms so a real spawn is never asked to answer
+ * against nothing. The floor is capped at the probe budget minus one, so
+ * the ask's own timer ALWAYS expires before the probe-level wrapper's:
+ * a budget under the floor would otherwise clamp the ask ABOVE the
+ * probe's, let the wrapper's cutoff fire first, and replace the rows
+ * with a bare timeout - the exact loss asking together exists to
+ * prevent. Below the floor the ask dies a tick before the wrapper, so
+ * the verdict still carries its rows, each naming its own timeout.
+ */
+export function clientAskBudgetMs(probeBudgetMs: number): number {
+  return Math.min(probeBudgetMs - 1, Math.max(50, Math.floor(probeBudgetMs * 0.8)));
+}
+
 /** First stdout line, trimmed and length-capped - the raw line, never parsed. */
 function firstVersionLine(stdout: string): string | null {
   const line = stdout.split("\n")[0]?.trim() ?? "";
@@ -1327,7 +1342,7 @@ export async function probeClientVersions(opts: ReadinessOptions): Promise<Readi
   // replace every answered row with a bare timeout while the loop kept
   // spawning children nobody awaited any more.
   const probeBudgetMs = opts.perCheckTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
-  const childBudgetMs = Math.max(50, Math.floor(probeBudgetMs * 0.8));
+  const childBudgetMs = clientAskBudgetMs(probeBudgetMs);
   const ask =
     opts.clientVersionRunner ??
     ((argv: ReadonlyArray<string>) => spawnClientVersion(argv, childBudgetMs));
