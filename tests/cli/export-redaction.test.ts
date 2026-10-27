@@ -304,6 +304,42 @@ describe("a visibility-reserved preference is left out and named by the shared l
     writeFileSync(abs, readFileSync(abs, "utf8").replace(/^---\n/, `---\n${line}\n`));
   }
 
+  /** Hand-edit the frontmatter id the same way an operator does. */
+  function stampPrefId(slug: string, id: string): void {
+    const abs = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace(/^id: .*$/m, `id: ${id}`));
+  }
+
+  test("a reserved preference whose id carries URL credentials is named scrubbed, never raw", async () => {
+    // The frontmatter id is read verbatim, so a hand-edited one can carry
+    // a credential. The egress guard scrubs the identifier inside the
+    // payload it releases; the stderr notices must name the SAME scrubbed
+    // form on every lane, never the raw secret the vault still holds.
+    await bootstrap();
+    await seedPreference("reserved", "principle reserved");
+    stampPrefMarker("reserved", "access: private");
+    stampPrefId("reserved", "pref-https://bert:hunter2@internal.example/ops");
+
+    const bank = await runCli(["brain", "bank-export", "--vault", vault], ENV());
+    expect(bank.returncode).toBe(0);
+    const payload = JSON.parse(bank.stdout) as {
+      preferences_omitted?: ReadonlyArray<{ id: string }>;
+    };
+    expect(payload.preferences_omitted?.[0]?.id).toBe(
+      `pref-https://${REDACTION_PLACEHOLDER}@internal.example/ops`,
+    );
+    expect(bank.stderr).toContain(`${REDACTION_PLACEHOLDER}@internal.example/ops`);
+    expect(bank.stderr).toContain("left out");
+    expect(bank.stderr).not.toContain("hunter2");
+
+    const txt = await runCli(["brain", "export", "--vault", vault, "--format", "llms-txt"], ENV());
+    expect(txt.returncode).toBe(0);
+    expect(txt.stderr).toContain(`${REDACTION_PLACEHOLDER}@internal.example/ops`);
+    expect(txt.stderr).toContain("left out");
+    expect(txt.stderr).not.toContain("hunter2");
+    expect(txt.stdout).not.toContain("hunter2");
+  });
+
   test("bank-export omits it from the bundle and names it on stderr", async () => {
     await bootstrap();
     await seedPreference("reserved", "principle reserved");

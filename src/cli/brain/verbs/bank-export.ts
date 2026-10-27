@@ -80,9 +80,6 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   let droppedReferences = 0;
   try {
     const bundle = exportBankBundle(vault);
-    // Absent-when-empty: the bundle carries the field only when a
-    // reservation held a row back.
-    preferenceOmissions = bundle.preferences_omitted ?? [];
     const nodeSplit = egressContentClassSplit(bundle.graph.nodes, classPolicy, {
       name: (node) => node.path,
       isPromptDerived: (node) => isPromptDerivedPage(vault, node.path),
@@ -121,6 +118,12 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
       pages: keptPages,
     });
     if (verdict.outcome !== EGRESS_OUTCOME.released) return fail(verdict.detail);
+    // Absent-when-empty: the bundle carries the field only when a
+    // reservation held a row back. Read from the RELEASED payload, so the
+    // notice names each denied id in the same scrubbed form the export
+    // carries - a hand-edited id whose credential the guard stripped
+    // reaches stderr scrubbed, never raw.
+    preferenceOmissions = verdict.payload.preferences_omitted ?? [];
     json = JSON.stringify(verdict.payload, null, 2) + "\n";
     redacted = verdict.redacted;
   } catch (exc) {

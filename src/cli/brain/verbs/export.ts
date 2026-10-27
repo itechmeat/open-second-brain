@@ -117,7 +117,18 @@ async function exportLlmsTxt(flags: BrainVerbFlags): Promise<FormatOutcome> {
   if (verdict.outcome !== EGRESS_OUTCOME.released) {
     return { kind: "refused", detail: verdict.detail };
   }
-  return released(verdict.payload, verdict.redacted, detail.omitted);
+  // The omission list rides the same guard as the document: the notice
+  // names each denied id in the scrubbed form the boundary released,
+  // never the raw frontmatter value.
+  const omittedVerdict = redactForEgress(EGRESS_SITE, detail.omitted);
+  if (omittedVerdict.outcome !== EGRESS_OUTCOME.released) {
+    return { kind: "refused", detail: omittedVerdict.detail };
+  }
+  return released(
+    verdict.payload,
+    verdict.redacted || omittedVerdict.redacted,
+    omittedVerdict.payload,
+  );
 }
 
 /** `--since` / `--until` as instants, or the operator's error. */
