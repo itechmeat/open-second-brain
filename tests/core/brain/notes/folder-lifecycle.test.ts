@@ -763,6 +763,42 @@ describe("move-folder", () => {
     },
   );
 
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a partially-failed set still cleans the empty branch a failed move invented",
+    async () => {
+      // One note relocates; the nested one fails the source-name drop
+      // after its branch was created for it. The set ends half-moved, and
+      // the empty branch the failed move invented must not stand beside a
+      // report that says it never moved - while the moved note's own
+      // branch, holding real bytes, does.
+      note("Projects/Old/a.md", "alpha\n");
+      note("Projects/Old/sub/b.md", "beta\n");
+      chmodSync(join(vault, "Projects/Old/sub"), 0o500);
+      let res;
+      try {
+        res = await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Archive",
+          apply: true,
+        });
+      } finally {
+        chmodSync(join(vault, "Projects/Old/sub"), 0o700);
+      }
+
+      expect(res.applied).toBe(true);
+      expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+      expect(res.moveFailures).toHaveLength(1);
+      expect(res.moveFailures[0]!.path).toBe("Projects/Old/sub/b.md");
+      // The moved note stands; the failed move's invented branch is gone.
+      expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+      expect(existsSync(join(vault, "Archive/Old/sub"))).toBe(false);
+      // The source keeps the failed file exactly where the report says.
+      expect(existsSync(join(vault, "Projects/Old/sub/b.md"))).toBe(true);
+      expect(existsSync(join(vault, "Projects/Old"))).toBe(true);
+    },
+  );
+
   test("a foreign file at a cleared destination name survives the move's fault", async () => {
     note("Projects/Old/a.md", "alpha\n");
     // The pre-flight cleared the destination name; a foreign file appears

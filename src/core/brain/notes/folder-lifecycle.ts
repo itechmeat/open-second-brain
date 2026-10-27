@@ -857,18 +857,29 @@ export async function folderLifecycle(
         moveFailures.push({ path: move.fromRel, reason });
       }
     }
-    // A set where NOTHING moved - every relocation failed - must not
-    // leave the directories this apply invented standing empty beside a
-    // report that says nothing moved. The failed moves' own destination
-    // spellings name the subtree the per-file machinery created for
-    // them; it is offered to rmdirSync deepest-first, then the
-    // destination folder, each only while genuinely empty - so a foreign
-    // name inside keeps its branch standing - and never at or above the
-    // ancestor that was already here. A destination that existed before,
-    // or one an empty-source move deliberately created, is not this
-    // cleanup's business.
-    if (moved.length === 0 && planned.length > 0 && !destinationExisted) {
-      const doomed = new Set<string>([destination.relPath]);
+    // The directories the per-file machinery invented for FAILED moves
+    // never stay behind: each failed move's own destination spelling
+    // names its branch, offered to rmdirSync deepest-first, each only
+    // while genuinely empty - so a moved file's branch, a foreign name or
+    // a name that could not be dropped keeps its branch standing. When
+    // NOTHING moved, the destination folder and the chain the recursive
+    // mkdir invented above it go too, up to - never including - the
+    // ancestor that was already here; with a partial set they hold real
+    // moves, so the walk stops at the destination folder. A destination
+    // that existed before, or one an empty-source move deliberately
+    // created, is not this cleanup's business.
+    if (failedDestinations.length > 0) {
+      const doomed = new Set<string>();
+      if (moved.length === 0 && !destinationExisted) {
+        doomed.add(destination.relPath);
+        let up = dirname(destination.relPath);
+        while (up !== "." && up !== existingAncestor) {
+          doomed.add(up);
+          const parentRel = dirname(up);
+          if (parentRel === up) break;
+          up = parentRel;
+        }
+      }
       for (const toRel of failedDestinations) {
         let dir = dirname(toRel);
         while (dir !== destination.relPath && dir !== ".") {
@@ -877,15 +888,6 @@ export async function folderLifecycle(
           if (parentRel === dir) break;
           dir = parentRel;
         }
-      }
-      // The chain above the destination that the recursive mkdir invented,
-      // up to - never including - the ancestor that was already here.
-      let up = dirname(destination.relPath);
-      while (up !== "." && up !== existingAncestor) {
-        doomed.add(up);
-        const parentRel = dirname(up);
-        if (parentRel === up) break;
-        up = parentRel;
       }
       const deepestFirst = [...doomed].toSorted((a, b) => b.length - a.length);
       for (const rel of deepestFirst) {
