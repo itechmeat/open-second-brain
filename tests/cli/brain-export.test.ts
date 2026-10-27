@@ -210,12 +210,16 @@ describe("brain export privacy omissions", () => {
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
       preferences: ReadonlyArray<{ id: string }>;
-      omitted?: ReadonlyArray<{ id: string; reason: string }>;
+      omitted?: ReadonlyArray<{ id: string; reason: string; denied_by: string }>;
     };
     expect(payload.preferences.map((p) => p.id)).toEqual(["pref-alpha"]);
-    expect(payload.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
-    // The omission is DISCLOSED, not silent: the notice names the rule.
+    expect(payload.omitted).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "access" },
+    ]);
+    // The omission is DISCLOSED, not silent: the notice names the rule and
+    // the reservation key that denied it.
     expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("(access)");
     expect(r.stderr).toContain("left out");
     // stderr only - the json bytes name the omission as data, not prose.
     expect(r.stdout).not.toContain("left out");
@@ -234,6 +238,7 @@ describe("brain export privacy omissions", () => {
     expect(r.stdout).toContain("- pref-alpha (topic: alpha, scope: writing): principle alpha");
     expect(r.stdout).not.toContain("pref-reserved");
     expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("(sensitivity)");
     expect(r.stderr).toContain("left out");
   });
 

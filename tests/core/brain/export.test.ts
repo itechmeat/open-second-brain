@@ -247,7 +247,15 @@ describe("collector privacy denial reporting", () => {
     // Sorted by id, like the rows: the denial list rides byte-deterministic
     // surfaces (the json envelope's omitted, the bundle's preferences_omitted).
     expect(out.denied.map((d) => d.id)).toEqual(marked.toSorted());
-    for (const d of out.denied) expect(d.reason).toBe("visibility");
+    // The reason stays the "visibility" class for machine readers; the key
+    // names the frontmatter key whose value actually denied the row.
+    const expectedKeys = new Map(
+      marked.map((id) => [id, id.replace("pref-marked-", "").split("-")[0] as string]),
+    );
+    for (const d of out.denied) {
+      expect(d.reason).toBe("visibility");
+      expect(d.denied_by).toBe(expectedKeys.get(d.id));
+    }
   });
 
   test("visibility: private denies the row", () => {
@@ -255,7 +263,9 @@ describe("collector privacy denial reporting", () => {
     writePreference(vault, basePref("open"));
 
     const out = collectPreferenceRows(vault);
-    expect(out.denied).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(out.denied).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "visibility" },
+    ]);
     // Denied rows ride beside the kept ones, never inside them.
     expect(out.rows.map((r) => r.id).toSorted()).toEqual(["pref-open", "pref-reserved"]);
   });
@@ -292,7 +302,9 @@ describe("shared-lane omission reporting", () => {
 
     const out = exportPreferencesJson(vault);
     expect(out.preferences.map((p) => p.id)).toEqual(["pref-open"]);
-    expect(out.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(out.omitted).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "access" },
+    ]);
     // The envelope's version is additive, not a bump: a consumer written
     // against the field-less envelope keeps working.
     expect(out.schema).toBe(BRAIN_EXPORT_SCHEMA_VERSION);
@@ -314,7 +326,9 @@ describe("shared-lane omission reporting", () => {
     expect(detail.text).toContain("- pref-open (topic: open, scope: writing): Principle for open");
     expect(detail.text).not.toContain("pref-reserved");
     expect(detail.text).not.toContain("Principle for reserved");
-    expect(detail.omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(detail.omitted).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "confidentiality" },
+    ]);
     // The stable string signature delegates to the detailed one, so the
     // two never disagree about what the document contains.
     expect(exportPreferencesLlmsTxt(vault)).toBe(detail.text);

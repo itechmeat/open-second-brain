@@ -108,9 +108,15 @@ describe("brain bank-export notices", () => {
     expect(r.stdout).not.toContain("left out");
     const bundle = JSON.parse(r.stdout) as {
       preferences: ReadonlyArray<{ id: string }>;
-      preferences_omitted?: ReadonlyArray<{ id: string; reason: string }>;
+      preferences_omitted?: ReadonlyArray<{
+        id: string;
+        reason: string;
+        denied_by: string;
+      }>;
     };
     expect(bundle.preferences.map((p) => p.id)).toEqual([]);
-    expect(bundle.preferences_omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(bundle.preferences_omitted).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "access" },
+    ]);
   });
 });

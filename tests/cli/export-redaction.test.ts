@@ -349,10 +349,16 @@ describe("a visibility-reserved preference is left out and named by the shared l
     expect(r.returncode).toBe(0);
     const payload = JSON.parse(r.stdout) as {
       preferences: ReadonlyArray<{ id: string }>;
-      preferences_omitted?: ReadonlyArray<{ id: string; reason: string }>;
+      preferences_omitted?: ReadonlyArray<{
+        id: string;
+        reason: string;
+        denied_by: string;
+      }>;
     };
     expect(payload.preferences.map((p) => p.id)).toEqual([]);
-    expect(payload.preferences_omitted).toEqual([{ id: "pref-reserved", reason: "visibility" }]);
+    expect(payload.preferences_omitted).toEqual([
+      { id: "pref-reserved", reason: "visibility", denied_by: "access" },
+    ]);
     expect(r.stderr).toContain("pref-reserved");
     expect(r.stderr).toContain("left out");
     // stderr only: the bundle names the omission as data, not prose.

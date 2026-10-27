@@ -33,8 +33,12 @@ import { brainDirs } from "./paths.ts";
 import { vaultDisplayName } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
-import { hasPrivacyDenyMarker } from "../graph/privacy-markers.ts";
-import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
+import {
+  hasPrivacyDenyMarker,
+  PRIVACY_DENY_MARKER_VALUES,
+  PRIVACY_MARKER_KEYS,
+} from "../graph/privacy-markers.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN, normToken, pageVisibility } from "../graph/visibility.ts";
 import { parseFrontmatter } from "../vault.ts";
 
 export const BRAIN_EXPORT_SCHEMA_VERSION = 1 as const;
@@ -49,11 +53,44 @@ export const BRAIN_EXPORT_SCHEMA_VERSION = 1 as const;
  */
 export const PREFERENCE_DENY_REASON = "visibility" as const;
 
+/**
+ * The frontmatter key whose value denied a shared lane a preference.
+ *
+ * `visibility` names the reserved token's own key; the other three are the
+ * informal marker keys of {@link PRIVACY_MARKER_KEYS} (kept in sync by
+ * construction - the runtime list below is built from that constant, and a
+ * key added there flows into the denial vocabulary with it).
+ */
+export type PreferenceDenyKey = "visibility" | "access" | "confidentiality" | "sensitivity";
+
+/** The denial keys, in the order the docs list them. */
+export const PREFERENCE_DENY_KEYS: ReadonlyArray<PreferenceDenyKey> = Object.freeze([
+  "visibility",
+  ...PRIVACY_MARKER_KEYS,
+]) as ReadonlyArray<PreferenceDenyKey>;
+
 /** One preference a shared lane leaves out, named the way the rows name them. */
 export interface PreferenceDenial {
   /** The denied row's id (`pref-<slug>`), as it appears in `rows`. */
   readonly id: string;
+  /**
+   * The reason CLASS, always the reserved-token class: a deny here is a
+   * visibility reservation, never a content class. Kept verbatim so the
+   * machine readers of the json envelope's `omitted`, the bundle's
+   * `preferences_omitted` and the knowledge pack's `blocked` list keep
+   * their vocabulary; the key below is the specific half.
+   */
   readonly reason: typeof PREFERENCE_DENY_REASON;
+  /**
+   * The frontmatter key whose value made the denial, named `denied_by`
+   * rather than `key` because the egress guard redacts every value under
+   * a field name containing "key" - a denial report must survive its own
+   * boundary. `visibility` when the reserved token under `visibility:`
+   * denied, or the informal marker key (`access` / `confidentiality` /
+   * `sensitivity`) that said the same thing. Canonical lower-case
+   * spelling, whatever case the file used.
+   */
+  readonly denied_by: PreferenceDenyKey;
 }
 
 /** How many unreadable files the error names before it stops listing. */
@@ -223,7 +260,7 @@ export interface PreferenceCollection {
 }
 
 /**
- * Does this frontmatter deny the preference a shared lane would carry?
+ * Which frontmatter key, if any, denies this preference a shared lane?
  *
  * The same judgment `pageBlockReason` makes for pages in the knowledge
  * pack, read once here from the frontmatter map the collector already
@@ -231,10 +268,35 @@ export interface PreferenceCollection {
  * informal privacy marker (`access: private` and its siblings) saying
  * what the reserved token says. A preference that declares only a
  * caller-scope token is a shared decision, not a reservation, and is
- * carried.
+ * carried. The answer is the KEY that spoke, not just the fact of a
+ * denial, so the stderr notice can name what the docs promise - the
+ * reservation key that denied the row.
  */
-function deniedByVisibility(meta: FrontmatterMap): boolean {
-  return hasPrivacyDenyMarker(meta) || pageVisibility(meta).includes(REMOTE_DENY_VISIBILITY_TOKEN);
+export function deniedReservationKey(meta: FrontmatterMap): PreferenceDenyKey | null {
+  if (pageVisibility(meta).includes(REMOTE_DENY_VISIBILITY_TOKEN)) return "visibility";
+  if (!hasPrivacyDenyMarker(meta)) return null;
+  // `hasPrivacyDenyMarker` just said some informal marker denies; name the
+  // key that carries the deny value. The value reading mirrors the marker
+  // module's own (a string, or an array of strings, normalised the same
+  // way) - that reader is not exported there, and this module needs it
+  // once, to answer WHICH key spoke rather than only whether one did.
+  for (const key of Object.keys(meta)) {
+    const canonical = PRIVACY_MARKER_KEYS.find((k) => normToken(k) === normToken(key));
+    if (canonical === undefined) continue;
+    const raw = meta[key];
+    const values =
+      typeof raw === "string"
+        ? [raw]
+        : Array.isArray(raw)
+          ? raw.filter((v): v is string => typeof v === "string")
+          : [];
+    if (values.some((v) => PRIVACY_DENY_MARKER_VALUES.includes(normToken(v)))) {
+      return canonical as PreferenceDenyKey;
+    }
+  }
+  // Unreachable: `hasPrivacyDenyMarker` was true, so one of the marker
+  // keys above carries a deny value and the loop already returned it.
+  return null;
 }
 
 /**
@@ -337,7 +399,10 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
       record(err);
       continue;
     }
-    if (deniedByVisibility(meta)) denied.push({ id: pref.id, reason: PREFERENCE_DENY_REASON });
+    const denyKey = deniedReservationKey(meta);
+    if (denyKey !== null) {
+      denied.push({ id: pref.id, reason: PREFERENCE_DENY_REASON, denied_by: denyKey });
+    }
     rows.push(toRow(pref, body));
   }
   rows.sort((a, b) => a.id.localeCompare(b.id));
@@ -411,14 +476,14 @@ export function collectSharedExportRows(vault: string): {
 /**
  * The stderr note naming the preferences a shared lane left out on a
  * visibility reservation, in the `contentClassOmissionNotice` shape:
- * counted, each item named with its reason, and a remedy. The remedy
- * names the reservation itself rather than an export flag - a reserved
- * rule never rides a shared lane, so the only way to share it is to
- * clear the reservation on the file, and the keys listed are the ones
- * this module reads.
+ * counted, each item named with the reservation key that denied it, and a
+ * remedy. The remedy names the reservation itself rather than an export
+ * flag - a reserved rule never rides a shared lane, so the only way to
+ * share it is to clear the reservation on the file, and the keys listed
+ * are the ones this module reads.
  */
 export function preferenceDenialNotice(denied: ReadonlyArray<PreferenceDenial>): string {
-  const list = denied.map((d) => `${d.id} (${d.reason})`).join(", ");
+  const list = denied.map((d) => `${d.id} (${d.denied_by})`).join(", ");
   return (
     `note: ${denied.length} preference(s) left out on a visibility reservation: ${list}; ` +
     "no export flag carries them - clear the reservation " +
