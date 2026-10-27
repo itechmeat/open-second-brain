@@ -1077,7 +1077,9 @@ describe("answer-quote-check hook - reply presence records", () => {
     // carries no answer text itself.
     expect(typeof payload.source_hash).toBe("string");
     expect(payload.source_hash).toMatch(/^[0-9a-f]{64}$/);
-  });
+    // Every test here spawns a real `bun run` hook child; pin the per-test
+    // budget past bun's 5 s default so a loaded runner cannot flake it.
+  }, 20000);
 
   test("a note whose spans all miss reads its strongest miss verdict", async () => {
     // Two candidates, one span missing from both: the whole-file
@@ -1105,7 +1107,7 @@ describe("answer-quote-check hook - reply presence records", () => {
       { path: "Brain/notes/restaking.md", verdict: "not-in-note" },
     ]);
     expect(records[0]!.payload["checked"]).toBe(1);
-  });
+  }, 20000);
 
   test("a reply with no quoted spans at all reads absent for every injected note", async () => {
     writeConfig("shadow");
@@ -1129,7 +1131,7 @@ describe("answer-quote-check hook - reply presence records", () => {
       { path: "Brain/notes/elsewhere.md", start_line: 1, end_line: 1, verdict: "absent" },
       { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "absent" },
     ]);
-  });
+  }, 20000);
 
   test("stop_hook_active silence writes no record", async () => {
     writeConfig("shadow");
@@ -1145,7 +1147,7 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(run.exit).toBe(0);
     expect(run.stdout).toBe("");
     expect(presenceRecords()).toEqual([]);
-  });
+  }, 20000);
 
   test("every phase off runs no check and writes no record", async () => {
     writeConfig("off");
@@ -1157,7 +1159,7 @@ describe("answer-quote-check hook - reply presence records", () => {
     const run = await runHook();
     expect(run.exit).toBe(0);
     expect(presenceRecords()).toEqual([]);
-  });
+  }, 20000);
 
   test("a failed presence write is fail-open: one audit line, the annotation still goes out", async () => {
     writeConfig("shadow");
@@ -1180,7 +1182,7 @@ describe("answer-quote-check hook - reply presence records", () => {
     const lines = run.stderr.split(/\r?\n/).filter((line) => line.length > 0);
     expect(lines.length).toBe(1);
     expect(lines[0]!.startsWith("answer-quote-check:")).toBe(true);
-  });
+  }, 20000);
 
   test("an unreadable transcript writes no record", async () => {
     writeConfig("shadow");
@@ -1194,5 +1196,5 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(run.exit).toBe(0);
     expect(run.stdout).toBe("");
     expect(presenceRecords()).toEqual([]);
-  });
+  }, 20000);
 });
