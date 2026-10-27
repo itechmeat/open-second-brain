@@ -293,6 +293,26 @@ describe("a letter the store refuses to parse is exit 1, never unknown-id", () =
     expect(payload.message).toContain("corrupt");
   });
 
+  test("list names the store's refusal at exit 1 instead of crashing", async () => {
+    writeCorruptLetter();
+    const r = await run([]);
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("corrupt");
+    // A typed refusal, never an uncaught stack: the listing under-reports
+    // nothing and the operator gets the same sentence show gives.
+    expect(r.stderr).not.toContain("at ");
+  });
+
+  test("list --json refuses typed at exit 1", async () => {
+    writeUnknownVersionLetter();
+    const r = await run(["--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("schema_version");
+    expect(payload.message).toContain("parses 1 and 2");
+  });
+
   test("show names an unsupported schema_version at exit 1", async () => {
     writeUnknownVersionLetter();
     const r = await run(["show", UNKNOWN_VERSION_ID]);

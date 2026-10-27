@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -289,9 +289,13 @@ describe("the recovery classifier", () => {
 });
 
 describe("the recovery plan", () => {
-  test("each item is labelled with the verdict the commit's own gates produce", () => {
-    // `release-notes-style` is already on disk (dedup), `module-names` is
-    // not (write), `scratch-pad` fails the denylist (refused).
+  test("each MISSING item is labelled with the verdict the commit's own gates produce", () => {
+    // `release-notes-style` landed before the failure and is not in the
+    // letter's missing set, so the plan - the preview of exactly what
+    // the apply would re-run - never labels it: replaying a delivered
+    // item would resurrect it even if an operator removed it later.
+    // `module-names` is missing and writable (write), `scratch-pad`
+    // fails the denylist (refused).
     commitExtractedSignals(vault, SESSION, { items: [item()] }, { agent: AGENT, now: NOW });
     const letter = v2Letter(
       [
@@ -304,11 +308,10 @@ describe("the recovery plan", () => {
     const plan = planRecovery(vault, letter, { durabilityDenylist: [/scratch/] });
     expect(plan.classification.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.recover);
     expect(plan.items.map((i) => [i.topic, i.verdict])).toEqual([
-      ["release-notes-style", "dedup"],
       ["module-names", "write"],
       ["scratch-pad", "refused"],
     ]);
-    expect(plan.items[2]?.reason).toContain("denylisted");
+    expect(plan.items[1]?.reason).toContain("denylisted");
   });
 
   test("with write approval on, a writable item plans as staged", () => {
@@ -332,6 +335,55 @@ describe("the apply", () => {
     const res = applyRecovery(vault, letter, { agent: AGENT, now: NOW });
     expect(res.written.map((w) => w.topic)).toEqual(["module-names"]);
     expect(res.deduped).toBe(1);
+  });
+
+  test("the apply re-runs only the missing items, never the delivered ones", () => {
+    // Item 0 landed before the failure, so the letter's missing set
+    // names item 1 alone. The operator then removes the delivered
+    // signal; the letter stays recoverable (its MISSING item is not on
+    // disk), and the re-run must resurrect nothing but that missing
+    // item - replaying the removed one is the stale replay the module
+    // promises can never happen.
+    const commit = commitExtractedSignals(
+      vault,
+      SESSION,
+      { items: [item()] },
+      { agent: AGENT, now: NOW },
+    );
+    expect(commit.written).toHaveLength(1);
+    const deliveredPath = join(vault, commit.written[0]!.path);
+    const letter = v2Letter([item(), item({ topic: "module-names" })], ["items[1]:module-names"]);
+    rmSync(deliveredPath, { force: true });
+    expect(existsSync(deliveredPath)).toBe(false);
+    expect(classifyDeadLetter(vault, letter).category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.recover);
+
+    // The plan previews exactly the apply's input: the missing item.
+    const plan = planRecovery(vault, letter);
+    expect(plan.items.map((i) => i.topic)).toEqual(["module-names"]);
+
+    const res = applyRecovery(vault, letter, { agent: AGENT, now: NOW });
+    expect(res.written.map((w) => w.topic)).toEqual(["module-names"]);
+    expect(existsSync(deliveredPath)).toBe(false);
+  });
+
+  test("a v1 letter is not resolved by another session's signal sharing the topic", () => {
+    // The topic is the only identity a payload-less letter names, but
+    // the delivery it asks about is THIS session's: a same-topic signal
+    // committed by a different session confirms nothing about what this
+    // session's commit delivered, and counting it would read a real
+    // partial write as resolved.
+    const other = commitExtractedSignals(
+      vault,
+      "sess-other-session",
+      { items: [item({ topic: "module-names" })] },
+      { agent: AGENT, now: NOW },
+    );
+    expect(other.written).toHaveLength(1);
+    const letter = v1Letter(["items[0]:module-names"]);
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).not.toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
+    // A payload-less letter whose own session delivered nothing re-extracts.
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.reExtract);
   });
 
   test("apply refuses a letter that is not recoverable, naming the category", () => {

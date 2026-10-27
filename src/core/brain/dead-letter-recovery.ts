@@ -184,6 +184,20 @@ function recoverablePayload(record: DeadLetterRecord): {
 const MISSING_KEY_RE = /^items\[(\d+)\]:(.+)$/;
 
 /**
+ * The payload indices the letter's `missing` keys name - the only items
+ * a recovery plans or re-runs. Keys this build cannot parse name no
+ * item and contribute nothing.
+ */
+function missingItemIndices(missing: ReadonlyArray<string>): ReadonlySet<number> {
+  const indices = new Set<number>();
+  for (const key of missing) {
+    const match = MISSING_KEY_RE.exec(key);
+    if (match !== null) indices.add(Number(match[1]));
+  }
+  return indices;
+}
+
+/**
  * The dedup hash one recorded item will dedup against, composed exactly
  * as `commitExtractedSignals` composes it - the same fields, the same
  * scope trim - so the classifier's forecast and the commit's decision
@@ -224,15 +238,22 @@ function countDeliveredByHash(
 
 /**
  * The inbox topics a payload-less (schema-1) letter can be re-measured
- * against: the `topic` frontmatter of every signal page the dedup index
- * walks - the same population the hash check sees. A page that carries
- * no readable topic confirms nothing.
+ * against: the `topic` frontmatter of the session's OWN signal pages -
+ * the pages the dedup index walks whose `session_ref` names this
+ * letter's session. A signal from another session confirms nothing
+ * about what THIS session's commit delivered, and counting it would
+ * read a real partial write as resolved. A page that carries no
+ * readable topic confirms nothing either.
  */
-function inboxSignalTopics(vault: string): ReadonlySet<string> {
+function inboxSignalTopics(
+  dedup: ReturnType<typeof buildDedupIndex>,
+  sessionRef: string,
+): ReadonlySet<string> {
   const topics = new Set<string>();
-  for (const entry of buildDedupIndex(vault).values()) {
+  for (const entry of dedup.values()) {
     try {
       const meta = parseFrontmatterText(readFileSync(entry.path, "utf8"))[0];
+      if (meta["session_ref"] !== sessionRef) continue;
       const topic = meta["topic"];
       if (typeof topic === "string") topics.add(topic);
     } catch {
@@ -289,7 +310,7 @@ export function classifyDeadLetter(
   const delivered =
     payload !== null
       ? countDeliveredByHash(record.missing, payload.items, dedup)
-      : countDeliveredByTopic(record.missing, inboxSignalTopics(vault));
+      : countDeliveredByTopic(record.missing, inboxSignalTopics(dedup, record.reference));
   if (record.missing.length > 0 && delivered === record.missing.length) {
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.resolved,
@@ -374,9 +395,12 @@ export function planRecovery(
 ): DeadLetterRecoveryPlan {
   const classification = classifyDeadLetter(vault, record);
   if (classification.category !== DEAD_LETTER_RECOVERY_CATEGORY.recover) {
+    // Worded without assuming why: a resolved or not_recoverable v2
+    // letter still carries its frozen payload, so "carries no payload"
+    // would be false exactly where the classification is the point.
     throw new DeadLetterRecoveryError(
-      `dead letter ${record.id} is classified '${classification.category}' and carries no ` +
-        `payload to plan a recovery for: ${classification.reason}` +
+      `dead letter ${record.id} cannot be planned as a payload re-run: classified ` +
+        `'${classification.category}' (${classification.reason})` +
         nextCommandSuffix(classification.command),
       classification.category,
     );
@@ -391,26 +415,35 @@ export function planRecovery(
   const dedup = buildDedupIndex(vault);
   const denylist = opts.durabilityDenylist ?? resolveDurabilityDenylist();
   const staged = opts.writeApprovalEnabled ?? resolveWriteApprovalEnabled();
+  // The plan previews exactly what the apply would re-run: the MISSING
+  // items, never the whole payload. The items that landed before the
+  // failure are not recovery's input - replaying them would resurrect
+  // any one an operator removed afterwards (a deleted signal, a
+  // rejected queue row the dedup index never walked).
+  const missingIndices = missingItemIndices(record.missing);
   return Object.freeze({
     classification,
     items: Object.freeze(
-      payload.items.map((item) => {
-        if (dedup.has(itemDedupHash(item))) {
-          return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
-        }
-        const verdict = classifyDurability(item.principle, { denylist });
-        if (!verdict.durable) {
+      payload.items
+        .map((item, index) => ({ item, index }))
+        .filter(({ index }) => missingIndices.has(index))
+        .map(({ item }) => {
+          if (dedup.has(itemDedupHash(item))) {
+            return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
+          }
+          const verdict = classifyDurability(item.principle, { denylist });
+          if (!verdict.durable) {
+            return Object.freeze({
+              topic: item.topic,
+              verdict: DEAD_LETTER_ITEM_VERDICT.refused,
+              ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
+            });
+          }
           return Object.freeze({
             topic: item.topic,
-            verdict: DEAD_LETTER_ITEM_VERDICT.refused,
-            ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
+            verdict: staged ? DEAD_LETTER_ITEM_VERDICT.staged : DEAD_LETTER_ITEM_VERDICT.write,
           });
-        }
-        return Object.freeze({
-          topic: item.topic,
-          verdict: staged ? DEAD_LETTER_ITEM_VERDICT.staged : DEAD_LETTER_ITEM_VERDICT.write,
-        });
-      }),
+        }),
     ),
   });
 }
@@ -451,10 +484,18 @@ export function applyRecovery(
       DEAD_LETTER_RECOVERY_CATEGORY.recover,
     );
   }
+  // The re-run commits exactly the MISSING items, never the whole
+  // payload: the items that landed before the failure are not recovery's
+  // input, and replaying them would resurrect any one an operator
+  // removed afterwards - a deleted signal, or a rejected queue row,
+  // neither of which the dedup index walks. "Nothing stale is replayed"
+  // is the module's own promise.
+  const missingIndices = missingItemIndices(record.missing);
+  const toReplay = payload.items.filter((_, index) => missingIndices.has(index));
   return commitExtractedSignals(
     vault,
     record.reference,
-    { items: [...payload.items] },
+    { items: toReplay },
     {
       agent: opts.agent,
       now: opts.now,

@@ -149,8 +149,15 @@ function deadLettersList(argv: string[]): number {
   // A letter on disk this build cannot read is a hard error by the
   // store's own contract (`listDeadLetters` refuses rather than skips) -
   // a listing that under-reports is the failure this surface exists to
-  // prevent, so the throw propagates to the shared refusal path below.
-  const views = listDeadLetters(vault).map((record) => rowView(vault, record));
+  // prevent. Refused like `show` and `recover` refuse the same fault:
+  // a typed exit 1, never an uncaught crash.
+  let views: ReturnType<typeof rowView>[];
+  try {
+    views = listDeadLetters(vault).map((record) => rowView(vault, record));
+  } catch (err) {
+    if (err instanceof DeadLetterError) return refused(err.message, asJson);
+    throw err;
+  }
 
   if (asJson) {
     okJson({ ok: true, total: views.length, letters: views.map(rowJson) });

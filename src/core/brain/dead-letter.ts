@@ -358,7 +358,7 @@ function parseRecord(path: string): DeadLetterRecord {
   if (!isParsedDeadLetterSchemaVersion(version)) {
     throw new DeadLetterError(
       `dead letter schema_version ${String(version)} not supported ` +
-        `(expected ${DEAD_LETTER_SCHEMA_VERSION}): ${path}`,
+        `(this build parses ${PARSED_DEAD_LETTER_SCHEMA_VERSIONS.join(" and ")}): ${path}`,
     );
   }
   // Strict per version: a v1 record never carried a payload, so one that
