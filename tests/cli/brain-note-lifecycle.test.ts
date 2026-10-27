@@ -283,3 +283,88 @@ test("--delete-linked on a rename is a refusal, not a silently ignored flag", as
   expect(res.stderr).toContain("delete-linked");
   expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
 });
+
+test("move-folder relocates the folder and renders the move report as JSON", async () => {
+  note("Projects/Old/a.md", "alpha\n");
+  note("Projects/Old/b.md", "beta\n");
+  note("Notes/Ref.md", "pathed [[Projects/Old/a]]\n");
+
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Old",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as {
+    action: string;
+    from: string;
+    to: string;
+    applied: boolean;
+    moved: Array<{ from: string; to: string }>;
+    move_failures: Array<{ path: string; reason: string }>;
+    snapshot: null;
+    references: { files_rewritten: number; files_scanned: number };
+  };
+  expect(body.action).toBe("move-folder");
+  expect(body.applied).toBe(true);
+  expect(body.from).toBe("Projects/Old");
+  expect(body.to).toBe("Archive/Old");
+  // The moved list, per file, and the per-file failure list - the report
+  // style the folder module's result is read in.
+  expect(body.moved).toEqual([
+    { from: "Projects/Old/a.md", to: "Archive/Old/a.md" },
+    { from: "Projects/Old/b.md", to: "Archive/Old/b.md" },
+  ]);
+  expect(body.move_failures).toEqual([]);
+  // A relocation destroys nothing, so no snapshot rides the receipt.
+  expect(body.snapshot).toBeNull();
+  expect(body.references.files_rewritten).toBe(1);
+  expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+  expect(existsSync(join(vault, "Archive/Old/b.md"))).toBe(true);
+  expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
+});
+
+test("move-folder renders the moved list and failures on the human receipt too", async () => {
+  note("Projects/Old/a.md", "alpha\n");
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "move-folder",
+    "Projects/Old",
+    "Archive",
+    "--vault",
+    vault,
+    "--apply",
+  ]);
+  expect(res.returncode).toBe(0);
+  expect(res.stdout).toContain("move-folder: Projects/Old -> Archive/Old");
+  expect(res.stdout).toContain("moved (1):");
+  expect(res.stdout).toContain("Projects/Old/a.md -> Archive/Old/a.md");
+});
+
+test("rename-folder runs in the folder lifecycle through the same verb", async () => {
+  note("Projects/Old/a.md", "alpha\n");
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "rename-folder",
+    "Projects/Old",
+    "New",
+    "--vault",
+    vault,
+    "--apply",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as { action: string; to: string; moved: unknown[] };
+  expect(body.action).toBe("rename-folder");
+  expect(body.to).toBe("Projects/New");
+  expect(body.moved).toEqual([{ from: "Projects/Old/a.md", to: "Projects/New/a.md" }]);
+  expect(existsSync(join(vault, "Projects/New/a.md"))).toBe(true);
+});

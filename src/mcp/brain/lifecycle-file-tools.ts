@@ -1,19 +1,22 @@
 /**
- * Note-FILE lifecycle MCP tool: `brain_note_lifecycle` (B2).
+ * Note lifecycle MCP tool: `brain_note_lifecycle` (B2, t_9571a47f).
  *
- * One tool dispatching on `action` - rename, move, archive, delete - in
- * the shape `brain_lifecycle` established. The sibling name is
- * deliberate and so is the separation: `brain_lifecycle` is the BELIEF
- * lifecycle (tombstone, supersede, temporal-replace), which marks a
- * memory's status in frontmatter and never moves a byte. This one moves
- * and removes files. Merging them would put "mark this claim superseded"
- * and "delete this file" behind one `action` key, where a mistyped value
- * is the difference between an annotation and a deletion.
+ * One tool dispatching on `action` - rename, move, archive, delete for a
+ * note FILE, move-folder and rename-folder for a whole FOLDER - in the
+ * shape `brain_lifecycle` established. The sibling name is deliberate and
+ * so is the separation: `brain_lifecycle` is the BELIEF lifecycle
+ * (tombstone, supersede, temporal-replace), which marks a memory's status
+ * in frontmatter and never moves a byte. This one moves and removes
+ * files. Merging them would put "mark this claim superseded" and "delete
+ * this file" behind one `action` key, where a mistyped value is the
+ * difference between an annotation and a deletion.
  *
- * The handler coerces arguments and renders the result; every guard -
- * the nine-step path envelope on BOTH paths, the confirmation ladder, the
- * count guard, the recovery point and its verdict - lives in
- * `core/brain/notes/lifecycle.ts`, so the CLI verb beside it cannot drift
+ * The handler coerces arguments, owns the dispatch and renders the
+ * result; every guard - the path envelope on BOTH paths, the
+ * confirmation ladder, the count guard, the recovery point and its
+ * verdict - lives in the core (`notes/lifecycle.ts` for the file
+ * actions, `notes/folder-lifecycle.ts` for the folder ones, which is
+ * where a folder action runs), so the CLI verb beside it cannot drift
  * into a different set of rules.
  *
  * Refusals carry their typed `code` in `data` rather than only in prose,
@@ -28,7 +31,13 @@ import {
   NOTE_LIFECYCLE_ACTIONS,
   isNoteLifecycleAction,
   type NoteLifecycleResult,
+  type NoteReferenceReport,
 } from "../../core/brain/notes/lifecycle.ts";
+import {
+  folderLifecycle,
+  isFolderLifecycleAction,
+  type FolderLifecycleResult,
+} from "../../core/brain/notes/folder-lifecycle.ts";
 import {
   DANGLING_SCAN_DEFAULT_LIMIT,
   listDanglingTargets,
@@ -54,6 +63,45 @@ import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
 const TOOL = "brain_note_lifecycle";
 
+/**
+ * The reference report, identical on both lifecycle machines - the folder
+ * result carries the same {@link NoteReferenceReport} the file result
+ * does, so the projection is written once.
+ */
+function renderReferences(refs: NoteReferenceReport): Record<string, unknown> {
+  return {
+    files_scanned: refs.filesScanned,
+    inbound_files: [...refs.inboundFiles],
+    files_rewritten: refs.filesRewritten,
+    rewritten_spellings: refs.rewrittenSpellings.map((s) => ({
+      from: s.from,
+      to: s.to,
+    })),
+    // Non-empty means the operation is half-applied: the note is at
+    // `to` and these files still name `from`. Rendered on every
+    // response, empty included, so a caller reading the field is
+    // reading an answer rather than guessing from its absence.
+    rewrite_failures: refs.rewriteFailures.map((f) => ({
+      path: f.path,
+      reason: f.reason,
+    })),
+    basename: refs.basename,
+    index: {
+      state: refs.index.state,
+      last_indexed_at: refs.index.lastIndexedAt,
+      next_command: refs.index.nextCommand,
+    },
+    // `claimed` says a detached refresh run is IN FLIGHT, never that it
+    // has landed; every other value names why nothing was started, and
+    // `refresh_reason` spells that reason - the freshen machinery's own
+    // skip token, or the error it raised - so `not_claimed` is never
+    // the whole answer a caller receives. Read from THIS call's own
+    // decision, never from state another vault could have written.
+    refresh: refs.refresh,
+    refresh_reason: refs.refreshReason,
+  };
+}
+
 /** Project the frozen core result into the tool's snake_cased response. */
 function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
   return {
@@ -68,37 +116,7 @@ function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
     },
     snapshot:
       res.snapshot === null ? null : { run_id: res.snapshot.runId, path: res.snapshot.path },
-    references: {
-      files_scanned: res.references.filesScanned,
-      inbound_files: [...res.references.inboundFiles],
-      files_rewritten: res.references.filesRewritten,
-      rewritten_spellings: res.references.rewrittenSpellings.map((s) => ({
-        from: s.from,
-        to: s.to,
-      })),
-      // Non-empty means the operation is half-applied: the note is at
-      // `to` and these files still name `from`. Rendered on every
-      // response, empty included, so a caller reading the field is
-      // reading an answer rather than guessing from its absence.
-      rewrite_failures: res.references.rewriteFailures.map((f) => ({
-        path: f.path,
-        reason: f.reason,
-      })),
-      basename: res.references.basename,
-      index: {
-        state: res.references.index.state,
-        last_indexed_at: res.references.index.lastIndexedAt,
-        next_command: res.references.index.nextCommand,
-      },
-      // `claimed` says a detached refresh run is IN FLIGHT, never that it
-      // has landed; every other value names why nothing was started, and
-      // `refresh_reason` spells that reason - the freshen machinery's own
-      // skip token, or the error it raised - so `not_claimed` is never
-      // the whole answer a caller receives. Read from THIS call's own
-      // decision, never from state another vault could have written.
-      refresh: res.references.refresh,
-      refresh_reason: res.references.refreshReason,
-    },
+    references: renderReferences(res.references),
     // `null` when no cascade was asked for, which is a different answer
     // from a cascade that found nothing. Rendered on every response so a
     // caller reads the distinction rather than inferring it from an
@@ -111,6 +129,31 @@ function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
             reported_files: [...res.cascade.reportedFiles],
             scanned_scope: res.cascade.scannedScope,
           },
+  };
+}
+
+/**
+ * Project the folder result into the same snake_cased response shape,
+ * with the move report in the folder module's own style: the list of
+ * what relocated, and the per-file list of what did not and why.
+ */
+function renderFolderResult(res: FolderLifecycleResult): Record<string, unknown> {
+  return {
+    action: res.action,
+    from: res.from,
+    to: res.to,
+    applied: res.applied,
+    moved: res.moved.map((m) => ({ from: m.from, to: m.to })),
+    move_failures: res.moveFailures.map((f) => ({ path: f.path, reason: f.reason })),
+    recoverability: {
+      state: res.recoverability.state,
+      coverage: [...res.recoverability.coverage],
+      blockers: [...res.recoverability.blockers],
+    },
+    // Always null on this surface: a relocation destroys nothing, so no
+    // recovery point is taken (the rewrite's risk is the verdict's).
+    snapshot: null,
+    references: renderReferences(res.references),
   };
 }
 
@@ -135,6 +178,25 @@ async function toolBrainNoteLifecycle(
   const { expect, strict } = readCountGuardArgs(args);
 
   try {
+    // The surface owns the dispatch: one vocabulary, two machines. A
+    // folder action sent to the file module would be refused
+    // `wrong_action` - the action exists and the caller named it
+    // correctly, so it runs where it lives.
+    if (isFolderLifecycleAction(action)) {
+      const res = await folderLifecycle(ctx.vault, {
+        action,
+        path,
+        ...(to !== undefined ? { to } : {}),
+        ...(apply !== undefined ? { apply } : {}),
+        expect,
+        strict,
+        // A folder the caller may not read at its reach is refused
+        // exactly as a missing one.
+        readable: readableAtContextReach(ctx),
+        ...(ctx.configPath !== null ? { refreshConfigPath: ctx.configPath } : {}),
+      });
+      return renderFolderResult(res);
+    }
     const res = await noteLifecycle(ctx.vault, {
       action,
       path,
@@ -381,7 +443,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
   {
     name: TOOL,
     description:
-      "Note-file lifecycle: rename, move, archive (displaces the note under Archive/), delete. Dry-run unless apply; delete needs confirm. Rewrites inbound [[wikilinks]] to the minimal spelling that still resolves; applied writes claim a detached index refresh (references.refresh: claimed, not landed).",
+      "Note lifecycle: rename, move, archive (displaces the note under Archive/), delete address a note file; move-folder and rename-folder address a whole folder and run in the folder lifecycle. Dry-run unless apply; delete needs confirm. Rewrites inbound [[wikilinks]] to the minimal spelling that still resolves; applied writes claim a detached index refresh (references.refresh: claimed, not landed).",
     inputSchema: {
       type: "object",
       properties: {
@@ -393,12 +455,12 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
         path: {
           type: "string",
           description:
-            "Vault-relative path of the note; must end in .md and stay inside the vault.",
+            "Vault-relative path of the subject: a note file (must end in .md) for the file actions, a folder for move-folder/rename-folder; stays inside the vault.",
         },
         to: {
           type: "string",
           description:
-            "rename/move: vault-relative destination. Forbidden for archive (it picks its own) and delete.",
+            "rename/move: vault-relative destination. move-folder: the destination DIRECTORY the folder lands under; rename-folder: the new single-segment name. Forbidden for archive (it picks its own) and delete.",
         },
         apply: {
           type: "boolean",

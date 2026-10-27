@@ -73,6 +73,63 @@ describe("brain_note_lifecycle registration", () => {
       "rename-folder",
     ]);
   });
+
+  test("the description names the folder actions and where they run", () => {
+    // The enum admits the folder actions, so the description must say the
+    // same thing the refusal says: they address a whole folder and run in
+    // the folder lifecycle - and the path argument covers a folder, which
+    // carries no .md suffix.
+    expect(tool.description).toContain("move-folder");
+    expect(tool.description).toContain("rename-folder");
+    expect(tool.description).toContain("folder lifecycle");
+    const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
+    expect(properties["path"]?.description).toContain("folder");
+  });
+});
+
+describe("folder actions through the tool", () => {
+  test("move-folder relocates the folder and renders the move report", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Notes/Ref.md", "pathed [[Projects/Old/a]]\n");
+
+    const res = await call({
+      action: "move-folder",
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res).toMatchObject({
+      action: "move-folder",
+      applied: true,
+      from: "Projects/Old",
+      to: "Archive/Old",
+    });
+    // The moved list, per file, and the per-file failure list.
+    expect(res["moved"]).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    expect(res["move_failures"]).toEqual([]);
+    // A relocation destroys nothing, so no snapshot rides the response.
+    expect(res["snapshot"]).toBeNull();
+    const references = res["references"] as Record<string, unknown>;
+    expect(references["files_rewritten"]).toBe(1);
+    expect(references["inbound_files"]).toEqual(["Notes/Ref.md"]);
+    expect(readFileSync(join(vault, "Notes/Ref.md"), "utf8")).toContain("[[a]]");
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
+  });
+
+  test("rename-folder renames within the parent through the same tool", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    const res = await call({
+      action: "rename-folder",
+      path: "Projects/Old",
+      to: "New",
+      apply: true,
+    });
+    expect(res).toMatchObject({ action: "rename-folder", applied: true, to: "Projects/New" });
+    expect(res["moved"]).toEqual([{ from: "Projects/Old/a.md", to: "Projects/New/a.md" }]);
+    expect(existsSync(join(vault, "Projects/New/a.md"))).toBe(true);
+  });
 });
 
 describe("dispatch", () => {
