@@ -59,8 +59,10 @@ function referenceOmissionNotice(dropped: number): string {
  * or an informal marker saying the same thing) is left out of the
  * preferences section before the guard runs - a bundle is handed to
  * another reader, and no override flag carries a reserved rule - and the
- * bundle's `preferences_omitted` report is disclosed on stderr beside
- * the page omissions, in the same notice shape.
+ * bundle's `preferences_omitted` report is disclosed on stderr in the
+ * same notice shape, beside whatever the class policy did: the override
+ * carries the marked pages back in and says so, and the denial is named
+ * on the override run exactly as on the default run.
  */
 export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -135,12 +137,16 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   } catch (exc) {
     return fail(`bank-export failed to write output: ${(exc as Error).message ?? exc}`);
   }
+  // The preference denial is unconditional - no flag carries a reserved
+  // rule - so its notice is hoisted above the class-policy arm: an
+  // operator overriding the page policy still drops the reserved row, and
+  // must still be told.
+  if (preferenceOmissions.length > 0) {
+    process.stderr.write(preferenceDenialNotice(preferenceOmissions));
+  }
   if (flags["include-prompt-derived"] === true) {
     process.stderr.write(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
   } else {
-    if (preferenceOmissions.length > 0) {
-      process.stderr.write(preferenceDenialNotice(preferenceOmissions));
-    }
     if (omitted.length > 0) process.stderr.write(contentClassOmissionNotice(omitted));
     if (droppedReferences > 0) process.stderr.write(referenceOmissionNotice(droppedReferences));
   }
