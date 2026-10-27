@@ -244,7 +244,9 @@ describe("collector privacy denial reporting", () => {
     const out = collectPreferenceRows(vault);
     expect(out.rows).toHaveLength(1 + marked.length);
     expect(out.rows.map((r) => r.id)).toContain("pref-open");
-    expect(out.denied.map((d) => d.id).toSorted()).toEqual(marked.toSorted());
+    // Sorted by id, like the rows: the denial list rides byte-deterministic
+    // surfaces (the json envelope's omitted, the bundle's preferences_omitted).
+    expect(out.denied.map((d) => d.id)).toEqual(marked.toSorted());
     for (const d of out.denied) expect(d.reason).toBe("visibility");
   });
 

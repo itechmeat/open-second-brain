@@ -341,6 +341,11 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     rows.push(toRow(pref, body));
   }
   rows.sort((a, b) => a.id.localeCompare(b.id));
+  // The denial list sorts like the rows: it rides the json envelope's
+  // `omitted`, the bank bundle's `preferences_omitted` and the stderr
+  // notice, and a byte-deterministic export cannot leave it in
+  // readdir order.
+  denied.sort((a, b) => a.id.localeCompare(b.id));
   return { rows, failures, denied };
 }
 
@@ -492,7 +497,10 @@ export function exportPreferencesLlmsTxtDetailed(vault: string): LlmsTxtExport {
 /**
  * The stable string signature, kept for the SDK façade and every
  * existing reader: the detailed variant's text, unchanged in shape and
- * byte-for-byte identical when nothing is denied.
+ * byte-for-byte identical when nothing is denied. The string variant
+ * carries no denial report - visibility-reserved rows are left out
+ * silently - so a caller that must name what stayed out uses
+ * {@link exportPreferencesLlmsTxtDetailed}.
  */
 export function exportPreferencesLlmsTxt(vault: string): string {
   return exportPreferencesLlmsTxtDetailed(vault).text;
