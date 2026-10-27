@@ -117,10 +117,13 @@ export interface SnapshotStore {
   readonly writerLockPath: string | null;
   /**
    * This snapshot never writes and never takes the lock. The consequence
-   * is rendered beside the flag: while `writerLock` is `held`, a write
-   * THIS caller attempted would refuse - the search lane with
-   * `INDEX_LOCKED` after its retries, the brain lane with a typed
-   * `BrainCollisionError`.
+   * is rendered beside the flag, SCOPED TO WHAT THE LOCK GATES: while
+   * `writerLock` is `held`, an index write THIS caller attempted - `o2b
+   * search index` / reindex - would refuse with `INDEX_LOCKED` after its
+   * retries. This is the search writer lock, and it gates index writers
+   * only: vault and memory writes serialize on the brain lane's own lock
+   * files, not on this one, so the rendered line says they are not gated
+   * rather than implying a refusal this lock cannot cause.
    */
   readonly thisCaller: typeof THIS_CALLER_READ_ONLY;
 }
@@ -449,8 +452,10 @@ export function renderOperatorSnapshot(snap: OperatorSnapshot): string {
   // Printed on BOTH branches, like the frozen line: the state an operator
   // most needs stated is the one where nothing is writing, and "no line"
   // would be indistinguishable from a renderer that forgot to ask. A held
-  // lock names the refusal a write would hit, so the agent reading this
-  // before writing does not learn it from the write failing.
+  // lock names the refusal an INDEX write would hit - scoped to what the
+  // lock gates, since vault and memory writes serialize elsewhere - so
+  // the agent reading this before writing does not learn it from the
+  // write failing.
   out.push(`  ${renderStoreLine(snap.store)}`);
 
   if (!snap.healthy) {
@@ -493,8 +498,12 @@ function heldForSuffix(ageMs: number | null): string {
  * The one store line, rendered for every state the group can hold. The
  * owner's absence is stated when the lock is held - the lock record
  * carries no identity, and silence would read as a renderer that forgot
- * to ask who - and the held line names the concrete refusal a writer
- * hits (`INDEX_LOCKED`, the search lane's typed contention error).
+ * to ask who - and the held line names the concrete refusal an index
+ * writer hits (`INDEX_LOCKED`, the search lane's typed contention
+ * error), scoped to what the search writer lock gates: vault and memory
+ * writes serialize on the brain lane's own lock files and are not gated
+ * by this lock, so the line says so rather than implying a refusal the
+ * lock cannot cause.
  */
 function renderStoreLine(store: SnapshotStore): string {
   const caller = `this caller ${store.thisCaller}`;
@@ -505,7 +514,8 @@ function renderStoreLine(store: SnapshotStore): string {
       return (
         `store: writer lock held${heldForSuffix(store.writerLockAgeMs)} ` +
         "(owner: unknown, the lock record carries no identity; " +
-        "a write now would refuse with INDEX_LOCKED); " +
+        "an index write (o2b search index / reindex) would refuse with INDEX_LOCKED; " +
+        "vault and memory writes are not gated by this lock); " +
         caller
       );
     case WRITER_LOCK_STATE.unknown:

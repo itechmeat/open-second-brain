@@ -168,8 +168,14 @@ describe("buildOperatorSnapshot store group (t_cfe2ce5d)", () => {
     expect(heldText).toContain("store: writer lock held");
     // The owner's absence is a stated measurement, not a gap.
     expect(heldText).toContain("carries no identity");
-    // The concrete refusal a writer hits while the lock is held, named.
-    expect(heldText).toContain("INDEX_LOCKED");
+    // The refusal is scoped to what the lock actually gates - index
+    // writers only. The brain lane serializes on its own lock files, so
+    // an unscoped "a write now would refuse" told every agent reading
+    // this card that a memory write would fail when it would not (M8).
+    expect(heldText).toContain(
+      "an index write (o2b search index / reindex) would refuse with INDEX_LOCKED",
+    );
+    expect(heldText).toContain("vault and memory writes are not gated by this lock");
     expect(heldText).toContain("this caller read-only");
 
     const unclear = await buildOperatorSnapshot(tmp, {
