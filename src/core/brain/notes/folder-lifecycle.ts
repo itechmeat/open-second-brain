@@ -781,6 +781,21 @@ export async function folderLifecycle(
     // this exact path). A folder that KEEPS entries - the attachments-
     // only case - creates nothing: its destination directory would hold
     // no file and no folder, just residue this operation invented.
+    const destinationExisted = statOrNull(destination.abs) !== null;
+    // The shallowest ancestor of the destination that is already on
+    // disk: the chain of directories the recursive mkdir invents stops
+    // there, and that is as far as any cleanup of an invented chain may
+    // walk - a directory that was already here is not this operation's
+    // to remove.
+    let inventedUpTo = dirname(destination.relPath);
+    while (
+      !destinationExisted &&
+      statOrNull(ensureInsideVault(join(vault, inventedUpTo), vault)) === null
+    ) {
+      const parentRel = dirname(inventedUpTo);
+      if (parentRel === inventedUpTo || parentRel === ".") break;
+      inventedUpTo = parentRel;
+    }
     if (planned.length > 0 || sourceEntries === null || sourceEntries.length === 0) {
       mkdirSync(destination.abs, { recursive: true });
     }
@@ -802,8 +817,14 @@ export async function folderLifecycle(
         // before the failure is reported; if even that fails, the
         // failure says so. A source that no longer exists means the
         // unlink SUCCEEDED and a later step threw - the file moved, and
-        // the destination name is the only copy, so it stays.
-        if (!move.sameEntry && existsSync(move.toAbs)) {
+        // the destination name is the only copy, so it stays. And a
+        // destination this call never created is never this operation's
+        // to drop: the pre-flight cleared the name, so
+        // `destination_occupied` means a foreign file appeared there
+        // between the check and the link, and unlinking it would delete
+        // bytes this operation did not write.
+        const occupied = err instanceof NoteLifecycleError && err.code === "destination_occupied";
+        if (!move.sameEntry && !occupied && existsSync(move.toAbs)) {
           if (existsSync(move.fromAbs)) {
             try {
               unlinkSync(move.toAbs);
@@ -817,6 +838,27 @@ export async function folderLifecycle(
           }
         }
         moveFailures.push({ path: move.fromRel, reason });
+      }
+    }
+    // A set where NOTHING moved - every relocation failed - must not
+    // leave the destination folder this apply created standing empty
+    // beside a report that says nothing moved. The invented chain goes
+    // deepest-first, only while genuinely empty, and never past the
+    // first directory that was already here; a destination that existed
+    // before, or one an empty-source move deliberately created, is not
+    // this cleanup's business.
+    if (moved.length === 0 && planned.length > 0 && !destinationExisted) {
+      let rel = destination.relPath;
+      for (;;) {
+        try {
+          rmdirSync(ensureInsideVault(join(vault, rel), vault));
+        } catch {
+          break;
+        }
+        if (rel === inventedUpTo) break;
+        const parentRel = dirname(rel);
+        if (parentRel === rel || parentRel === ".") break;
+        rel = parentRel;
       }
     }
     // The folders the moves emptied go with their files: every ancestor
@@ -952,10 +994,15 @@ function pruneEmptiedFolders(
     let dir = dirname(file.from);
     // Walk the ancestor chain in VAULT-RELATIVE spellings - the move
     // report's own paths, never names resolved through the filesystem -
-    // and stop at the subject itself.
+    // and stop at the subject itself. The walk is bounded to fail closed:
+    // a moved path outside the subject (a different spelling, a future
+    // caller) can never send the walk below the vault root, where
+    // `dirname` stops changing and the loop would never end.
     candidates.add(dir);
     while (dir !== fromRel) {
-      dir = dirname(dir);
+      const parent = dirname(dir);
+      if (parent === dir || parent === ".") break;
+      dir = parent;
       candidates.add(dir);
     }
   }

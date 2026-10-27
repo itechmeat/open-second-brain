@@ -696,6 +696,38 @@ describe("move-folder", () => {
     },
   );
 
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a set where nothing moves leaves no invented destination folder behind",
+    async () => {
+      note("Projects/Old/a.md", "alpha\n");
+      // Every relocation fails the same way: the destination name lands,
+      // then dropping the source name is refused, so the set finishes
+      // with nothing moved - and the destination folder the apply
+      // created for the set must not stay behind as residue the report
+      // contradicts.
+      chmodSync(join(vault, "Projects/Old"), 0o500);
+      let res;
+      try {
+        res = await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Archive",
+          apply: true,
+        });
+      } finally {
+        chmodSync(join(vault, "Projects/Old"), 0o700);
+      }
+
+      expect(res.applied).toBe(true);
+      expect(res.moved).toEqual([]);
+      expect(res.moveFailures).toHaveLength(1);
+      // Nothing was invented at the destination, and the source stands
+      // exactly where the report says its bytes are.
+      expect(existsSync(join(vault, "Archive"))).toBe(false);
+      expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    },
+  );
+
   test("a top-level folder moves under a sibling top-level directory", async () => {
     note("Old/a.md", "alpha\n");
     mkdirSync(join(vault, "Archive"), { recursive: true });
