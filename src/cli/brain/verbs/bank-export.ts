@@ -1,5 +1,8 @@
 import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
-import { exportBankBundle } from "../../../core/brain/portability/bundle.ts";
+import {
+  exportBankBundleDetailed,
+  type BankBundleExportOptions,
+} from "../../../core/brain/portability/bundle.ts";
 import { preferenceDenialNotice, type PreferenceDenial } from "../../../core/brain/export.ts";
 import {
   isPromptDerivedPage,
@@ -30,10 +33,39 @@ function referenceOmissionNotice(dropped: number): string {
 }
 
 /**
- * `o2b brain bank-export [--out <file>] [--include-prompt-derived]` -
- * serialise a whole-vault bank bundle (preferences + page graph + page
- * contracts + sources dashboard) to a schema-versioned JSON. Prints to
- * stdout, or writes to `--out <file>`. Read-only on the vault.
+ * The stderr line counting the kept pages' structured references (graph
+ * links and relation targets, page-contract citations) that named a
+ * left-out page and were dropped. A bundle the policy shortened without
+ * a word is the same silently smaller export the page omission notice
+ * exists to prevent.
+ */
+function referenceOmissionNotice(dropped: number): string {
+  return (
+    `note: ${dropped} link/relation/citation target(s) to left-out page(s) dropped from ` +
+    "kept pages' structured references\n"
+  );
+}
+
+/**
+ * The stderr line naming the reserved preferences a `--include-reserved`
+ * run carried into the backup, in the `EGRESS_CONTENT_CLASS_INCLUDE_NOTICE`
+ * shape: counted, each row named with the key that denied it, the flag
+ * spelled, and the one-line account of what the override changed.
+ */
+function reservedInclusionNotice(denied: ReadonlyArray<PreferenceDenial>): string {
+  const list = denied.map((d) => `${d.id} (${d.denied_by})`).join(", ");
+  return (
+    `note: ${denied.length} reserved preference(s) INCLUDED by override (--include-reserved): ` +
+    `${list}; this personal backup carries material the shared lanes leave out\n`
+  );
+}
+
+/**
+ * `o2b brain bank-export [--out <file>] [--include-prompt-derived]
+ * [--include-reserved]` - serialise a whole-vault bank bundle
+ * (preferences + page graph + page contracts + sources dashboard) to a
+ * schema-versioned JSON. Prints to stdout, or writes to `--out <file>`.
+ * Read-only on the vault.
  *
  * Every byte goes through the shared egress guard first (registry entry
  * `brain-bank-export`). The guard runs over the bundle TREE and the JSON
@@ -57,29 +89,41 @@ function referenceOmissionNotice(dropped: number): string {
  *
  * A preference the privacy deny markers reserve (`visibility: private`,
  * or an informal marker saying the same thing) is left out of the
- * preferences section before the guard runs - a bundle is handed to
- * another reader, and no override flag carries a reserved rule - and the
- * bundle's `preferences_omitted` report is disclosed on stderr in the
- * same notice shape, beside whatever the class policy did: the override
- * carries the marked pages back in and says so, and the denial is named
- * on the override run exactly as on the default run.
+ * preferences section before the guard runs, and the bundle's
+ * `preferences_omitted` report is disclosed on stderr in the same notice
+ * shape, beside whatever the class policy did: the page override carries
+ * the marked pages back in and says so, and the denial is named on that
+ * run exactly as on the default run - a bundle shared with another
+ * reader is a shared lane, and no page flag carries a reserved rule.
+ * `--include-reserved` is the ONE override for the reservation itself,
+ * and it exists for the documented purpose of this verb: the one-file
+ * backup of the operator's own vault. A reservation is a statement about
+ * shared readers; the operator's own restore copy is not one, so the
+ * flag carries the reserved rows into the section whole and the run
+ * prints the inclusion notice where the denial notice would have been -
+ * a backup that silently lost a rule would fail exactly when it is used.
  */
 export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     out: { type: "string" },
     "include-prompt-derived": { type: "boolean" },
+    "include-reserved": { type: "boolean" },
   });
   const { vault } = brainVerbContext(flags);
   const classPolicy = { contentClass: { include: flags["include-prompt-derived"] === true } };
+  const includeReserved = flags["include-reserved"] === true;
+  const bundleOpts: BankBundleExportOptions = { includeReserved };
 
   let json: string;
   let redacted: boolean;
   let omitted: ReadonlyArray<string> = [];
   let preferenceOmissions: ReadonlyArray<PreferenceDenial> = [];
+  let reservedCarried: ReadonlyArray<PreferenceDenial> = [];
   let droppedReferences = 0;
   try {
-    const bundle = exportBankBundle(vault);
+    const { bundle, reserved } = exportBankBundleDetailed(vault, bundleOpts);
+    reservedCarried = includeReserved ? reserved : [];
     const nodeSplit = egressContentClassSplit(bundle.graph.nodes, classPolicy, {
       name: (node) => node.path,
       isPromptDerived: (node) => isPromptDerivedPage(vault, node.path),
@@ -124,6 +168,14 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
     // carries - a hand-edited id whose credential the guard stripped
     // reaches stderr scrubbed, never raw.
     preferenceOmissions = verdict.payload.preferences_omitted ?? [];
+    // The carried rows' names for the inclusion notice go through the
+    // same boundary: the ids ride the bundle scrubbed, and the notice
+    // spells them the way the bundle does.
+    if (reservedCarried.length > 0) {
+      const reservedVerdict = redactForEgress("brain-bank-export", reservedCarried);
+      if (reservedVerdict.outcome !== EGRESS_OUTCOME.released) return fail(reservedVerdict.detail);
+      reservedCarried = reservedVerdict.payload;
+    }
     json = JSON.stringify(verdict.payload, null, 2) + "\n";
     redacted = verdict.redacted;
   } catch (exc) {
@@ -140,11 +192,13 @@ export async function cmdBrainBankExport(argv: string[]): Promise<number> {
   } catch (exc) {
     return fail(`bank-export failed to write output: ${(exc as Error).message ?? exc}`);
   }
-  // The preference denial is unconditional - no flag carries a reserved
-  // rule - so its notice is hoisted above the class-policy arm: an
-  // operator overriding the page policy still drops the reserved row, and
-  // must still be told.
-  if (preferenceOmissions.length > 0) {
+  // The reservation notice sits above the class-policy arm: whichever
+  // way the reservation was answered - withheld and named, or carried in
+  // under --include-reserved and named - an operator overriding the page
+  // policy is told about it too.
+  if (reservedCarried.length > 0) {
+    process.stderr.write(reservedInclusionNotice(reservedCarried));
+  } else if (preferenceOmissions.length > 0) {
     process.stderr.write(preferenceDenialNotice(preferenceOmissions));
   }
   if (flags["include-prompt-derived"] === true) {

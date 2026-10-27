@@ -119,4 +119,54 @@ describe("brain bank-export notices", () => {
       { id: "pref-reserved", reason: "visibility", denied_by: "access" },
     ]);
   });
+
+  test("the default run still leaves the reserved row out of the preferences section", async () => {
+    await bootstrap();
+    await seedPreference("open", "principle open");
+    await seedPreference("reserved", "principle reserved");
+    stampPrefMarker("reserved", "access: private");
+
+    const r = await runCli(["brain", "bank-export", "--vault", vault], ENV());
+    expect(r.returncode).toBe(0);
+    const bundle = JSON.parse(r.stdout) as {
+      preferences: ReadonlyArray<{ id: string }>;
+      preferences_omitted?: ReadonlyArray<{ id: string }>;
+    };
+    expect(bundle.preferences.map((p) => p.id)).toEqual(["pref-open"]);
+    expect(bundle.preferences_omitted?.map((d) => d.id)).toEqual(["pref-reserved"]);
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("left out");
+  });
+
+  test("--include-reserved carries the reserved row into the backup and names the inclusion", async () => {
+    // The bundle is documented as the one-file backup: the operator's own
+    // copy of their own vault. A reservation is a statement about SHARED
+    // readers, not about the operator, so the flag carries the reserved
+    // rows back in and the run says so - the mirror of
+    // --include-prompt-derived - and the denial notice is silent because
+    // nothing was denied.
+    await bootstrap();
+    await seedPreference("open", "principle open");
+    await seedPreference("reserved", "principle reserved");
+    stampPrefMarker("reserved", "access: private");
+
+    const r = await runCli(["brain", "bank-export", "--vault", vault, "--include-reserved"], ENV());
+    expect(r.returncode).toBe(0);
+    const bundle = JSON.parse(r.stdout) as {
+      preferences: ReadonlyArray<{ id: string; principle: string }>;
+      preferences_omitted?: ReadonlyArray<{ id: string }>;
+    };
+    expect(bundle.preferences.map((p) => p.id)).toEqual(["pref-open", "pref-reserved"]);
+    expect(bundle.preferences[1]!.principle).toBe("principle reserved");
+    // Nothing was withheld, so no omission report rides the bundle.
+    expect("preferences_omitted" in bundle).toBe(false);
+    // The run names the inclusion and the flag that caused it.
+    expect(r.stderr).toContain("--include-reserved");
+    expect(r.stderr).toContain("pref-reserved");
+    expect(r.stderr).toContain("INCLUDED");
+    // The preference denial is silent - nothing was withheld. The class
+    // policy's own omission notice may still fire (the bootstrapped
+    // prompt-derived page), so the assertion names the denial's phrase.
+    expect(r.stderr).not.toContain("visibility reservation");
+  });
 });
