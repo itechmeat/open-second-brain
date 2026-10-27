@@ -223,6 +223,58 @@ describe("dirty mode", () => {
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("ok");
   });
+
+  test("a staged rename lints the destination spelling git reports first", async () => {
+    writePage("Brain/inbox/old-name.md", CLEAN_PAGE);
+    gitInit();
+    // In -z porcelain output a rename's entry carries the DESTINATION
+    // and the next NUL field carries the origin - the reverse of the
+    // line-oriented `old -> new` spelling. The gate lints the
+    // destination, the spelling a commit would contain; the origin is
+    // gone from disk and names no page to lint.
+    execFileSync("git", ["-C", vault, "mv", "Brain/inbox/old-name.md", "Brain/inbox/new-name.md"]);
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("Brain/inbox/new-name.md");
+    expect(r.stdout).not.toContain("old-name.md");
+    expect(r.stdout).not.toContain("page-unreadable");
+  });
+
+  test("a page modified in the index and deleted from the worktree leaves nothing to lint", async () => {
+    const page = writePage("Brain/inbox/gone.md", CLEAN_PAGE);
+    gitInit();
+    // Staged modification, then the worktree copy removed: the X/Y pair
+    // is "MD", and the only truthful answer is that no page content a
+    // commit would contain exists on disk.
+    writePage(page, "---\ntitle: Gone\n---\n\nchanged\n");
+    execFileSync("git", ["-C", vault, "add", page]);
+    rmSync(join(vault, page));
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("gone.md");
+  });
+
+  test("a vault nested in a larger repository lints only the vault's own dirty pages", async () => {
+    // The repo root is tmp, one level above the vault: git reports
+    // repo-relative paths, so the gate must rebase them onto the vault
+    // and must not inherit dirty Markdown that lives outside it.
+    writePage("Brain/inbox/inner.md", CLEAN_PAGE);
+    writeFileSync(join(tmp, "outside.md"), CLEAN_PAGE);
+    const git = (args: string[]) => execFileSync("git", ["-C", tmp, ...args], { encoding: "utf8" });
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "test"]);
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    writePage("Brain/inbox/inner.md", ERROR_PAGE);
+    writeFileSync(join(tmp, "outside.md"), "no frontmatter here\n");
+
+    const r = await run(["--dirty"]);
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("Brain/inbox/inner.md");
+    expect(r.stdout).not.toContain("outside.md");
+    expect(r.stdout).not.toContain("page-unreadable");
+  });
 });
 
 describe("wiring", () => {

@@ -20,12 +20,16 @@
  * collapse it into a bare directory row. `-z` NUL-terminated output is
  * parsed instead of line-oriented, so filenames with spaces, quotes and
  * non-ASCII arrive verbatim (git skips its quotePath C-style quoting in
- * this mode) and a rename arrives as two adjacent fields rather than an
- * `old -> new` spelling that a filename could forge.
+ * this mode), and a rename arrives as its destination followed by the
+ * origin in the next NUL field - two adjacent fields rather than an
+ * `old -> new` spelling that a filename could forge - of which the gate
+ * lints the destination. The listing is bounded by a `.` pathspec and
+ * every path is rebased from the repository root onto the vault, so a
+ * vault nested inside a larger repository lints exactly its own dirt.
  */
 
 import { execFileSync } from "node:child_process";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 /** The refusal for a vault whose dirtiness git cannot measure. */
 export class VaultDirtyError extends Error {
@@ -69,32 +73,64 @@ export function listDirtyMarkdownPaths(vault: string): ReadonlyArray<string> {
 
   let out: string;
   try {
-    out = execFileSync("git", ["-C", resolve(vault), "status", "--porcelain", "-uall", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    // The pathspec bounds the listing to the vault: git answers for the
+    // whole repository otherwise, and a vault nested inside a larger
+    // repo would inherit its neighbours' dirtiness.
+    out = execFileSync(
+      "git",
+      ["-C", resolve(vault), "status", "--porcelain", "-uall", "-z", "--", "."],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
   } catch (err) {
     throw new VaultDirtyError(`${NOT_A_WORKTREE_MESSAGE} (git status failed: ${firstLine(err)})`);
   }
+
+  // Porcelain paths are relative to the repository ROOT, not to the `-C`
+  // directory, so the vault's own prefix is stripped from every path
+  // before it is used - a no-op when the vault IS the repo root.
+  let prefix: string;
+  try {
+    prefix = execFileSync("git", ["-C", resolve(vault), "rev-parse", "--show-prefix"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch (err) {
+    throw new VaultDirtyError(
+      `${NOT_A_WORKTREE_MESSAGE} (git show-prefix failed: ${firstLine(err)})`,
+    );
+  }
+
+  /** Repo-root-relative porcelain path to a vault-relative one, or `null` outside the vault. */
+  const inVault = (repoPath: string): string | null => {
+    if (prefix === "") return repoPath;
+    return repoPath.startsWith(prefix) ? repoPath.slice(prefix.length) : null;
+  };
 
   const dirty: string[] = [];
   const entries = out.split("\0").filter((e) => e.length > 0);
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
     const xy = entry.slice(0, 2);
-    const path = entry.slice(3);
-    if (xy[1] === "R" || xy[0] === "R") {
-      // -z rename entry: the field just parsed carried the OLD name and
-      // the NEXT field carries the new one; the gate lints the
-      // destination spelling, the one a commit would contain.
-      const renamed = entries[++i];
-      if (renamed !== undefined && renamed.endsWith(".md")) dirty.push(renamed);
+    // In `-z` output a rename or copy entry carries a SECOND NUL field -
+    // the origin path - and git orders it AFTER the destination ("the
+    // field order is reversed", git-status docs): THIS field's path is
+    // the destination, the spelling a commit would contain, and the
+    // origin field is consumed here and names nothing to lint.
+    if (xy.includes("R") || xy.includes("C")) {
+      i++;
+      const destination = inVault(entry.slice(3));
+      if (destination !== null && destination.endsWith(".md")) dirty.push(destination);
       continue;
     }
-    if (path.endsWith("/") || !path.endsWith(".md")) continue; // a directory row, or not a note
-    if (xy.includes("D") && !xy.includes("M")) continue; // deleted: nothing to lint
-    dirty.push(path);
+    const rel = inVault(entry.slice(3));
+    if (rel === null) continue; // outside the vault: not this gate's subject
+    if (rel.endsWith("/") || !rel.endsWith(".md")) continue; // a directory row, or not a note
+    if (xy[0] === "D" || xy[1] === "D") continue; // deleted in the index or the worktree: nothing on disk to lint
+    dirty.push(rel);
   }
   return dirty;
 }
@@ -109,7 +145,10 @@ export function listDirtyMarkdownPaths(vault: string): ReadonlyArray<string> {
  */
 export function vaultRelativeOrNull(vault: string, page: string): string | null {
   const rel = relative(resolve(vault), resolve(vault, page));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+  // A real parent-directory segment is the escape; a name that merely
+  // begins with two dots (`..draft.md`) is an ordinary vault-relative
+  // name and is kept.
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
   return rel
     .split(/[\\/]/)
     .filter((p) => p.length > 0)
