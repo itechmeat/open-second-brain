@@ -811,6 +811,22 @@ export async function folderLifecycle(
     if (planned.length > 0 || sourceEntries === null || sourceEntries.length === 0) {
       mkdirSync(destination.abs, { recursive: true });
     }
+    // The directories below the destination that are already on disk
+    // before the first relocation - a failed move's branch the vault
+    // already had, empty or not, is the vault's own and never this
+    // cleanup's to remove. Recorded now, before any of it can change.
+    const preExistingBranchDirs = new Set<string>();
+    for (const move of planned) {
+      let dir = dirname(move.toRel);
+      while (dir !== destination.relPath && dir !== ".") {
+        if (statOrNull(ensureInsideVault(join(vault, dir), vault)) !== null) {
+          preExistingBranchDirs.add(dir);
+        }
+        const parentRel = dirname(dir);
+        if (parentRel === dir) break;
+        dir = parentRel;
+      }
+    }
     // The destination spellings the per-file machinery created for moves
     // that then failed: the invented subtree the cleanup below offers
     // back to the filesystem.
@@ -861,13 +877,14 @@ export async function folderLifecycle(
     // never stay behind: each failed move's own destination spelling
     // names its branch, offered to rmdirSync deepest-first, each only
     // while genuinely empty - so a moved file's branch, a foreign name or
-    // a name that could not be dropped keeps its branch standing. When
-    // NOTHING moved, the destination folder and the chain the recursive
-    // mkdir invented above it go too, up to - never including - the
-    // ancestor that was already here; with a partial set they hold real
-    // moves, so the walk stops at the destination folder. A destination
-    // that existed before, or one an empty-source move deliberately
-    // created, is not this cleanup's business.
+    // a name that could not be dropped keeps its branch standing - and a
+    // branch that was already here is spared by name. When NOTHING moved,
+    // the destination folder and the chain the recursive mkdir invented
+    // above it go too, up to - never including - the ancestor that was
+    // already here; with a partial set they hold real moves, so the walk
+    // stops at the destination folder. A destination that existed before,
+    // or one an empty-source move deliberately created, is not this
+    // cleanup's business.
     if (failedDestinations.length > 0) {
       const doomed = new Set<string>();
       if (moved.length === 0 && !destinationExisted) {
@@ -889,7 +906,9 @@ export async function folderLifecycle(
           dir = parentRel;
         }
       }
-      const deepestFirst = [...doomed].toSorted((a, b) => b.length - a.length);
+      const deepestFirst = [...doomed]
+        .filter((rel) => !preExistingBranchDirs.has(rel))
+        .toSorted((a, b) => b.length - a.length);
       for (const rel of deepestFirst) {
         try {
           rmdirSync(ensureInsideVault(join(vault, rel), vault));
