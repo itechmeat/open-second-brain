@@ -1207,17 +1207,6 @@ export async function spawnClientVersion(
 }
 
 /**
- * The normal ask keeps a fifth of the probe budget in reserve (the 80%
- * share), floored at 50 ms so a real spawn is never asked to answer
- * against nothing. The floor is capped at the probe budget minus one, so
- * the ask's own timer ALWAYS expires before the probe-level wrapper's:
- * a budget under the floor would otherwise clamp the ask ABOVE the
- * probe's, let the wrapper's cutoff fire first, and replace the rows
- * with a bare timeout - the exact loss asking together exists to
- * prevent. Below the floor the ask dies a tick before the wrapper, so
- * the verdict still carries its rows, each naming its own timeout.
- */
-/**
  * The ask's own budget, derived from the probe's: the normal ask keeps a
  * fifth of the probe budget in reserve (the 80% share), floored at 50 ms
  * so a real spawn never answers against nothing. The floor is capped at
@@ -1380,11 +1369,17 @@ export async function probeClientVersions(opts: ReadinessOptions): Promise<Readi
   const probeBudgetMs = opts.perCheckTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
   // Each ask's budget is read at ask time against the probe's own start,
   // so the manifest read and the time spawning the earlier children took
-  // come off the later asks' share, never off the wrapper's margin.
+  // come off the later asks' share, never off the wrapper's margin. A
+  // budget with nothing left spawns nothing: a child started only to be
+  // killed on a zero timer would race its own first tick.
   const ask =
     opts.clientVersionRunner ??
-    ((argv: ReadonlyArray<string>) =>
-      spawnClientVersion(argv, clientAskBudgetMs(probeBudgetMs, Date.now() - startedAtMs)));
+    ((argv: ReadonlyArray<string>) => {
+      const budgetMs = clientAskBudgetMs(probeBudgetMs, Date.now() - startedAtMs);
+      return budgetMs <= 0
+        ? Promise.reject(new ReadinessTimeoutError(`client version ${argv[0]}`, 0))
+        : spawnClientVersion(argv, budgetMs);
+    });
   // Promise.all preserves the manifest's order, whichever ask settles first.
   const rows: ReadinessVersionRow[] = await Promise.all(
     installs.map((entry) => clientVersionRow(entry.target, ask)),
