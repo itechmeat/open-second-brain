@@ -311,6 +311,37 @@ describe("dirty mode", () => {
     expect(r.stdout).not.toContain("outside.md");
     expect(r.stdout).not.toContain("page-unreadable");
   });
+
+  test("a vault its enclosing repository ignores refuses, naming --paths as the remedy", async () => {
+    // The M14 hole: `rev-parse --is-inside-work-tree` answers true inside
+    // an ignored directory and `git status` omits ignored files, so a
+    // vault a dotfiles or monorepo checkout ignores read as permanently
+    // clean - dirty state git cannot measure, which the gate may never
+    // report as a pass. The refusal names the selector that still works.
+    const repo = join(tmp, "repo");
+    mkdirSync(join(repo, "notes", "vault", "Brain", "inbox"), { recursive: true });
+    vault = join(repo, "notes", "vault");
+    writeFileSync(configPath, `vault: ${vault}\n`);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "test"]);
+    writeFileSync(join(repo, ".gitignore"), "notes/\n");
+    git(["add", ".gitignore"]);
+    git(["commit", "-q", "-m", "base"]);
+    writePage("Brain/inbox/broken.md", ERROR_PAGE);
+
+    const dirty = await run(["--dirty"]);
+    expect(dirty.returncode).toBe(2);
+    expect(dirty.stderr).toContain("ignored");
+    expect(dirty.stderr).toContain("--paths");
+
+    // The remedy the refusal names still lints the broken note.
+    const paths = await run(["--paths", "Brain/inbox/broken.md"]);
+    expect(paths.returncode).toBe(1);
+    expect(paths.stdout).toContain("frontmatter-missing");
+  });
 });
 
 describe("wiring", () => {

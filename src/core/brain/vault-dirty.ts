@@ -8,9 +8,11 @@
  * bounded buffer). Unlike the reader, this module is NOT fail-soft: a
  * gate that silently reported "clean" for a vault whose dirtiness it
  * could not measure would be the exact failure the verb exists to
- * prevent, so a vault that is not a git worktree (or a git that cannot
- * answer) is a named {@link VaultDirtyError}, and the verb refuses with
- * exit 2 rather than passing.
+ * prevent, so a vault that is not a git worktree, a vault its enclosing
+ * repository ignores (inside a worktree, `git status` omits ignored
+ * files - dirt under such a vault can never be seen), or a git that
+ * cannot answer is a named {@link VaultDirtyError}, and the verb refuses
+ * with exit 2 rather than passing.
  *
  * Deleted entries are excluded by name: a deleted path cannot be linted,
  * and the gate's subject is the page content a caller is about to
@@ -44,6 +46,18 @@ const NOT_A_WORKTREE_MESSAGE =
   "the vault is not inside a git worktree, so --dirty has nothing to measure; " +
   "name pages explicitly with --paths instead";
 
+/**
+ * The second unmeasurable condition: a vault its enclosing repository
+ * IGNORES. `rev-parse --is-inside-work-tree` answers `true` inside an
+ * ignored directory and `git status` omits ignored files, so without the
+ * check-ignore guard such a vault read as permanently clean - the exact
+ * state the module's contract refuses to report. The remedy is the other
+ * selector, by name.
+ */
+const IGNORED_VAULT_MESSAGE =
+  "the vault directory is ignored by its enclosing git repository, so git cannot " +
+  "measure its dirty state; name pages explicitly with --paths instead";
+
 /** The first line of an error's message: git output is multi-line. */
 function firstLine(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -70,6 +84,31 @@ export function listDirtyMarkdownPaths(vault: string): ReadonlyArray<string> {
   } catch (err) {
     throw new VaultDirtyError(`${NOT_A_WORKTREE_MESSAGE} (${firstLine(err)})`);
   }
+
+  // Inside a worktree is not yet measurable: a vault that sits in a
+  // directory the repository's exclude rules IGNORE passes the check
+  // above while `git status` silently omits every file under it - the
+  // gate would read permanently clean for dirt it can never see. Ask git
+  // directly whether the vault root itself is ignored. `check-ignore -q`
+  // exits 0 when the path IS ignored and 1 when it is not; any other
+  // exit (or an execution failure) is a git that could not answer, which
+  // refuses rather than passes, like every git call in this module.
+  let ignored: boolean;
+  try {
+    execFileSync("git", ["-C", resolve(vault), "check-ignore", "-q", "."], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    ignored = true;
+  } catch (err) {
+    const status = (err as NodeJS.ErrnoException & { status?: number | null }).status;
+    if (status !== 1) {
+      throw new VaultDirtyError(
+        `${NOT_A_WORKTREE_MESSAGE} (git check-ignore failed: ${firstLine(err)})`,
+      );
+    }
+    ignored = false;
+  }
+  if (ignored) throw new VaultDirtyError(IGNORED_VAULT_MESSAGE);
 
   let out: string;
   try {
