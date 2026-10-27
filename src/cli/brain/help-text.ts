@@ -352,7 +352,8 @@ export const VERB_HELP: Record<string, string> = {
     "destination is checked free before the first rename, so an occupied destination\n" +
     "refuses with nothing moved and the source untouched; the move set's inbound\n" +
     "path-spelled links are rewritten in one pass over the successfully moved set,\n" +
-    "and a mid-set failure is named per file (moveFailures) with no rollback.\n" +
+    "and a mid-set failure is named per file (the move_failures response keys, with\n" +
+    "left_behind naming what stayed in the source) with no rollback.\n" +
     "Inbound [[wikilinks]] are rewritten across the vault, minus what vault scope\n" +
     "excludes, minus code fences, and minus Brain/log, which is append-only. The\n" +
     "receipt names how stale the search index now is and the command that fixes it.\n" +
