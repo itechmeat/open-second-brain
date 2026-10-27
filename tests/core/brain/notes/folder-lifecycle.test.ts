@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1180,5 +1181,309 @@ describe("the file surface keeps refusing folder subjects", () => {
       }),
     ).rejects.toThrow(NoteLifecycleError);
     expect(existsSync(join(vault, "Projects/a.md"))).toBe(true);
+  });
+});
+
+/**
+ * The move set is judged by REAL LOCATION (H2, M18): the vault walk lists
+ * a file under whichever alias of its directory won the walk, so both the
+ * membership decision and the spelling every report and rewrite pair
+ * carries are decided by where a file really lives - inside the source's
+ * real path - never by the spelling the walk happened to reach it
+ * through. The two alias orders below are written to hold regardless of
+ * which spelling wins the walk on any host.
+ */
+describe("symlinked entries in the move set (judged by real location)", () => {
+  test("a symlinked directory inside the source excludes the foreign notes it reaches (H2, order one)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Alpha/Deep/real.md", "real body\n");
+    note("Index.md", "[[Projects/Old/a]] and [[Alpha/Deep/real]]\n");
+    symlinkSync(join(vault, "Alpha/Deep"), join(vault, "Projects/Old/link"), "dir");
+
+    // The plan already shows the truth: only the folder's OWN note moves.
+    const plan = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+    });
+    expect(plan.applied).toBe(false);
+    expect(plan.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    // The foreign note keeps its real location under either walked
+    // spelling, and no name for it appears at the destination.
+    expect(existsSync(join(vault, "Alpha/Deep/real.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive/Old/link/real.md"))).toBe(false);
+    // The link itself is neither followed nor removed: it is the residue,
+    // named like any other entry the move could not carry.
+    expect(res.leftBehind).toEqual(["link"]);
+    expect(existsSync(join(vault, "Projects/Old/link"))).toBe(true);
+    // The foreign note's inbound link is untouched; the moved note's is
+    // rewritten. Before the real-location judgment the foreign note was
+    // relocated under the link spelling with NO rewrite pair, and
+    // `[[Alpha/Deep/real]]` dangled.
+    expect(read("Index.md")).toBe("[[a]] and [[Alpha/Deep/real]]\n");
+  });
+
+  test("an alias walked before the source is normalized to the real spelling, not a silent no-op (H2, order two)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Index.md", "[[Projects/Old/a]]\n");
+    // `Zed` sorts after `Projects`, so the walk reaches the source THROUGH
+    // the alias first and lists the note under the alias spelling only -
+    // the order that used to leave `movingSet` empty and report
+    // applied:true with nothing moved.
+    mkdirSync(join(vault, "Zed"), { recursive: true });
+    symlinkSync(join(vault, "Projects/Old"), join(vault, "Zed/alias"), "dir");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.applied).toBe(true);
+    // The move set carries the REAL spelling - the name the disk answers
+    // to and the name inbound links are spelled with - so the rewrite
+    // pair exists and `[[Projects/Old/a]]` does not dangle.
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(false);
+    expect(read("Index.md")).toBe("[[a]]\n");
+    // The source folder genuinely emptied and went; the operator's own
+    // alias is the only thing left pointing at a former address.
+    expect(existsSync(join(vault, "Projects/Old"))).toBe(false);
+    expect(res.leftBehind).toEqual([]);
+  });
+
+  test("a symlinked note is excluded and named, never hard-linked (M18)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Other/x.md", "elsewhere\n");
+    // A RELATIVE target, the shape that dangles when the symlink itself is
+    // hard-linked at a new depth.
+    symlinkSync("../../Other/x.md", join(vault, "Projects/Old/l.md"));
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.moved).toEqual([{ from: "Projects/Old/a.md", to: "Archive/Old/a.md" }]);
+    // The symlinked note is named as what stayed...
+    expect(res.leftBehind).toEqual(["l.md"]);
+    expect(lstatSync(join(vault, "Projects/Old/l.md")).isSymbolicLink()).toBe(true);
+    // ...and no name for it was created at the destination: linking the
+    // symlink used to leave a dangling `Archive/Old/l.md` behind.
+    expect(lstatSync(join(vault, "Archive/Old/l.md"), { throwIfNoEntry: false })).toBeUndefined();
+    // The real target is untouched at its real location.
+    expect(read("Other/x.md")).toBe("elsewhere\n");
+  });
+
+  test("a dangling name a mid-set fault created is dropped by the cleanup (M18)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    // The relocation seam leaves a SYMLINK at the destination name whose
+    // target does not exist - the exact shape a hard-linked symlinked
+    // note produced - and then reports the fault. `existsSync` follows
+    // the link, sees nothing and skips the unlink; a name this call
+    // created must be dropped even when it dangles.
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+      relocate: (fromAbs, toAbs, label) => {
+        symlinkSync(join(fromAbs, "../never-here.md"), toAbs);
+        throw new Error(`noteLifecycle: write of ${label} reported success but the file is absent`);
+      },
+    });
+
+    expect(res.applied).toBe(true);
+    expect(res.moved).toEqual([]);
+    expect(res.moveFailures).toHaveLength(1);
+    expect(res.moveFailures[0]!.path).toBe("Projects/Old/a.md");
+    expect(lstatSync(join(vault, "Archive/Old/a.md"), { throwIfNoEntry: false })).toBeUndefined();
+    expect(existsSync(join(vault, "Archive/Old"))).toBe(false);
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+  });
+});
+
+/**
+ * The destination is judged by real path on both sides (M15), and the
+ * rename-intent heuristic only fires when the named destination directory
+ * does not exist (M16).
+ */
+describe("the destination's real path and existence", () => {
+  test("a destination that is a symlink alias of the source is refused as nesting (M15)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Index.md", "[[Projects/Old/a]]\n");
+    mkdirSync(join(vault, "Aa/Deep"), { recursive: true });
+    symlinkSync(join(vault, "Projects/Old"), join(vault, "Aa/Deep/Link"), "dir");
+
+    for (const apply of [false, true]) {
+      let caught: unknown;
+      try {
+        await folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "Aa/Deep/Link",
+          apply,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(NoteLifecycleError);
+      const refusal = caught as NoteLifecycleError;
+      expect(refusal.code).toBe("destination_inside_source");
+      expect(refusal.message).toContain("Projects/Old");
+    }
+    // Nothing was linked into the source: the alias spelled a path
+    // outside the folder while naming the folder itself, and the spelled
+    // guard used to let it fold `Old/` inside `Projects/Old`.
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/Old"))).toBe(false);
+    expect(read("Index.md")).toBe("[[Projects/Old/a]]\n");
+  });
+
+  test.skipIf(!FOLDS_CASE)(
+    "a case-folded destination inside the source is refused by real path (M15)",
+    async () => {
+      note("Projects/Old/a.md", "alpha\n");
+      // On the folding host this IS `Projects/Old/sub` - inside the
+      // source - although its spelling never matches the spelled guard.
+      mkdirSync(join(vault, "projects/old/sub"), { recursive: true });
+      await expect(
+        folderLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.moveFolder,
+          path: "Projects/Old",
+          to: "projects/old/sub",
+          apply: true,
+        }),
+      ).rejects.toThrow(/destination_inside_source|nest inside itself/);
+      expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+      expect(existsSync(join(vault, "Projects/Old/sub/Old"))).toBe(false);
+    },
+  );
+
+  test("a move into an EXISTING sibling folder works in one call (M16)", async () => {
+    note("Projects/Old/a.md", "alpha\n");
+    note("Projects/Old/b.md", "beta\n");
+    note("Index.md", "[[Projects/Old/a]]\n");
+    mkdirSync(join(vault, "Projects/Archive"), { recursive: true });
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Projects/Archive",
+      apply: true,
+    });
+
+    // An existing sibling directory is a real move target, not the
+    // spelling of a rename intent - the refusal that pointed at
+    // rename-folder (which points back here for a cross-parent move)
+    // used to make this move impossible in one call.
+    expect(res.applied).toBe(true);
+    expect(res.to).toBe("Projects/Archive/Old");
+    expect(res.moved.map((m) => m.to).toSorted()).toEqual([
+      "Projects/Archive/Old/a.md",
+      "Projects/Archive/Old/b.md",
+    ]);
+    expect(existsSync(join(vault, "Projects/Old"))).toBe(false);
+    expect(read("Index.md")).toBe("[[a]]\n");
+  });
+
+  test("a NON-existent sibling destination is still the rename-intent refusal (M16)", async () => {
+    note("Projects/Second/c.md", "c\n");
+    await expect(
+      folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.moveFolder,
+        path: "Projects/Second",
+        to: "Projects/Nowhere",
+        apply: true,
+      }),
+    ).rejects.toThrow(/use rename-folder/);
+    expect(existsSync(join(vault, "Projects/Second/c.md"))).toBe(true);
+  });
+});
+
+/**
+ * Only Markdown moves; the receipt says what that honestly costs (M17):
+ * a moved note's RELATIVE Markdown links and images depend on the note's
+ * directory, which the move changed, and when the target stayed behind
+ * the receipt names the pair instead of letting `files_rewritten: 0`
+ * read as "nothing broke".
+ */
+describe("relative links the move leaves dangling (M17)", () => {
+  test("a moved note's relative embed whose target stayed behind is named; targets that moved are not", async () => {
+    note(
+      "Projects/Old/a.md",
+      "![pic](diagram.png)\n" +
+        "[nested](./sub/other.md)\n" +
+        "![absolute](/abs.png)\n" +
+        "[remote](https://example.com/x.png)\n" +
+        "![already broken](was-never-here.png)\n",
+    );
+    note("Projects/Old/sub/other.md", "nested\n");
+    writeFileSync(join(vault, "Projects/Old/diagram.png"), "png\n");
+
+    // The plan previews the same judgment from the planned set.
+    const plan = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+    });
+    expect(plan.applied).toBe(false);
+    expect(plan.danglingRelativeLinks).toEqual([
+      { note: "Archive/Old/a.md", target: "diagram.png" },
+    ]);
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.applied).toBe(true);
+    // The embed whose target is not a note stayed behind - named per note
+    // and target, exactly as the note spells it.
+    expect(res.danglingRelativeLinks).toEqual([
+      { note: "Archive/Old/a.md", target: "diagram.png" },
+    ]);
+    // The attachment itself is in the residue, the file surface's own
+    // honest answer for what a Markdown-only move leaves.
+    expect(res.leftBehind).toEqual(["diagram.png"]);
+    expect(existsSync(join(vault, "Archive/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Projects/Old/diagram.png"))).toBe(true);
+    // A target that moved WITH the folder still resolves and is not
+    // named; a vault-absolute or scheme spelling never depended on the
+    // note's directory; a link that was already dangling is not this
+    // operation's doing.
+    expect(existsSync(join(vault, "Archive/Old/sub/other.md"))).toBe(true);
+  });
+
+  test("a move whose relative targets all move with it names no dangling links", async () => {
+    note("Projects/Old/a.md", "![pic](./img/inside.png)\n");
+    note("Projects/Old/img/keep.md", "the target set is Markdown, so this moves too\n");
+
+    const res = await folderLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.moveFolder,
+      path: "Projects/Old",
+      to: "Archive",
+      apply: true,
+    });
+
+    expect(res.moved).toHaveLength(2);
+    expect(res.danglingRelativeLinks).toEqual([]);
   });
 });

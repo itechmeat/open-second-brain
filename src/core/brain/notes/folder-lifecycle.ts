@@ -43,6 +43,26 @@
  * operation's business. A folder whose subtree holds them reports the
  * Markdown relocations honestly in `moved` and leaves the rest standing
  * - the prune at the end removes only what the moves genuinely emptied.
+ * And the set is judged by REAL LOCATION, never by the spelling the walk
+ * happened to reach a file through: the walk lists a note under whichever
+ * alias of its directory won the walk, so a move set built from spellings
+ * would relocate another folder's notes through a symlinked directory
+ * inside the source, or read as an empty applied success when an alias
+ * elsewhere was walked first. Membership - and the spelling every move
+ * pair and rewrite pair carries - is decided by where a file really
+ * lives: inside the source's real path, under the source's real name. A
+ * symlinked directory inside the source therefore relocates none of the
+ * foreign notes it reaches (the link is the named residue), a symlinked
+ * note is left standing rather than hard-linking its target, and a
+ * source reached through an alias is moved, reported and pruned under
+ * the name its bytes actually answer to.
+ *
+ * Relative Markdown links and images are NOT wikilinks and get no
+ * rewrite - the pass repairs `[[path]]` spellings only, and a relative
+ * `![pic](diagram.png)` depends on the note's directory, which the move
+ * changed. When a moved note's relative target stayed behind, the
+ * receipt names the pair in `danglingRelativeLinks` instead of letting
+ * `files_rewritten: 0` read as "nothing broke".
  *
  * Occupancy is eliminated up front: every destination file path, and the
  * destination folder itself, is checked (with the dev/ino case-only
@@ -62,11 +82,14 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmdirSync,
   statSync,
   unlinkSync,
+  type Dirent,
   type Stats,
 } from "node:fs";
 import { dirname, join, posix, sep, win32 } from "node:path";
@@ -212,6 +235,17 @@ export interface FolderMoveFailure {
   readonly reason: string;
 }
 
+/** One relative link or image in a moved note whose target stayed behind. */
+export interface FolderDanglingLink {
+  /**
+   * The moved note, spelled at its NEW path - where the broken spelling
+   * now lives.
+   */
+  readonly note: string;
+  /** The relative target, spelled exactly as the note spells it. */
+  readonly target: string;
+}
+
 export interface FolderLifecycleResult {
   readonly action: FolderLifecycleAction;
   /** Vault-relative path the folder was at. */
@@ -248,6 +282,20 @@ export interface FolderLifecycleResult {
    * either.
    */
   readonly leftBehind: ReadonlyArray<string>;
+  /**
+   * The moved notes' RELATIVE Markdown links and images that no longer
+   * resolve: targets the move did not carry (the set is the vault's
+   * MARKDOWN) and that stayed behind in the source folder. The rewrite
+   * pass repairs `[[path]]` spellings only, so without this field a
+   * `files_rewritten: 0` would read as "nothing broke" while every moved
+   * note's relative embed pointed at nothing. A target that moved with
+   * its note still resolves and is not named; a vault-absolute or scheme
+   * spelling never depended on the note's directory; a link that was
+   * already dangling is not this operation's doing. A plan reports the
+   * same judgment for its planned set. Empty (and absent on the rendered
+   * surfaces) when nothing dangles.
+   */
+  readonly danglingRelativeLinks: ReadonlyArray<FolderDanglingLink>;
   /** What the recovery point (if any) is worth for THIS operation. */
   readonly recoverability: RecoverabilityVerdict;
   /**
@@ -441,6 +489,63 @@ function statOrNull(target: string): Stats | null {
   }
 }
 
+/**
+ * `lstatSync`, or `null` when the NAME is not there or cannot be read.
+ * Unlike `statSync`/`existsSync` this judges the name itself, so a
+ * symlink whose target is gone - a name this call created and then
+ * reported as failed - still counts as present and can be dropped.
+ */
+function lstatOrNull(target: string): Stats | null {
+  try {
+    return lstatSync(target);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The spelling the disk answers to: `relPath`'s real vault-relative
+ * location, or the caller's spelling when that does not resolve (the
+ * vault root, or a path whose deepest existing ancestor already carries
+ * the answer). Every path this module JUDGES, MOVES or REPORTS goes
+ * through it, so a symlink alias cannot make one folder look like two:
+ * the review's H2/M15 faults were both spelling comparisons where one
+ * side was an alias.
+ */
+function realSpelling(vault: string, relPath: string): string {
+  return realVaultRelative(vault, relPath) ?? relPath;
+}
+
+/**
+ * Whether the folder's REAL subtree holds any Markdown file: a plain
+ * readdir that never follows a symlinked entry, because a link's name is
+ * not a Markdown file of this subtree - its target's real location is
+ * somewhere else (or nowhere) and is judged there. This is the disk's
+ * own answer for the empty-move-set refusal, independent of what the
+ * vault walk happened to list.
+ */
+function subtreeHoldsMarkdown(vault: string, fromRel: string): boolean {
+  const stack: string[] = [join(vault, fromRel)];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        stack.push(join(dir, entry.name));
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(MARKDOWN_SUFFIX)) return true;
+    }
+  }
+  return false;
+}
+
 /** `readdirSync`, or `null` when the directory cannot be read. */
 function readdirOrNull(target: string): string[] | null {
   try {
@@ -480,16 +585,28 @@ interface PlannedMove {
  * `move-folder` must change the folder's parent, `rename-folder` must
  * keep it.
  *
- * The destination directory a `move-folder` names is judged in its own
- * right: it is resolved through the envelope first, and a destination
- * directory that sits in the source's own parent is refused as the
- * spelling of a RENAME intent - a caller reading `to` as the folder's
- * new full path, which is exactly the mistake no path check would
- * otherwise catch, because both spellings name legal destinations. The
- * heuristic exempts the top level: a rename there spells a single
- * segment, so `Old` under `Archive` can only ever mean the move it
- * asked for, and refusing it would leave every top-level folder
- * unmovable into a sibling top-level directory.
+ * Both judgments run on REAL paths, never on spellings. The source
+ * arrives already normalized to the name its bytes answer to; the
+ * destination directory is normalized here before anything is decided,
+ * because a symlink alias spells a path outside the source while naming
+ * the source itself (or something inside it) - the inside-source guard
+ * comparing spellings let such a destination fold the folder into
+ * itself, and a case-folded spelling slipped past the same way. The
+ * landing path is reported in its real spelling too, so the receipt
+ * names where the bytes actually went.
+ *
+ * The rename-intent heuristic for `move-folder` - a destination in the
+ * source's own parent is the spelling of a RENAME - applies ONLY when
+ * the named destination directory does not exist: an existing sibling
+ * directory is a real move target (moving `Projects/Old` under an
+ * existing `Projects/Archive`), and refusing it pointed at
+ * `rename-folder`, which refuses the cross-parent move right back. A
+ * sibling that is not there is exactly the caller mistake the heuristic
+ * exists for, so it is refused by name. The heuristic exempts the top
+ * level: a rename there spells a single segment, so `Old` under
+ * `Archive` can only ever mean the move it asked for, and refusing it
+ * would leave every top-level folder unmovable into a sibling
+ * top-level directory.
  */
 function resolveFolderDestination(
   vault: string,
@@ -514,27 +631,37 @@ function resolveFolderDestination(
       );
     }
   }
+  /** The landing folder, judged and reported in its real spelling. */
+  const landing = (folder: { relPath: string; abs: string }): { relPath: string; abs: string } => {
+    const real = realSpelling(vault, folder.relPath);
+    return real === folder.relPath
+      ? folder
+      : { relPath: real, abs: ensureInsideVault(join(vault, real), vault) };
+  };
   if (action === FOLDER_LIFECYCLE_ACTION.moveFolder) {
     const destinationDirectory = resolveFolderTarget(vault, input.to, { allowVaultRoot: true });
+    const destinationReal = realSpelling(vault, destinationDirectory.relPath);
     // A destination directory inside the source's own subtree nests the
     // tree inside itself: every planned path stays a strict descendant of
     // the source, so the file-surface refusals (same path, same parent)
     // all pass while the operation folds the folder into its own
     // descendant. Refused on the destination DIRECTORY the caller named -
-    // the computed landing path is necessarily deeper still.
-    if (
-      destinationDirectory.relPath === source.relPath ||
-      destinationDirectory.relPath.startsWith(`${source.relPath}/`)
-    ) {
+    // the computed landing path is necessarily deeper still - and judged
+    // by real path on both sides, which is what an alias (or a case
+    // fold) cannot talk its way past.
+    if (destinationReal === source.relPath || destinationReal.startsWith(`${source.relPath}/`)) {
       throw new NoteLifecycleError(
         "destination_inside_source",
         `${action} destination ${destinationDirectory.relPath} sits inside the source folder ` +
-          `${source.relPath}; the folder would nest inside itself`,
+          `${source.relPath} (it resolves on disk to ${destinationReal}); the folder would ` +
+          "nest inside itself",
       );
     }
-    const destination = resolveFolderTarget(
-      vault,
-      posix.join(destinationDirectory.relPath, folderBasename(source.relPath)),
+    const destination = landing(
+      resolveFolderTarget(
+        vault,
+        posix.join(destinationDirectory.relPath, folderBasename(source.relPath)),
+      ),
     );
     if (destination.relPath === source.relPath) {
       throw new NoteLifecycleError(
@@ -543,8 +670,9 @@ function resolveFolderDestination(
       );
     }
     if (
+      statOrNull(destinationDirectory.abs) === null &&
       folderParent(source.relPath) !== "" &&
-      folderParent(destinationDirectory.relPath) === folderParent(source.relPath)
+      folderParent(destinationReal) === folderParent(source.relPath)
     ) {
       throw new NoteLifecycleError(
         "wrong_action",
@@ -555,9 +683,8 @@ function resolveFolderDestination(
     }
     return destination;
   }
-  const destination = resolveFolderTarget(
-    vault,
-    posix.join(folderParent(source.relPath), input.to),
+  const destination = landing(
+    resolveFolderTarget(vault, posix.join(folderParent(source.relPath), input.to)),
   );
   if (destination.relPath === source.relPath) {
     throw new NoteLifecycleError(
@@ -617,6 +744,94 @@ function assertDestinationsFree(
   }
 }
 
+// ----- What a Markdown-only move leaves dangling -----------------------------
+
+/** Inline Markdown link/image target: `[text](target)`, `![alt](<target>)`. */
+const MARKDOWN_LINK_TARGET_RE = /\[[^\]]*\]\(\s*<?([^)<>]+?)>?\s*\)/g;
+
+/**
+ * The URI-scheme shape (`https:`, `obsidian:`, `mailto:`) that is an
+ * address rather than a path - the same judgment `path-safety.ts`'s
+ * unexported `URI_SCHEME_RE` makes for wikilink targets.
+ */
+const URI_SCHEME_TEST = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * Which of the moved notes' RELATIVE Markdown links and images now point
+ * at nothing. The judgment is made for each target exactly as the note
+ * spells it, against the OLD directory the link was written to resolve
+ * from and the NEW one the note now lives at: the link dangles only when
+ * the target sat where the old spelling resolved to (it was never this
+ * operation's business otherwise) and sits nowhere where the new one
+ * does. A target that moved with the folder still resolves; a
+ * vault-absolute (`/pic.png`) or scheme spelling never depended on the
+ * note's directory; an in-page `#anchor` names the note itself; a link
+ * that was already dangling names no fault of the move. Each distinct
+ * note-and-target pair is named once, sorted by note then target.
+ */
+function danglingRelativeLinks(
+  vault: string,
+  moves: ReadonlyArray<{
+    readonly from: string;
+    readonly to: string;
+    /** Where the note's bytes are right now - the old path on a plan, the new one on an apply. */
+    readonly bytesAbs: string;
+  }>,
+  /**
+   * PLAN only: the move-set's own promise that a Markdown target sitting
+   * inside the source will be at the new location once the move runs.
+   * An apply needs no promise - the relocation has already happened and
+   * the disk is the whole truth - but a plan that judged by the current
+   * disk would name EVERY relative target dangling, because nothing has
+   * landed yet.
+   */
+  willLand?: (oldRel: string) => boolean,
+): FolderDanglingLink[] {
+  const seen = new Set<string>();
+  const out: FolderDanglingLink[] = [];
+  for (const move of moves) {
+    let body: string;
+    try {
+      body = readFileSync(move.bytesAbs, "utf8");
+    } catch {
+      // A note that cannot be read states nothing about its links; the
+      // per-file machinery has already named it if the move failed.
+      continue;
+    }
+    for (const match of body.matchAll(MARKDOWN_LINK_TARGET_RE)) {
+      const raw = match[1]!;
+      if (raw === "" || raw.startsWith("#") || raw.startsWith("/") || URI_SCHEME_TEST.test(raw)) {
+        continue;
+      }
+      const target = (() => {
+        try {
+          return decodeURIComponent(raw);
+        } catch {
+          return raw;
+        }
+      })();
+      const hash = target.indexOf("#");
+      const pathPart = hash < 0 ? target : target.slice(0, hash);
+      if (pathPart === "") continue;
+      const oldRel = posix.normalize(posix.join(posix.dirname(move.from), pathPart));
+      const newRel = posix.normalize(posix.join(posix.dirname(move.to), pathPart));
+      if (oldRel.startsWith("..") || newRel.startsWith("..")) continue;
+      const stayed = existsSync(join(vault, oldRel));
+      const landed = existsSync(join(vault, newRel)) || (willLand?.(oldRel) ?? false);
+      if (stayed && !landed) {
+        const key = `${move.to}\u0000${raw}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({ note: move.to, target: raw });
+        }
+      }
+    }
+  }
+  return out.toSorted((a, b) =>
+    a.note === b.note ? (a.target < b.target ? -1 : 1) : a.note < b.note ? -1 : 1,
+  );
+}
+
 // ----- The operation ----------------------------------------------------------
 
 /**
@@ -652,15 +867,49 @@ export async function folderLifecycle(
   if (sourceStat === null || !sourceStat.isDirectory()) {
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
+  // The source is judged, moved and reported under its REAL spelling.
+  // Every judgment below compares or slices it against walk spellings
+  // and real locations, so an alias-spelled source would plan a move of
+  // names the disk does not answer to. The envelope has already vetted
+  // the real location - it refuses a path whose realpath leaves the
+  // vault or lands under `Brain/` - so this only makes the name honest.
+  const sourceRel = realSpelling(vault, source.relPath);
+  const sourceFolder =
+    sourceRel === source.relPath
+      ? source
+      : { relPath: sourceRel, abs: ensureInsideVault(join(vault, sourceRel), vault) };
   // Pass one: walk the whole vault once. This is the move set's source,
   // the post-move population the minimal spellings are computed against,
   // and the filesScanned denominator - one walk, so no two of those can
   // see different vaults.
   const walk = retargetWikilinks(vault, [], { root: VAULT_ROOT_REL, apply: false });
   const vaultFiles = walk.files;
-  const underSource = (rel: string): boolean =>
-    rel === source.relPath || rel.startsWith(`${source.relPath}/`);
-  const movingSet = vaultFiles.filter(underSource).toSorted();
+  // The move set is the walked files whose REAL LOCATION is inside the
+  // source's real path, carried under that real spelling. The walk lists
+  // a file under whichever alias of its directory won the walk (it skips
+  // a directory whose realpath was already visited), so membership - and
+  // the spelling every move pair and rewrite pair carries - must be
+  // decided by where a file really lives: a symlinked directory inside
+  // the source puts ANOTHER folder's notes under the source's spelling,
+  // and an alias elsewhere puts the source's own notes under a foreign
+  // one. The walk dedupes directories by realpath, so each file is
+  // listed under exactly one spelling and the set cannot hold a file
+  // twice. (The realpath read is memoized per spelling; the judgment is
+  // order-independent, so either alias order plans the same move.)
+  const realCache = new Map<string, string>();
+  const realOf = (rel: string): string => {
+    const cached = realCache.get(rel);
+    if (cached !== undefined) return cached;
+    const real = realSpelling(vault, rel);
+    realCache.set(rel, real);
+    return real;
+  };
+  const movingReal = new Set<string>();
+  for (const rel of vaultFiles) {
+    const real = realOf(rel);
+    if (real === sourceRel || real.startsWith(`${sourceRel}/`)) movingReal.add(real);
+  }
+  const movingSet = [...movingReal].toSorted();
   // The caller's reach judges the MOVE SET, and it judges BEFORE the
   // destination is resolved: one note under the folder that the caller
   // may not read refuses the WHOLE operation as a missing folder, on
@@ -677,14 +926,14 @@ export async function folderLifecycle(
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);
   }
   const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
-  const destination = resolveFolderDestination(vault, input, source);
+  const destination = resolveFolderDestination(vault, input, sourceFolder);
   // A destination that IS the source's directory entry - the case-only
   // folder rename on a host that folds case - cannot be performed by
   // re-homing the folder's files: the entry keeps its spelling, the
   // prune cannot remove it, and the receipt would name a move that
   // never happened. Refused before anything is planned, on the plan
   // too: a dry run that previews a move it cannot perform is a lie.
-  if (namesSameEntry(source.abs, destination.abs)) {
+  if (namesSameEntry(sourceFolder.abs, destination.abs)) {
     throw new NoteLifecycleError(
       "destination_unchanged",
       `${action} destination ${destination.relPath} is the source folder's own directory ` +
@@ -697,32 +946,47 @@ export async function folderLifecycle(
   // path whose case (or Unicode normalization form) differs from the
   // vault's real names stats fine on a case-insensitive host and yet
   // matches no walked file, and the operation would report applied:true
-  // with an empty `moved` over notes that are really there. That shape
-  // is recognisable - the walk holds a file under a case-folded spelling
-  // of the caller's path - and refused, naming the suspicion. A folder
-  // the walk has NOTHING under, whatever it holds on disk, is simply not
-  // a Markdown subject: an attachments-only or empty-subtree folder
-  // moves an empty set, keeps its contents, and the residue report says
-  // so. A directory this process cannot read states nothing about
-  // emptiness either, so it does not refuse here - the per-file
-  // machinery names the fault if the move really is attempted.
-  const sourceEntries = readdirOrNull(source.abs);
+  // with an empty `moved` over notes that are really there. The same
+  // empty applied success is what a symlinked entry inside the source
+  // used to produce from the other direction: the walk holds spellings
+  // that fold under the path, but each names a file whose real location
+  // is elsewhere. Both shapes are recognisable and refused, naming the
+  // suspicion. A folder the walk has NOTHING under, whatever it holds on
+  // disk, is simply not a Markdown subject: an attachments-only or
+  // empty-subtree folder moves an empty set, keeps its contents, and the
+  // residue report says so - unless the disk holds Markdown under the
+  // source that NO walked spelling accounts for (out of the caller's
+  // vault scope, or a directory the walk could not read), which is the
+  // third shape of the same lie and refused too. A directory this
+  // process cannot read states nothing about emptiness either, so it
+  // does not refuse here - the per-file machinery names the fault if the
+  // move really is attempted.
+  const sourceEntries = readdirOrNull(sourceFolder.abs);
   if (movingSet.length === 0 && sourceEntries !== null && sourceEntries.length > 0) {
     const fold = (rel: string): string => `${rel.normalize("NFC").toLowerCase()}/`;
-    const foldedSource = fold(source.relPath);
-    const spellingMatchesElsewhere = vaultFiles.some((rel) => fold(rel).startsWith(foldedSource));
-    if (spellingMatchesElsewhere) {
+    const foldedSource = fold(sourceRel);
+    if (vaultFiles.some((rel) => fold(rel).startsWith(foldedSource))) {
       throw new NoteLifecycleError(
         "move_set_empty",
-        `no Markdown moves from ${source.relPath} but the folder is not empty on disk: ` +
-          `the walk saw ${vaultFiles.length} Markdown file(s) and none sits under the path as ` +
-          "spelled - check the spelling, casing and character normalization of the path " +
-          "against the vault's own names",
+        `no Markdown moves from ${sourceRel} but the folder is not empty on disk: the walk saw ` +
+          `${vaultFiles.length} Markdown file(s) spelled under the path, and none of them ` +
+          "really lives inside it - each is reached through a symlink whose target the move " +
+          "does not follow, or sits under a different casing or character normalization of " +
+          "the path - check the folder's own names against the vault's",
+      );
+    }
+    if (subtreeHoldsMarkdown(vault, sourceRel)) {
+      throw new NoteLifecycleError(
+        "move_set_empty",
+        `no Markdown moves from ${sourceRel} but the folder is not empty on disk: it holds ` +
+          "Markdown that no walked spelling accounts for - excluded by vault scope, or a " +
+          "directory the walk could not read - and moving none of it is refused rather than " +
+          "reported as an empty success",
       );
     }
   }
   const planned: PlannedMove[] = movingSet.map((fromRel) => {
-    const toRel = `${destination.relPath}${fromRel.slice(source.relPath.length)}`;
+    const toRel = `${destination.relPath}${fromRel.slice(sourceRel.length)}`;
     const fromAbs = ensureInsideVault(join(vault, fromRel), vault);
     const toAbs = ensureInsideVault(join(vault, toRel), vault);
     return { fromRel, toRel, fromAbs, toAbs, sameEntry: namesSameEntry(fromAbs, toAbs) };
@@ -730,13 +994,19 @@ export async function folderLifecycle(
 
   // The occupancy gate runs on the plan too: a dry run that reports a
   // move it cannot perform would preview a lie.
-  assertDestinationsFree(planned, source.abs, destination);
+  assertDestinationsFree(planned, sourceFolder.abs, destination);
 
-  // The post-move population: every file that is not moving, plus every
-  // destination - the folder analogue of the file surface's
-  // postRelocationPopulation, derived from the same walked list.
+  // The post-move population: every walked file that is not moving - by
+  // real location, so a foreign note that merely sat under the source's
+  // alias spelling stays in the population the minimal spellings are
+  // disambiguated against - plus every destination. The folder analogue
+  // of the file surface's postRelocationPopulation, derived from the
+  // same walked list.
   const newRels = new Set(planned.map((move) => move.toRel));
-  const postPopulation = [...vaultFiles.filter((rel) => !underSource(rel)), ...newRels].toSorted();
+  const postPopulation = [
+    ...vaultFiles.filter((rel) => !movingReal.has(realOf(rel))),
+    ...newRels,
+  ].toSorted();
 
   // One pair set, no bare basename rung: a folder move never changes a
   // basename, so the bare `[[Name]]` spellings keep resolving and
@@ -848,16 +1118,20 @@ export async function folderLifecycle(
         // "never moved". The source name still holds the original bytes
         // whenever it exists, so the extra destination name is dropped
         // before the failure is reported; if even that fails, the
-        // failure says so. A source that no longer exists means the
-        // unlink SUCCEEDED and a later step threw - the file moved, and
-        // the destination name is the only copy, so it stays. And a
-        // destination this call never created is never this operation's
-        // to drop: the pre-flight cleared the name, so
-        // `destination_occupied` means a foreign file appeared there
-        // between the check and the link, and unlinking it would delete
-        // bytes this operation did not write.
+        // failure says so. The name is judged with LSTAT, not
+        // `existsSync`: a name that dangles - a link whose target the
+        // new depth cannot see - is still a name this call created, and
+        // following the link would see nothing and leave it standing.
+        // A source that no longer exists means the unlink SUCCEEDED and
+        // a later step threw - the file moved, and the destination name
+        // is the only copy, so it stays. And a destination this call
+        // never created is never this operation's to drop: the
+        // pre-flight cleared the name, so `destination_occupied` means a
+        // foreign file appeared there between the check and the link,
+        // and unlinking it would delete bytes this operation did not
+        // write.
         const occupied = err instanceof NoteLifecycleError && err.code === "destination_occupied";
-        if (!move.sameEntry && !occupied && existsSync(move.toAbs)) {
+        if (!move.sameEntry && !occupied && lstatOrNull(move.toAbs) !== null) {
           if (existsSync(move.fromAbs)) {
             try {
               unlinkSync(move.toAbs);
@@ -926,25 +1200,26 @@ export async function folderLifecycle(
     // its bytes are, and directories the move never touched (empty
     // siblings, a subtree that held no Markdown) are not this operation's
     // to delete.
-    pruneEmptiedFolders(vault, source.relPath, moved);
+    pruneEmptiedFolders(vault, sourceRel, moved);
     // An EMPTY folder's move is the directory entry itself: nothing was
     // relocated, so the prune has no moved file whose ancestors name the
     // subject, and the entry is dropped by hand - but only while the disk
     // still says the source is empty, and never when the source keeps
     // entries it was never going to move (the attachments-only case).
-    if (planned.length === 0 && (readdirOrNull(source.abs) ?? []).length === 0) {
+    if (planned.length === 0 && (readdirOrNull(sourceFolder.abs) ?? []).length === 0) {
       try {
-        rmdirSync(source.abs);
+        rmdirSync(sourceFolder.abs);
       } catch {
         // The entry is not removable (or re-appeared between the read and
         // the removal): the residue report names what stayed.
       }
     }
     // Whatever the prune could not remove is exactly what stayed - a
-    // non-Markdown file beside the notes, or a failed file's folder -
-    // and the report names it rather than reading as if the source
-    // folder went with its notes.
-    leftBehind = (readdirOrNull(source.abs) ?? []).toSorted();
+    // non-Markdown file beside the notes, a symlinked entry whose real
+    // location is outside the source, or a failed file's folder - and
+    // the report names it rather than reading as if the source folder
+    // went with its notes.
+    leftBehind = (readdirOrNull(sourceFolder.abs) ?? []).toSorted();
     // ONE rewrite pass over the SUCCESSFULLY moved set's pairs, under the
     // destination. A failed file's pairs are excluded, which is the
     // correct outcome: its inbound links still resolve to where its
@@ -1000,9 +1275,34 @@ export async function folderLifecycle(
     refreshReason = null;
   }
 
+  // The relative-link judgment (M17) reads the moved notes' bytes once,
+  // from where they now are: the planned set on a plan (the notes have
+  // not moved - the plan is the preview), the SUCCESSFULLY moved set on
+  // an apply - a failed file never moved, so its relative links still
+  // resolve and name no fault.
+  const linkMoves = (
+    apply
+      ? moved.map((m) => ({
+          from: m.from,
+          to: m.to,
+          bytesAbs: ensureInsideVault(join(vault, m.to), vault),
+        }))
+      : planned.map((m) => ({ from: m.fromRel, to: m.toRel, bytesAbs: m.fromAbs }))
+  ).toSorted((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  const dangling = danglingRelativeLinks(
+    vault,
+    linkMoves,
+    apply
+      ? undefined
+      : // The plan's promise: a target whose real location is inside the
+        // source's real path is IN the move set and will be at the new
+        // location once the move runs.
+        (oldRel: string) => movingReal.has(realSpelling(vault, oldRel)),
+  );
+
   return Object.freeze({
     action,
-    from: source.relPath,
+    from: sourceRel,
     to: destination.relPath,
     applied: apply,
     moved: Object.freeze(
@@ -1012,6 +1312,7 @@ export async function folderLifecycle(
       moveFailures.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     ),
     leftBehind: Object.freeze([...leftBehind]),
+    danglingRelativeLinks: Object.freeze(dangling),
     recoverability,
     snapshot: null,
     references: Object.freeze({
