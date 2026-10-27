@@ -1103,10 +1103,13 @@ describe("probeClientVersions", () => {
     // The 50 ms floor once clamped the child budget ABOVE a probe budget
     // under ~63 ms: the wrapper's cutoff then fired first and replaced
     // the rows with a bare timeout - the exact loss asking together
-    // exists to prevent. The cap at the probe budget minus one keeps the
-    // ask's timer ahead of the wrapper's at every budget, so the verdict
+    // exists to prevent. The cap at the probe budget minus a margin,
+    // less whatever the probe already spent, keeps the ask's timer ahead
+    // of the wrapper's at every budget - the wrapper armed first and
+    // each ask's timer is armed one spawn later, so the headroom is a
+    // real margin, not a one-millisecond subtraction - and the verdict
     // always carries its rows, each naming its own timeout.
-    for (const probeBudgetMs of [0, 1, 2, 40, 50, 62, 63, 64, 100, DEFAULT_READINESS_TIMEOUT_MS]) {
+    for (const probeBudgetMs of [1, 2, 5, 40, 50, 62, 63, 64, 100, DEFAULT_READINESS_TIMEOUT_MS]) {
       expect(clientAskBudgetMs(probeBudgetMs)).toBeLessThan(probeBudgetMs);
     }
     // Normal budgets keep the 80% share's headroom between the two
@@ -1116,8 +1119,15 @@ describe("probeClientVersions", () => {
       Math.floor(DEFAULT_READINESS_TIMEOUT_MS * 0.8),
     );
     expect(clientAskBudgetMs(500)).toBe(400);
-    // A budget under the floor: the ask dies one tick before the wrapper.
-    expect(clientAskBudgetMs(40)).toBe(39);
+    // A budget under the floor: the ask dies the margin before the
+    // wrapper, and time the probe already spent comes off the ask's
+    // share first.
+    expect(clientAskBudgetMs(40)).toBe(35);
+    expect(clientAskBudgetMs(40, 4)).toBe(31);
+    // A degenerate budget clamps at zero instead of going negative: the
+    // row reads timed out after 0ms, never after -1ms.
+    expect(clientAskBudgetMs(0)).toBe(0);
+    expect(clientAskBudgetMs(1)).toBe(0);
   });
 
   test("the generic target has no client binary of its own and is skipped by name", async () => {

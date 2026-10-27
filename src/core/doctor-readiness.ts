@@ -1217,8 +1217,30 @@ export async function spawnClientVersion(
  * prevent. Below the floor the ask dies a tick before the wrapper, so
  * the verdict still carries its rows, each naming its own timeout.
  */
-export function clientAskBudgetMs(probeBudgetMs: number): number {
-  return Math.min(probeBudgetMs - 1, Math.max(50, Math.floor(probeBudgetMs * 0.8)));
+/**
+ * The ask's own budget, derived from the probe's: the normal ask keeps a
+ * fifth of the probe budget in reserve (the 80% share), floored at 50 ms
+ * so a real spawn never answers against nothing. The floor is capped at
+ * the probe budget minus a margin, less whatever the probe already
+ * spent, so the ask's timer expires strictly BEFORE the probe-level
+ * wrapper's - which was armed first and expires at a fixed point - even
+ * though each ask's timer is armed later, one spawn at a time. The
+ * wrapper can then only ever fire on a child that ignored its own
+ * (earlier) budget, and the verdict that carries the rows wins the race.
+ * Under the floor the ask dies the margin before the wrapper, so the
+ * verdict still carries its rows, each naming its own timeout; a
+ * degenerate budget clamps at zero instead of going negative, and the
+ * row says timed out after 0ms - a measurement that had no budget, never
+ * a negative one.
+ */
+export function clientAskBudgetMs(probeBudgetMs: number, elapsedMs: number = 0): number {
+  return Math.max(
+    0,
+    Math.min(
+      probeBudgetMs - CLIENT_ASK_MARGIN_MS - Math.max(0, elapsedMs),
+      Math.max(50, Math.floor(probeBudgetMs * 0.8)),
+    ),
+  );
 }
 
 /** First stdout line, trimmed and length-capped - the raw line, never parsed. */
@@ -1302,6 +1324,15 @@ async function clientVersionRow(
 }
 
 /**
+ * The wall-clock headroom the ask's own timer keeps below the probe-level
+ * wrapper's fixed expiry: timers carry millisecond precision and the
+ * asks' timers are armed one spawn after another, so the margin - not a
+ * one-millisecond subtraction - is what keeps every ask's expiry strictly
+ * earlier than the wrapper's.
+ */
+const CLIENT_ASK_MARGIN_MS = 5;
+
+/**
  * Which version of each detected agent client answered (t_8e49ec96).
  *
  * Slot beside `registered_commands` and read the SAME detection source -
@@ -1317,6 +1348,11 @@ async function clientVersionRow(
  * exists, not a column to ship half-decided.
  */
 export async function probeClientVersions(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  // The probe's own start, before anything is read: the wrapper's timer
+  // was armed just before this call, so every ask's budget is measured
+  // against this instant - the manifest read and the earlier spawns spend
+  // the asks' shared share, never the wrapper's margin.
+  const startedAtMs = Date.now();
   let manifest;
   try {
     manifest = readManifest(opts.vault);
@@ -1342,10 +1378,13 @@ export async function probeClientVersions(opts: ReadinessOptions): Promise<Readi
   // replace every answered row with a bare timeout while the loop kept
   // spawning children nobody awaited any more.
   const probeBudgetMs = opts.perCheckTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
-  const childBudgetMs = clientAskBudgetMs(probeBudgetMs);
+  // Each ask's budget is read at ask time against the probe's own start,
+  // so the manifest read and the time spawning the earlier children took
+  // come off the later asks' share, never off the wrapper's margin.
   const ask =
     opts.clientVersionRunner ??
-    ((argv: ReadonlyArray<string>) => spawnClientVersion(argv, childBudgetMs));
+    ((argv: ReadonlyArray<string>) =>
+      spawnClientVersion(argv, clientAskBudgetMs(probeBudgetMs, Date.now() - startedAtMs)));
   // Promise.all preserves the manifest's order, whichever ask settles first.
   const rows: ReadinessVersionRow[] = await Promise.all(
     installs.map((entry) => clientVersionRow(entry.target, ask)),
