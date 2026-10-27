@@ -40,9 +40,10 @@
  * Reply presence (t_f8510c55). Wherever a transcript exists - annotation
  * rendering or not - every checked turn also appends exactly one
  * `reply_presence` continuity record: per injected note, whether a
- * quoted span verified against it, its strongest miss verdict, or
- * `absent` when no span was ever measured against it. The record is
- * keyed by session id and joined to the session's context receipts on
+ * quoted span verified against it, its strongest miss verdict, `absent`
+ * when no span was ever measured against it, or `note-unavailable` when
+ * the budget cut the walk before the note could be measured. The record
+ * is keyed by session id and joined to the session's context receipts on
  * read; identifiers and verdicts only, never answer text. The presence
  * record rides the same per-phase modes: every phase `off` writes
  * nothing.
@@ -120,8 +121,25 @@ export const ANSWER_QUOTE_MAX_MESSAGES = 6;
 /** Per-message character budget: the prefix of a message that is checked. */
 export const ANSWER_QUOTE_MAX_CHARS = 4000;
 
+/** The shipped wall-clock budget for the whole check. */
+const ANSWER_QUOTE_DEFAULT_BUDGET_MS = 1500;
+
+/**
+ * The wall-clock budget, resolved ONCE at module load: a spawned hook
+ * process honors an `ANSWER_QUOTE_BUDGET_MS` environment override - a
+ * test seam for the budget-expiry arms, read a single time so a child's
+ * whole run sees one budget; anything absent, blank or unparsable keeps
+ * the shipped default.
+ */
+function resolveBudget(): number {
+  const raw = process.env["ANSWER_QUOTE_BUDGET_MS"]?.trim();
+  if (raw === undefined || raw.length === 0) return ANSWER_QUOTE_DEFAULT_BUDGET_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : ANSWER_QUOTE_DEFAULT_BUDGET_MS;
+}
+
 /** Wall-clock budget for the whole check; past it, unchecked spans are dropped. */
-export const ANSWER_QUOTE_BUDGET_MS = 1500;
+export const ANSWER_QUOTE_BUDGET_MS: number = resolveBudget();
 
 /**
  * Ceiling on findings rendered in one annotation - and in one enforce
@@ -789,15 +807,20 @@ function checkSpan(
  * least one quoted span of the reply checked out against the note;
  * otherwise the strongest miss verdict across the spans that measured
  * it - the check module's own merge ladder, so degradation still
- * outranks a readable miss per note exactly as it does per turn; and
+ * outranks a readable miss per note exactly as it does per turn;
  * {@link ANSWER_QUOTE_VERDICT.absent} for a note no span was ever
  * measured against - injected into context, never surfaced in the
- * answer, the row this record exists to surface. Rows carry
- * identifiers and verdicts only; no answer text rides the record.
+ * answer, the row this record exists to surface; and
+ * {@link ANSWER_QUOTE_VERDICT.noteUnavailable} for a note no span
+ * measured while the budget was exhausted - the transcript went unread
+ * past the cut, which is not evidence the note went untouched, so the
+ * fold refuses to spend `absent` on it. Rows carry identifiers and
+ * verdicts only; no answer text rides the record.
  */
 function foldReplyPresence(
   candidates: ReadonlyArray<MergedCandidate>,
   outcomes: ReadonlyArray<SpanCandidateOutcome>,
+  budgetExhausted: boolean,
 ): ReadonlyArray<Record<string, unknown>> {
   const measured = new Map<string, AnswerQuoteVerdict[]>();
   for (const outcome of outcomes) {
@@ -813,7 +836,11 @@ function foldReplyPresence(
       ...(candidate.startLine !== undefined ? { start_line: candidate.startLine } : {}),
       ...(candidate.endLine !== undefined ? { end_line: candidate.endLine } : {}),
       verdict:
-        verdicts === undefined ? ANSWER_QUOTE_VERDICT.absent : mergeAnswerQuoteVerdicts(verdicts),
+        verdicts === undefined
+          ? budgetExhausted
+            ? ANSWER_QUOTE_VERDICT.noteUnavailable
+            : ANSWER_QUOTE_VERDICT.absent
+          : mergeAnswerQuoteVerdicts(verdicts),
     };
   });
 }
@@ -956,15 +983,26 @@ async function main(): Promise<void> {
   const presenceOutcomes: SpanCandidateOutcome[] = [];
   let checked = 0;
   let enforceable = 0;
+  // Set when a deadline comparison cuts the walk: spans never started
+  // contribute no candidate outcomes, so their candidates would otherwise
+  // fold as `absent` - a verdict the fold reserves for a note the reply
+  // had every chance to touch and did not.
+  let budgetExhausted = false;
   outer: for (const [messageIndex, message] of messages.entries()) {
     // Before the scans of this message, not only before its spans: the
     // span and path scans themselves cost the budget they precede.
-    if (Date.now() > deadline) break outer;
+    if (Date.now() > deadline) {
+      budgetExhausted = true;
+      break outer;
+    }
     const scan = findQuoteSpans(message);
     if (scan.spans.length === 0) continue;
     const marks = citationMarks(message);
     for (const span of scan.spans) {
-      if (Date.now() > deadline) break outer;
+      if (Date.now() > deadline) {
+        budgetExhausted = true;
+        break outer;
+      }
       checked++;
       const quoted: QuotedSpan = {
         message: messageIndex,
@@ -993,11 +1031,14 @@ async function main(): Promise<void> {
   // The reply-presence record (t_f8510c55): exactly one per checked
   // turn, whatever the findings - a turn whose every span verified still
   // owes its per-note verdicts, and a note no span touched reads
-  // `absent`, the row this record exists to surface. A turn with no
-  // injected candidate writes nothing: with no note to report on, an
-  // empty verdict list would say nothing the absence of a record does
-  // not say already. Fail-open like every arm: a failed append names
-  // itself on the audit line and the annotation still goes out.
+  // `absent`, the row this record exists to surface - except when the
+  // budget cut the walk, where an untouched note reads
+  // `note-unavailable` (the fold's own doc names the distinction). A
+  // turn with no injected candidate writes nothing: with no note to
+  // report on, an empty verdict list would say nothing the absence of a
+  // record does not say already. Fail-open like every arm: a failed
+  // append names itself on the audit line and the annotation still goes
+  // out.
   if (candidates.length > 0) {
     try {
       appendContinuityRecord(vault, {
@@ -1006,7 +1047,7 @@ async function main(): Promise<void> {
         payload: {
           ...(sessionId !== null ? { [CONTINUITY_SESSION_ID_KEY]: sessionId } : {}),
           checked,
-          per_note: foldReplyPresence(candidates, presenceOutcomes),
+          per_note: foldReplyPresence(candidates, presenceOutcomes, budgetExhausted),
           // The hash binds the verdicts to the exact answer text checked;
           // it carries no answer text itself.
           ...(messages.length > 0

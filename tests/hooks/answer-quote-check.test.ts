@@ -137,7 +137,10 @@ interface RunResult {
   readonly exit: number;
 }
 
-async function runHook(overrides: Record<string, unknown> = {}): Promise<RunResult> {
+async function runHook(
+  overrides: Record<string, unknown> = {},
+  envOverrides: Record<string, string> = {},
+): Promise<RunResult> {
   const transcriptPath =
     typeof overrides["transcript_path"] === "string"
       ? (overrides["transcript_path"] as string)
@@ -149,7 +152,12 @@ async function runHook(overrides: Record<string, unknown> = {}): Promise<RunResu
     // Bun hands a child without `env` the environment this process STARTED
     // with; pass the live one so the child keeps the hermetic defaults the
     // suite preload installed, plus this test's VAULT_DIR and recall gate.
-    env: { ...process.env, VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+    env: {
+      ...process.env,
+      VAULT_DIR: vault,
+      OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
+      ...envOverrides,
+    },
   });
   proc.stdin.write(
     JSON.stringify({
@@ -1130,6 +1138,37 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(records[0]!.payload["per_note"]).toEqual([
       { path: "Brain/notes/elsewhere.md", start_line: 1, end_line: 1, verdict: "absent" },
       { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "absent" },
+    ]);
+  }, 20000);
+
+  test("a note the budget cut before it was measured reads note-unavailable, never absent", async () => {
+    // The note is quoted only in the SECOND message; a budget that expires
+    // before that message is scanned leaves it never-measured. The fold's
+    // invariant: a budget-cut candidate reads the transcript as UNREAD
+    // (`note-unavailable`), never the note as untouched (`absent` - the
+    // verdict reserved for a reply that quoted nothing from it).
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    expect(recordRecallInjected(vault, SESSION, ["local:Brain/notes/restaking.md#L1-L1"])).toBe(
+      true,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant("A first answer that quotes nothing at all."),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    // The hook's test-only budget seam: any finite value is honored once at
+    // module load. A negative budget is already past at the FIRST deadline
+    // comparison (`Date.now() > started - 1` holds always), so the outer
+    // break fires deterministically before any span is measured.
+    const run = await runHook({}, { ANSWER_QUOTE_BUDGET_MS: "-1" });
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["checked"]).toBe(0);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "note-unavailable" },
     ]);
   }, 20000);
 
