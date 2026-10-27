@@ -228,28 +228,37 @@ describe("packContext tailTrim trim and keep rules", () => {
     });
   });
 
-  test("ranked mode, a real-token query matching nothing: the zero bar keeps every delivered item", async () => {
+  test("ranked mode, a real-token query matching nothing: the zero bar keeps every delivered item", () => {
     // The query tokenises (so the trim runs - a tokenless query never
     // would) but shares no token with any page: every score is 0, the top
     // delivered score is 0, and the keep bar is 0 with it. Nothing was
     // dropped, so nothing is rescued and nothing is saved; the tail items
     // sit exactly AT the bar (0 >= 0) and are kept - a query that cannot
     // discriminate must not trim the pack it also could not rank.
-    writePref("z1", "unrelated words about caching systems", "2026-05-05T00:00:00Z");
-    writePref("z2", "unrelated words about caching systems", "2026-05-04T00:00:00Z", "zeta");
-    writePref(
-      "z3",
-      "unrelated words about caching systems",
-      "2026-05-03T00:00:00Z",
-      "zeta eta theta",
-    );
-    writePref("z4", "unrelated words about caching systems", "2026-05-02T00:00:00Z", "zeta");
-    writePref(
-      "z5",
-      "unrelated words about caching systems",
-      "2026-05-01T00:00:00Z",
-      "zeta eta theta iota kappa lambda mu nu",
-    );
+    writePref("z1", {
+      principle: "unrelated words about caching systems",
+      created_at: "2026-05-05T00:00:00Z",
+    });
+    writePref("z2", {
+      principle: "unrelated words about caching systems",
+      created_at: "2026-05-04T00:00:00Z",
+      body: "zeta",
+    });
+    writePref("z3", {
+      principle: "unrelated words about caching systems",
+      created_at: "2026-05-03T00:00:00Z",
+      body: "zeta eta theta",
+    });
+    writePref("z4", {
+      principle: "unrelated words about caching systems",
+      created_at: "2026-05-02T00:00:00Z",
+      body: "zeta",
+    });
+    writePref("z5", {
+      principle: "unrelated words about caching systems",
+      created_at: "2026-05-01T00:00:00Z",
+      body: "zeta eta theta iota kappa lambda mu nu",
+    });
     const r = packContext(vault, {
       maxTokens: 10_000,
       query: "omega sigma tau",
