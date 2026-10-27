@@ -410,6 +410,8 @@ export type NoteLifecycleErrorCode =
   | "destination_unchanged"
   /** A move whose destination directory sits inside the source subtree. */
   | "destination_inside_source"
+  /** The move set is empty while the source folder is not. */
+  | "move_set_empty"
   /** A `rename` that changes the directory, or a `move` that does not. */
   | "wrong_action"
   /** A delete reached the mutating path without an explicit confirmation. */

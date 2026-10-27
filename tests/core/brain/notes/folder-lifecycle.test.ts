@@ -457,6 +457,49 @@ describe("move-folder", () => {
     expect(isDir("Archive/Empty")).toBe(true);
   });
 
+  test("a spelling that matches nothing in the walk refuses instead of succeeding as a no-op", async () => {
+    // The vault's real folder, as the walk spells it.
+    note("Projects/Old/a.md", "alpha\n");
+    // A second, differently-cased directory this host tells apart: the
+    // caller's spelling stats as a real, non-empty folder while matching
+    // none of the walked paths - the shape a case or normalization
+    // mismatch takes on a case-insensitive host.
+    mkdirSync(join(vault, "projects/old"), { recursive: true });
+    writeFileSync(join(vault, "projects/old/img.png"), "png\n");
+
+    let caught: unknown;
+    try {
+      await folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.moveFolder,
+        path: "projects/old",
+        to: "Archive",
+        apply: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(NoteLifecycleError);
+    const refusal = caught as NoteLifecycleError;
+    expect(refusal.code).toBe("move_set_empty");
+    expect(refusal.message).toContain("projects/old");
+    expect(refusal.message).toMatch(/case|normaliz/i);
+    // Nothing was touched: the real folder stands and no destination
+    // skeleton appeared.
+    expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
+    expect(existsSync(join(vault, "Archive/old"))).toBe(false);
+
+    // A plan-only run of the same spelling is the same refusal: a plan
+    // of nothing over a non-empty folder is a preview of a lie.
+    await expect(
+      folderLifecycle(vault, {
+        action: NOTE_LIFECYCLE_ACTION.moveFolder,
+        path: "projects/old",
+        to: "Archive",
+      }),
+    ).rejects.toThrow(/move_set_empty|not empty on disk/);
+  });
+
   test("dry run is the default: it reports the full plan and writes nothing", async () => {
     note("Projects/Old/a.md", "alpha\n");
     note("Notes/Ref.md", "[[Projects/Old/a]]\n");

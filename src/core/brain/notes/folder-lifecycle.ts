@@ -409,6 +409,15 @@ function statOrNull(target: string): Stats | null {
   }
 }
 
+/** `readdirSync`, or `null` when the directory cannot be read. */
+function readdirOrNull(target: string): string[] | null {
+  try {
+    return readdirSync(target);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Subtrees the rewrite pass READS and REPORTS but never rewrites - the
  * file surface's one entry, shared for the same reason: `Brain/log` is an
@@ -615,6 +624,27 @@ export async function folderLifecycle(
   const underSource = (rel: string): boolean =>
     rel === source.relPath || rel.startsWith(`${source.relPath}/`);
   const movingSet = vaultFiles.filter(underSource).toSorted();
+  // An empty move set over a folder the disk says is non-empty is not a
+  // quiet success waiting to happen - it is a spelling that matched
+  // nothing. The move set is a STRING prefix match of the caller's
+  // spelling of the source against the walk's own spellings, so a path
+  // whose case (or Unicode normalization form) differs from the vault's
+  // real names stats fine on a case-insensitive host and yet matches no
+  // walked file: the operation would report applied:true with an empty
+  // `moved` and leave the whole tree standing. Refused instead, naming
+  // the suspicion. A directory this process cannot read states nothing
+  // about emptiness, so it does not refuse here - the per-file machinery
+  // names the fault if the move really is attempted.
+  const sourceEntries = readdirOrNull(source.abs);
+  if (movingSet.length === 0 && sourceEntries !== null && sourceEntries.length > 0) {
+    throw new NoteLifecycleError(
+      "move_set_empty",
+      `no Markdown moves from ${source.relPath} but the folder is not empty on disk: ` +
+        `the walk saw ${vaultFiles.length} Markdown file(s) and none sits under the path as ` +
+        "spelled - check the spelling, casing and character normalization of the path " +
+        "against the vault's own names",
+    );
+  }
   const planned: PlannedMove[] = movingSet.map((fromRel) => {
     const toRel = `${destination.relPath}${fromRel.slice(source.relPath.length)}`;
     const fromAbs = ensureInsideVault(join(vault, fromRel), vault);
