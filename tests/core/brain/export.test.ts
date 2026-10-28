@@ -21,6 +21,7 @@ import {
   exportPreferencesLlmsTxt,
   exportPreferencesLlmsTxtDetailed,
   PreferenceParseError,
+  type PreferenceDenyKey,
 } from "../../../src/core/brain/export.ts";
 import {
   PRIVACY_DENY_MARKER_VALUES,
@@ -249,12 +250,14 @@ describe("collector privacy denial reporting", () => {
     expect(out.denied.map((d) => d.id)).toEqual(marked.toSorted());
     // The reason stays the "visibility" class for machine readers; the key
     // names the frontmatter key whose value actually denied the row.
-    const expectedKeys = new Map(
-      marked.map((id) => [id, id.replace("pref-marked-", "").split("-")[0] as string]),
+    const expectedKeys = new Map<string, PreferenceDenyKey>(
+      marked.map((id) => [id, id.replace("pref-marked-", "").split("-")[0] as PreferenceDenyKey]),
     );
     for (const d of out.denied) {
       expect(d.reason).toBe("visibility");
-      expect(d.denied_by).toBe(expectedKeys.get(d.id));
+      // Every denied id is asserted above to come from `marked`, so the
+      // expected key is always present.
+      expect(d.denied_by).toBe(expectedKeys.get(d.id)!);
     }
   });
 
