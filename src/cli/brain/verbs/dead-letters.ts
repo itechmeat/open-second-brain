@@ -12,7 +12,9 @@
  * re-runs a schema-2 letter's frozen payload through the extraction
  * commit at CURRENT vault state - the capture boundary, the dedup index
  * and the staging lane are re-derived at call time, so already-written
- * items dedup away and nothing stale is ever replayed.
+ * items dedup away, an item the session re-delivered by re-extracting is
+ * left out (its frozen wording is stale), and nothing stale is ever
+ * replayed.
  *
  * The frozen payload is handled per surface: `show --json` carries it
  * (the freeze redacts the free-text fields, and an operator inspecting

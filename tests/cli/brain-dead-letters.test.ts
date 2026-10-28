@@ -22,7 +22,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -632,6 +640,38 @@ describe("dead-letters recover", () => {
     expect(payload.ok).toBe(false);
     expect(payload.message).toContain("nothing was delivered");
     expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
+  });
+
+  test("a reworded re-extract reads as resolved: the apply exits 1 and writes nothing", async () => {
+    // The review's scenario: the letter misses release-theme; the session
+    // was mined again and a REWORDED release-theme signal landed. The
+    // letter reads resolved, the apply refuses, and the inbox keeps ONE
+    // release-theme page instead of gaining the stale wording back.
+    commitExtractedSignals(
+      vault,
+      SESSION,
+      {
+        items: [
+          item({ topic: "release-theme", principle: "Lead every release note with the theme." }),
+        ],
+      },
+      { agent: AGENT, now: NOW },
+    );
+    const letter = v2Letter(
+      [item({ topic: "release-theme", principle: "Name the release theme in the heading." })],
+      ["items[0]:release-theme"],
+    );
+    const listing = await run([]);
+    expect(listing.stdout).toContain("resolved");
+    expect(listing.stdout).not.toContain("--apply");
+    const r = await run(["recover", letter.id, "--apply", "--yes", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("resolved");
+    const inbox = join(vault, "Brain", "inbox");
+    const pages = readdirSync(inbox).filter((p) => p.includes("release-theme"));
+    expect(pages).toHaveLength(1);
   });
 
   test("a frozen vault refuses the apply and points at unfreeze", async () => {

@@ -22,7 +22,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -242,6 +250,70 @@ describe("the recovery classifier", () => {
     const c = classifyDeadLetter(vault, letter);
     expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
     expect(c.command).toBeNull();
+  });
+
+  test("a v2 item the session re-delivered by re-extracting reads as delivered", () => {
+    // The operator mined the session again (the `re-extract` route the
+    // write error names) and the model REWORDED the principle: the exact
+    // content hash never matches, and reading the item undelivered made
+    // the apply replay the stale wording as a second release-theme signal
+    // on the same session. The topic is the delivery evidence a v1 letter
+    // always had; a v2 item counts it too.
+    commitExtractedSignals(
+      vault,
+      SESSION,
+      {
+        items: [
+          item({ topic: "release-theme", principle: "Lead every release note with the theme." }),
+        ],
+      },
+      { agent: AGENT, now: NOW },
+    );
+    const letter = v2Letter(
+      [item({ topic: "release-theme", principle: "Name the release theme in the heading." })],
+      ["items[0]:release-theme"],
+    );
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
+    expect(c.command).toBeNull();
+    // ...and the apply writes nothing - the stale wording is not replayed.
+    const inbox = join(vault, "Brain", "inbox");
+    const before = existsSync(inbox) ? readdirSync(inbox).length : 0;
+    expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+      DeadLetterRecoveryError,
+    );
+    expect(existsSync(inbox) ? readdirSync(inbox).length : 0).toBe(before);
+  });
+
+  test("a re-extracted item is left out of the plan and the apply, not replayed as a duplicate", () => {
+    // Same delivery shape as above, with a second item still missing: the
+    // re-extracted one is delivered (by topic) and must not be handed
+    // back to the commit - its frozen wording would land as a SECOND
+    // release-theme page - while the genuinely missing one still writes.
+    commitExtractedSignals(
+      vault,
+      SESSION,
+      {
+        items: [
+          item({ topic: "release-theme", principle: "Lead every release note with the theme." }),
+        ],
+      },
+      { agent: AGENT, now: NOW },
+    );
+    const letter = v2Letter(
+      [
+        item({ topic: "release-theme", principle: "Name the release theme in the heading." }),
+        item({ topic: "module-names" }),
+      ],
+      ["items[0]:release-theme", "items[1]:module-names"],
+    );
+    expect(classifyDeadLetter(vault, letter).category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.recover);
+    const plan = planRecovery(vault, letter);
+    expect(plan.items.map((i) => i.topic)).toEqual(["module-names"]);
+    const res = applyRecovery(vault, letter, { agent: AGENT, now: NOW });
+    expect(res.written.map((w) => w.topic)).toEqual(["module-names"]);
+    const pages = readdirSync(join(vault, "Brain", "inbox"));
+    expect(pages.filter((p) => p.includes("release-theme"))).toHaveLength(1);
   });
 
   test("a letter whose undelivered items the durability gate refuses classifies not_recoverable", () => {

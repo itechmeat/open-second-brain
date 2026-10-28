@@ -35,7 +35,10 @@
  * per-file writes - so {@link applyRecovery} hands the recorded payload
  * straight back to `commitExtractedSignals`, which re-derives the
  * capture boundary, the dedup index and the staging lane at call time.
- * Already-written items dedup away; nothing stale is ever replayed.
+ * Already-written items dedup away; an item the session re-delivered by
+ * mining again (the `re-extract` route, whose reworded text can never
+ * match the frozen hash) is left out of the re-run entirely; nothing
+ * stale is ever replayed.
  *
  * ## Nothing here deletes a letter
  *
@@ -327,6 +330,61 @@ function countDeliveredByTopic(
   return delivered;
 }
 
+/**
+ * How a payload letter's resolved missing items stand against the vault's
+ * current state, in key order. An item is DELIVERED when its dedup hash
+ * is on disk (the exact identity - the frozen raw-text hash for a redacted
+ * letter) or - the rule a v1 letter always used, now extended to v2 -
+ * when this session already holds a signal page on the item's topic: the
+ * `re-extract` route rewords the principle, so the exact hash never
+ * matches and the topic is the evidence the content was delivered after
+ * all. Counting a topic-delivered item undelivered made the apply replay
+ * the stale wording as a second signal on the same session and topic.
+ *
+ * The buckets separate what each consumer needs:
+ * - `reExtracted` - delivered by topic alone. The re-run must never hand
+ *   these back to the commit (the commit's dedup is hash-only; it would
+ *   write the duplicate the topic measure just ruled out), so the plan
+ *   and the apply leave them out.
+ * - `undelivered` - no delivery evidence at all. These are what a
+ *   recovery would write, and what the durability gate is measured over.
+ */
+interface DeliveryMeasure {
+  readonly delivered: number;
+  readonly reExtracted: ReadonlyArray<ExtractedSignalItem>;
+  readonly undelivered: ReadonlyArray<ExtractedSignalItem>;
+}
+
+function measureDelivery(
+  dedup: ReturnType<typeof buildDedupIndex>,
+  topicCounts: ReadonlyMap<string, number>,
+  items: ReadonlyArray<ExtractedSignalItem>,
+): DeliveryMeasure {
+  const remaining = new Map(topicCounts);
+  const reExtracted: ExtractedSignalItem[] = [];
+  const undelivered: ExtractedSignalItem[] = [];
+  let delivered = 0;
+  for (const item of items) {
+    if (dedup.has(itemDedupHash(item))) {
+      delivered += 1;
+      continue;
+    }
+    const left = remaining.get(item.topic) ?? 0;
+    if (left > 0) {
+      remaining.set(item.topic, left - 1);
+      delivered += 1;
+      reExtracted.push(item);
+      continue;
+    }
+    undelivered.push(item);
+  }
+  return Object.freeze({
+    delivered,
+    reExtracted: Object.freeze(reExtracted),
+    undelivered: Object.freeze(undelivered),
+  });
+}
+
 // ----- Classification -------------------------------------------------------
 
 /**
@@ -394,10 +452,19 @@ export function classifyDeadLetter(
       command: null,
     });
   }
-  const delivered =
-    payload !== null && resolvedMissing !== null
-      ? resolvedMissing.items.filter((item) => dedup.has(itemDedupHash(item))).length
-      : countDeliveredByTopic(record.missing, inboxSignalTopicCounts(dedup, record.reference));
+  // The session's own topic pages, computed once: a v1 letter measures
+  // its keys against them, and a v2 item falls back to them when its
+  // exact hash is absent (the re-extract route rewords the principle).
+  const topicCounts = inboxSignalTopicCounts(dedup, record.reference);
+  let delivered: number;
+  let undelivered: ReadonlyArray<ExtractedSignalItem> = Object.freeze([]);
+  if (payload !== null && resolvedMissing !== null) {
+    const measure = measureDelivery(dedup, topicCounts, resolvedMissing.items);
+    delivered = measure.delivered;
+    undelivered = measure.undelivered;
+  } else {
+    delivered = countDeliveredByTopic(record.missing, topicCounts);
+  }
   if (record.missing.length > 0 && delivered === record.missing.length) {
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.resolved,
@@ -447,16 +514,12 @@ export function classifyDeadLetter(
     // apply would report success over zero writes - the exact dishonesty
     // the module refuses. The same gate, over the same items, is run here
     // so the state is named before a command promises a re-run.
-    const undeliveredItems =
-      resolvedMissing !== null
-        ? resolvedMissing.items.filter((item) => !dedup.has(itemDedupHash(item)))
-        : [];
-    if (undeliveredItems.length > 0) {
+    if (undelivered.length > 0) {
       const denylist = resolveDurabilityDenylist();
-      const refusals = undeliveredItems
+      const refusals = undelivered
         .map((item) => classifyDurability(item.principle, { denylist }))
         .filter((verdict) => !verdict.durable);
-      if (refusals.length === undeliveredItems.length) {
+      if (refusals.length === undelivered.length) {
         const reasons = [
           ...new Set(
             refusals.flatMap((verdict) => (verdict.reason !== null ? [verdict.reason] : [])),
@@ -465,17 +528,17 @@ export function classifyDeadLetter(
         return Object.freeze({
           category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
           reason:
-            `all ${undeliveredItems.length} undelivered missing item(s) are refused by the durability ` +
+            `all ${undelivered.length} undelivered missing item(s) are refused by the durability ` +
             `gate (${reasons}); the payload cannot be re-run until the gate accepts them`,
           command: null,
         });
       }
     }
-    const undelivered = record.missing.length - delivered;
+    const reRunnable = record.missing.length - delivered;
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.recover,
       reason:
-        `${undelivered} of ${record.missing.length} missing item(s) are not yet on disk; ` +
+        `${reRunnable} of ${record.missing.length} missing item(s) are not yet on disk; ` +
         "the frozen payload can be re-run at current vault state",
       command: `${RECOVER_COMMAND_PREFIX} ${record.id} --apply --yes`,
     });
@@ -510,6 +573,27 @@ function resolvedMissingItemsOrThrow(
     );
   }
   return resolved.items;
+}
+
+/**
+ * What a recovery hands back to the commit: the resolved missing items
+ * MINUS the ones the topic measure found delivered by a re-extract. An
+ * item whose exact hash is absent but whose topic this session already
+ * holds was delivered with reworded text; replaying the frozen wording
+ * would write a second signal on the same session and topic, because the
+ * commit's dedup is hash-only and cannot see the delivery the topic
+ * measure just ruled out. Items whose exact hash IS on disk stay in: the
+ * commit dedups them by the same hash, which is how a delivered item is
+ * accounted without being rewritten.
+ */
+function replayItems(
+  dedup: ReturnType<typeof buildDedupIndex>,
+  record: DeadLetterRecord,
+  items: ReadonlyArray<ExtractedSignalItem>,
+): ReadonlyArray<ExtractedSignalItem> {
+  const measure = measureDelivery(dedup, inboxSignalTopicCounts(dedup, record.reference), items);
+  const reExtracted = new Set(measure.reExtracted);
+  return items.filter((item) => !reExtracted.has(item));
 }
 
 /** Test and caller seams for {@link planRecovery}, mirroring the commit's own options. */
@@ -555,17 +639,20 @@ export function planRecovery(
   const denylist = opts.durabilityDenylist ?? resolveDurabilityDenylist();
   const staged = opts.writeApprovalEnabled ?? resolveWriteApprovalEnabled();
   // The plan previews exactly what the apply would re-run: the MISSING
-  // items, never the whole payload. The items that landed before the
-  // failure are not recovery's input - replaying them would resurrect
-  // any one an operator removed afterwards (a deleted signal, a
-  // rejected queue row the dedup index never walked). A missing key
-  // that names no payload item is a letter this build cannot recover
-  // faithfully, and the classifier has already refused it above.
-  const replayItems = resolvedMissingItemsOrThrow(record, payload.items);
+  // items the commit would not recognise as already delivered. The items
+  // that landed before the failure are not recovery's input - replaying
+  // them would resurrect any one an operator removed afterwards (a
+  // deleted signal, a rejected queue row the dedup index never walked) -
+  // and an item the session re-delivered by re-extracting is left out
+  // too, or its stale wording would be the second signal on that topic.
+  // A missing key that names no payload item is a letter this build
+  // cannot recover faithfully, and the classifier has already refused it
+  // above.
+  const replay = replayItems(dedup, record, resolvedMissingItemsOrThrow(record, payload.items));
   return Object.freeze({
     classification,
     items: Object.freeze(
-      replayItems.map((item) => {
+      replay.map((item) => {
         if (dedup.has(itemDedupHash(item))) {
           return Object.freeze({ topic: item.topic, verdict: DEAD_LETTER_ITEM_VERDICT.dedup });
         }
@@ -622,20 +709,25 @@ export function applyRecovery(
       DEAD_LETTER_RECOVERY_CATEGORY.recover,
     );
   }
-  // The re-run commits exactly the MISSING items, never the whole
-  // payload: the items that landed before the failure are not recovery's
-  // input, and replaying them would resurrect any one an operator
-  // removed afterwards - a deleted signal, or a rejected queue row,
-  // neither of which the dedup index walks. "Nothing stale is replayed"
-  // is the module's own promise - and so is never reporting success over
-  // a re-run that would write nothing: the classifier has already
-  // refused any letter whose missing keys do not resolve, and the shared
-  // refusal keeps that true on this path too.
-  const replayItems = resolvedMissingItemsOrThrow(record, payload.items);
+  // The re-run commits exactly the MISSING items the commit would not
+  // recognise as already delivered, never the whole payload: the items
+  // that landed before the failure are not recovery's input, and
+  // replaying them would resurrect any one an operator removed
+  // afterwards - a deleted signal, or a rejected queue row, neither of
+  // which the dedup index walks. An item the session re-delivered by
+  // re-extracting is left out as well: its frozen wording is stale, and
+  // the commit's hash-only dedup would land it as a second signal on the
+  // same topic. "Nothing stale is replayed" is the module's own promise -
+  // and so is never reporting success over a re-run that would write
+  // nothing: the classifier has already refused any letter whose missing
+  // keys do not resolve, and the shared refusal keeps that true on this
+  // path too.
+  const dedup = buildDedupIndex(vault);
+  const replay = replayItems(dedup, record, resolvedMissingItemsOrThrow(record, payload.items));
   return commitExtractedSignals(
     vault,
     record.reference,
-    { items: replayItems },
+    { items: replay },
     {
       agent: opts.agent,
       now: opts.now,
