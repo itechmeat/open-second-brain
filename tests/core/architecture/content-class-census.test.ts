@@ -287,9 +287,12 @@ describe("content-class egress census", () => {
     expect(undeclared).toEqual([]);
   });
 
+  // The census scans the whole source tree; it measured 2.0-4.5 s on main
+  // and brushes the 5 s default on slower runners as the tree grows, so it
+  // carries its own budget instead of riding the default.
   test("every page-carrying site applies the class filter", () => {
     expect(classFilterCensus(SOURCE_TREE)).toEqual([]);
-  });
+  }, 20000);
 
   test("the pack verb's delegated filter is really there", () => {
     // The one hop the census credits. If the selection step's block scan
