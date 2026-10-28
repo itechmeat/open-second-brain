@@ -1059,13 +1059,11 @@ describe("answer-quote-check hook - reply presence records", () => {
     const run = await runHook();
     expect(run.exit).toBe(0);
     expect(run.stderr).toBe("");
-    // Candidates check in path order, so `elsewhere.md` was measured
-    // first and missed, and the span verified against `restaking.md` -
-    // the turn's merged verdict, hence no finding. Each note reads its
-    // own delivery-shaped history: the recall range delivered only a
-    // partial view, so the first note's miss is `source-truncated`, and
-    // the second reads the `verified` hit. `absent` is reserved for a
-    // note no span was ever measured against.
+    // The span verified against `restaking.md`, so that is the only note
+    // the span reports on: `elsewhere.md` was never measured - no span
+    // was checked against it - and reads `absent`. A note that sorts
+    // before the verifier does not inherit the span's miss, and the
+    // record's verdicts cannot depend on filename order.
     expect(annotations(run)).toEqual([]);
     const records = presenceRecords();
     expect(records).toHaveLength(1);
@@ -1078,7 +1076,7 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(payload.session_id).toBe(SESSION);
     expect(payload.checked).toBe(1);
     expect(payload.per_note).toEqual([
-      { path: "Brain/notes/elsewhere.md", start_line: 1, end_line: 1, verdict: "source-truncated" },
+      { path: "Brain/notes/elsewhere.md", start_line: 1, end_line: 1, verdict: "absent" },
       { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "verified" },
     ]);
     // The hash binds the verdicts to the exact answer text checked; it
@@ -1087,6 +1085,66 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(payload.source_hash).toMatch(/^[0-9a-f]{64}$/);
     // Every test here spawns a real `bun run` hook child; pin the per-test
     // budget past bun's 5 s default so a loaded runner cannot flake it.
+  }, 20000);
+
+  test("an unrelated note reads the same verdict sorting before the verifying note", async () => {
+    // M4: for a span that verified, ONLY the verifying candidate reports
+    // an outcome. `aaa-unrelated.md` sorts before the verifier and would
+    // once have inherited the span's miss; it must read exactly what a
+    // note sorting after the verifier reads - `absent`.
+    writeConfig("shadow");
+    writeNote("Brain/notes/aaa-unrelated.md", "Unrelated collects other facts.\n");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/aaa-unrelated.md#L1-L1",
+        "local:Brain/notes/restaking.md#L1-L1",
+      ]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/aaa-unrelated.md", start_line: 1, end_line: 1, verdict: "absent" },
+      { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "verified" },
+    ]);
+  }, 20000);
+
+  test("an unrelated note reads the same verdict sorting after the verifying note", async () => {
+    // The mirror fixture: the same reply, the same verifying note, the
+    // unrelated name sorting after it. The verdict must be the SAME
+    // `absent` the before-sorting fixture read - a note's presence is a
+    // fact about the reply, not about its filename.
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeNote("Brain/notes/zzz-unrelated.md", "Unrelated collects other facts.\n");
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/restaking.md#L1-L1",
+        "local:Brain/notes/zzz-unrelated.md#L1-L1",
+      ]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "verified" },
+      { path: "Brain/notes/zzz-unrelated.md", start_line: 1, end_line: 1, verdict: "absent" },
+    ]);
   }, 20000);
 
   test("a note whose spans all miss reads its strongest miss verdict", async () => {

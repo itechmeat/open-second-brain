@@ -42,11 +42,13 @@
  * `reply_presence` continuity record: per injected note, whether a
  * quoted span verified against it, its strongest miss verdict, `absent`
  * when no span was ever measured against it, or `note-unavailable` when
- * the budget cut the walk before the note could be measured. The record
- * is keyed by session id and joined to the session's context receipts on
- * read; identifiers and verdicts only, never answer text. The presence
- * record rides the same per-phase modes: every phase `off` writes
- * nothing.
+ * the budget cut the walk before the note could be measured. A span
+ * that verified is measured against the note that carries it alone, so
+ * the per-note verdicts hold whichever way the candidates sort. The
+ * record is keyed by session id and joined to the session's context
+ * receipts on read; identifiers and verdicts only, never answer text.
+ * The presence record rides the same per-phase modes: every phase `off`
+ * writes nothing.
  *
  * Bounded, fail-open. The step reads at most
  * {@link ANSWER_QUOTE_TAIL_BYTES} of the transcript, the last
@@ -701,12 +703,16 @@ interface SpanOutcome {
    */
   readonly decidingPhases: ReadonlyArray<AnswerQuoteCheckPhase>;
   /**
-   * The verdict every candidate actually checked for this span, in check
-   * order - the reply-presence fold's raw material (t_f8510c55). A
-   * candidate past an early `verified` break was never measured and
-   * appears here for no span, which the fold reads as `absent`; a
-   * candidate the budget cut reads `note-unavailable`, never `absent`,
-   * so an unspent budget can never masquerade as an untouched note.
+   * The verdicts the reply-presence fold records for this span, in check
+   * order (t_f8510c55). A span that verified somewhere records ONLY the
+   * verifying candidate's outcome - the span belongs to the note that
+   * carries it, and a candidate that missed it before the walk reached
+   * the verifier did not measure the span in any sense worth reporting.
+   * A span that verified nowhere records every candidate's miss. A
+   * candidate left unmeasured appears here for no span, which the fold
+   * reads as `absent`; a candidate the budget cut reads
+   * `note-unavailable`, never `absent`, so an unspent budget can never
+   * masquerade as an untouched note.
    */
   readonly candidateOutcomes: ReadonlyArray<SpanCandidateOutcome>;
 }
@@ -815,11 +821,24 @@ function checkSpan(
     for (const phase of candidate.phases) decidingPhases.push(phase);
     if (verdict === ANSWER_QUOTE_VERDICT.verified) break;
   }
+  const merged = mergeAnswerQuoteVerdicts(verdicts);
+  // A span that verified somewhere belongs to the note it verified
+  // against: only that candidate's outcome is recorded. The misses the
+  // walk accumulated before reaching the verifier were measurements of
+  // the span against evidence that could not carry it - recording them
+  // would make an unrelated note's verdict depend on whether its path
+  // sorts before or after the verifying one. Per-candidate misses stay
+  // only for spans that verified nowhere, where every miss is the
+  // span's own history.
+  const recordedOutcomes =
+    merged === ANSWER_QUOTE_VERDICT.verified
+      ? candidateOutcomes.filter((outcome) => outcome.verdict === ANSWER_QUOTE_VERDICT.verified)
+      : candidateOutcomes;
   return {
-    verdict: mergeAnswerQuoteVerdicts(verdicts),
+    verdict: merged,
     preview,
     decidingPhases,
-    candidateOutcomes,
+    candidateOutcomes: recordedOutcomes,
   };
 }
 
@@ -836,7 +855,10 @@ function checkSpan(
  * {@link ANSWER_QUOTE_VERDICT.noteUnavailable} for a note no span
  * measured while the budget was exhausted - the transcript went unread
  * past the cut, which is not evidence the note went untouched, so the
- * fold refuses to spend `absent` on it. Rows carry identifiers and
+ * fold refuses to spend `absent` on it. A span that verified somewhere
+ * measured only the note that carries it ({@link checkSpan} records the
+ * verifying candidate alone), so a note's verdict is a fact about the
+ * reply, never about where its path sorts. Rows carry identifiers and
  * verdicts only; no answer text rides the record.
  */
 function foldReplyPresence(
