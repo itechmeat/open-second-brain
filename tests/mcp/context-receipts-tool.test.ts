@@ -197,6 +197,64 @@ describe("brain_context_receipts tool", () => {
     }
   });
 
+  test("a note verified in the next turn reads verified through show, whatever later turns did", async () => {
+    // The review's timeline, through the tool surface: the Stop hook
+    // writes a record on every checked turn, including later turns that
+    // quote nothing, so the receipt's join must fold its own lifetime -
+    // a later all-absent turn never erases an earlier verification, and
+    // the row list stays the receipt's own injection.
+    writePage("Brain/notes/note-a.md", "Note a body.\n");
+    writePage("Brain/notes/note-b.md", "Note b body.\n");
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "mcp-test",
+        trigger: "session_inject",
+        createdAt: "2026-05-20T15:00:00.000Z",
+        sessionId: "session-fold",
+      },
+      finalText: "eager layer",
+      items: [{ id: "note-a", path: "Brain/notes/note-a.md" }],
+    });
+    appendContinuityRecord(vault, {
+      kind: "reply_presence",
+      createdAt: "2026-05-20T15:01:00.000Z",
+      payload: {
+        session_id: "session-fold",
+        checked: 1,
+        per_note: [
+          { path: "Brain/notes/note-a.md", start_line: 1, end_line: 1, verdict: "verified" },
+        ],
+      },
+    });
+    const last = appendContinuityRecord(vault, {
+      kind: "reply_presence",
+      createdAt: "2026-05-20T15:06:00.000Z",
+      payload: {
+        session_id: "session-fold",
+        checked: 0,
+        per_note: [
+          { path: "Brain/notes/note-a.md", verdict: "absent" },
+          { path: "Brain/notes/note-b.md", verdict: "absent" },
+        ],
+      },
+    });
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const show = await callReceipts(server, { operation: "show", id: receipt.id });
+    expect(show["reply_presence"]).toEqual({
+      joined: true,
+      presence: {
+        record_id: last.id,
+        created_at: "2026-05-20T15:06:00.000Z",
+        checked: 1,
+        per_note: [
+          { path: "Brain/notes/note-a.md", start_line: 1, end_line: 1, verdict: "verified" },
+        ],
+      },
+    });
+  });
+
   test("below local reach the join withholds a reserved page's row and counts the withholding", async () => {
     writePage("Brain/preferences/pref-open.md", "Open body.\n");
     writePage(
