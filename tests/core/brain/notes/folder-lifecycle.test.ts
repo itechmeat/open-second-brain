@@ -49,6 +49,7 @@ import {
   folderLifecycle,
   isFolderLifecycleAction,
 } from "../../../../src/core/brain/notes/folder-lifecycle.ts";
+import { realVaultRelative } from "../../../../src/core/path-safety.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 
@@ -1364,14 +1365,25 @@ describe("the destination's real path and existence", () => {
       // matches the spelled guard. (A destination folding onto the source
       // itself is the destination_unchanged refusal, covered elsewhere.)
       mkdirSync(join(vault, "projects/old/sub/deeper"), { recursive: true });
-      await expect(
-        folderLifecycle(vault, {
+      let caught: unknown;
+      try {
+        await folderLifecycle(vault, {
           action: NOTE_LIFECYCLE_ACTION.moveFolder,
           path: "Projects/Old",
           to: "projects/old/sub/deeper",
           apply: true,
-        }),
-      ).rejects.toThrow(/destination_inside_source|nest inside itself/);
+        });
+      } catch (err) {
+        caught = err;
+      }
+      const destinationReal = realVaultRelative(vault, "projects/old/sub/deeper");
+      expect({
+        caught: caught instanceof Error ? caught.message : caught,
+        destinationReal,
+      }).toEqual({
+        caught: expect.stringContaining("destination_inside_source"),
+        destinationReal: expect.stringMatching(/^Projects\/Old\//),
+      });
       expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
       expect(existsSync(join(vault, "Projects/Old/sub/Old"))).toBe(false);
     },

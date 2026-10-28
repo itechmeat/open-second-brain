@@ -665,6 +665,31 @@ function resolveFolderDestination(
           "nest inside itself",
       );
     }
+    // Spelling-independent rung: walk the destination chain up to the
+    // vault root and refuse when any existing entry IS the source's own
+    // directory entry. A file-identity compare is what a case fold, a
+    // Unicode normalization form or an alias cannot talk past - the
+    // spelled rungs above judge spellings, and a host that answers a
+    // spelled path from a differently spelled real entry can slip a
+    // mismatch past every one of them.
+    const sourceEntry = statOrNull(source.abs);
+    if (sourceEntry !== null && sourceEntry.ino !== 0) {
+      let cursor = destinationDirectory.abs;
+      for (;;) {
+        const entry = statOrNull(cursor);
+        if (entry !== null && entry.ino === sourceEntry.ino && entry.dev === sourceEntry.dev) {
+          throw new NoteLifecycleError(
+            "destination_inside_source",
+            `${action} destination ${destinationDirectory.relPath} is the source folder ` +
+              `${source.relPath} (same directory entry on this host); the folder would ` +
+              "nest inside itself",
+          );
+        }
+        const parent = dirname(cursor);
+        if (parent === cursor || parent === vault || parent.length < vault.length) break;
+        cursor = parent;
+      }
+    }
     const destination = landing(
       resolveFolderTarget(
         vault,
