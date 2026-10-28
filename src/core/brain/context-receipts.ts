@@ -1,6 +1,11 @@
 import { sha256Hex } from "../integrity/digest.ts";
 
 import {
+  ANSWER_QUOTE_VERDICT,
+  isAnswerQuoteVerdict,
+  mergeAnswerQuoteVerdicts,
+} from "./answer-quotes/check.ts";
+import {
   appendContinuityRecord,
   isCanonicalUtcTimestamp,
   listContinuityRecords,
@@ -492,28 +497,47 @@ export interface ReceiptReplyPresenceNote {
 
 /**
  * The per-note presence verdicts one receipt's session produced, joined
- * from the session's `reply_presence` continuity record. Identifiers and
- * verdicts only - the record never carried answer text, and none is
- * invented here.
+ * from the session's `reply_presence` records. Identifiers and verdicts
+ * only - the records never carried answer text, and none is invented
+ * here.
  */
 export interface ReceiptReplyPresence {
-  /** Continuity id of the `reply_presence` record that joined. */
+  /**
+   * Continuity id of the NEWEST `reply_presence` record the join folded.
+   * The verdicts are the fold's, not that record's alone: every readable
+   * session record written at or after the receipt contributed.
+   */
   readonly record_id: string;
-  /** When that record was written - the turn it reports on. */
+  /** When that record was written - the last turn the fold drew from. */
   readonly created_at: string;
-  /** How many reply spans the hook measured; `null` when it recorded none. */
+  /**
+   * How many reply spans the folded records measured in sum; `null` when
+   * none of them carried a readable count.
+   */
   readonly checked: number | null;
-  /** One row per injected note, writer order kept. */
+  /**
+   * One row per note THIS receipt injected, first-seen order across the
+   * folded turns kept. The hook's record covers the session's whole
+   * injection ledger; the join covers the receipt, so a row for a note
+   * the receipt never injected is not this receipt's history to report.
+   * A note the receipt injected that no folded record carried has no row:
+   * the join reports what was measured, never an inferred verdict.
+   */
   readonly per_note: ReadonlyArray<ReceiptReplyPresenceNote>;
   /**
-   * How many of the record's note rows were WITHHELD below the caller's
-   * reach, by the same {@link isPathReadableAtReach} verdict every surface
-   * resolves a path with. Present only when rows were dropped, so a join
-   * that withheld nothing stays byte-identical - and a truncated join can
+   * How many folded note rows for THIS receipt's own notes were WITHHELD
+   * below the caller's reach, by the same {@link isPathReadableAtReach}
+   * verdict every surface resolves a path with - summed across the folded
+   * records. Present only when rows were dropped, so a join that
+   * withheld nothing stays byte-identical - and a truncated join can
    * never read as a session that checked fewer notes.
    */
   readonly withheld?: number;
-  /** Hash binding the verdicts to the exact answer text checked. */
+  /**
+   * Hash binding the verdicts to the exact answer text checked - carried
+   * only when the fold drew from ONE record. A fold over several records
+   * answers across several answers, and no single answer hash binds it.
+   */
   readonly source_hash?: string;
 }
 
@@ -531,22 +555,38 @@ export type ReceiptReplyPresenceJoin =
   | { readonly joined: false; readonly reason: "unjoined"; readonly session_id?: string };
 
 /**
- * Join a context receipt to its session's reply-presence record by exact
+ * Join a context receipt to its session's reply-presence records by exact
  * {@link CONTINUITY_SESSION_ID_KEY} match (t_f8510c55).
  *
- * When the session checked several turns, the LATEST sibling record
- * whose payload reads joins - the store reads ascending, append order
- * breaking same-instant ties, so the walk starts at the last match and
- * moves back only past records a corrupt or hand-edited payload made
- * unreadable; the record that joins names itself (`record_id`,
- * `created_at`), and earlier turns remain in the ledger for the
- * continuity reader. A session whose every sibling is unreadable reads
- * `unjoined` with its key, the same named absence a session with no
- * record gets. A receipt without a session key is unjoined
- * before the ledger is read: there is nothing to match on, and inventing
- * a window would answer a question the receipt never asked.
+ * The receipt's own creation draws the fold window: EVERY readable
+ * `reply_presence` record of the session written at or after
+ * `createdAt` folds into the join, chronologically, with `verified`
+ * winning across turns. The window is the honesty guarantee on both
+ * sides. The Stop hook writes a record on every checked turn - including
+ * turns that quote nothing, where every note reads `absent` - so joining
+ * only the session's newest record would answer a receipt whose note was
+ * verified in the next turn with a later turn's absence; and a record
+ * written before the receipt describes turns this receipt's injections
+ * did not exist for, so no earlier record may answer it either. A
+ * receipt with no readable record at or after its own creation reads
+ * `unjoined` - the HONEST absence, never an inferred join - whether no
+ * record exists, none matches the window, or every in-window record's
+ * payload is unreadable. A record whose payload cannot be read is
+ * skipped per record (never reported as the join, never a reason to
+ * orphan readable records behind it); a record whose written time cannot
+ * be read claims no place in the window. The join names itself
+ * (`record_id`, `created_at` - the newest record folded), and earlier
+ * turns remain in the ledger for the continuity reader.
  *
- * `view` is the caller's reach view ({@link reachView}); every joined
+ * `per_note` is restricted to the receipt's own injected notes: the
+ * hook's record covers the session's whole ledger, and a row for a note
+ * the receipt never carried is not this receipt's history to report.
+ *
+ * A receipt without a session key is unjoined before the ledger is read:
+ * there is nothing to match on, and inventing a window would answer a
+ * question the receipt never asked.
+ *
+ * `view` is the caller's reach view ({@link reachView}); every folded
  * note row whose path it hides is DROPPED from `per_note` and counted in
  * `withheld`, so a caller below local reach reads neither the path, the
  * line range nor the verdict of a page reserved against it - the same
@@ -562,38 +602,112 @@ export function lookupReceiptReplyPresence(
   if (typeof sessionId !== "string" || sessionId.length === 0) {
     return Object.freeze({ joined: false as const, reason: "unjoined" });
   }
-  // Newest sibling first, and the newest one whose payload READS joins:
-  // a corrupt or hand-edited line must not orphan the session's earlier,
-  // readable records behind it, and must not be reported as "no record
-  // for this session" when a record plainly exists.
-  const siblings = listContinuityRecords(vault, { kind: "reply_presence" }).filter(
-    (sibling) => sibling.payload[CONTINUITY_SESSION_ID_KEY] === sessionId,
-  );
-  for (let i = siblings.length - 1; i >= 0; i--) {
-    const presence = replyPresenceOf(siblings[i]!, view);
-    if (presence !== null) return Object.freeze({ joined: true as const, presence });
+  // A receipt whose creation cannot be read can establish no window at
+  // all: no record can prove it was written at or after the receipt, so
+  // nothing may claim to answer it.
+  const createdAtMs = Date.parse(record.createdAt);
+  if (Number.isNaN(createdAtMs)) {
+    return Object.freeze({
+      joined: false as const,
+      reason: "unjoined" as const,
+      session_id: sessionId,
+    });
   }
-  // No sibling at all, or none whose payload reads: either way the
-  // honest answer is the named absence, keyed on the session that did
-  // not produce a readable record.
+  const injectedPaths = receiptInjectedPaths(record);
+  // Exact session match, as before; then the window - at or after the
+  // receipt, readable, chronological. Append order breaks same-instant
+  // ties, matching the store's read order.
+  const store = listContinuityRecords(vault, { kind: "reply_presence" });
+  const turns: PresenceTurn[] = [];
+  for (let i = 0; i < store.length; i++) {
+    const sibling = store[i]!;
+    if (sibling.payload[CONTINUITY_SESSION_ID_KEY] !== sessionId) continue;
+    const writtenMs = Date.parse(sibling.createdAt);
+    if (Number.isNaN(writtenMs) || writtenMs < createdAtMs) continue;
+    const turn = readablePresenceTurn(sibling, writtenMs, i, injectedPaths, view);
+    if (turn !== null) turns.push(turn);
+  }
+  if (turns.length === 0) {
+    // No sibling at all, none at or after the receipt, or none in the
+    // window whose payload reads: either way the honest answer is the
+    // named absence, keyed on the session that did not produce a
+    // readable record for this receipt.
+    return Object.freeze({
+      joined: false as const,
+      reason: "unjoined" as const,
+      session_id: sessionId,
+    });
+  }
+  const folded = turns.toSorted(
+    (a, b) => a.writtenMs - b.writtenMs || a.appendIndex - b.appendIndex,
+  );
+  const newest = folded[folded.length - 1]!;
+  const rowsByPath = new Map<string, ReceiptReplyPresenceNote[]>();
+  let withheld = 0;
+  let checked: number | null = null;
+  for (const turn of folded) {
+    if (typeof turn.checked === "number") checked = (checked ?? 0) + turn.checked;
+    withheld += turn.withheld;
+    for (const row of turn.rows) {
+      const rows = rowsByPath.get(row.path);
+      if (rows === undefined) rowsByPath.set(row.path, [row]);
+      else rows.push(row);
+    }
+  }
+  const perNote = [...rowsByPath.values()].map((rows) => foldNoteRows(rows));
   return Object.freeze({
-    joined: false as const,
-    reason: "unjoined" as const,
-    session_id: sessionId,
+    joined: true as const,
+    presence: Object.freeze({
+      record_id: newest.record.id,
+      created_at: newest.record.createdAt,
+      checked,
+      per_note: Object.freeze(perNote),
+      ...(withheld > 0 ? { withheld } : {}),
+      ...(folded.length === 1 && folded[0]!.sourceHash !== undefined
+        ? { source_hash: folded[0]!.sourceHash }
+        : {}),
+    }),
   });
 }
 
 /**
- * Unfold one `reply_presence` record; `null` when its payload cannot be
- * read. Each note row the `view` hides is dropped and counted - the count
- * is the honest residue, absent when nothing was dropped.
+ * The vault-relative note paths THIS receipt injected: the `path` members
+ * of its recorded items. Items without a path (the operator-rule blocks,
+ * the bodies keyed by id alone) offer nothing the presence rows could
+ * match, and a receipt whose items cannot be read injects nothing this
+ * join can report on.
  */
-function replyPresenceOf(record: ContinuityRecord, view?: ReachView): ReceiptReplyPresence | null {
-  const payload = record.payload;
-  const stored = payload["per_note"];
+function receiptInjectedPaths(record: ContinuityRecord): ReadonlySet<string> {
+  const paths = new Set<string>();
+  const stored = record.payload["items"];
+  if (!Array.isArray(stored)) return paths;
+  for (const raw of stored) {
+    if (raw === null || typeof raw !== "object") continue;
+    const path = (raw as Record<string, unknown>)["path"];
+    if (typeof path === "string" && path.length > 0) paths.add(path);
+  }
+  return paths;
+}
+
+/**
+ * One readable in-window `reply_presence` record, shaped for the fold:
+ * its rows restricted to the receipt's own injected notes, each visible
+ * row kept and each reach-hidden row counted. `null` when the payload
+ * cannot be read at all (no `per_note` array) - the per-record
+ * unreadable skip the walk-back named, here meaning the record simply
+ * contributes no turn.
+ */
+function readablePresenceTurn(
+  record: ContinuityRecord,
+  writtenMs: number,
+  appendIndex: number,
+  injectedPaths: ReadonlySet<string>,
+  view?: ReachView,
+): PresenceTurn | null {
+  const stored = record.payload["per_note"];
   if (!Array.isArray(stored)) return null;
   const visible = view?.visible ?? (() => true);
-  const perNote: ReceiptReplyPresenceNote[] = [];
+  const rows: ReceiptReplyPresenceNote[] = [];
   let withheld = 0;
   for (const raw of stored) {
     if (raw === null || typeof raw !== "object") continue;
@@ -602,6 +716,10 @@ function replyPresenceOf(record: ContinuityRecord, view?: ReachView): ReceiptRep
     const verdict = note["verdict"];
     if (typeof path !== "string" || path.length === 0) continue;
     if (typeof verdict !== "string" || verdict.length === 0) continue;
+    // The receipt scopes the join: a row for a note this receipt never
+    // injected is dropped before the reach verdict runs, so the join
+    // resolves no visibility it will not use.
+    if (!injectedPaths.has(path)) continue;
     // The reach verdict runs on the row's path BEFORE anything from it is
     // kept, and a hidden row counts: reporting the drop is what keeps a
     // filtered join honest instead of reading as a smaller check.
@@ -609,23 +727,64 @@ function replyPresenceOf(record: ContinuityRecord, view?: ReachView): ReceiptRep
       withheld += 1;
       continue;
     }
-    perNote.push({
+    rows.push({
       path,
       verdict,
       ...(typeof note["start_line"] === "number" ? { start_line: note["start_line"] } : {}),
       ...(typeof note["end_line"] === "number" ? { end_line: note["end_line"] } : {}),
     });
   }
-  const checked = payload["checked"];
-  const sourceHash = payload["source_hash"];
+  const checked = record.payload["checked"];
+  const sourceHash = record.payload["source_hash"];
   return {
-    record_id: record.id,
-    created_at: record.createdAt,
+    record,
+    writtenMs,
+    appendIndex,
     checked: typeof checked === "number" ? checked : null,
-    per_note: perNote,
-    ...(withheld > 0 ? { withheld } : {}),
-    ...(typeof sourceHash === "string" && sourceHash.length > 0 ? { source_hash: sourceHash } : {}),
+    rows,
+    withheld,
+    ...(typeof sourceHash === "string" && sourceHash.length > 0 ? { sourceHash } : {}),
   };
+}
+
+/** Sort and fold input: one readable in-window record's contribution. */
+interface PresenceTurn {
+  readonly record: ContinuityRecord;
+  /** The record's written time, the fold's primary sort key. */
+  readonly writtenMs: number;
+  /** Store append position, the same-instant tiebreak. */
+  readonly appendIndex: number;
+  readonly checked: number | null;
+  readonly rows: ReadonlyArray<ReceiptReplyPresenceNote>;
+  readonly withheld: number;
+  readonly sourceHash?: string;
+}
+
+/**
+ * Fold one injected note's rows across the folded turns, oldest first. A
+ * hit anywhere in the receipt's lifetime wins - a later turn's absence
+ * never erases an earlier verification, and the newest verifying row
+ * carries the line range the hit was found against. Otherwise the check
+ * module's own merge ladder runs over the MEASURED misses: `absent` is
+ * no turn's measurement, and it neither upgrades nor downgrades a miss
+ * another turn recorded. A note whose every row is `absent` - or whose
+ * verdicts a newer hook wrote and this reader cannot place - reads its
+ * newest row verbatim: the join passes verdict strings through, it does
+ * not interpret what it does not know.
+ */
+function foldNoteRows(rows: ReadonlyArray<ReceiptReplyPresenceNote>): ReceiptReplyPresenceNote {
+  if (rows.length === 1) return rows[0]!;
+  const verified = rows.filter((row) => row.verdict === ANSWER_QUOTE_VERDICT.verified);
+  if (verified.length > 0) return verified[verified.length - 1]!;
+  const measured = rows.filter(
+    (row) => row.verdict !== ANSWER_QUOTE_VERDICT.absent && isAnswerQuoteVerdict(row.verdict),
+  );
+  if (measured.length > 0) {
+    const merged = mergeAnswerQuoteVerdicts(measured.map((row) => row.verdict));
+    const carrier = [...rows].reverse().find((row) => row.verdict === merged);
+    return carrier ?? rows[rows.length - 1]!;
+  }
+  return rows[rows.length - 1]!;
 }
 
 export function summarizeContextReceipt(
