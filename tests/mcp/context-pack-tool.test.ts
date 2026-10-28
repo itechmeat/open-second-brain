@@ -314,22 +314,32 @@ describe("brain_context_pack tool — round trip", () => {
       configPath,
       `vault: ${vault}\nagent_name: claude\ntail_trim_context_pack: "true"\n`,
     );
-    // Five pages whose principle carries the query verbatim, so
-    // substring mode keeps them all and recency alone decides the
-    // order; body extras shape the trim scores (1.0, 5/6, 5/8, 5/6,
-    // 5/13) the way the core pack suite pins them.
-    const QUERY = "alpha beta gamma delta epsilon";
+    // Five pages in recency order whose tail separates under the keep
+    // rule's own measure, query-term coverage (M1): pref-tail-a through
+    // pref-tail-d carry the query verbatim - coverage 1.0 each, and d's
+    // long body repeating every term stays kept, where the jaccard
+    // kernel the ranked comparator uses scored the body's vocabulary
+    // against it; pref-tail-e passes the substring reading only by
+    // fusing the query's last term into a longer token (`delta-off`),
+    // so it covers 3 of the 4 query terms - 0.75, below the 0.8 bar -
+    // and drops whole.
+    const QUERY = "alpha beta gamma delta";
     const pages: Array<[string, string, string]> = [
       ["pref-tail-a", "2026-05-05T00:00:00Z", ""],
       ["pref-tail-b", "2026-05-04T00:00:00Z", "zeta"],
       ["pref-tail-c", "2026-05-03T00:00:00Z", "zeta eta theta"],
-      ["pref-tail-d", "2026-05-02T00:00:00Z", "zeta"],
-      ["pref-tail-e", "2026-05-01T00:00:00Z", "zeta eta theta iota kappa lambda mu nu"],
+      [
+        "pref-tail-d",
+        "2026-05-02T00:00:00Z",
+        "zeta eta theta iota kappa lambda mu nu alpha beta gamma delta",
+      ],
+      ["pref-tail-e", "2026-05-01T00:00:00Z", "omega"],
     ];
     for (const [slug, created, body] of pages) {
+      const principle = slug === "pref-tail-e" ? "alpha beta gamma delta-off" : QUERY;
       writeFileSync(
         join(vault, "Brain", "preferences", `pref-${slug}.md`),
-        `---\nid: ${slug}\ntopic: x\nprinciple: ${QUERY}\ntier: core\ncreated_at: ${created}\n---\n\n${body}\n`,
+        `---\nid: ${slug}\ntopic: x\nprinciple: ${principle}\ntier: core\ncreated_at: ${created}\n---\n\n${body}\n`,
       );
     }
     const server = new MCPServer({ vault, configPath });
