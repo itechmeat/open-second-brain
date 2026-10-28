@@ -95,7 +95,7 @@ import {
 import { dirname, join, posix, sep, win32 } from "node:path";
 
 import { checkWriteBinding } from "../../write-binding/index.ts";
-import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
+import { ensureInsideVault, realVaultRelative, toPosix } from "../../path-safety.ts";
 import { pathCovers } from "../../vault-scope/defaults.ts";
 import { assertExpectedCount } from "../count-guard.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "../gates/recoverability.ts";
@@ -454,7 +454,15 @@ function resolveFolderTarget(
   } catch (err) {
     throw new CreateNoteError("outside_vault", err instanceof Error ? err.message : String(err));
   }
-  return { relPath, abs };
+  // The folder envelope speaks POSIX: every judgment below compares or
+  // slices relPath against real locations and walk spellings, which are
+  // POSIX spellings on every platform. `inspectPath` joins its segments
+  // with the platform separator, so without this rung a Windows relPath
+  // carries backslashes and the spelled guards (`startsWith(`${rel}/`)`)
+  // silently stop matching - the destination-inside-source refusal never
+  // fires and the move nests the folder into itself on a case-folding
+  // host.
+  return { relPath: toPosix(relPath), abs };
 }
 
 // ----- Path helpers (folder-shaped) -----------------------------------------
