@@ -776,11 +776,13 @@ function foldNoteRows(rows: ReadonlyArray<ReceiptReplyPresenceNote>): ReceiptRep
   if (rows.length === 1) return rows[0]!;
   const verified = rows.filter((row) => row.verdict === ANSWER_QUOTE_VERDICT.verified);
   if (verified.length > 0) return verified[verified.length - 1]!;
-  const measured = rows.filter(
-    (row) => row.verdict !== ANSWER_QUOTE_VERDICT.absent && isAnswerQuoteVerdict(row.verdict),
+  const measured = rows.flatMap((row) =>
+    row.verdict !== ANSWER_QUOTE_VERDICT.absent && isAnswerQuoteVerdict(row.verdict)
+      ? [row.verdict]
+      : [],
   );
   if (measured.length > 0) {
-    const merged = mergeAnswerQuoteVerdicts(measured.map((row) => row.verdict));
+    const merged = mergeAnswerQuoteVerdicts(measured);
     const carrier = [...rows].reverse().find((row) => row.verdict === merged);
     return carrier ?? rows[rows.length - 1]!;
   }
