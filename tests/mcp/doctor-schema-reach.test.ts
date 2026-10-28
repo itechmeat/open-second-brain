@@ -24,10 +24,20 @@ import { MCPServer } from "../../src/mcp/server.ts";
 
 const PREF = "Brain/preferences/pref-secret.md";
 
+/**
+ * A creation date inside every staleness window the doctor reads: fixed
+ * offsets from the run date keep the fixture from crossing a stale-stable
+ * boundary (a hardcoded date silently flipped the maintenance reach shape
+ * half a year after it was written).
+ */
+function stableCreatedAt(): string {
+  return new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+}
+
 /** A private preference with no `status`, whose identity field is `id`. */
 function prefBody(id: string, body: string): string {
   return (
-    `---\nkind: brain-preference\nid: ${id}\ncreated_at: 2026-05-01T00:00:00Z\n` +
+    `---\nkind: brain-preference\nid: ${id}\ncreated_at: ${stableCreatedAt()}\n` +
     `topic: style\nvisibility: private\n---\n\n${body}`
   );
 }
