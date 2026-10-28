@@ -1290,13 +1290,14 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   default is off), `brain_context_pack` runs one score-aware trim over
   the unified tier-and-budget walk whenever the call carries a query:
   the top three delivered items are immune, any later item whose
-  token-overlap score against the query is at least 0.8 of the top
-  delivered score is kept (it restates the question's terms nearly as
-  fully as the top hit), and the rest drop whole with a `tail-trim` skip
-  reason - never partially re-cut. The freed budget is then offered back
-  to `over-budget` candidates in priority order, the only path by which
-  a page can cross tiers, bounded by the same `max_tokens` and never
-  reordering or dropping the synthesized attention item. The response
+  query-term coverage - the fraction of the query's tokens it carries -
+  is at least 0.8 of the top delivered score is kept (it restates the
+  question's terms nearly as fully as the top hit), and the rest drop
+  whole with a `tail-trim` skip reason - never partially re-cut. The
+  freed budget is then offered back to `over-budget` candidates in
+  priority order, the only path by which a page can cross tiers,
+  spending the tokens the trim freed and no more, and never reordering
+  or dropping the synthesized attention item. The response
   carries a conditional `tail_trim` block (`dropped`,
   `kept_by_query_terms`, `rescued`, `tokens_saved`) only when the trim
   ran. With the key off - the default - packs are byte-identical, and
