@@ -17,8 +17,12 @@
 
 import type { CreateNoteInput, CreateNoteResult } from "./notes/create-note.ts";
 import { createNote } from "./notes/create-note.ts";
-import type { ExportedPreferencesJson } from "./export.ts";
-import { exportPreferencesJson, exportPreferencesLlmsTxt } from "./export.ts";
+import type { ExportedPreferencesJson, LlmsTxtExport } from "./export.ts";
+import {
+  exportPreferencesJson,
+  exportPreferencesLlmsTxt,
+  exportPreferencesLlmsTxtDetailed,
+} from "./export.ts";
 import {
   type BankBundle,
   type BankImportResult,
@@ -75,7 +79,19 @@ export interface BrainSdk {
 
   // Preference export.
   exportPreferencesJson(): ExportedPreferencesJson;
+  /**
+   * The stable string signature, kept for every existing caller.
+   *
+   * @deprecated the string carries no denial report - a preference the
+   * privacy deny markers reserve leaves the text silently, so a caller
+   * cannot name what stayed out. Use
+   * {@link BrainSdk.exportPreferencesLlmsTxtDetailed}, which returns the
+   * same text beside the omission report; the CLI surface (which names
+   * every omission on stderr) is the model.
+   */
   exportPreferencesLlmsTxt(): string;
+  /** The llms-txt document beside the omissions its privacy policy made. */
+  exportPreferencesLlmsTxtDetailed(): LlmsTxtExport;
 
   // Open Knowledge Format bundle export/import (Unit C).
   buildOkfBundle(): OkfBundle;
@@ -109,6 +125,7 @@ export function createBrain(vault: string): BrainSdk {
 
     exportPreferencesJson: () => exportPreferencesJson(vault),
     exportPreferencesLlmsTxt: () => exportPreferencesLlmsTxt(vault),
+    exportPreferencesLlmsTxtDetailed: () => exportPreferencesLlmsTxtDetailed(vault),
 
     buildOkfBundle: () => buildOkfBundle(vault),
     writeOkfBundle: (dir, bundle, opts) => writeOkfBundle(dir, bundle, opts ?? {}),
