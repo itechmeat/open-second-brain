@@ -270,11 +270,13 @@ const APPEND_PRIMITIVES: ReadonlyArray<string> = Object.freeze([
 
 /**
  * A payload stamp written unconditionally, from a required binding.
- * `session_id: sessionId`, `session_id: input.sessionId`, ...
- * (`session_id?: string` in an interface is not a stamp; a read of
- * `payload["session_id"]` is not one either.)
+ * `session_id: sessionId`, `session_id: input.sessionId`, or the same
+ * stamp under the shared key constant the hook writers use
+ * (`[CONTINUITY_SESSION_ID_KEY]: sessionId`). (`session_id?: string` in
+ * an interface is not a stamp; a read of `payload["session_id"]` is not
+ * one either.)
  */
-const UNCONDITIONAL_STAMP_RE = /session_id: [A-Za-z$_]/;
+const UNCONDITIONAL_STAMP_RE = /(?:session_id|\[CONTINUITY_SESSION_ID_KEY\]): [A-Za-z$_]/;
 
 /**
  * The conditional-spread shape the sessionless lanes stamp with:
@@ -394,12 +396,12 @@ const KIND_WRITERS: ReadonlyArray<{
     // answer-quote-check Stop hook's per-turn fold of per-injected-note
     // verdicts. Written ONLY by the Stop hook, outside src - the one
     // kind whose writer lives past the src root, named with its root so
-    // the writer-shape check reads it where it lives. The hook stamps
-    // the session key conditionally (absent when the host names no
-    // session), so it is sessionless by design exactly like the
-    // context_receipt lane above.
+    // the writer-shape check reads it where it lives. The hook appends
+    // the record only when the host names a session, and stamps the key
+    // on every payload it appends, so a record never exists without one:
+    // session-scoped, exactly like the session_turn lane.
     kind: "reply_presence",
-    sessionScoped: false,
+    sessionScoped: true,
     writers: [HOOK_WRITER],
   },
 ]);

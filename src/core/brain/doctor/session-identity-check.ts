@@ -71,6 +71,10 @@ export const SESSION_IDENTITY_SITE = "brain.doctor.sessionIdentity";
  *   `sessionId`, stamped into every payload).
  * - `decision_model_extract_commit` - `extract-signals-prefilter.ts`
  *   (stamped from the commit result's required session id).
+ * - `reply_presence` - `hooks/answer-quote-check.ts` (the Stop hook
+ *   appends the record only when the host names a session, and stamps
+ *   the key on every payload it appends, so a record never exists
+ *   without one).
  *
  * The writer-shape census that keeps this list honest over the full
  * `ContinuityRecordKind` population lives in the check's test file.
@@ -79,6 +83,7 @@ export const SESSION_IDENTITY_CHECKED_KINDS: ReadonlyArray<ContinuityRecordKind>
   "decision_model_extract_commit",
   "post_compact_audit",
   "pre_compact_extract",
+  "reply_presence",
   "session_summary_digest",
   "session_summary_node",
   "session_turn",
