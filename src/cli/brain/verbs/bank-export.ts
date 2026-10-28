@@ -33,20 +33,6 @@ function referenceOmissionNotice(dropped: number): string {
 }
 
 /**
- * The stderr line counting the kept pages' structured references (graph
- * links and relation targets, page-contract citations) that named a
- * left-out page and were dropped. A bundle the policy shortened without
- * a word is the same silently smaller export the page omission notice
- * exists to prevent.
- */
-function referenceOmissionNotice(dropped: number): string {
-  return (
-    `note: ${dropped} link/relation/citation target(s) to left-out page(s) dropped from ` +
-    "kept pages' structured references\n"
-  );
-}
-
-/**
  * The stderr line naming the reserved preferences a `--include-reserved`
  * run carried into the backup, in the `EGRESS_CONTENT_CLASS_INCLUDE_NOTICE`
  * shape: counted, each row named with the key that denied it, the flag
