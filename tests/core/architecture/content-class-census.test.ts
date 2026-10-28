@@ -28,7 +28,10 @@
  *    unambiguous flag names the egress census reads);
  * 2. it redacts through the shared guard (`redactForEgress`);
  * 3. it composes vault page material: it imports a composer from the
- *    portability surface or the brain-export modules.
+ *    portability surface or the brain-export modules. The brain-export
+ *    arm reads the import's BINDINGS, not just its module path, because
+ *    the shared denial notice rides the same module and composes
+ *    nothing - see `importsPageComposer`.
  *
  * All three, because each alone over- or under-states: a destination
  * without the guard is the egress census's finding, not this one's; the
@@ -45,7 +48,13 @@
  *   construction) and the decision-model routes. None imports a page
  *   composer, so none is in population; the continuity and explorer
  *   decisions are recorded in their registry reasons (commit 887cb142),
- *   and the snapshot carries no vault content at all.
+ *   and the snapshot carries no vault content at all. The explorer's
+ *   static export reads one helper from the brain-export module - the
+ *   denial notice it prints beside its reservation omissions (commit
+ *   0d00e879) - so the composer rule credits a brain-export import only
+ *   when it binds something beyond that notice pair; the rows it
+ *   exports never take the prompt-derived stamp, and the registry
+ *   reason says so.
  * - A class filter delegated more than ONE hop. The knowledge-pack verb
  *   composes through `selectKnowledgePack`, whose module applies the
  *   filter inside `pageBlockReason`; that is the one named delegation
@@ -104,9 +113,56 @@ function namedStringParamRe(names: ReadonlyArray<string>): RegExp {
 
 const DESTINATION_RE = namedStringParamRe(DESTINATION_NAMES);
 
-/** A composer import: the portability surface or the brain-export modules. */
-const COMPOSER_IMPORT_RE =
-  /from\s*"[^"]*(?:\/portability\/[^"]*|\/brain\/export(?:-transcripts)?\.ts)"/;
+/**
+ * A composer import from the portability surface or the transcript
+ * export module. The brain-export module (`src/core/brain/export.ts`)
+ * is handled by `importsPageComposer`, which reads the import's
+ * bindings before crediting it.
+ */
+const PORTABILITY_OR_TRANSCRIPTS_IMPORT_RE =
+  /from\s*"[^"]*(?:\/portability\/[^"]*|\/brain\/export-transcripts\.ts)"/;
+
+/** One `import { ... } from "<...>/brain/export.ts"` statement. */
+const BRAIN_EXPORT_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"[^"]*\/brain\/export\.ts"/g;
+
+/**
+ * The shared denial notice and its row type. They ride the brain-export
+ * module but compose nothing: they are the omission report an exporter
+ * prints BESIDE the payload. The explorer's static export pulls exactly
+ * this pair to name its reservation omissions (commit 0d00e879), so a
+ * module-level path match would place a no-composer site in population
+ * and demand a class filter the registry already records as removing
+ * nothing - preference and retired rows never take the prompt-derived
+ * stamp.
+ */
+const DENIAL_NOTICE_BINDINGS: ReadonlySet<string> = new Set([
+  "preferenceDenialNotice",
+  "PreferenceDenial",
+]);
+
+/**
+ * Whether the module imports a page composer. A brain-export import is
+ * a composer import only when it binds something beyond the denial
+ * notice pair - a text census cannot otherwise tell the exporters'
+ * composer imports from the explorer's notice import, because both name
+ * the same module.
+ */
+function importsPageComposer(withoutComments: string): boolean {
+  if (PORTABILITY_OR_TRANSCRIPTS_IMPORT_RE.test(withoutComments)) return true;
+  for (const match of withoutComments.matchAll(BRAIN_EXPORT_IMPORT_RE)) {
+    const bindings = (match[1] ?? "")
+      .split(",")
+      .map((binding) =>
+        binding
+          .trim()
+          .replace(/^type\s+/, "")
+          .trim(),
+      )
+      .filter((binding) => binding.length > 0);
+    if (bindings.some((binding) => !DENIAL_NOTICE_BINDINGS.has(binding))) return true;
+  }
+  return false;
+}
 
 /** The shared egress guard. A module that calls it redacts on the way out. */
 const GUARD_RE = /\bredactForEgress\s*\(/;
@@ -154,7 +210,7 @@ function isPageCarryingRedactor(text: string): boolean {
   return (
     DESTINATION_RE.test(views.withoutComments) &&
     GUARD_RE.test(views.code) &&
-    COMPOSER_IMPORT_RE.test(views.withoutComments)
+    importsPageComposer(views.withoutComments)
   );
 }
 
@@ -175,7 +231,7 @@ function classFilterCensus(files: ReadonlyArray<CensusFile>): ReadonlyArray<stri
     if (
       !DESTINATION_RE.test(views.withoutComments) ||
       !GUARD_RE.test(views.code) ||
-      !COMPOSER_IMPORT_RE.test(views.withoutComments)
+      !importsPageComposer(views.withoutComments)
     ) {
       continue;
     }
@@ -330,6 +386,33 @@ describe("the content-class census cannot pass by finding nothing", () => {
     // The continuity export: guard call, destination flag, no composer
     // import - its class decision lives in the registry, not in a filter.
     const text = readFileSync(join(REPO_ROOT, "src/cli/brain/verbs/continuity.ts"), "utf8");
+    expect(isPageCarryingRedactor(text)).toBe(false);
+  });
+
+  test("the explorer's brain-export imports bind only the denial notice", () => {
+    // The one module whose composer verdict turns on import BINDINGS
+    // rather than the module path. If a composer binding ever joins the
+    // explorer's brain-export import, the explorer becomes a
+    // page-carrying shared export: the equality test above fails until
+    // it is named and filtered, and this pin is the signpost naming
+    // which import moved.
+    const text = readFileSync(join(REPO_ROOT, "src/cli/brain/verbs/explorer.ts"), "utf8");
+    const views = lexSource(text);
+    const imports = [...views.withoutComments.matchAll(BRAIN_EXPORT_IMPORT_RE)].map((m) =>
+      (m[1] ?? "")
+        .split(",")
+        .map((binding) =>
+          binding
+            .trim()
+            .replace(/^type\s+/, "")
+            .trim(),
+        )
+        .filter((binding) => binding.length > 0),
+    );
+    expect(imports.length).toBeGreaterThanOrEqual(1);
+    for (const bindings of imports) {
+      expect(bindings.every((binding) => DENIAL_NOTICE_BINDINGS.has(binding))).toBe(true);
+    }
     expect(isPageCarryingRedactor(text)).toBe(false);
   });
 });
