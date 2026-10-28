@@ -359,6 +359,23 @@ function deadLettersRecover(argv: string[]): number {
       now: new Date(),
     });
     const letterPath = deadLetterPath(vault, record.id);
+    // The module's own promise: never report success over a re-run that
+    // delivered nothing. The classifier refuses the states it can see
+    // (every undelivered item gate-refused, every missing item already
+    // delivered); an apply that still comes back with zero writes and
+    // zero staging - the vault changing between the classification and
+    // the commit is the shape this catches - is refused here with the
+    // accounting named, instead of printed as a green `wrote 0
+    // signal(s)`.
+    if (res.written.length + res.staged === 0) {
+      const refusedItems = res.rejected.map((r) => `${r.topic}: ${r.reason}`).join("; ");
+      const message =
+        `nothing was delivered while recovering ${record.id}: wrote 0 signal(s) and staged 0 ` +
+        `(deduped ${res.deduped}, durability-rejected ${res.durabilityRejected}` +
+        (refusedItems !== "" ? `; ${refusedItems}` : "") +
+        `); the letter is retained at ${letterPath}`;
+      return refused(message, asJson);
+    }
     if (asJson) {
       okJson({
         ok: true,

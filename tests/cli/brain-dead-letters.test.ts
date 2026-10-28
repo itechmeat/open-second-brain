@@ -579,6 +579,61 @@ describe("dead-letters recover", () => {
     expect(payload.message).toContain("not_recoverable");
   });
 
+  test("a denylist-refused letter refuses the apply at exit 1, naming the gate", async () => {
+    // The item never reaches disk, so the letter used to read `recover`
+    // forever and every apply reported success over zero writes. The
+    // classifier answers not_recoverable and the verb refuses - on the
+    // first apply and on every one after it.
+    const letter = v2Letter(
+      [item({ topic: "scratch-pad", principle: "temporary scratch note" })],
+      ["items[0]:scratch-pad"],
+    );
+    const r = await runCli(
+      [
+        "brain",
+        "dead-letters",
+        "recover",
+        letter.id,
+        "--apply",
+        "--yes",
+        "--json",
+        "--vault",
+        vault,
+      ],
+      {
+        env: {
+          OPEN_SECOND_BRAIN_CONFIG: configPath,
+          OPEN_SECOND_BRAIN_DURABILITY_DENYLIST: "scratch",
+        },
+      },
+    );
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("durability");
+    expect(payload.message).toContain("denylisted");
+    // The refused item was never written.
+    expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
+  });
+
+  test("an apply that delivers nothing exits 1 naming the reason", async () => {
+    // A hand-edited letter whose missing list is empty: the classifier's
+    // recover promise has nothing behind it and the re-run delivers
+    // nothing - which used to print `wrote 0 signal(s)` and exit 0. The
+    // verb refuses the empty success instead of reporting it.
+    const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
+    const path = deadLetterPath(vault, letter.id);
+    const body = JSON.parse(readFileSync(path, "utf8")) as { missing: string[] };
+    body.missing = [];
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+    const r = await run(["recover", letter.id, "--apply", "--yes", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("nothing was delivered");
+    expect(existsSync(join(vault, "Brain", "inbox"))).toBe(false);
+  });
+
   test("a frozen vault refuses the apply and points at unfreeze", async () => {
     const letter = v2Letter([item()], ["items[0]:release-notes-style"]);
     freezeVault(vault, { agent: "@operator", reason: "migrating the fleet" });

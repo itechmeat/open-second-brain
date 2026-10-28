@@ -49,6 +49,7 @@ import {
 } from "../../../src/core/brain/extract-signals.ts";
 import { computeDedupHash } from "../../../src/core/brain/dedup-hash.ts";
 import { redactRawOutput } from "../../../src/core/redactor.ts";
+import { DURABILITY_DENYLIST_ENV_KEY } from "../../../src/core/brain/gates/durability.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-template.ts";
 import { brainConfigPath, brainDirs } from "../../../src/core/brain/paths.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
@@ -241,6 +242,57 @@ describe("the recovery classifier", () => {
     const c = classifyDeadLetter(vault, letter);
     expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
     expect(c.command).toBeNull();
+  });
+
+  test("a letter whose undelivered items the durability gate refuses classifies not_recoverable", () => {
+    // A denylisted item never reaches disk, so the dedup index never
+    // shows it delivered: the letter used to read `recover` forever and
+    // every apply reported success over zero writes. The classifier runs
+    // the same gate over the undelivered items and names the state
+    // honestly instead.
+    const letter = v2Letter(
+      [item({ topic: "scratch-pad", principle: "temporary scratch note" })],
+      ["items[0]:scratch-pad"],
+    );
+    process.env[DURABILITY_DENYLIST_ENV_KEY] = "scratch";
+    try {
+      const c = classifyDeadLetter(vault, letter);
+      expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable);
+      expect(c.reason).toContain("durability");
+      expect(c.reason).toContain("denylisted");
+      expect(c.command).toBeNull();
+      expect(() => planRecovery(vault, letter)).toThrow(DeadLetterRecoveryError);
+      expect(() => applyRecovery(vault, letter, { agent: AGENT, now: NOW })).toThrow(
+        DeadLetterRecoveryError,
+      );
+    } finally {
+      delete process.env[DURABILITY_DENYLIST_ENV_KEY];
+    }
+  });
+
+  test("a letter with one refused and one writable item stays recover - the writable one still writes", () => {
+    // The refusal answer is for letters whose EVERY undelivered item is
+    // refused; a mixed letter keeps the recover exit, and the apply
+    // writes the writable item and names the refused one.
+    const letter = v2Letter(
+      [
+        item({ topic: "module-names" }),
+        item({ topic: "scratch-pad", principle: "temporary scratch note" }),
+      ],
+      ["items[0]:module-names", "items[1]:scratch-pad"],
+    );
+    process.env[DURABILITY_DENYLIST_ENV_KEY] = "scratch";
+    try {
+      expect(classifyDeadLetter(vault, letter).category).toBe(
+        DEAD_LETTER_RECOVERY_CATEGORY.recover,
+      );
+      const res = applyRecovery(vault, letter, { agent: AGENT, now: NOW });
+      expect(res.written.map((w) => w.topic)).toEqual(["module-names"]);
+      expect(res.durabilityRejected).toBe(1);
+      expect(res.rejected[0]?.reason).toContain("denylisted");
+    } finally {
+      delete process.env[DURABILITY_DENYLIST_ENV_KEY];
+    }
   });
 
   test("a missing key the frozen payload cannot resolve classifies not_recoverable, by name", () => {

@@ -441,6 +441,36 @@ export function classifyDeadLetter(
   }
 
   if (payload !== null) {
+    // An item the durability gate refuses never reaches disk, so the
+    // dedup index can never show it delivered: a letter whose EVERY
+    // undelivered item is refused would read `recover` forever, and each
+    // apply would report success over zero writes - the exact dishonesty
+    // the module refuses. The same gate, over the same items, is run here
+    // so the state is named before a command promises a re-run.
+    const undeliveredItems =
+      resolvedMissing !== null
+        ? resolvedMissing.items.filter((item) => !dedup.has(itemDedupHash(item)))
+        : [];
+    if (undeliveredItems.length > 0) {
+      const denylist = resolveDurabilityDenylist();
+      const refusals = undeliveredItems
+        .map((item) => classifyDurability(item.principle, { denylist }))
+        .filter((verdict) => !verdict.durable);
+      if (refusals.length === undeliveredItems.length) {
+        const reasons = [
+          ...new Set(
+            refusals.flatMap((verdict) => (verdict.reason !== null ? [verdict.reason] : [])),
+          ),
+        ].join("; ");
+        return Object.freeze({
+          category: DEAD_LETTER_RECOVERY_CATEGORY.notRecoverable,
+          reason:
+            `all ${undeliveredItems.length} undelivered missing item(s) are refused by the durability ` +
+            `gate (${reasons}); the payload cannot be re-run until the gate accepts them`,
+          command: null,
+        });
+      }
+    }
     const undelivered = record.missing.length - delivered;
     return Object.freeze({
       category: DEAD_LETTER_RECOVERY_CATEGORY.recover,
