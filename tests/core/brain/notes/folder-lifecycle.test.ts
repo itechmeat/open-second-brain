@@ -1359,14 +1359,16 @@ describe("the destination's real path and existence", () => {
     "a case-folded destination inside the source is refused by real path (M15)",
     async () => {
       note("Projects/Old/a.md", "alpha\n");
-      // On the folding host this IS `Projects/Old/sub` - inside the
-      // source - although its spelling never matches the spelled guard.
-      mkdirSync(join(vault, "projects/old/sub"), { recursive: true });
+      // On the folding host this IS `Projects/Old/sub/deeper` - inside the
+      // source but not the source itself - although its spelling never
+      // matches the spelled guard. (A destination folding onto the source
+      // itself is the destination_unchanged refusal, covered elsewhere.)
+      mkdirSync(join(vault, "projects/old/sub/deeper"), { recursive: true });
       await expect(
         folderLifecycle(vault, {
           action: NOTE_LIFECYCLE_ACTION.moveFolder,
           path: "Projects/Old",
-          to: "projects/old/sub",
+          to: "projects/old/sub/deeper",
           apply: true,
         }),
       ).rejects.toThrow(/destination_inside_source|nest inside itself/);
