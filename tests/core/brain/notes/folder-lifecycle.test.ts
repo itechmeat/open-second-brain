@@ -49,7 +49,6 @@ import {
   folderLifecycle,
   isFolderLifecycleAction,
 } from "../../../../src/core/brain/notes/folder-lifecycle.ts";
-import { realVaultRelative } from "../../../../src/core/path-safety.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 
@@ -1376,14 +1375,13 @@ describe("the destination's real path and existence", () => {
       } catch (err) {
         caught = err;
       }
-      const destinationReal = realVaultRelative(vault, "projects/old/sub/deeper");
-      expect({
-        caught: caught instanceof Error ? caught.message : caught,
-        destinationReal,
-      }).toEqual({
-        caught: expect.stringContaining("destination_inside_source"),
-        destinationReal: expect.stringMatching(/^Projects\/Old\//),
-      });
+      // On a case-sensitive host the spelled rung refuses (the spelled
+      // destination realpaths strictly inside the source); on a folding
+      // host the platform realpath preserves the caller's casing, so the
+      // refusal comes from the identity rung - the directory entry IS the
+      // source. Either way the code is the same.
+      expect(caught).toBeInstanceOf(NoteLifecycleError);
+      expect((caught as NoteLifecycleError).code).toBe("destination_inside_source");
       expect(existsSync(join(vault, "Projects/Old/a.md"))).toBe(true);
       expect(existsSync(join(vault, "Projects/Old/sub/Old"))).toBe(false);
     },
