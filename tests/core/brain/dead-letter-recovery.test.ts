@@ -47,6 +47,8 @@ import {
   commitExtractedSignals,
   type ExtractedSignalItem,
 } from "../../../src/core/brain/extract-signals.ts";
+import { computeDedupHash } from "../../../src/core/brain/dedup-hash.ts";
+import { redactRawOutput } from "../../../src/core/redactor.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-template.ts";
 import { brainConfigPath, brainDirs } from "../../../src/core/brain/paths.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
@@ -97,6 +99,42 @@ function v2Letter(
     firstError: "EIO: i/o error",
     now: NOW,
     payload: { items: [...items] },
+  });
+}
+
+/**
+ * A schema-2 letter frozen the way the extractor now freezes one: each
+ * item's free-text fields redacted, the RAW text's dedup hash stored
+ * beside it (`dead-letter.test.ts` pins the freeze itself; the tests
+ * below pin what recovery reads out of that shape).
+ */
+function frozenLetter(
+  items: ReadonlyArray<ExtractedSignalItem>,
+  missingKeys: ReadonlyArray<string>,
+): DeadLetterRecord {
+  return recordDeadLetter(vault, {
+    envelope: ENVELOPE,
+    report: report(items.length, missingKeys),
+    firstError: "EIO: i/o error",
+    now: NOW,
+    payload: {
+      items: items.map((entry) => {
+        const scope = entry.scope?.trim();
+        return {
+          topic: entry.topic,
+          signal: entry.signal,
+          principle: redactRawOutput(entry.principle),
+          confidence: entry.confidence,
+          ...(scope !== undefined && scope !== "" ? { scope: redactRawOutput(scope) } : {}),
+          dedup_hash: computeDedupHash({
+            topic: entry.topic,
+            signal: entry.signal,
+            principle: entry.principle,
+            ...(scope !== undefined && scope !== "" ? { scope } : {}),
+          }),
+        };
+      }),
+    },
   });
 }
 
@@ -176,6 +214,30 @@ describe("the recovery classifier", () => {
     const items = [item(), item({ topic: "module-names" })];
     commitExtractedSignals(vault, SESSION, { items }, { agent: AGENT, now: NOW });
     const letter = v1Letter(["items[0]:release-notes-style", "items[1]:module-names"]);
+    const c = classifyDeadLetter(vault, letter);
+    expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
+    expect(c.command).toBeNull();
+  });
+
+  test("a frozen item's stored hash is the raw identity: the same content delivered later reads as delivered", () => {
+    // The freeze redacts the frozen principle, so a hash recomputed from
+    // the frozen fields is NOT the identity the original delivery would
+    // have carried. The raw-text hash stored beside the item is: a later
+    // delivery of the same raw content - here by another session, which
+    // the session-scoped topic measure deliberately cannot see - is
+    // recognised, and the letter reads resolved instead of promising a
+    // re-run that would only duplicate what is already on disk.
+    const raw = "Use token password=hunter2secret when scraping.";
+    const letter = frozenLetter(
+      [item({ topic: "scraping-auth", principle: raw })],
+      ["items[0]:scraping-auth"],
+    );
+    commitExtractedSignals(
+      vault,
+      "sess-other-delivery",
+      { items: [item({ topic: "scraping-auth", principle: raw })] },
+      { agent: AGENT, now: NOW },
+    );
     const c = classifyDeadLetter(vault, letter);
     expect(c.category).toBe(DEAD_LETTER_RECOVERY_CATEGORY.resolved);
     expect(c.command).toBeNull();

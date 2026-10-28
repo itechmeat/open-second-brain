@@ -44,6 +44,7 @@ import {
   type DeadLetterEnvelopeIdentity,
 } from "../../../src/core/brain/dead-letter.ts";
 import { commitExtractedSignals } from "../../../src/core/brain/extract-signals.ts";
+import { computeDedupHash } from "../../../src/core/brain/dedup-hash.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
 import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import { buildReconciliationReport } from "../../../src/core/reconciliation-report.ts";
@@ -489,7 +490,14 @@ describe("schema v2 freezes the payload", () => {
 });
 
 describe("the extractor freezes its payload into the letter", () => {
-  test("the letter carries the validated items the commit failed to write", () => {
+  test("the frozen items are redacted, with the raw text's dedup hash kept beside each", () => {
+    // The letter sits in `.open-second-brain/dead-letters/` forever and
+    // `show --json` prints it: the same redaction `writeSignal` applies
+    // before disk applies at freeze time, and the dedup hash frozen
+    // beside each item is the RAW text's, so recovery still matches the
+    // original delivery identity (the redacted fields alone would hash
+    // differently and a re-delivery of the real content would dedup
+    // nothing).
     const v = vault();
     mkdirSync(join(v, "Brain"), { recursive: true });
     importSessionRecall(v, {
@@ -504,21 +512,26 @@ describe("the extractor freezes its payload into the letter", () => {
       ],
       createdAt: "2026-08-22T10:00:00Z",
     });
+    const rawPrinciple = "Use token password=hunter2secret when scraping.";
+    const rawScope = "password=hunter2secret";
     const payload = {
       items: [
         {
           topic: "release-style",
           signal: "positive",
-          principle: "Name the release theme in the heading.",
+          principle: rawPrinciple,
           confidence: 0.9,
         },
         {
           // A colon is not a legal slug character, so this item's write
           // refuses and the commit fails PART WAY through the payload.
+          // (Its scope never reaches the tag gate, so a secret-shaped one
+          // is safe to freeze-test here.)
           topic: "module:names",
           signal: "positive",
           principle: "Never abbreviate a module name.",
           confidence: 0.9,
+          scope: rawScope,
         },
       ],
     };
@@ -528,7 +541,37 @@ describe("the extractor freezes its payload into the letter", () => {
     const letters = listDeadLetters(v);
     expect(letters).toHaveLength(1);
     expect(letters[0]?.schema_version).toBe(2);
-    expect(letters[0]?.payload).toEqual(payload);
     expect(letters[0]?.missing).toEqual(["items[1]:module:names"]);
+
+    // The letter file - read raw, not through the parser - carries no
+    // secret anywhere.
+    const rawFile = readFileSync(deadLetterPath(v, letters[0]!.id), "utf8");
+    expect(rawFile).not.toContain("hunter2secret");
+
+    const frozen = letters[0]?.payload?.["items"] as Array<Record<string, unknown>>;
+    expect(frozen).toHaveLength(2);
+    expect(frozen[0]?.["principle"]).not.toContain("hunter2secret");
+    expect(frozen[0]?.["principle"]).toContain("***REDACTED***");
+    expect(frozen[1]?.["principle"]).toBe("Never abbreviate a module name.");
+    expect(frozen[1]?.["scope"]).not.toContain("hunter2secret");
+    expect(frozen[1]?.["scope"]).toContain("***REDACTED***");
+
+    // The hashes are the RAW text's identity: exactly what the commit
+    // wrote into the delivered page's `dedup_hash` frontmatter.
+    expect(frozen[0]?.["dedup_hash"]).toBe(
+      computeDedupHash({
+        topic: "release-style",
+        signal: "positive",
+        principle: rawPrinciple,
+      }),
+    );
+    expect(frozen[1]?.["dedup_hash"]).toBe(
+      computeDedupHash({
+        topic: "module:names",
+        signal: "positive",
+        principle: "Never abbreviate a module name.",
+        scope: rawScope,
+      }),
+    );
   });
 });

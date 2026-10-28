@@ -201,6 +201,85 @@ describe("dead-letters list", () => {
     expect(r.stdout).toContain("not_recoverable");
     expect(r.stdout).toContain("sess-nowhere");
   });
+
+  test("list --json carries has_payload but never the payload itself", async () => {
+    // The listing is the machine-read bulk surface - agents and cron logs
+    // read it - so the frozen items never ride on it, not even redacted.
+    // `show` is the one-letter inspection surface and keeps them.
+    expect(() =>
+      commitExtractedSignals(
+        vault,
+        SESSION,
+        {
+          items: [
+            {
+              topic: "release-notes-style",
+              signal: "positive",
+              principle: "Use token password=hunter2secret when scraping.",
+              confidence: 0.9,
+            },
+            // A colon is not a legal slug character: the write refuses and
+            // the commit records the letter, frozen payload and all.
+            {
+              topic: "module:names",
+              signal: "positive",
+              principle: "Never abbreviate a module name.",
+              confidence: 0.9,
+            },
+          ],
+        },
+        { agent: AGENT, now: NOW },
+      ),
+    ).toThrow(/failed to write extracted signal/);
+    expect(listDeadLetters(vault)).toHaveLength(1);
+    const r = await run(["--json"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("hunter2secret");
+    const payload = JSON.parse(r.stdout) as {
+      letters: Array<Record<string, unknown> & { has_payload: boolean }>;
+    };
+    const row = payload.letters[0]!;
+    expect(row["payload"]).toBeUndefined();
+    expect(row.has_payload).toBe(true);
+  });
+
+  test("show --json keeps the frozen payload for the one-letter inspection, redacted as frozen", async () => {
+    expect(() =>
+      commitExtractedSignals(
+        vault,
+        SESSION,
+        {
+          items: [
+            {
+              topic: "release-notes-style",
+              signal: "positive",
+              principle: "Use token password=hunter2secret when scraping.",
+              confidence: 0.9,
+            },
+            {
+              topic: "module:names",
+              signal: "positive",
+              principle: "Never abbreviate a module name.",
+              confidence: 0.9,
+            },
+          ],
+        },
+        { agent: AGENT, now: NOW },
+      ),
+    ).toThrow(/failed to write extracted signal/);
+    const letter = listDeadLetters(vault)[0]!;
+    const r = await run(["show", letter.id, "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      letter: { payload?: { items: Array<Record<string, unknown>> } };
+    };
+    // An operator inspecting ONE letter locally may need the frozen items
+    // - they are the only record of what the failed commit was writing -
+    // and the freeze redacts the free text already.
+    expect(payload.letter.payload).toBeDefined();
+    expect(JSON.stringify(payload.letter.payload)).not.toContain("hunter2secret");
+    expect(payload.letter.payload?.items[0]?.["dedup_hash"]).toBeTypeOf("string");
+  });
 });
 
 describe("dead-letters show", () => {

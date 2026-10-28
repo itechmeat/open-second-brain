@@ -48,13 +48,19 @@
 
 import { posix } from "node:path";
 
+import { redactRawOutput } from "../redactor.ts";
 import { buildReconciliationReport, type ReconciliationReport } from "../reconciliation-report.ts";
 import {
   buildCaptureBoundary,
   type CaptureBoundary,
   type SessionCaptureDecision,
 } from "./capture-boundary.ts";
-import { tryRecordDeadLetter, type DeadLetterLane, type DeadLetterOutcome } from "./dead-letter.ts";
+import {
+  tryRecordDeadLetter,
+  type DeadLetterLane,
+  type DeadLetterOutcome,
+  type DeadLetterPayload,
+} from "./dead-letter.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
@@ -646,6 +652,48 @@ function transcriptLabel(turn: MinedTurn): string {
 
 // ----- Phase two: what the caller mined ------------------------------------
 
+/**
+ * The payload as it is FROZEN into a dead letter. The letter sits in
+ * `.open-second-brain/dead-letters/` forever (the retention rule deletes
+ * nothing) and the dead-letters surfaces print it, so each item's
+ * free-text fields - `principle` and `scope` - are redacted here exactly
+ * as `writeSignal` redacts them before disk; the letter is never the one
+ * place the raw text survives.
+ *
+ * What redaction must not cost is the delivery identity: the dedup hash
+ * a re-run would have been recognised by is computed over the RAW text,
+ * so the raw text's hash is frozen beside each item (`dedup_hash`, the
+ * same field name the delivered pages carry). Recovery prefers it, and a
+ * later delivery of the real content still reads as delivered.
+ *
+ * The fields are enumerated rather than spread so a field added to
+ * {@link ExtractedSignalItem} later cannot ride into the letter
+ * unredacted: freezing it becomes a decision, not an accident.
+ */
+function frozenDeadLetterPayload(items: ReadonlyArray<ExtractedSignalItem>): DeadLetterPayload {
+  return {
+    items: items.map((item) => {
+      const scope = item.scope?.trim();
+      return {
+        topic: item.topic,
+        signal: item.signal,
+        principle: redactRawOutput(item.principle),
+        confidence: item.confidence,
+        ...(scope !== undefined && scope !== "" ? { scope: redactRawOutput(scope) } : {}),
+        ...(typeof item.source_turn === "string" && item.source_turn.trim() !== ""
+          ? { source_turn: item.source_turn }
+          : {}),
+        dedup_hash: computeDedupHash({
+          topic: item.topic,
+          signal: item.signal,
+          principle: item.principle,
+          ...(scope !== undefined && scope !== "" ? { scope } : {}),
+        }),
+      };
+    }),
+  };
+}
+
 /** A plan's surveyed-turns hash: a SHA-256 digest in lowercase hex. */
 const SURVEYED_TURNS_HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -772,12 +820,15 @@ export function commitExtractedSignals(
           },
           report: reconciliation,
           firstError: err,
-          // Schema 2 freezes the validated payload whole - the SAME
-          // payload the error message tells the caller to re-run - so
-          // recovery can re-commit it without a second model call. The
-          // items already written ride along on purpose: a re-run lets
-          // the dedup index recognize them, exactly as the message says.
-          payload: { items: [...items] },
+          // Schema 2 freezes the validated payload - the SAME payload the
+          // error message tells the caller to re-run - so recovery can
+          // re-commit it without a second model call. The items already
+          // written ride along on purpose: a re-run lets the dedup index
+          // recognize them, exactly as the message says. The freeze
+          // redacts the free-text fields and keeps each item's raw dedup
+          // hash, so the letter never becomes the one unredacted copy of
+          // the payload and recovery still matches the original identity.
+          payload: frozenDeadLetterPayload(items),
           now: opts.now,
         }),
       });

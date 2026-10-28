@@ -250,8 +250,21 @@ function resolveMissingItems(
  * as `commitExtractedSignals` composes it - the same fields, the same
  * scope trim - so the classifier's forecast and the commit's decision
  * cannot disagree.
+ *
+ * A schema-2 item frozen by the extractor carries `dedup_hash`: the hash
+ * of the RAW text, stored at freeze time beside the REDACTED fields (the
+ * letter is redacted at rest, so recomputing over its fields would hash
+ * the placeholder text and never match what the original delivery wrote
+ * into the dedup index). The stored hash IS the original delivery
+ * identity; the recomputation is the fallback for letters frozen by an
+ * older build, whose fields are the raw ones.
  */
+const FROZEN_DEDUP_HASH_KEY = "dedup_hash";
+
 function itemDedupHash(item: ExtractedSignalItem): string {
+  const frozen = item as unknown as { readonly [FROZEN_DEDUP_HASH_KEY]?: unknown };
+  const stored = frozen[FROZEN_DEDUP_HASH_KEY];
+  if (typeof stored === "string" && stored.length > 0) return stored;
   const scope = item.scope?.trim();
   return computeDedupHash({
     topic: item.topic,

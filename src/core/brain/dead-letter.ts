@@ -29,11 +29,15 @@
  * to re-run and why the run stopped.
  *
  * Since schema 2 it also carries the payload itself, frozen at failure
- * time: the producer's validated payload, recorded whole, so recovery
- * can re-run the exact write that failed part way without a second
- * model call. A v1 letter names the payload but does not carry it, and
- * still parses - it is the recovery layer's business what that means,
- * not this module's (see `dead-letter-recovery.ts`).
+ * time: the producer's validated payload, recorded so recovery can re-run
+ * the exact write that failed part way without a second model call. The
+ * freeze may redact free-text fields and keep each item's original dedup
+ * hash beside it (the extraction lane does: the letter lives forever and
+ * the dead-letters surfaces print it) - the identity a re-run dedups
+ * against survives, the raw text does not. A v1 letter names the payload
+ * but does not carry it, and still parses - it is the recovery layer's
+ * business what that means, not this module's (see
+ * `dead-letter-recovery.ts`).
  *
  * ## Where it lives, and why nothing here deletes it
  *
@@ -156,10 +160,13 @@ export interface DeadLetterEnvelopeIdentity {
 
 /**
  * The frozen payload a schema-2 record carries: the producer's validated
- * payload, byte-faithful, so recovery can re-run the exact write that
- * failed part way without a second model call. The shape is the lane's
- * own - this module never looks inside it, so a future lane may freeze a
- * different envelope here without this file learning its fields.
+ * payload as the lane froze it, so recovery can re-run the exact write
+ * that failed part way without a second model call. The shape is the
+ * lane's own - this module never looks inside it, so a future lane may
+ * freeze a different envelope here without this file learning its
+ * fields. A lane whose payload carries free text redacts it at freeze
+ * time and keeps the pre-redaction dedup identity beside it; recovery
+ * reads whatever shape the lane froze.
  */
 export interface DeadLetterPayload {
   readonly [key: string]: unknown;

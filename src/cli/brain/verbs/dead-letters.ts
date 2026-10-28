@@ -14,6 +14,12 @@
  * and the staging lane are re-derived at call time, so already-written
  * items dedup away and nothing stale is ever replayed.
  *
+ * The frozen payload is handled per surface: `show --json` carries it
+ * (the freeze redacts the free-text fields, and an operator inspecting
+ * one letter locally may need the items); `list --json` carries only
+ * `has_payload`, because the listing is the surface agents and cron logs
+ * read in bulk.
+ *
  * The consent ladder is the house one for a write that has a preview:
  * recover is dry-run by default, and `--apply` requires `--yes` under
  * `--json` or a non-TTY stdin (the `brain lint --apply` /
@@ -113,7 +119,21 @@ function rowView(vault: string, record: DeadLetterRecord): RowView {
   };
 }
 
-function rowJson(view: RowView): Record<string, unknown> {
+/**
+ * One row's JSON. The frozen payload rides only when `includePayload` is
+ * set: `list --json` is the machine-read bulk surface - agents and cron
+ * logs read it - so the payload never rides on a listing, not even
+ * redacted (`has_payload` still says the letter carries one). `show
+ * --json` keeps it: an operator inspecting ONE letter locally may need
+ * the frozen items - they are the only record of what the failed commit
+ * was writing - and the freeze redacts the free-text fields at write
+ * time, so what show prints is the redacted form for every letter this
+ * build recorded.
+ */
+function rowJson(
+  view: RowView,
+  opts: { readonly includePayload: boolean },
+): Record<string, unknown> {
   const r = view.record;
   return {
     id: r.id,
@@ -125,7 +145,7 @@ function rowJson(view: RowView): Record<string, unknown> {
     attempted: r.attempted,
     found: r.found,
     missing: [...r.missing],
-    ...(r.payload !== undefined ? { payload: r.payload } : {}),
+    ...(opts.includePayload && r.payload !== undefined ? { payload: r.payload } : {}),
     has_payload: r.payload !== undefined,
     outcome: r.outcome,
     first_error: r.first_error,
@@ -160,7 +180,11 @@ function deadLettersList(argv: string[]): number {
   }
 
   if (asJson) {
-    okJson({ ok: true, total: views.length, letters: views.map(rowJson) });
+    okJson({
+      ok: true,
+      total: views.length,
+      letters: views.map((v) => rowJson(v, { includePayload: false })),
+    });
     return 0;
   }
   if (views.length === 0) {
@@ -212,7 +236,7 @@ function deadLettersShow(argv: string[]): number {
   const view = rowView(vault, record);
 
   if (asJson) {
-    okJson({ ok: true, letter: rowJson(view) });
+    okJson({ ok: true, letter: rowJson(view, { includePayload: true }) });
     return 0;
   }
   const r = view.record;
