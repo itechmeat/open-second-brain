@@ -515,7 +515,7 @@ describe("MCPServer.classifiesWrite fail-closed gates", () => {
       inputSchema: { type: "object" },
       handler: async () => ({}),
     } as unknown as ToolDefinition;
-    (server as { tools: ToolDefinition[] }).tools = [...server.tools, handBuilt];
+    (server as unknown as { tools: ToolDefinition[] }).tools = [...server.tools, handBuilt];
     expect(server.classifiesWrite(callFrame({ name: "hand_built_untyped" }))).toBe(true);
   });
 });

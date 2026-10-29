@@ -125,7 +125,7 @@ function startScripted(opts: { drainDeadlineMs?: number } = {}): {
   server: ScriptedServer;
   stdin: PassThrough;
   frames: () => string[];
-  close: () => Promise<DrainOutcome>;
+  close: (deadlineMs?: number) => Promise<DrainOutcome>;
 } {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
