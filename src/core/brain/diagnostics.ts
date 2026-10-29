@@ -61,6 +61,7 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_CODE,
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
+import { GIT_TRACKED_DERIVED_STATE_CODE } from "./doctor/git-tracked-state-check.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
@@ -1024,6 +1025,18 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         issueClass: "capture recorded with no routing scope",
         nextCommand:
           "o2b brain feedback --topic <topic> --signal=positive --principle <principle> --scope <scope>",
+        autoRepairable: false,
+      },
+      {
+        // The git tracked-state row (t_206562ae). The ignore half of the
+        // remediation is the seeder, and the seeder is idempotent and
+        // merge-safe on an existing vault, so one command ends the
+        // warning - and the ignore half of the error. The untrack half
+        // is git's own (`git rm -r --cached <path>`, named per path in
+        // the finding) because no verb in this tool untracks a file.
+        code: GIT_TRACKED_DERIVED_STATE_CODE,
+        issueClass: "derived brain state tracked by git, or present and not git-ignored",
+        nextCommand: "o2b brain init",
         autoRepairable: false,
       },
     ] satisfies ReadonlyArray<DiagnosticSignal>

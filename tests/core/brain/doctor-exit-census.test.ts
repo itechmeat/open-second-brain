@@ -191,6 +191,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "entity-label-malformed",
   "entity-quote-variant-collision",
   "freshen-failing",
+  "git-tracked-derived-state",
   "inbox-archivable",
   "log-chain-broken",
   "low-evidence-confirmed",
