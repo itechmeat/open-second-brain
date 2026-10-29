@@ -49,6 +49,19 @@
  * resolves that from the audit rows alone - pure, no I/O, no writes - and
  * the doctor-readiness probe grades each triple as a `fail`.
  *
+ * One exception keeps the resolution honest about what a host actually
+ * sees: a file whose `@<basename>` line imports the contract file renders
+ * it - managed block included - into the surface the host reads. Claude
+ * Code's memory-import syntax is a line starting with `@` followed by a
+ * path, and a CLAUDE.md that only says `@AGENTS.md` beside a conforming
+ * AGENTS.md is the common real setup; claiming a shadow there fails
+ * `o2b doctor --readiness` for a workspace whose operative host sees the
+ * gate. {@link auditWritebackContractFile} therefore records the basenames
+ * such lines reference ({@link referencedImportBasenames}, matched
+ * conservatively - line start, basename-shaped token, recorded verbatim),
+ * and the resolver skips the shadow triple when the preferred file imports
+ * the contract file's basename.
+ *
  * Findings are the closed {@link WRITEBACK_CONTRACT_FINDING} vocabulary:
  * `conforming`, `malformed-block`, `missing-clauses` (a block is present
  * and was measured - pass/fail material), `missing-block` (the file
@@ -202,6 +215,15 @@ export interface WritebackContractFileAudit {
   readonly detail: string;
   /** Labels of the unmet contract clauses; empty unless `missing-clauses`. */
   readonly missing: ReadonlyArray<string>;
+  /**
+   * Basenames the file's `@<basename>`-style import lines reference, in
+   * first-appearance order, deduplicated (see
+   * {@link referencedImportBasenames} for exactly what is matched). Empty
+   * unless the file was actually read: the refused findings (`absent`,
+   * `symlink`, `unreadable`) measured no content, so they claim no
+   * imports.
+   */
+  readonly imports: ReadonlyArray<string>;
 }
 
 // ----- Pure contract --------------------------------------------------------
@@ -241,6 +263,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         finding: WRITEBACK_CONTRACT_FINDING.absent,
         detail: `${path} does not exist - nothing installed is not a contract violation`,
         missing: [],
+        imports: [],
       };
     }
     return {
@@ -248,6 +271,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       finding: WRITEBACK_CONTRACT_FINDING.unreadable,
       detail: `${path} could not be stat'ed: ${reason(err)}`,
       missing: [],
+      imports: [],
     };
   }
   if (stat.isSymbolicLink()) {
@@ -258,6 +282,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} is a symbolic link - the audit refuses to read through symlinks, ` +
         "so the contract is unmeasured",
       missing: [],
+      imports: [],
     };
   }
   let content: string;
@@ -269,8 +294,10 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       finding: WRITEBACK_CONTRACT_FINDING.unreadable,
       detail: `${path} could not be read: ${reason(err)}`,
       missing: [],
+      imports: [],
     };
   }
+  const imports = referencedImportBasenames(content);
   const body = hasManagedBlock(content) ? extractManagedBlock(content) : null;
   if (body === null) {
     if (!carriesMarkerLine(content)) {
@@ -282,6 +309,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
           `managed block is not installed, so the write gate is not graded; ` +
           WRITEBACK_CONTRACT_RECOVERY,
         missing: [],
+        imports,
       };
     }
     // A marker is there but not as one ordered pair (a lone, repeated or
@@ -294,6 +322,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} carries an Open Second Brain managed-block marker but no well-formed ` +
         `block - broken same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
       missing: [],
+      imports,
     };
   }
   const missing = missingWritebackGateClauses(body);
@@ -305,6 +334,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} managed block is missing ${missing.join(", ")} - incomplete ` +
         `same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
       missing,
+      imports,
     };
   }
   return {
@@ -314,6 +344,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       `${path} carries the managed block and the same-turn atomic-fact write gate ` +
       `(${WRITEBACK_CONTRACT_REQUIREMENTS.length} clauses verified)`,
     missing: [],
+    imports,
   };
 }
 
@@ -323,6 +354,38 @@ function carriesMarkerLine(content: string): boolean {
     .replace(/\r\n/g, "\n")
     .split("\n")
     .some((line) => line === DEFAULT_BEGIN_MARKER || line === DEFAULT_END_MARKER);
+}
+
+/**
+ * The basenames `content`'s `@<basename>`-style import lines reference - the
+ * Claude Code memory-import shape this tree implements, matched
+ * CONSERVATIVELY and recorded exactly as matched:
+ *
+ *   - the line's FIRST character must be `@` - no leading whitespace, so
+ *     an indented `@AGENTS.md` and a mid-line mention ("see @AGENTS.md")
+ *     match nothing;
+ *   - what follows must be one basename-shaped token (`A-Za-z0-9._-`,
+ *     greedy) that ends at whitespace or end of line - so `@AGENTS.md.bak`
+ *     records `AGENTS.md.bak` (never equal to a candidate basename),
+ *     `@@AGENTS.md` matches nothing (the token cannot start with `@`), and
+ *     `@docs/AGENTS.md` matches nothing (the token cannot contain `/`);
+ *   - the token is recorded verbatim: case, spelling and suffix are the
+ *     caller's, and the comparison against a candidate basename is exact.
+ *
+ * CRLF line endings are normalized before the per-line match. Pure; used
+ * by {@link auditWritebackContractFile} so the shadow resolver can tell a
+ * host that renders the contract file through an import from one that
+ * never sees it.
+ */
+export function referencedImportBasenames(content: string): ReadonlyArray<string> {
+  const found: string[] = [];
+  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+    const match = /^@([A-Za-z0-9._-]+)(?=\s|$)/.exec(line);
+    if (match === null) continue;
+    const name = match[1]!;
+    if (!found.includes(name)) found.push(name);
+  }
+  return Object.freeze(found);
 }
 
 // ----- Workspace audit ------------------------------------------------------
@@ -401,15 +464,22 @@ const BLOCK_BEARING_FINDINGS: ReadonlySet<WritebackContractFinding> = new Set([
  * a peer carries a better-formed one; a symlink or unreadable preferred
  * file is refused evidence, so no shadow is claimed from it (whether a
  * link between candidates should be admitted as evidence is a recorded
- * open question, not decided here). The contract side is the first
- * block-bearing candidate in the audits' given order - the candidate list's
- * priority order for a workspace audit.
+ * open question, not decided here). Nor is a host shadowed when its
+ * preferred file - however block-free itself - imports the contract file
+ * through a `@<basename>` line: the host renders that import into the
+ * surface it reads, managed block included, so the gate is seen (the
+ * audits' `imports` rows, {@link referencedImportBasenames}; the comparison
+ * is exact against the contract file's basename, and the preferred file
+ * importing some OTHER candidate excuses nothing). The contract side is
+ * the first block-bearing candidate in the audits' given order - the
+ * candidate list's priority order for a workspace audit.
  */
 export function resolveShadowedInstructionContracts(
   audits: ReadonlyArray<WritebackContractFileAudit>,
 ): ReadonlyArray<WritebackContractShadow> {
-  const contractPath = audits.find((audit) => BLOCK_BEARING_FINDINGS.has(audit.finding));
-  if (contractPath === undefined) return Object.freeze([]);
+  const contract = audits.find((audit) => BLOCK_BEARING_FINDINGS.has(audit.finding));
+  if (contract === undefined) return Object.freeze([]);
+  const contractBasename = basename(contract.path);
   const byName = new Map<string, WritebackContractFileAudit>();
   for (const audit of audits) byName.set(basename(audit.path), audit);
   const shadows: WritebackContractShadow[] = [];
@@ -419,11 +489,15 @@ export function resolveShadowedInstructionContracts(
       .find((audit) => audit !== undefined && audit.finding !== WRITEBACK_CONTRACT_FINDING.absent);
     if (preferred === undefined) continue;
     if (preferred.finding !== WRITEBACK_CONTRACT_FINDING.missingBlock) continue;
+    // The host renders its preferred file's `@<basename>` imports into the
+    // surface it reads: an import of the contract file carries the block
+    // through, so there is no shadow to claim.
+    if (preferred.imports.includes(contractBasename)) continue;
     shadows.push(
       Object.freeze({
         host: host as HostInstructionName,
         readsPath: preferred.path,
-        contractPath: contractPath.path,
+        contractPath: contract.path,
       }),
     );
   }

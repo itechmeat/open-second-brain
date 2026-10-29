@@ -897,6 +897,21 @@ describe("probeWritebackContract", () => {
     expect([agents, claude].map((p) => readFileSync(p, "utf8"))).toEqual(before);
   });
 
+  test("a CLAUDE.md that only imports the conforming AGENTS.md passes: the host sees the contract", async () => {
+    // Claude Code renders `@AGENTS.md` imports into the surface it reads,
+    // so the managed block is NOT shadowed away and the gate must stay
+    // green - the same workspace without the import line fails above.
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), "# Claude\n\n@AGENTS.md\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain(agents);
+    expect(v.detail).toContain("1 pass");
+    expect(v.detail).toContain("0 fail");
+  });
+
   test("the shadow verdict exits non-zero under --readiness", async () => {
     writeConfig("");
     writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
