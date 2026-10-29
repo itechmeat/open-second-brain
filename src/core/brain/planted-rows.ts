@@ -11,25 +11,30 @@
  * drift apart: both this audit and the neutralizer read the one
  * detection grammar in `text/neutralize-markdown.ts`.
  *
- * The population is the third-party lanes, keyed off PROVENANCE and never
- * vocabulary - exactly the lanes the enforce-mode seam neutralizes, so a
- * page the gate already cleaned yields no rows here:
+ * The population is split the way authorship actually splits. For the
+ * marker and osb-fence families it is EVERY readable page under `Brain/`:
+ * no Brain writer ever emits a live `@osb` marker line or a live ```osb
+ * fence (the consumed `@osb✓` sentinel is not detection), so a live one
+ * anywhere in the derived layer is planted by construction - the same
+ * structure the §9 vault scan would harvest into signals from any page
+ * it walks. For the wikilink and atx-heading families it stays the
+ * third-party lanes keyed off PROVENANCE, because the Brain's own
+ * writers render those by design on pages outside the lanes - the
+ * manual's section headings, the log's `[[Brain/log/...]]` refs, the
+ * digests' links - and reporting them regardless of provenance would
+ * report the vault's own structure as planted on every run.
  *
- *   - capture pages (`kind: brain-capture`), the Telegram/CLI capture
- *     staging area,
- *   - untrusted-stamped pages (the `untrusted_source` marker), whatever
- *     their kind,
- *   - quarantined entity pages (`kind: brain-entity` with `status:
- *     quarantine`), the records untrusted ingest held back,
- *   - source summaries (`kind: brain-source`), the per-source pages the
- *     ingest pipeline writes.
+ * The provenance classification therefore also rides along as CONTEXT on
+ * each finding ({@link PlantedRowsPage.thirdParty}), and the doctor names
+ * lane pages first - a lane page and an operator note with the same rows
+ * are equally live, but not equally expected.
  *
- * The scan over each selected page's body is the neutralizer's own
- * fence-masked detection, so an inert excerpt inside a fenced code block
- * counts nothing while a planted ```osb fence line does. Staged copies
- * under `Brain/pending/` are deduplicated against their publish targets
- * by content: the pending directory holds a byte-verbatim copy of the
- * page under review, so the same rows would otherwise be reported twice.
+ * The scan over each page's body is the neutralizer's own detection, so
+ * an inert excerpt inside a fenced code block counts nothing while a
+ * planted ```osb fence line does. Staged copies under `Brain/pending/`
+ * are deduplicated against their publish targets by content: the pending
+ * directory holds a byte-verbatim copy of the page under review, so the
+ * same rows would otherwise be reported twice.
  *
  * Read-only by contract: nothing here writes, and a page that cannot be
  * read between the walk and the body scan is skipped rather than thrown
@@ -40,16 +45,21 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { listVaultPages, parseFrontmatter } from "../vault.ts";
 import { vaultRelative } from "../path-safety.ts";
+import { BRAIN_PENDING_REL, isUnderBrainRoot } from "./path-constants.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 import { hasUntrustedSourceMarker } from "./trust/untrusted-provenance.ts";
 import { BRAIN_CAPTURE_KIND } from "./capture/capture-note.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
 import { BRAIN_ENTITY_KIND, BRAIN_ENTITY_STATUS } from "./entities/types.ts";
-import { detectMarkdownStructure, type MarkdownStructureKind } from "./text/neutralize-markdown.ts";
-import type { FrontmatterMap } from "../types.ts";
+import {
+  MARKDOWN_STRUCTURE_KIND,
+  detectMarkdownStructure,
+  type MarkdownStructureKind,
+} from "./text/neutralize-markdown.ts";
+import type { FrontmatterMap, VaultPage } from "../types.ts";
 
 /** Where the review queue holds staged copies, `/`-separated and vault-relative. */
-const PENDING_DIR = "Brain/pending/";
+const PENDING_DIR = `${BRAIN_PENDING_REL}/`;
 
 /** One page whose body carries live structure rows. */
 export interface PlantedRowsPage {
@@ -59,6 +69,13 @@ export interface PlantedRowsPage {
   readonly kinds: ReadonlyArray<MarkdownStructureKind>;
   /** How many live rows the fence-masked scan found. */
   readonly count: number;
+  /**
+   * True when the page sits in a third-party provenance lane (a capture,
+   * a source summary, an untrusted-stamped page, a quarantined entity) -
+   * the lanes the enforce-mode seams neutralize. Context for the finding,
+   * not the population filter: every Brain page is scanned.
+   */
+  readonly thirdParty: boolean;
 }
 
 export interface PlantedRowsPlan {
@@ -75,7 +92,7 @@ function entityStatus(meta: FrontmatterMap): string {
 }
 
 /** Does this page belong to a lane that receives third-party text? */
-function inPopulation(meta: FrontmatterMap): boolean {
+function inThirdPartyLane(meta: FrontmatterMap): boolean {
   const kind = typeof meta["kind"] === "string" ? meta["kind"] : "";
   if (kind === BRAIN_CAPTURE_KIND) return true;
   if (kind === BRAIN_SOURCE_KIND) return true;
@@ -84,33 +101,52 @@ function inPopulation(meta: FrontmatterMap): boolean {
 }
 
 /**
- * Scan the third-party lanes for live structure rows. Pure over the
+ * The families no Brain writer ever authors - a live row is planted
+ * wherever it sits, so these scan every readable Brain page. The
+ * wikilink and heading families are excluded because the Brain's own
+ * writers render them by design outside the third-party lanes (see the
+ * module docblock); there the lane key IS the authorship signal.
+ */
+const ALWAYS_PLANTED_KINDS: ReadonlySet<MarkdownStructureKind> = new Set([
+  MARKDOWN_STRUCTURE_KIND.osbInline,
+  MARKDOWN_STRUCTURE_KIND.osbFence,
+]);
+
+/**
+ * Scan every readable Brain page for live structure rows. Pure over the
  * vault's bytes: nothing is written, nothing is mutated, and the result
  * is deterministic for a given vault state (paths sorted, kinds sorted).
  */
 export function planPlantedRows(vault: string): PlantedRowsPlan {
   const selected = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH }).filter((page) =>
-    inPopulation(page.metadata),
+    isUnderBrainRoot(vaultRelative(page.path, vault)),
   );
 
   // Staged-vs-published dedupe: a Brain/pending copy is the publish
   // target's bytes verbatim, so when a staged page's content equals a
   // published page's content the publish target is the report and the
-  // staged copy is dropped. Hashes are computed only when a staged page
-  // was selected at all, so the common vault pays nothing.
-  const staged = selected.filter((page) => vaultRelative(page.path, vault).startsWith(PENDING_DIR));
-  const deduped =
-    staged.length === 0
-      ? selected
-      : selected.filter((page) => {
-          if (!vaultRelative(page.path, vault).startsWith(PENDING_DIR)) return true;
-          const stagedHash = contentHash(page.path);
-          return !selected.some(
-            (other) =>
-              !vaultRelative(other.path, vault).startsWith(PENDING_DIR) &&
-              contentHash(other.path) === stagedHash,
-          );
-        });
+  // staged copy is dropped. Published hashes are computed ONCE, not once
+  // per staged page, and an UNDEFINED hash - a page that could not be
+  // read between the walk and the hash - never enters the set and never
+  // matches: two unreadable pages are not the same page, and a staged
+  // copy the audit cannot hash is reported, never silently dropped.
+  const isStaged = (page: VaultPage): boolean =>
+    vaultRelative(page.path, vault).startsWith(PENDING_DIR);
+  const staged = selected.filter(isStaged);
+  let deduped = selected;
+  if (staged.length > 0) {
+    const publishedHashes = new Set<string>();
+    for (const page of selected) {
+      if (isStaged(page)) continue;
+      const hash = contentHash(page.path);
+      if (hash !== undefined) publishedHashes.add(hash);
+    }
+    deduped = selected.filter((page) => {
+      if (!isStaged(page)) return true;
+      const stagedHash = contentHash(page.path);
+      return stagedHash === undefined || !publishedHashes.has(stagedHash);
+    });
+  }
 
   const planted: PlantedRowsPage[] = [];
   for (const page of deduped) {
@@ -123,11 +159,14 @@ export function planPlantedRows(vault: string): PlantedRowsPlan {
       continue;
     }
     const matches = detectMarkdownStructure(body);
-    if (matches.length === 0) continue;
+    const lane = inThirdPartyLane(page.metadata);
+    const live = lane ? matches : matches.filter((m) => ALWAYS_PLANTED_KINDS.has(m.kind));
+    if (live.length === 0) continue;
     planted.push({
       path: vaultRelative(page.path, vault),
-      kinds: [...new Set(matches.map((m) => m.kind))].toSorted(),
-      count: matches.length,
+      kinds: [...new Set(live.map((m) => m.kind))].toSorted(),
+      count: live.length,
+      thirdParty: lane,
     });
   }
   planted.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

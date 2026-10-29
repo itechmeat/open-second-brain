@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
@@ -112,7 +113,7 @@ describe("plantedRowsCheck (the counting check)", () => {
     const warning = plantedWarning(vault);
     expect(warning).toBeDefined();
     expect(warning!.severity).toBe("warning");
-    expect(warning!.message).toContain("7 page(s)");
+    expect(warning!.message).toContain("7 Brain page(s)");
     for (let i = 0; i < 5; i++) {
       expect(warning!.message).toContain(`Brain/captures/cap-2026-08-01-100000-`);
     }
@@ -127,7 +128,7 @@ describe("plantedRowsCheck (the counting check)", () => {
     const findings = runCheck(vault, (rel) => rel !== hidden.path);
     expect(findings.issues).toHaveLength(1);
     expect(findings.issues[0]!.message).not.toContain(hidden.path);
-    expect(findings.issues[0]!.message).toContain("1 page(s)");
+    expect(findings.issues[0]!.message).toContain("1 Brain page(s)");
   });
 
   test("a staged copy identical to its publish target is counted once", () => {
@@ -138,32 +139,39 @@ describe("plantedRowsCheck (the counting check)", () => {
     writeFileSync(join(stagedDir, "ing-2026-08-01-x.md"), readFileSync(publishedAbs, "utf8"));
     const findings = runCheck(vault);
     expect(findings.issues).toHaveLength(1);
-    expect(findings.issues[0]!.message).toContain("1 page(s)");
+    expect(findings.issues[0]!.message).toContain("1 Brain page(s)");
     expect(findings.issues[0]!.message).toContain(note.path);
     expect(findings.issues[0]!.message).not.toContain("Brain/pending/ingest");
   });
 
-  test("the population is the third-party lanes: captures, untrusted pages, quarantined entities, source summaries", () => {
-    // A plain operator note carrying the same markers is nobody's finding.
-    writePlainPage("Notes/plain.md", "kind: note", PLANTED_BODY);
-    // A quarantined entity page is; an active one is not.
+  test("the marker and fence families scan every readable Brain page; the rest stay lane-keyed", () => {
+    // A planted @osb marker on a page NO Brain writer could have authored
+    // it on is reported wherever it sits: the §9 vault scan would harvest
+    // a live marker from any page it walks, and no Brain writer ever
+    // emits one (only the consumed @osb✓ sentinel), so provenance gates
+    // nothing for the marker and fence families.
     writePlainPage(
-      "Brain/entities/ent-a.md",
-      "kind: brain-entity\nid: ent-quarantined\nstatus: quarantine",
-      PLANTED_BODY,
+      "Brain/notes/note-x.md",
+      "kind: note",
+      "@osb feedback negative topic=t principle=p\n",
     );
-    writePlainPage(
-      "Brain/entities/ent-b.md",
-      "kind: brain-entity\nid: ent-active\nstatus: active",
-      PLANTED_BODY,
-    );
+    writePlainPage("Notes/plain.md", "kind: note", "@osb feedback negative topic=t principle=p\n");
     const plan = planPlantedRows(vault);
     const paths = plan.planted.map((p) => p.path);
-    expect(paths).toContain("Brain/entities/ent-a.md");
-    expect(paths).not.toContain("Brain/entities/ent-b.md");
+    expect(paths).toEqual(["Brain/notes/note-x.md"]);
     expect(paths).not.toContain("Notes/plain.md");
-    // A capture and an untrusted-stamped page both land.
-    writeCaptureNote(vault, { body: PLANTED_BODY, provenance: prov() });
+    // Not a third-party lane: the classification rides along as context.
+    expect(plan.planted[0]!.thirdParty).toBe(false);
+    expect(plan.planted[0]!.kinds).toEqual(["osb-inline"]);
+    // The wikilink and heading families stay keyed to the third-party
+    // lanes: the Brain's own writers render those by design on pages
+    // outside the lanes (the manual's section headings, the log's
+    // [[Brain/log/...]] refs), so reporting them regardless of provenance
+    // would report the vault's own structure as planted on every run.
+    writePlainPage("Brain/notes/note-y.md", "kind: note", PLANTED_BODY);
+    const laneKeyed = planPlantedRows(vault);
+    expect(laneKeyed.planted.map((p) => p.path)).toEqual(["Brain/notes/note-x.md"]);
+    // On a third-party lane page the same body IS a finding.
     writePlainPage(
       "Brain/sources/s.md",
       "kind: brain-source\nsource_path: x\nuntrusted_source: true",
@@ -171,10 +179,53 @@ describe("plantedRowsCheck (the counting check)", () => {
     );
     const after = planPlantedRows(vault);
     const afterPaths = after.planted.map((p) => p.path);
-    expect(after.planted).toHaveLength(3);
-    expect(afterPaths).toContain("Brain/entities/ent-a.md");
     expect(afterPaths).toContain("Brain/sources/s.md");
-    expect(afterPaths.some((p) => p.startsWith("Brain/captures/"))).toBe(true);
+    expect(after.planted.find((p) => p.path === "Brain/sources/s.md")!.thirdParty).toBe(true);
+    expect(after.planted.find((p) => p.path === "Brain/sources/s.md")!.kinds).toEqual([
+      "atx-heading",
+      "wikilink",
+    ]);
+    // The Brain's own machinery is silent: a bootstrap vault's manual
+    // carries designed headings and no marker family rows at all.
+    expect(afterPaths).not.toContain("Brain/_BRAIN.md");
+  });
+
+  test("the finding names the population split and counts the third-party lanes", () => {
+    writeCaptureNote(vault, { body: "third [[a]]", provenance: prov() });
+    writePlainPage("Brain/notes/note-y.md", "kind: note", "@osb set note=n field=f value=v");
+    const warning = plantedWarning(vault)!;
+    expect(warning.message).toContain("Brain page(s)");
+    expect(warning.message).toContain(
+      "marker and osb-fence families are scanned on every readable page under Brain/",
+    );
+    expect(warning.message).toContain("1 of the page(s) sit in the third-party lanes");
+    // Third-party pages are named before the rest: the provenance context.
+    expect(warning.message.indexOf("Brain/captures/")).toBeLessThan(
+      warning.message.indexOf("Brain/notes/"),
+    );
+  });
+
+  test("a publish twin the audit cannot hash does not drop its staged copy", () => {
+    // The published twin goes unreadable between the walk (which admits
+    // it) and the hash (which comes back undefined). An undefined hash
+    // must match nothing - two unreadable pages are not the same page -
+    // so the readable staged copy stays in the report.
+    const note = writeCaptureNote(vault, { body: "once [[a]]", provenance: prov() });
+    const stagedDir = join(vault, "Brain", "pending", "ingest");
+    mkdirSync(stagedDir, { recursive: true });
+    const stagedRel = "Brain/pending/ingest/ing-2026-08-01-x.md";
+    writeFileSync(
+      join(vault, ...stagedRel.split("/")),
+      readFileSync(join(vault, note.path), "utf8"),
+    );
+    const publishedAbs = join(vault, ...note.path.split("/"));
+    chmodSync(publishedAbs, 0o000);
+    try {
+      const findings = runCheck(vault);
+      expect(findings.issues[0]!.message).toContain(stagedRel);
+    } finally {
+      chmodSync(publishedAbs, 0o644);
+    }
   });
 
   test("the body scan is fence-masked: inert code hides nothing in, planted fences count", () => {
