@@ -441,6 +441,28 @@ describe("bootstrapBrain — gitignore guard degradation (warn-and-continue)", (
     expect(stderr).toContain("derived-brain-state");
   });
 
+  test("a hostile .gitignore that negates the entry after it is a conflict, not a clean skip", () => {
+    // git last-match-wins: the entry is present, so the seeder's
+    // exact-line check used to report a clean skip while the store was
+    // NOT ignored. The init report carries the conflict instead.
+    const hostile = "/.open-second-brain/\n*.tmp\n!.open-second-brain\n";
+    writeFileSync(join(vault, ".gitignore"), hostile, "utf8");
+
+    let result!: ReturnType<typeof bootstrapBrain>;
+    captureStderr(() => {
+      result = bootstrapBrain(vault, { configPath });
+    });
+
+    // Bootstrap continued; nothing was written to the operator's file.
+    expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
+    expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe(hostile);
+    expect(result.skipped).toContain(".gitignore");
+    expect(result.created).not.toContain(".gitignore");
+    expect(result.overwritten).not.toContain(".gitignore");
+    expect(result.guard?.status).toBe("conflict");
+    expect(result.guard?.detail).toContain("!.open-second-brain");
+  });
+
   test("the doctor's tracked-state row reports the state a failed guard left behind", () => {
     // Init degraded past the unwritable guard; the protection the guard
     // would have seeded is genuinely absent, and the doctor's row is the

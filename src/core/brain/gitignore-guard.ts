@@ -23,7 +23,11 @@
  *     missing guard entries are added.
  *   - Exact-line membership is checked first, so a user who already
  *     ignores the path - inside the block or beside it - yields a skip,
- *     not a duplicate.
+ *     not a duplicate. The skip is only clean while no LATER line
+ *     negates the entry: git evaluates patterns in order and the last
+ *     match wins, so `!.open-second-brain` after the entry leaves the
+ *     store visible, and that surfaces as the same named conflict a
+ *     malformed block gets.
  *   - A second run is a no-op: byte-equal file, `skipped`.
  *   - Markers present but malformed (unpaired, doubled, inverted) surface
  *     as a named conflict with warn-and-continue: nothing is written,
@@ -81,7 +85,7 @@ export type GitignoreGuardStatus =
   | "created" // the file did not exist and was written with only the block
   | "updated" // an existing file gained the block (or the block gained entries)
   | "skipped" // every entry already present as an exact line; no bytes moved
-  | "conflict"; // malformed existing markers; nothing written, warning emitted
+  | "conflict"; // malformed markers, or a later line negates the entry; nothing written, warning emitted
 
 export interface GitignoreGuardResult {
   readonly status: GitignoreGuardStatus;
@@ -94,6 +98,31 @@ export interface GitignoreGuardResult {
 /** The exact block body for `entries`: markers around one entry per line. */
 function blockBody(entries: ReadonlyArray<string>): string {
   return `${DEFAULT_BEGIN_MARKER}\n${entries.join("\n")}\n${DEFAULT_END_MARKER}\n`;
+}
+
+/**
+ * A line that re-includes the derived store: `!.open-second-brain` or
+ * the root-anchored `!/.open-second-brain`, with git's optional trailing
+ * slash. Built from the directory constant so the guard and its negation
+ * cannot drift apart.
+ */
+const NEGATED_ENTRY_RE = new RegExp(`^!/?${DERIVED_STORE_DIR.replaceAll(".", "\\.")}/?$`);
+
+/**
+ * The first line after the LAST guard entry that negates it, or null.
+ * git evaluates .gitignore patterns in order and the last match wins, so
+ * only a negation AFTER the entry re-opens the store - one before it is
+ * overridden and harmless.
+ */
+function negationAfterEntry(lines: ReadonlyArray<string>): string | null {
+  let lastEntry = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (GITIGNORE_GUARD_ENTRIES.includes(lines[i]!)) lastEntry = i;
+  }
+  for (let i = lastEntry + 1; i < lines.length; i += 1) {
+    if (NEGATED_ENTRY_RE.test(lines[i]!)) return lines[i]!;
+  }
+  return null;
 }
 
 /**
@@ -114,9 +143,27 @@ export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult
   // Exact-line membership first, over the CRLF-normalized whole file: a
   // user who already ignores the path anywhere in it gets a skip, never
   // a second (redundant) line.
-  const present = new Set(current.replace(/\r\n/g, "\n").split("\n"));
+  const lines = current.replace(/\r\n/g, "\n").split("\n");
+  const present = new Set(lines);
   const missing = GITIGNORE_GUARD_ENTRIES.filter((entry) => !present.has(entry));
   if (missing.length === 0) {
+    // The entry being present is not the whole story: git takes the LAST
+    // matching pattern, so a later `!.open-second-brain` re-includes the
+    // store and a clean skip here would be optimistic - the doctor's
+    // tracked-state row would catch it, but the init report should not
+    // wait to be corrected. Surface the same named conflict the
+    // malformed-marker case gets; write nothing either way.
+    const negation = negationAfterEntry(lines);
+    if (negation !== null) {
+      const detail =
+        `the guard entry is negated by the later line ${negation} ` +
+        "(git last-match-wins: the derived store stays visible to git)";
+      process.stderr.write(
+        `warning: the ${GITIGNORE_GUARD_BLOCK_ID} .gitignore guard is negated ` +
+          `(derived brain state stays visible to git): ${file}: ${detail}\n`,
+      );
+      return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
+    }
     return { status: "skipped", file: GITIGNORE_GUARD_FILE };
   }
 

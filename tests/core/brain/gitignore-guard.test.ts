@@ -172,7 +172,62 @@ describe("ensureVaultGitignoreEntries", () => {
       rmSync(vault, { recursive: true, force: true });
     }
   });
+
+  test("a later negating line turns the exact-line skip into a named conflict", () => {
+    // git evaluates .gitignore patterns in order and the LAST match
+    // wins: with `!.open-second-brain` after the entry the store is NOT
+    // ignored, so reporting a clean skip here would be optimistic. The
+    // doctor row catches it later; the init report itself must not lie.
+    for (const negation of ["!.open-second-brain", "!/.open-second-brain"]) {
+      vault = freshVault();
+      try {
+        const hostile = `/.open-second-brain/\n*.tmp\n${negation}\n`;
+        writeFileSync(gitignorePath(), hostile, "utf8");
+        let result!: ReturnType<typeof ensureVaultGitignoreEntries>;
+        const { stderr } = captureStderr(() => {
+          result = ensureVaultGitignoreEntries(vault);
+        });
+        expect(result.status).toBe("conflict");
+        expect(result.detail).toContain(negation);
+        // Warn-and-continue: the file is exactly as the user left it.
+        expect(readFileSync(gitignorePath(), "utf8")).toBe(hostile);
+        expect(stderr).toMatch(/warning:/);
+        expect(stderr).toContain("derived-brain-state");
+      } finally {
+        rmSync(vault, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a negation BEFORE the entry is a clean skip - last-match-wins favors the entry", () => {
+    vault = freshVault();
+    try {
+      const harmless = "!.open-second-brain\n/.open-second-brain/\n";
+      writeFileSync(gitignorePath(), harmless, "utf8");
+      const result = ensureVaultGitignoreEntries(vault);
+      expect(result.status).toBe("skipped");
+      expect(readFileSync(gitignorePath(), "utf8")).toBe(harmless);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
 });
+
+/** Run `fn`, capturing everything it writes to stderr; restore afterwards. */
+function captureStderr(fn: () => unknown): { stderr: string } {
+  const original = process.stderr.write.bind(process.stderr);
+  let captured = "";
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    fn();
+  } finally {
+    process.stderr.write = original;
+  }
+  return { stderr: captured };
+}
 
 // ----- Source-reading census ------------------------------------------------
 
