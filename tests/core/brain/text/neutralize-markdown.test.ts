@@ -25,6 +25,7 @@ import {
   resolveMarkdownNeutralizeMode,
   type MarkdownStructureKind,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
+import { extractWikilinkRichBodies } from "../../../../src/core/brain/link-graph/parse-wikilink.ts";
 import { extractWikilinks } from "../../../../src/core/vault.ts";
 
 /** The structure kinds one sample carries, as a set for order-free asserts. */
@@ -73,17 +74,18 @@ describe("neutralizeMarkdown: wikilinks", () => {
     expect(twice.text).toBe(out.text);
   });
 
-  test("an already-escaped closing bracket inside a wikilink is data, not a sigil to re-escape", () => {
-    // `[[a\]]`: the last `]` carries an odd backslash run, the detector's
-    // own already-escaped shape. Re-escaping it would grow the bytes on a
-    // second pass; checking each bracket's run keeps the escape one pass.
-    // The readers hold the span to the same rule - an escaped `]` closes
-    // no link, so the span extracts as nothing (the closing-bracket half
-    // of the reader-parity guarantee below).
+  test("an already-escaped closing bracket inside a wikilink is data: the span is not live", () => {
+    // `[[a\]]`: the closing `]` carries an odd backslash run, so no link
+    // reader extracts the span (isLiveWikilinkSpan fails on it) and no
+    // consumer parses a link there - the detector applies the readers'
+    // own live-span rule and leaves the bytes alone, adding zero bytes.
+    // (The readers hold BOTH brackets to the rule, so the span is inert
+    // even though its opening pair is unescaped.)
     const src = "[[a\\]]";
     expect(extractWikilinks(src)).toEqual([]);
     const out = neutralizeMarkdown(src);
-    expect(out.text).toBe("\\[\\[a\\]\\]");
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe(src);
     expect(extractWikilinks(out.text)).toEqual([]);
     expect(neutralizeMarkdown(out.text).changed).toBe(false);
   });
@@ -360,6 +362,61 @@ describe("neutralizeMarkdown: wikilink reader parity (escaped brackets)", () => 
       expect(twice.text).toBe(once.text);
       expect(twice.changed).toBe(false);
     }
+  });
+});
+
+describe("neutralizeMarkdown: wikilinks spanning inline code (the readers' masked view)", () => {
+  // The link readers do not scan the raw bytes: they first replace every
+  // code region (fence or inline span) with a space and match on THAT
+  // view, so a `[[target|`code`]]` span whose brackets sit outside the
+  // region still extracts a live target from them. The detector must ask
+  // the same question over the same view - masking code regions with a
+  // length-preserving fill keeps every match offset identical to the raw
+  // text - or a span the raw scan dismisses as "overlapping code" stays
+  // live in the vault's link graph under `enforce`.
+  test("a wikilink carrying an inline code span is caught and escaped, and extracts nothing", () => {
+    const src = "Quoted thread: see [[Evil Page|`x`]] for details";
+    expect(extractWikilinks(src)).toEqual(["Evil Page"]);
+    expect(extractWikilinkRichBodies(src)).toEqual(["Evil Page| "]);
+    const out = neutralizeMarkdown(src);
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("wikilink"));
+    expect(out.text).toBe("Quoted thread: see \\[\\[Evil Page|`x`\\]\\] for details");
+    expect(extractWikilinks(out.text)).toEqual([]);
+    expect(extractWikilinkRichBodies(out.text)).toEqual([]);
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("a fenced wikilink whose brackets sit outside the fence's line grammar is still caught", () => {
+    // Inline spans, not just fenced blocks: any code region the readers
+    // mask must mask the detector's view identically - and nothing more.
+    const src = "note [[a|`b`]] and `[[c]]` end";
+    expect(extractWikilinks(src)).toEqual(["a"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.text).toBe("note \\[\\[a|`b`\\]\\] and `[[c]]` end");
+    expect(out.kinds).toEqual(kindsOf("wikilink"));
+    expect(extractWikilinks(out.text)).toEqual([]);
+    expect(extractWikilinkRichBodies(out.text)).toEqual([]);
+  });
+
+  test("the wikilink scan stays linear on link-and-backtick heavy pages (was quadratic)", () => {
+    // One planted row per line: a live link followed by an inline code
+    // span - the shape that made the old detector re-scan every code
+    // region for every match (quadratic). Measured on this Bun build:
+    // 1.4 MB of this shape took ~6.1 s with the region-overlap test and
+    // ~20 ms with the masked-view scan; the bound below leaves two orders
+    // of magnitude of headroom on the fixed cost while still failing on
+    // the quadratic shape.
+    const page =
+      "- [[Brain/log/note-0000]] ran `bun test --grep smoke` and more prose here\n".repeat(19_000);
+    expect(page.length).toBeGreaterThan(1_000_000);
+    const t0 = performance.now();
+    const matches = detectMarkdownStructure(page);
+    const elapsed = performance.now() - t0;
+    expect(matches).toHaveLength(19_000);
+    expect(elapsed).toBeLessThan(2_000);
   });
 });
 

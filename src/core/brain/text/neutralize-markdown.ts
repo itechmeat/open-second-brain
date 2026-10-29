@@ -78,7 +78,12 @@
  * write stays byte-identical to before it existed.
  */
 
-import { codeRegions, precededByOddBackslashRun, WIKILINK_TARGET_RE } from "../wikilink.ts";
+import {
+  isLiveWikilinkSpan,
+  maskCodeRegions,
+  precededByOddBackslashRun,
+  WIKILINK_TARGET_RE,
+} from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
 import { fencedLineMask } from "../source-links.ts";
 import { envOrConfig } from "../../validate.ts";
@@ -210,18 +215,6 @@ function markerFenceStructure(lines: ReadonlyArray<Line>): MarkerFenceStructure 
   return { spans, bodyMasked };
 }
 
-/** Whether `[start, end)` overlaps any code region (fences and inline code). */
-function overlapsRegion(
-  regions: ReadonlyArray<readonly [number, number]>,
-  start: number,
-  end: number,
-): boolean {
-  for (const [from, to] of regions) {
-    if (from < end && start < to) return true;
-  }
-  return false;
-}
-
 /** The sigil span of a line's leading `@` when the line parses as a marker. */
 function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch | null {
   if (parseInlineMarker(line.text, lineNo + 1) === null) return null;
@@ -243,10 +236,19 @@ function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch |
  *     resolver): 3-or-more backtick or tilde fences, and an unterminated
  *     fence fences nothing;
  *   - the wikilink family answers to the link readers (`vault.ts`
- *     `extractWikilinks`, page-lint) and keeps the shared
- *     {@link codeRegions} masking over their multi-line-tolerant
- *     {@link WIKILINK_TARGET_RE} shape, so a `[[...\n...]]` pair across a
- *     line break is detected exactly when they would extract it.
+ *     `extractWikilinks`, page-lint) and runs the readers' own recipe:
+ *     code regions (fences and inline spans) are masked out of the scan
+ *     view first, then the multi-line-tolerant {@link WIKILINK_TARGET_RE}
+ *     shape and {@link isLiveWikilinkSpan} run on that view, so a
+ *     `[[...\n...]]` pair across a line break is detected exactly when
+ *     they would extract it. The mask is length-preserving, so every
+ *     match offset in the view is the same offset in the raw text and the
+ *     brackets the readers can see are exactly the brackets this scan
+ *     sees - a `[[target|`code`]]` span whose brackets sit outside the
+ *     region is reported (and escaped) even though the raw span overlaps
+ *     the region, which is the hole a raw-text scan with a region-overlap
+ *     test left open: the readers still extracted the live target from
+ *     their own masked view.
  *
  * Fence lines for the osb family are boundaries rather than masked
  * content. Pure and linear in the length of the text.
@@ -255,16 +257,17 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
   const lines = splitLines(text);
   const fence = markerFenceStructure(lines);
   const matches: MarkdownStructureMatch[] = [...fence.spans];
-  const regions = codeRegions(text);
   // The wikilink family keys on the multi-line-tolerant shape its readers
-  // run (`vault.ts` extractWikilinks, page-lint): `[[...\n...]]` across a
-  // line break is a live link to them, so single-line detection would
-  // leave it planted.
-  for (const m of text.matchAll(WIKILINK_TARGET_RE)) {
+  // run (`vault.ts` extractWikilinks, page-lint) over the same masked view
+  // those readers match on. The fill preserves length, so match offsets
+  // are raw-text offsets; the bracket-span match set itself is identical
+  // under any space fill, because a code region contributes no bracket
+  // characters in either view.
+  const masked = maskCodeRegions(text, (region) => " ".repeat(region.length));
+  for (const m of masked.matchAll(WIKILINK_TARGET_RE)) {
     const start = m.index;
     const end = start + m[0].length;
-    if (overlapsRegion(regions, start, end)) continue;
-    if (precededByOddBackslashRun(text, start)) continue;
+    if (!isLiveWikilinkSpan(masked, start, end)) continue;
     matches.push({ kind: "wikilink", start, end });
   }
   const headingMasked = fencedLineMask(lines.map((line) => line.text));
