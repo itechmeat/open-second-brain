@@ -217,8 +217,14 @@ export async function serveStdio(
       // letting the rejection escape into the bookkeeping below. The
       // dispatcher's own INTERNAL_ERROR builder, the same framing the
       // HTTP catch-all uses: the prose goes through the redactor for this
-      // transport's reach, and the code comes from the classifier.
-      writeFrame(stdout, internalErrorResponse(request["id"], exc, server.vault, server.reach));
+      // transport's reach, and the code comes from the classifier. A
+      // NOTIFICATION has no id to answer, so it gets no frame: the
+      // dispatcher itself returns null for a failed notification rather
+      // than an `id: null` error, and this catch-all mirrors that instead
+      // of writing a response to a frame that was never a request.
+      if ("id" in request) {
+        writeFrame(stdout, internalErrorResponse(request["id"], exc, server.vault, server.reach));
+      }
     } finally {
       finish();
     }

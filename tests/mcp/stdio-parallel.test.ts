@@ -659,4 +659,31 @@ describe("dispatch failures answer their id", () => {
       expect(frame.error?.message).toContain("handler exploded");
     }
   });
+
+  test("a failing notification is never answered - it has no id to answer", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const chunks: string[] = [];
+    stdout.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
+    const server = new ExplodingServer({ vault: tempVault() });
+    const loop = serveStdio({ vault: server.vault }, { stdin, stdout, server });
+    const notification = JSON.stringify({
+      jsonrpc: JSONRPC_VERSION,
+      method: "tools/call",
+      params: { name: READ_TOOL, arguments: {} },
+    });
+    stdin.write(call(9, READ_TOOL) + "\n" + notification + "\n");
+    stdin.end();
+    expect(await loop).toBe(0);
+    const frames = chunks
+      .join("")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as JsonRpcResponse);
+    // The request gets its error frame by its own id; the notification -
+    // no `id` member - gets NO frame at all, not an `id: null` error
+    // nobody can correlate: the dispatcher itself returns null for a
+    // failed notification, and the transport catch-all mirrors that.
+    expect(frames.map((f) => f.id)).toEqual([9]);
+  });
 });
