@@ -355,9 +355,17 @@ describe("plantedRowsCheck (the counting check)", () => {
     writePlainPage("Brain/notes/note-y.md", "kind: note", "@osb set note=n field=f value=v");
     const warning = plantedWarning(vault)!;
     expect(warning.message).toContain("Brain page(s)");
+    // The population split, stated exactly as the planner applies it:
+    // one family everywhere, the other only on the lanes, and the
+    // writers' own sections excluded from both.
+    expect(warning.message).toContain("The population splits by family");
     expect(warning.message).toContain(
       "marker and osb-fence families are scanned on every readable page under Brain/",
     );
+    expect(warning.message).toContain(
+      "wikilink and heading families are scanned only on the third-party provenance lanes",
+    );
+    expect(warning.message).toContain("excluded, not reported");
     expect(warning.message).toContain("1 of the page(s) sit in the third-party lanes");
     // Third-party pages are named before the rest: the provenance context.
     expect(warning.message.indexOf("Brain/captures/")).toBeLessThan(

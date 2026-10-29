@@ -105,15 +105,16 @@ export const plantedRowsCheck: DoctorCheck = {
       message:
         `${rows} live structure row(s) across ${readable.length} Brain page(s) ` +
         "(planted wikilinks, @osb markers, osb fences, ATX headings): " +
-        `${named.join(", ")}${remainder}. The marker and osb-fence families are scanned on ` +
-        "every readable page under Brain/ - no Brain writer emits a live marker line or an " +
-        "osb fence, so one anywhere in the derived layer is planted. The wikilink and heading " +
-        "families stay keyed to the third-party provenance lanes, where caller text lands; " +
-        "the Brain's own writers render those shapes by design on other pages. Neither " +
-        "population reports the sections those writers themselves render: a capture's " +
-        "marker-authorized ## Guidance section and a source summary's ## Sources, " +
-        "## Premises, ## Entities and ## Connections to existing notes citation sections, " +
-        "plus its ## Parts and ## Table derivation headings, are this vault's own output" +
+        `${named.join(", ")}${remainder}. The population splits by family: the marker and ` +
+        "osb-fence families are scanned on every readable page under Brain/ - no Brain " +
+        "writer emits a live marker line or an osb fence, so one anywhere in the derived " +
+        "layer is planted - while the wikilink and heading families are scanned only on " +
+        "the third-party provenance lanes, where caller text lands. On both populations " +
+        "the sections the Brain writers themselves render are excluded, not reported: a " +
+        "capture's marker-authorized ## Guidance section and a source summary's " +
+        "## Sources, ## Premises, ## Entities and ## Connections to existing notes " +
+        "citation sections, plus its ## Parts and ## Table derivation headings, are this " +
+        "vault's own output" +
         laneClause +
         ". Nothing was changed by this check; the rows leave only by re-capturing the text " +
         "with the markdown neutralization gate in enforce mode, or by a later repair pass" +
