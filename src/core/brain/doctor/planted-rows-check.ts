@@ -22,6 +22,8 @@
  * design elsewhere. On both populations the sections those writers
  * themselves render - a capture's marker-authorized `## Guidance`, a
  * source summary's `## Sources`/`## Premises`/link and derivation
+ * sections, a quarantined entity page's writer H1 and provenance
+ * citation, a distillation page's `## Claims`/`## Excerpt`/`## Sources`
  * sections - are excluded as the vault's own output, never reported.
  * The lane classification stays in the finding as
  * context: those pages are named first, and the message counts them. A
@@ -31,10 +33,13 @@
  * dedupe can never drop a staged copy in favor of a twin this filter
  * would remove - that would leave the report with neither copy.
  *
- * Under the gate's `shadow` mode the finding says so: enforce would
- * escape exactly these rows on the next capture or untrusted ingest of
- * the same text, which is the preview an operator needs before turning
- * the mode on.
+ * Under the gate's `shadow` mode the finding says so, and says exactly
+ * what enforce would and would not do: the guarded write seams (the
+ * capture, the untrusted ingest's summary prose and entity names, the
+ * untrusted distillation's claim text) would escape the rows they
+ * rewrite on the next write of the same text, while the rows no guarded
+ * seam rewrites leave only by a later repair pass - the honest preview
+ * an operator needs before turning the mode on.
  */
 
 import { planPlantedRows } from "../planted-rows.ts";
@@ -96,7 +101,9 @@ export const plantedRowsCheck: DoctorCheck = {
     const shadow =
       gateModeForWording() === MARKDOWN_NEUTRALIZE_MODE.shadow
         ? " The markdown neutralization gate is in shadow mode: switching it to enforce would " +
-          "escape exactly these rows on the next capture or untrusted ingest of the same text."
+          "escape the rows a guarded write seam rewrites - the next capture, untrusted ingest " +
+          "(summary prose and entity names) or untrusted distillation (claim text) - while " +
+          "rows no guarded seam rewrites leave only by a later repair pass."
         : "";
     out.issues.push({
       severity: "warning",
@@ -114,10 +121,13 @@ export const plantedRowsCheck: DoctorCheck = {
         "capture's marker-authorized ## Guidance section and a source summary's " +
         "## Sources, ## Premises, ## Entities and ## Connections to existing notes " +
         "citation sections, plus its ## Parts and ## Table derivation headings, are this " +
-        "vault's own output" +
+        "vault's own output - and so are a quarantined entity page's writer H1 and " +
+        "provenance citation and a distillation page's ## Claims, ## Excerpt and ## " +
+        "Sources sections" +
         laneClause +
-        ". Nothing was changed by this check; the rows leave only by re-capturing the text " +
-        "with the markdown neutralization gate in enforce mode, or by a later repair pass" +
+        ". Nothing was changed by this check; rows a guarded write seam rewrites leave " +
+        "by re-writing their text with the markdown neutralization gate in enforce " +
+        "mode, and every row leaves by a later repair pass" +
         shadow,
     } satisfies DoctorIssue);
   },
