@@ -25,6 +25,7 @@ import {
 import { planPlantedRows } from "../../../../src/core/brain/planted-rows.ts";
 import { writeCaptureNote } from "../../../../src/core/brain/capture/capture-note.ts";
 import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../../../../src/core/brain/text/neutralize-markdown.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import type {
   DoctorCheckContext,
   DoctorFindings,
@@ -205,28 +206,31 @@ describe("plantedRowsCheck (the counting check)", () => {
     );
   });
 
-  test("a publish twin the audit cannot hash does not drop its staged copy", () => {
-    // The published twin goes unreadable between the walk (which admits
-    // it) and the hash (which comes back undefined). An undefined hash
-    // must match nothing - two unreadable pages are not the same page -
-    // so the readable staged copy stays in the report.
-    const note = writeCaptureNote(vault, { body: "once [[a]]", provenance: prov() });
-    const stagedDir = join(vault, "Brain", "pending", "ingest");
-    mkdirSync(stagedDir, { recursive: true });
-    const stagedRel = "Brain/pending/ingest/ing-2026-08-01-x.md";
-    writeFileSync(
-      join(vault, ...stagedRel.split("/")),
-      readFileSync(join(vault, note.path), "utf8"),
-    );
-    const publishedAbs = join(vault, ...note.path.split("/"));
-    chmodSync(publishedAbs, 0o000);
-    try {
-      const findings = runCheck(vault);
-      expect(findings.issues[0]!.message).toContain(stagedRel);
-    } finally {
-      chmodSync(publishedAbs, 0o644);
-    }
-  });
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a publish twin the audit cannot hash does not drop its staged copy",
+    () => {
+      // The published twin goes unreadable between the walk (which admits
+      // it) and the hash (which comes back undefined). An undefined hash
+      // must match nothing - two unreadable pages are not the same page -
+      // so the readable staged copy stays in the report.
+      const note = writeCaptureNote(vault, { body: "once [[a]]", provenance: prov() });
+      const stagedDir = join(vault, "Brain", "pending", "ingest");
+      mkdirSync(stagedDir, { recursive: true });
+      const stagedRel = "Brain/pending/ingest/ing-2026-08-01-x.md";
+      writeFileSync(
+        join(vault, ...stagedRel.split("/")),
+        readFileSync(join(vault, note.path), "utf8"),
+      );
+      const publishedAbs = join(vault, ...note.path.split("/"));
+      chmodSync(publishedAbs, 0o000);
+      try {
+        const findings = runCheck(vault);
+        expect(findings.issues[0]!.message).toContain(stagedRel);
+      } finally {
+        chmodSync(publishedAbs, 0o644);
+      }
+    },
+  );
 
   test("the body scan is fence-masked: inert code hides nothing in, planted fences count", () => {
     // A wikilink inside a python fence is inert; an osb block's fence
