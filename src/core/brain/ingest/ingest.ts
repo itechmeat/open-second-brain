@@ -110,6 +110,12 @@ import {
   stageForReview,
 } from "../pending/pending-lanes.ts";
 import type { WriteSubject } from "../write-disposition.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  neutralizeMarkdown,
+  neutralizedMarkersFrontmatter,
+  resolveMarkdownNeutralizeModeForProcess,
+} from "../text/neutralize-markdown.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -398,6 +404,32 @@ export function ingestSource(
     ? readKeptFrontmatter(absPath, stamp)
     : { createdAt: stamp };
 
+  // Write-time marker neutralization (t_c2ac4fc8), keyed off PROVENANCE:
+  // the summary prose about an untrusted source is the one caller-authored
+  // half of this page, so under enforce mode it passes through the pure
+  // neutralizer ONCE here - before either consumer of the page bytes runs
+  // - so the Brain/pending staged copy and the published page carry the
+  // same escaped bytes. Every section appended below is vault-authored
+  // (the provenance and link sections, the derivation section) and never
+  // passes through the neutralizer. Off and shadow leave the summary
+  // byte-identical; shadow runs the pure neutralizer and discards the
+  // output, surfacing nothing on disk.
+  const summaryText = input.summary.trim();
+  let storedSummary = summaryText;
+  let neutralized: FrontmatterMap = {};
+  const gate = resolveMarkdownNeutralizeModeForProcess();
+  if (trust === INTAKE_TRUST.untrusted) {
+    if (gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
+      const neutralSummary = neutralizeMarkdown(summaryText);
+      if (neutralSummary.changed) {
+        storedSummary = neutralSummary.text;
+        neutralized = neutralizedMarkersFrontmatter(neutralSummary.kinds);
+      }
+    } else if (gate === MARKDOWN_NEUTRALIZE_MODE.shadow) {
+      neutralizeMarkdown(summaryText);
+    }
+  }
+
   const meta: FrontmatterMap = {
     kind: BRAIN_SOURCE_KIND,
     source_path: canonicalSource,
@@ -408,6 +440,10 @@ export function ingestSource(
     // reason rather than ranking it beside the operator's own notes. Trusted
     // sources add nothing, keeping their page byte-identical to before.
     ...untrustedSourceFrontmatter(trust),
+    // Names the structure families enforce-mode neutralization removed from
+    // the summary, ON CHANGE ONLY - the same conditional-spread shape as the
+    // marker above, so an unchanged page gains zero bytes.
+    ...neutralized,
     // Says how much of the source was captured when it is less than the
     // whole file; a full-local source adds nothing, for the same reason.
     ...captureScopeFrontmatter(captureScope),
@@ -447,7 +483,7 @@ export function ingestSource(
   };
 
   const body = [
-    input.summary.trim(),
+    storedSummary,
     renderProvenanceSection(provenance),
     renderLinkSection("Entities", allEntities),
     renderLinkSection("Connections to existing notes", connections),
