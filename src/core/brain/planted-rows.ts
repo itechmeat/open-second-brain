@@ -76,6 +76,7 @@ import {
   MARKDOWN_STRUCTURE_KIND,
   detectMarkdownStructure,
   type MarkdownStructureKind,
+  type MarkdownStructureMatch,
 } from "./text/neutralize-markdown.ts";
 import type { FrontmatterMap, VaultPage } from "../types.ts";
 
