@@ -43,7 +43,7 @@
  * gate flip between captures of the same text therefore yields a
  * different id - an honest duplicate, documented rather than accidental.
  * Under `off` (the default) and `shadow` the bytes are untouched: the
- * seam never reaches the neutralizer's output.
+ * seam never reaches the neutralizer under either mode.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -273,9 +273,12 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   // Write-time marker neutralization (t_c2ac4fc8), resolved before the
   // id so the hash follows the bytes that will actually be persisted.
   // Only `enforce` writes neutralized bytes; `off` and `shadow` leave
-  // the caller's text byte-identical. The caller's body and guidance are
-  // the only caller-authored halves - the guidance HEADING below is
-  // renderer-authored and never passes through the neutralizer.
+  // the caller's text byte-identical - shadow's preview is the doctor's
+  // planted-rows audit, which recomputes the would-be rows from the
+  // vault's bytes on its own, so a shadow-mode seam has nothing to run.
+  // The caller's body and guidance are the only caller-authored halves -
+  // the guidance HEADING below is renderer-authored and never passes
+  // through the neutralizer.
   const gate = resolveMarkdownNeutralizeModeForProcess();
   let storedBody = body;
   let storedGuidance = guidance;
@@ -290,12 +293,6 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
         [...new Set([...neutralBody.kinds, ...(neutralGuidance?.kinds ?? [])])].toSorted(),
       );
     }
-  } else if (gate === MARKDOWN_NEUTRALIZE_MODE.shadow) {
-    // Shadow: run the pure neutralizer, discard its output - the seams'
-    // contract is zero disk change, with the would-be kinds surfacing
-    // through the doctor audit instead.
-    neutralizeMarkdown(body);
-    if (guidance !== null) neutralizeMarkdown(guidance);
   }
 
   const dir = capturesDir(vault);

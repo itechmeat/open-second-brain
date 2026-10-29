@@ -412,8 +412,9 @@ export function ingestSource(
   // same escaped bytes. Every section appended below is vault-authored
   // (the provenance and link sections, the derivation section) and never
   // passes through the neutralizer. Off and shadow leave the summary
-  // byte-identical; shadow runs the pure neutralizer and discards the
-  // output, surfacing nothing on disk.
+  // byte-identical: shadow's preview is the doctor's planted-rows audit,
+  // which recomputes the would-be rows from the vault's bytes on its own,
+  // so a shadow-mode seam has nothing to run.
   const summaryText = input.summary.trim();
   let storedSummary = summaryText;
   let neutralized: FrontmatterMap = {};
@@ -425,8 +426,6 @@ export function ingestSource(
         storedSummary = neutralSummary.text;
         neutralized = neutralizedMarkersFrontmatter(neutralSummary.kinds);
       }
-    } else if (gate === MARKDOWN_NEUTRALIZE_MODE.shadow) {
-      neutralizeMarkdown(summaryText);
     }
   }
 

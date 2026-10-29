@@ -426,9 +426,12 @@ export function neutralizedMarkersFrontmatter(
  * The resolved posture of the write-time neutralization gate:
  *   - `off`     - the seams never invoke the neutralizer; every write
  *                 stays byte-identical to a build without this module,
- *   - `shadow`  - the seams run the pure neutralizer and discard its
- *                 output; no disk change, the would-be kinds surface
- *                 through the doctor audit wording,
+ *   - `shadow`  - byte-identical to `off` at the seams. Shadow has no
+ *                 work to do there: the doctor's planted-rows audit
+ *                 recomputes the would-be rows from the vault's bytes on
+ *                 its own and reads this mode only for its wording, so a
+ *                 seam call under shadow would compute an answer nobody
+ *                 consumes,
  *   - `enforce` - the seams write neutralized bytes.
  */
 export const MARKDOWN_NEUTRALIZE_MODE = Object.freeze({
