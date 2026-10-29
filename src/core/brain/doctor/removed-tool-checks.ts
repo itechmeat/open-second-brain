@@ -39,7 +39,20 @@ const REMOVED_TOOL_MAX_WARNINGS = 50;
 /** Subsystem name the scan reports an unreadable path under. */
 const REMOVED_TOOL_SITE = "brain.doctor.removedToolReference";
 
-/** Root instruction files the scan reads beside the Brain tree. */
+/**
+ * Root instruction files the sweep reads beside the Brain tree. An
+ * EXISTENCE-loop scan list, not a precedence order (t_00b617b6 sweep):
+ * each existing file is read once for removed-tool references, in this
+ * order, for reporting only. `GEMINI.md` is absent here while the
+ * instruction-file ceiling (`TRACKED_FILES`,
+ * `src/core/brain/trust/instruction-file-ceiling.ts`) and the write-back
+ * contract audit (`AGENT_INSTRUCTION_FILES`,
+ * `src/core/brain/writeback-contract.ts`) both include it - whether the
+ * omission is deliberate is an open question recorded here, never
+ * answered by a silent unification. Which file an operative host actually
+ * reads is a different question again, answered by
+ * `HOST_INSTRUCTION_PRECEDENCE` in writeback-contract.ts, not by this list.
+ */
 const ROOT_INSTRUCTION_FILES: ReadonlyArray<string> = Object.freeze(["CLAUDE.md", "AGENTS.md"]);
 
 /**
