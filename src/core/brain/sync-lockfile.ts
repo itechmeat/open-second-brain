@@ -146,16 +146,24 @@ function identityOf(fd: number): LockIdentity {
  * volume without inodes the token alone decides.
  */
 function ownsLockName(lockPath: string, identity: LockIdentity, token: string): boolean {
+  let body: Buffer | null = null;
   try {
-    if (
-      !readFileSync(lockPath)
-        .subarray(0, Buffer.byteLength(token, "utf8"))
-        .equals(Buffer.from(token, "utf8"))
-    ) {
-      return false;
-    }
-    if (identity === null) return true;
+    body = readFileSync(lockPath);
+  } catch {
+    // A body that cannot be read (Windows holds a just-written file
+    // briefly against readers) cannot be told from another holder's:
+    // fall back to the device-and-inode check alone, the behaviour
+    // before ownership tokens.
+    body = null;
+  }
+  if (body !== null && token !== "") {
+    // The stamp answers for the whole file: a matching token is owned,
+    // a foreign one (a reused identity, a takeover survivor) is not.
+    return body.subarray(0, Buffer.byteLength(token, "utf8")).equals(Buffer.from(token, "utf8"));
+  }
+  try {
     const st = lstatSync(lockPath, { bigint: true });
+    if (identity === null) return true;
     return st.dev === identity.dev && st.ino === identity.ino;
   } catch {
     return false;
