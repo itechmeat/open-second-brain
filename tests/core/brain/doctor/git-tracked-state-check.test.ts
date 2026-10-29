@@ -104,9 +104,28 @@ describe("the git tracked-state doctor check", () => {
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
     const message = errors[0]!.message;
-    expect(message).toContain("git rm -r --cached .open-second-brain/brain.sqlite");
+    expect(message).toContain('git rm -r --cached ".open-second-brain/brain.sqlite"');
     expect(message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
     expect(message).toContain("never edits");
+  }, 20000);
+
+  test("names five untrack commands and counts the rest, every path paste-safe", () => {
+    // The cap is honest: five full commands, then a count. The quoting
+    // is what makes each command paste-safe - a tracked path with a
+    // space would otherwise read as two operands.
+    withStore();
+    for (let i = 0; i < 6; i += 1) {
+      writeFileSync(join(vault, ".open-second-brain", `shard-${i}.sqlite`), "bytes", "utf8");
+    }
+    writeFileSync(join(vault, ".open-second-brain", "my db.sqlite"), "bytes", "utf8");
+    gitRepoWithCommit();
+
+    const message = findingsOf("error")[0]!.message;
+    const commands = message.match(/git rm -r --cached "[^"]+"/g) ?? [];
+    expect(commands).toHaveLength(5);
+    // brain.sqlite, "my db.sqlite" and three shards fit; the rest count.
+    expect(commands[1]).toBe('git rm -r --cached ".open-second-brain/my db.sqlite"');
+    expect(message).toContain("and 3 more");
   }, 20000);
 
   test("errors even when the tracked store is ALSO ignored - tracking is measured, not inferred", () => {
@@ -197,7 +216,7 @@ describe("the git tracked-state doctor check", () => {
     );
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toContain("git rm -r --cached .open-second-brain/brain.sqlite");
+    expect(errors[0]!.message).toContain('git rm -r --cached ".open-second-brain/brain.sqlite"');
   }, 20000);
 
   test("never edits anything", () => {

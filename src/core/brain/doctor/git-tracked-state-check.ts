@@ -39,6 +39,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
+// The exact ignore line is the seeder's own constant, re-exported here
+// for this module's test consumers: a remediation message that says
+// "add the exact line" must quote the line the guard actually writes,
+// not a second composition of it.
+import { GITIGNORE_GUARD_IGNORE_LINE } from "../gitignore-guard.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 
@@ -48,8 +53,7 @@ export const GIT_TRACKED_DERIVED_STATE_CODE = "git-tracked-derived-state";
 /** How many tracked paths one finding names before it counts the rest. */
 const NAMED_PATH_LIMIT = 5;
 
-/** The exact `.gitignore` line the seeded guard block carries. */
-export const GITIGNORE_GUARD_IGNORE_LINE = `/${DERIVED_STORE_DIR}/`;
+export { GITIGNORE_GUARD_IGNORE_LINE };
 
 /** Git listings are bounded like every git read in the tree. */
 const MAX_GIT_OUTPUT = 64 * 1024 * 1024;
@@ -129,7 +133,11 @@ export function probeDerivedStoreGitState(vault: string): DerivedStoreGitState |
 }
 
 function trackedMessage(tracked: ReadonlyArray<string>): string {
-  const named = tracked.slice(0, NAMED_PATH_LIMIT).map((p) => `git rm -r --cached ${p}`);
+  // Each path is quoted: `git ls-files` output is pasted verbatim into a
+  // shell, and an unquoted path with a space reads as two operands. The
+  // named commands are the whole remediation for the first five paths;
+  // the remainder is counted, never hidden.
+  const named = tracked.slice(0, NAMED_PATH_LIMIT).map((p) => `git rm -r --cached "${p}"`);
   const remainder = tracked.length - named.length;
   return (
     `${tracked.length} path(s) under ${DERIVED_STORE_DIR}/ are tracked by git: derived runtime ` +
