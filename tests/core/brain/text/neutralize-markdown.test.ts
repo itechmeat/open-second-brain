@@ -12,8 +12,13 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  MARKDOWN_NEUTRALIZE_MODE_CONFIG,
+  MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeModeError,
   detectMarkdownStructure,
   neutralizeMarkdown,
+  resolveMarkdownNeutralizeMode,
   type MarkdownStructureKind,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
 
@@ -280,5 +285,64 @@ describe("detectMarkdownStructure (the shared detection grammar)", () => {
     expect(detectMarkdownStructure("```python\nx = '[[a]]'\n```\n")).toEqual([]);
     expect(detectMarkdownStructure("`[[a]]` and @osb✓ done\n")).toEqual([]);
     expect(detectMarkdownStructure("")).toEqual([]);
+  });
+});
+
+describe("resolveMarkdownNeutralizeMode (the gate)", () => {
+  test("absent everywhere resolves off", () => {
+    expect(resolveMarkdownNeutralizeMode({ env: {}, config: {} })).toBe(
+      MARKDOWN_NEUTRALIZE_MODE.off,
+    );
+  });
+
+  test("env wins over config", () => {
+    expect(
+      resolveMarkdownNeutralizeMode({
+        env: { [MARKDOWN_NEUTRALIZE_MODE_ENV]: "off" },
+        config: { [MARKDOWN_NEUTRALIZE_MODE_CONFIG]: "enforce" },
+      }),
+    ).toBe(MARKDOWN_NEUTRALIZE_MODE.off);
+  });
+
+  test("shadow and enforce resolve from either source", () => {
+    expect(
+      resolveMarkdownNeutralizeMode({ config: { [MARKDOWN_NEUTRALIZE_MODE_CONFIG]: "shadow" } }),
+    ).toBe("shadow");
+    expect(
+      resolveMarkdownNeutralizeMode({ env: { [MARKDOWN_NEUTRALIZE_MODE_ENV]: "enforce" } }),
+    ).toBe("enforce");
+  });
+
+  test("an empty env value counts as unset", () => {
+    expect(
+      resolveMarkdownNeutralizeMode({
+        env: { [MARKDOWN_NEUTRALIZE_MODE_ENV]: "" },
+        config: { [MARKDOWN_NEUTRALIZE_MODE_CONFIG]: "enforce" },
+      }),
+    ).toBe("enforce");
+  });
+
+  test("an invalid value is refused naming the key actually in force", () => {
+    expect(() =>
+      resolveMarkdownNeutralizeMode({ env: { [MARKDOWN_NEUTRALIZE_MODE_ENV]: "yes" } }),
+    ).toThrow(`${MARKDOWN_NEUTRALIZE_MODE_ENV} must be 'off', 'shadow' or 'enforce', got 'yes'`);
+    expect(() =>
+      resolveMarkdownNeutralizeMode({ config: { [MARKDOWN_NEUTRALIZE_MODE_CONFIG]: "yes" } }),
+    ).toThrow(`${MARKDOWN_NEUTRALIZE_MODE_CONFIG} must be 'off', 'shadow' or 'enforce', got 'yes'`);
+    expect(() =>
+      resolveMarkdownNeutralizeMode({ env: { [MARKDOWN_NEUTRALIZE_MODE_ENV]: "yes" } }),
+    ).toThrow(MarkdownNeutralizeModeError);
+  });
+
+  test("the resolver reads only its arguments", () => {
+    // A polluted process env must not leak into an explicit-argument call.
+    const saved = process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+    process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = "enforce";
+    try {
+      expect(resolveMarkdownNeutralizeMode({ env: {}, config: {} })).toBe("off");
+    } finally {
+      if (saved === undefined) delete process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+      else process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = saved;
+    }
   });
 });

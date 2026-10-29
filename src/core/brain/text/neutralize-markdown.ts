@@ -57,10 +57,15 @@
  * ({@link neutralizeMarkdown}) escapes the spans it reports, and the
  * doctor's planted-rows planner counts them - so the finding, its count
  * and what enforce mode would change cannot drift apart.
+ *
+ * The gate ({@link resolveMarkdownNeutralizeMode}) is pure and defaults
+ * to `off`, where the seams do not call this module at all and every
+ * write stays byte-identical to before it existed.
  */
 
 import { codeRegions, WIKILINK_ALIAS_RE } from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
+import { envOrConfig } from "../../validate.ts";
 
 // ----- The shared detection grammar -----------------------------------------
 
@@ -327,4 +332,76 @@ export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
     changed: true,
     kinds: Object.freeze([...kinds].toSorted()),
   });
+}
+
+// ----- The gate -------------------------------------------------------------
+
+/**
+ * The resolved posture of the write-time neutralization gate:
+ *   - `off`     - the seams never invoke the neutralizer; every write
+ *                 stays byte-identical to a build without this module,
+ *   - `shadow`  - the seams run the pure neutralizer and discard its
+ *                 output; no disk change, the would-be kinds surface
+ *                 through the doctor audit wording,
+ *   - `enforce` - the seams write neutralized bytes.
+ */
+export const MARKDOWN_NEUTRALIZE_MODE = Object.freeze({
+  off: "off",
+  shadow: "shadow",
+  enforce: "enforce",
+} as const);
+
+export type MarkdownNeutralizeMode =
+  (typeof MARKDOWN_NEUTRALIZE_MODE)[keyof typeof MARKDOWN_NEUTRALIZE_MODE];
+
+/** Environment variable for the markdown neutralization gate mode. */
+export const MARKDOWN_NEUTRALIZE_MODE_ENV = "OPEN_SECOND_BRAIN_MARKDOWN_NEUTRALIZE_MODE";
+
+/** Machine-config key for the markdown neutralization gate mode. */
+export const MARKDOWN_NEUTRALIZE_MODE_CONFIG = "markdown_neutralize_mode";
+
+/** True when `value` is one of the three mode tokens. */
+export function isMarkdownNeutralizeMode(value: string): value is MarkdownNeutralizeMode {
+  return (Object.values(MARKDOWN_NEUTRALIZE_MODE) as string[]).includes(value);
+}
+
+/** Refusal raised for a gate mode value that is not in the vocabulary. */
+export class MarkdownNeutralizeModeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MarkdownNeutralizeModeError";
+  }
+}
+
+/**
+ * Resolve the gate's mode: an explicit mode key wins (env over machine
+ * config; an invalid value is a misconfiguration refused with a
+ * {@link MarkdownNeutralizeModeError} naming the key actually in force -
+ * never silently defaulted); with neither set the default is `off`, the
+ * posture every write had before the gate existed. The
+ * `resolveSearchTrustGateMode` shape minus the legacy boolean: this gate
+ * never had one. Reads only its arguments.
+ */
+export function resolveMarkdownNeutralizeMode(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly config?: Readonly<Record<string, string>>;
+}): MarkdownNeutralizeMode {
+  const env = input.env ?? {};
+  const config = input.config ?? {};
+  const raw = envOrConfig(
+    env,
+    config,
+    MARKDOWN_NEUTRALIZE_MODE_ENV,
+    MARKDOWN_NEUTRALIZE_MODE_CONFIG,
+  );
+  if (raw !== null) {
+    if (isMarkdownNeutralizeMode(raw)) return raw;
+    const inForce = env[MARKDOWN_NEUTRALIZE_MODE_ENV]
+      ? MARKDOWN_NEUTRALIZE_MODE_ENV
+      : MARKDOWN_NEUTRALIZE_MODE_CONFIG;
+    throw new MarkdownNeutralizeModeError(
+      `${inForce} must be 'off', 'shadow' or 'enforce', got '${raw}'`,
+    );
+  }
+  return MARKDOWN_NEUTRALIZE_MODE.off;
 }
