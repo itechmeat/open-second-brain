@@ -22,9 +22,11 @@
  * silence - the doctor never throws on the state of the operator's
  * VCS, and never edits anything. Findings:
  *
- *   - any tracked path under the store → severity error, naming
- *     `git rm -r --cached <path>` per path (capped) plus the exact
- *     missing ignore line;
+ *   - any tracked path under the store → severity error, naming ONE
+ *     location-independent untrack command (`git -C '<vault>' rm -r
+ *     --cached -- .open-second-brain`, single-quoted) plus the exact
+ *     missing ignore line; the tracked paths are listed as capped
+ *     evidence, the remainder counted;
  *   - present, untracked, unignored → severity warning, the only signal
  *     a vault whose init ran before the guard (or without git) gets.
  *
@@ -36,7 +38,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
 // The exact ignore line is the seeder's own constant, re-exported here
@@ -132,17 +134,33 @@ export function probeDerivedStoreGitState(vault: string): DerivedStoreGitState |
   return { tracked, ignored };
 }
 
-function trackedMessage(tracked: ReadonlyArray<string>): string {
-  // Each path is quoted: `git ls-files` output is pasted verbatim into a
-  // shell, and an unquoted path with a space reads as two operands. The
-  // named commands are the whole remediation for the first five paths;
-  // the remainder is counted, never hidden.
-  const named = tracked.slice(0, NAMED_PATH_LIMIT).map((p) => `git rm -r --cached "${p}"`);
-  const remainder = tracked.length - named.length;
+/**
+ * `value` wrapped in single quotes with embedded single quotes escaped
+ * the shell-standard way (close, escaped quote, reopen): the command is
+ * pasted verbatim, and double quotes would leave `$`, backticks and `\`
+ * live in the vault path.
+ */
+function shellSingleQuoted(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function trackedMessage(vault: string, tracked: ReadonlyArray<string>): string {
+  // ONE complete, location-independent command: `rm -r` on the store
+  // directory covers every tracked path (a real store tracks
+  // brain.sqlite with -wal and -shm, audit shards and ledgers - far past
+  // any per-path cap), and `-C <vault>` makes it runnable from any
+  // directory, a parent repository's root included - vault-relative
+  // pathspecs fatal there. Single-quoted, so the paste is inert. The
+  // tracked paths below are EVIDENCE ONLY: quoted for readability, capped
+  // with the remainder counted, never hidden.
+  const command = `git -C ${shellSingleQuoted(resolve(vault))} rm -r --cached -- ${DERIVED_STORE_DIR}`;
+  const evidence = tracked.slice(0, NAMED_PATH_LIMIT).map((p) => `"${p}"`);
+  const remainder = tracked.length - evidence.length;
   return (
     `${tracked.length} path(s) under ${DERIVED_STORE_DIR}/ are tracked by git: derived runtime ` +
     "state (search database, checkpoints, ledgers, locks, secrets ciphertext) is in history and " +
-    `every commit carries its churn. Untrack with ${named.join(", ")}` +
+    `every commit carries its churn. Untrack with ${command} (runnable from any directory)` +
+    `${evidence.length > 0 ? `; the tracked paths: ${evidence.join(", ")}` : ""}` +
     `${remainder > 0 ? `, and ${remainder} more` : ""}; add the exact line ` +
     `${GITIGNORE_GUARD_IGNORE_LINE} to .gitignore at the vault root (o2b brain init seeds it ` +
     "idempotently); this check never edits anything"
@@ -172,7 +190,7 @@ export const gitTrackedStateCheck: DoctorCheck = {
         severity: "error",
         code: GIT_TRACKED_DERIVED_STATE_CODE,
         path: ctx.vault,
-        message: trackedMessage(state.tracked),
+        message: trackedMessage(ctx.vault, state.tracked),
       } satisfies DoctorIssue);
       return;
     }

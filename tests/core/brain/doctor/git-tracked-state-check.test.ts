@@ -98,21 +98,26 @@ describe("the git tracked-state doctor check", () => {
     expect(findingsOf("warning")).toHaveLength(0);
   }, 20000);
 
-  test("errors when the store is committed, naming the untrack command and the ignore line", () => {
+  test("errors when the store is committed, naming one vault-bounded untrack command and the ignore line", () => {
     withStore();
     gitRepoWithCommit();
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
     const message = errors[0]!.message;
-    expect(message).toContain('git rm -r --cached ".open-second-brain/brain.sqlite"');
+    // One complete command, vault-bounded with -C, targeting the whole
+    // directory: it untracks every tracked path no matter how many there
+    // are, and it runs from any directory - a parent repository's root
+    // included.
+    expect(message).toContain(`git -C '${vault}' rm -r --cached -- .open-second-brain`);
     expect(message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
     expect(message).toContain("never edits");
   }, 20000);
 
-  test("names five untrack commands and counts the rest, every path paste-safe", () => {
-    // The cap is honest: five full commands, then a count. The quoting
-    // is what makes each command paste-safe - a tracked path with a
-    // space would otherwise read as two operands.
+  test("names the complete untrack command once and keeps the path list as evidence, counting the rest", () => {
+    // The cap is honest about evidence, not about the remediation: the
+    // named command covers every tracked path via `-r` on the directory,
+    // and the five quoted paths below it are evidence only - a real
+    // store tracks brain.sqlite with -wal/-shm, audit shards, ledgers.
     withStore();
     for (let i = 0; i < 6; i += 1) {
       writeFileSync(join(vault, ".open-second-brain", `shard-${i}.sqlite`), "bytes", "utf8");
@@ -121,10 +126,9 @@ describe("the git tracked-state doctor check", () => {
     gitRepoWithCommit();
 
     const message = findingsOf("error")[0]!.message;
-    const commands = message.match(/git rm -r --cached "[^"]+"/g) ?? [];
-    expect(commands).toHaveLength(5);
-    // brain.sqlite, "my db.sqlite" and three shards fit; the rest count.
-    expect(commands[1]).toBe('git rm -r --cached ".open-second-brain/my db.sqlite"');
+    expect(message.match(/git -C /g)).toHaveLength(1);
+    expect(message).toContain('".open-second-brain/my db.sqlite"');
+    expect(message).toContain('".open-second-brain/shard-2.sqlite"');
     expect(message).toContain("and 3 more");
   }, 20000);
 
@@ -185,7 +189,11 @@ describe("the git tracked-state doctor check", () => {
     expect(findingsOf("warning")).toHaveLength(0);
   }, 20000);
 
-  test("is silent in a vault nested in a bigger repo, naming vault-relative paths", () => {
+  test("in a vault nested in a bigger repo, the named command untracks from the repo root", () => {
+    // The tracked paths are vault-relative (`git -C <vault> ls-files`),
+    // so per-path `git rm` commands fatal'd from the repository root -
+    // exactly where an operator of a nested vault runs git. The one
+    // command the message names is vault-bounded and runs anywhere.
     const nested = join(tmp, "nested");
     vault = join(nested, "vault");
     for (const d of [
@@ -199,6 +207,7 @@ describe("the git tracked-state doctor check", () => {
     }
     writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
     withStore();
+    writeFileSync(join(vault, ".open-second-brain", "ledger.sqlite"), "bytes", "utf8");
     // The repo root is `tmp`; only the nested vault's store is tracked.
     git(tmp, "init");
     git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
@@ -216,7 +225,39 @@ describe("the git tracked-state doctor check", () => {
     );
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toContain('git rm -r --cached ".open-second-brain/brain.sqlite"');
+    const message = errors[0]!.message;
+    expect(message).toContain(`git -C '${vault}' rm -r --cached -- .open-second-brain`);
+    expect(message).toContain('".open-second-brain/ledger.sqlite"');
+    // Run exactly the command the message names, from the repository
+    // root, then seed the guard and recommit: the row goes silent.
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-C",
+      vault,
+      "rm",
+      "-r",
+      "--cached",
+      "--",
+      ".open-second-brain",
+    );
+    expect(ensureVaultGitignoreEntries(vault).status).toBe("created");
+    git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "untrack the nested vault's derived state",
+    );
+    expect(findingsOf("error")).toHaveLength(0);
+    expect(findingsOf("warning")).toHaveLength(0);
   }, 20000);
 
   test("never edits anything", () => {
