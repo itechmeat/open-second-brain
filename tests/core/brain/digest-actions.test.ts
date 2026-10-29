@@ -12,6 +12,8 @@ import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
 
 // A forwarding mock over the dedup scan (the claim-provenance precedent):
@@ -309,6 +311,139 @@ describe("digest actions honor the caller's agent scope", () => {
         agentScope: "agent-b",
       });
       expect(JSON.parse(scoped.content).actions).toEqual(baseline);
+    }
+  });
+});
+
+/**
+ * The confidence-shift and contradiction rows are parsed from dream log
+ * lines, so the log-level filter reads the whole line as one reference
+ * and cannot resolve the preference it names; the parsed id is what
+ * carries the row. Those ids resolve through the Brain id-directories,
+ * so the rows are judged by the same composed view the actions are kept
+ * through: under `integrity.owner_scope_delivery: fail` another owner's
+ * shift or contradiction is absent with its pref id, counts and
+ * description, while the caller's own rows still render, and a scope
+ * requested without the gate changes nothing.
+ */
+describe("digest confidence shifts and contradictions honor the caller's agent scope", () => {
+  const OURS = "shared";
+  const THEIRS = "owned-by-a";
+  const DREAM_AT = "2026-05-24T12:00:00.000Z";
+  const SINCE = new Date("2026-05-24T00:00:00Z");
+  const UNTIL = new Date("2026-05-25T00:00:00Z");
+
+  function seedShifts(): void {
+    writePref(OURS, {
+      topic: OURS,
+      principle: `principle for ${OURS}`,
+      status: "confirmed",
+      created_at: "2026-05-01T00:00:00Z",
+      confirmed_at: "2026-05-02T00:00:00Z",
+    });
+    writePref(THEIRS, {
+      topic: THEIRS,
+      principle: `principle for ${THEIRS}`,
+      status: "confirmed",
+      created_at: "2026-05-01T00:00:00Z",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      owner: "agent-a",
+    });
+    appendLogEvent(
+      vault,
+      {
+        timestamp: DREAM_AT,
+        eventType: BRAIN_LOG_EVENT_KIND.dream,
+        body: {
+          run_id: "run-shifts",
+          confidence_shifts: [
+            `[[pref-${THEIRS}]] high -> medium (applied: 11, violated: 0)`,
+            `[[pref-${OURS}]] low -> high (applied: 3, violated: 1)`,
+          ],
+          contradictions: [
+            `[[pref-${THEIRS}]] contradicts the logged behaviour (topic: ${OURS})`,
+            `[[pref-${OURS}]] conflicts with the recorded evidence`,
+          ],
+        },
+      },
+      { deviceId: "" },
+    );
+  }
+
+  interface ShiftRow {
+    readonly id: string;
+    readonly applied_count: number | null;
+  }
+  interface ContradictionRow {
+    readonly id: string;
+    readonly description: string;
+  }
+
+  function rows(content: string): {
+    shifts: ReadonlyArray<ShiftRow>;
+    contradictions: ReadonlyArray<ContradictionRow>;
+  } {
+    const payload = JSON.parse(content) as {
+      confidence_shifts: ReadonlyArray<ShiftRow>;
+      contradictions: ReadonlyArray<ContradictionRow>;
+    };
+    return { shifts: payload.confidence_shifts, contradictions: payload.contradictions };
+  }
+
+  test("under fail, another owner's shift and contradiction rows are absent and the caller's own render", () => {
+    seedShifts();
+    setGate(GATE_MODE.fail);
+
+    const json = renderDigest(vault, {
+      format: "json",
+      since: SINCE,
+      until: UNTIL,
+      agentScope: "agent-b",
+    });
+    const scoped = rows(json.content);
+    expect(scoped.shifts.map((r) => r.id)).toEqual([`pref-${OURS}`]);
+    expect(scoped.contradictions.map((r) => r.id)).toEqual([`pref-${OURS}`]);
+    // The description of a withheld contradiction is raw log prose; none
+    // of it travels either.
+    expect(json.content).not.toContain(THEIRS);
+    expect(json.content).not.toContain("contradicts the logged behaviour");
+    // No over-filtering: the caller's own rows keep their counts and text.
+    expect(scoped.shifts[0]).toMatchObject({ applied_count: 3 });
+    expect(scoped.contradictions[0]!.description).toContain("conflicts with the recorded evidence");
+
+    // Its own owner still reads both rows.
+    const asOwner = renderDigest(vault, {
+      format: "json",
+      since: SINCE,
+      until: UNTIL,
+      agentScope: "agent-a",
+    });
+    const owned = rows(asOwner.content);
+    expect(owned.shifts.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+    expect(owned.contradictions.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+  });
+
+  test("a scope requested under off or warn changes no shift or contradiction row", () => {
+    seedShifts();
+    const unscoped = rows(
+      renderDigest(vault, { format: "json", since: SINCE, until: UNTIL }).content,
+    );
+    // The fixture really does carry both owners' rows on both lists.
+    expect(unscoped.shifts.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+    expect(unscoped.contradictions.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+
+    for (const mode of [GATE_MODE.off, GATE_MODE.warn]) {
+      setGate(mode);
+      const scoped = rows(
+        renderDigest(vault, {
+          format: "json",
+          since: SINCE,
+          until: UNTIL,
+          agentScope: "agent-b",
+        }).content,
+      );
+      expect(scoped.shifts).toEqual(unscoped.shifts);
+      expect(scoped.contradictions).toEqual(unscoped.contradictions);
     }
   });
 });
