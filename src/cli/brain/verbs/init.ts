@@ -67,6 +67,11 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
       created: result.created,
       overwritten: result.overwritten,
       skipped: result.skipped,
+      // The bootstrap result's guard field is always set, and the
+      // docblock's contract is that machine readers use it instead of
+      // parsing stderr: without it a conflict or a failed seed rendered
+      // in JSON as a plain skipped, indistinguishable from a clean one.
+      guard: result.guard,
       ...(empty ? nextCommandField("brain-empty") : {}),
     });
   } else {
@@ -74,6 +79,13 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
     for (const p of result.created) info(`  created: ${p}`);
     for (const p of result.overwritten) info(`  overwritten: ${p}`);
     for (const p of result.skipped) info(`  exists: ${p}`);
+    // Named like the lists above. Clean statuses say so in one word; a
+    // conflict or a failed seed carries its detail so the human output
+    // reads alongside the stderr warning instead of instead of it.
+    info(
+      `  guard: ${result.guard.status}` +
+        (result.guard.detail !== undefined ? `: ${result.guard.detail}` : ""),
+    );
   }
 
   // no-dead-ends, task 5. This verb creates the tree and then says

@@ -20,6 +20,7 @@ import {
   GIT_TRACKED_DERIVED_STATE_CODE,
 } from "../../src/core/brain/doctor/git-tracked-state-check.ts";
 import { DEFAULT_BEGIN_MARKER, DEFAULT_END_MARKER } from "../../src/core/install/managed-block.ts";
+import { cmdBrainInit } from "../../src/cli/brain/verbs/init.ts";
 
 // Shared temp scratch for both vault and machine-config directories.
 // Tests that need to assert the "missing machine config" path can
@@ -58,6 +59,25 @@ function captureStderr(fn: () => unknown): { stderr: string } {
     process.stderr.write = original;
   }
   return { stderr: captured };
+}
+
+/**
+ * Run the init verb in-process, capturing stdout. The verb's docblock
+ * promises machine readers `result.guard` instead of stderr parsing;
+ * the CLI tests below hold the verb's OWN output to that promise.
+ */
+async function runBrainInitCli(argv: string[]): Promise<{ code: number; stdout: string }> {
+  let stdout = "";
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+    stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    return { code: await cmdBrainInit(argv), stdout };
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 }
 
 describe("bootstrapBrain — empty vault", () => {
@@ -496,6 +516,30 @@ describe("bootstrapBrain — gitignore guard degradation (warn-and-continue)", (
     expect(result.guard?.detail).toContain("!.open-second-brain");
   });
 
+  test("a conforming block that a later negation defeats reports the conflict, not a clean update", () => {
+    // The merge would land the entry INSIDE the earlier block while the
+    // negation after it still wins under git's last-match rule, so the
+    // seeder must refuse the write - and the init report must say the
+    // guard did not resolve instead of claiming a seeded block.
+    const hostile = `${DEFAULT_BEGIN_MARKER}\n*.log\n${DEFAULT_END_MARKER}\n!.open-second-brain\n`;
+    writeFileSync(join(vault, ".gitignore"), hostile, "utf8");
+
+    let result!: ReturnType<typeof bootstrapBrain>;
+    captureStderr(() => {
+      result = bootstrapBrain(vault, { configPath });
+    });
+
+    // Bootstrap continued past the guard; the operator's file is
+    // byte-identical and the store stays unprotected - reported.
+    expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
+    expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe(hostile);
+    expect(result.skipped).toContain(".gitignore");
+    expect(result.created).not.toContain(".gitignore");
+    expect(result.overwritten).not.toContain(".gitignore");
+    expect(result.guard?.status).toBe("conflict");
+    expect(result.guard?.detail).toContain("!.open-second-brain");
+  });
+
   test("the doctor's tracked-state row reports the state a failed guard left behind", () => {
     // Init degraded past the unwritable guard; the protection the guard
     // would have seeded is genuinely absent, and the doctor's row is the
@@ -533,4 +577,52 @@ describe("bootstrapBrain — gitignore guard degradation (warn-and-continue)", (
     expect(rows).toHaveLength(1);
     expect(rows[0]!.message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
   }, 20000);
+});
+
+describe("brain init CLI — the guard outcome on both output streams", () => {
+  test("--json carries guard.status = conflict for a defeated block fixture", async () => {
+    // A conflict used to render in JSON as a plain skipped .gitignore -
+    // indistinguishable from a clean "already covered" skip.
+    const hostile = `${DEFAULT_BEGIN_MARKER}\n*.log\n${DEFAULT_END_MARKER}\n!.open-second-brain\n`;
+    writeFileSync(join(vault, ".gitignore"), hostile, "utf8");
+
+    const { code, stdout } = await runBrainInitCli([
+      "--vault",
+      vault,
+      "--config",
+      configPath,
+      "--json",
+    ]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout) as {
+      guard?: { status?: string; detail?: string };
+      skipped?: string[];
+    };
+    expect(payload.guard?.status).toBe("conflict");
+    expect(payload.guard?.detail).toContain("!.open-second-brain");
+    expect(payload.skipped).toContain(".gitignore");
+  });
+
+  test("--json carries the guard outcome for a clean run too", async () => {
+    const { code, stdout } = await runBrainInitCli([
+      "--vault",
+      vault,
+      "--config",
+      configPath,
+      "--json",
+    ]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout) as { guard?: { status?: string } };
+    expect(payload.guard?.status).toBe("created");
+  });
+
+  test("the human output names the guard outcome for a conflict fixture", async () => {
+    const hostile = `${DEFAULT_BEGIN_MARKER}\n*.log\n${DEFAULT_END_MARKER}\n!.open-second-brain\n`;
+    writeFileSync(join(vault, ".gitignore"), hostile, "utf8");
+
+    const { code, stdout } = await runBrainInitCli(["--vault", vault, "--config", configPath]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("guard: conflict");
+    expect(stdout).toContain("!.open-second-brain");
+  });
 });
