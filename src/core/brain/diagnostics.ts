@@ -1032,8 +1032,8 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // remediation is the seeder, and the seeder is idempotent and
         // merge-safe on an existing vault, so one command ends the
         // warning - and the ignore half of the error. The untrack half
-        // is git's own (`git rm -r --cached <path>`, named per path in
-        // the finding) because no verb in this tool untracks a file.
+        // is git's own (one location-independent `git -C <vault> rm -r --cached --
+        // .open-second-brain` command, named in the finding) because no verb in this tool untracks a file.
         code: GIT_TRACKED_DERIVED_STATE_CODE,
         issueClass: "derived brain state tracked by git, or present and not git-ignored",
         nextCommand: "o2b brain init",
