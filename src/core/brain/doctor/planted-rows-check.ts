@@ -26,7 +26,10 @@
  * The lane classification stays in the finding as
  * context: those pages are named first, and the message counts them. A
  * page the caller may not read is not named and does not move the count
- * (`ctx.readable`, the contract every other counting check follows).
+ * (`ctx.readable`, the contract every other counting check follows), and
+ * the same predicate rides into the planner so its staged-vs-published
+ * dedupe can never drop a staged copy in favor of a twin this filter
+ * would remove - that would leave the report with neither copy.
  *
  * Under the gate's `shadow` mode the finding says so: enforce would
  * escape exactly these rows on the next capture or untrusted ingest of
@@ -65,7 +68,11 @@ function gateModeForWording(): MarkdownNeutralizeMode {
 export const plantedRowsCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
-    const plan = planPlantedRows(ctx.vault);
+    // The readability predicate rides into the planner: the staged-vs-
+    // published dedupe must not drop a staged copy in favor of a
+    // hash-equal twin this filter would remove, or both rows would
+    // vanish from the report.
+    const plan = planPlantedRows(ctx.vault, ctx.readable);
     const readable =
       ctx.readable === undefined ? plan.planted : plan.planted.filter((p) => ctx.readable!(p.path));
     if (readable.length === 0) return;

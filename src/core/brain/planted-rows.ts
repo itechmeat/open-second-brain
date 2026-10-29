@@ -34,7 +34,12 @@
  * planted ```osb fence line does. Staged copies under `Brain/pending/`
  * are deduplicated against their publish targets by content: the pending
  * directory holds a byte-verbatim copy of the page under review, so the
- * same rows would otherwise be reported twice.
+ * same rows would otherwise be reported twice. The dedupe answers to the
+ * caller's readability when one is supplied: the consuming check filters
+ * its rows by `ctx.readable` AFTER planning, so a hash-equal published
+ * twin the caller may not read must never stand in for a readable staged
+ * copy - the dedupe would drop the copy, the check would drop the twin,
+ * and both would vanish from the report.
  *
  * The writers' own output is not planted, and the scan knows it. A
  * capture's trailing `## Guidance` section and a source summary's
@@ -297,40 +302,34 @@ function excludeWriterAuthoredRows(
  * Scan every readable Brain page for live structure rows. Pure over the
  * vault's bytes: nothing is written, nothing is mutated, and the result
  * is deterministic for a given vault state (paths sorted, kinds sorted).
+ *
+ * `readable` is the CALLER's readability over vault-relative paths (the
+ * doctor's `ctx.readable`), and it is NOT a population filter here - the
+ * consuming check applies it to the report after planning. It informs
+ * one decision only: which published pages may stand in for a staged
+ * copy in the dedupe. The planner hashes with filesystem access while
+ * the check filters by this predicate, so without it a readable staged
+ * copy deduped against a hash-equal twin the caller may not read would
+ * leave the report with neither row.
  */
-export function planPlantedRows(vault: string): PlantedRowsPlan {
+export function planPlantedRows(
+  vault: string,
+  readable?: (rel: string) => boolean,
+): PlantedRowsPlan {
   const selected = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH }).filter((page) =>
     isUnderBrainRoot(vaultRelative(page.path, vault)),
   );
 
-  // Staged-vs-published dedupe: a Brain/pending copy is the publish
-  // target's bytes verbatim, so when a staged page's content equals a
-  // published page's content the publish target is the report and the
-  // staged copy is dropped. Published hashes are computed ONCE, not once
-  // per staged page, and an UNDEFINED hash - a page that could not be
-  // read between the walk and the hash - never enters the set and never
-  // matches: two unreadable pages are not the same page, and a staged
-  // copy the audit cannot hash is reported, never silently dropped.
   const isStaged = (page: VaultPage): boolean =>
     vaultRelative(page.path, vault).startsWith(PENDING_DIR);
-  const staged = selected.filter(isStaged);
-  let deduped = selected;
-  if (staged.length > 0) {
-    const publishedHashes = new Set<string>();
-    for (const page of selected) {
-      if (isStaged(page)) continue;
-      const hash = contentHash(page.path);
-      if (hash !== undefined) publishedHashes.add(hash);
-    }
-    deduped = selected.filter((page) => {
-      if (!isStaged(page)) return true;
-      const stagedHash = contentHash(page.path);
-      return stagedHash === undefined || !publishedHashes.has(stagedHash);
-    });
-  }
 
-  const planted: PlantedRowsPage[] = [];
-  for (const page of deduped) {
+  // Scan FIRST, dedupe after. Deduping before the scan trades report
+  // completeness for one skipped parse: the scan of a staged page whose
+  // twin survives is wasted work at worst, while a twin that later
+  // leaves the report (the check's readable filter) would take the
+  // staged copy's rows with it if the copy had already been dropped.
+  const hits: { entry: PlantedRowsPage; page: VaultPage }[] = [];
+  for (const page of selected) {
     let body: string;
     try {
       [, body] = parseFrontmatter(page.path);
@@ -344,13 +343,42 @@ export function planPlantedRows(vault: string): PlantedRowsPlan {
     const scoped = lane ? matches : matches.filter((m) => ALWAYS_PLANTED_KINDS.has(m.kind));
     const live = excludeWriterAuthoredRows(page.metadata, body, scoped);
     if (live.length === 0) continue;
-    planted.push({
-      path: vaultRelative(page.path, vault),
-      kinds: [...new Set(live.map((m) => m.kind))].toSorted(),
-      count: live.length,
-      thirdParty: lane,
+    hits.push({
+      entry: {
+        path: vaultRelative(page.path, vault),
+        kinds: [...new Set(live.map((m) => m.kind))].toSorted(),
+        count: live.length,
+        thirdParty: lane,
+      },
+      page,
     });
   }
+
+  // Staged-vs-published dedupe: a Brain/pending copy is the publish
+  // target's bytes verbatim, so when a staged page's content equals a
+  // published page's content the publish target is the report and the
+  // staged copy is dropped - but ONLY when the twin actually reports.
+  // A twin the caller may not read is filtered out of the report by the
+  // consuming check, so its hash must not stand in for anything: the
+  // readable staged copy is the one that must be reported. An UNDEFINED
+  // hash - a page that could not be read between the scan and the hash -
+  // never enters the set and never matches: two unreadable pages are not
+  // the same page, and a staged copy the audit cannot hash is reported,
+  // never silently dropped.
+  const publishedReportedHashes = new Set<string>();
+  for (const hit of hits) {
+    if (isStaged(hit.page)) continue;
+    if (readable !== undefined && !readable(hit.entry.path)) continue;
+    const hash = contentHash(hit.page.path);
+    if (hash !== undefined) publishedReportedHashes.add(hash);
+  }
+  const planted = hits
+    .filter((hit) => {
+      if (!isStaged(hit.page)) return true;
+      const stagedHash = contentHash(hit.page.path);
+      return stagedHash === undefined || !publishedReportedHashes.has(stagedHash);
+    })
+    .map((hit) => hit.entry);
   planted.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { scanned: selected.length, planted };
 }
