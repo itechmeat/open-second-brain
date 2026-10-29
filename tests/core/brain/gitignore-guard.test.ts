@@ -312,7 +312,7 @@ describe("ensureVaultGitignoreEntries", () => {
       });
       expect(result.status).toBe("conflict");
       expect(result.detail).toContain("dotfiles.gitignore");
-      expect(result.detail.length).toBeGreaterThan(0);
+      expect(result.detail!.length).toBeGreaterThan(0);
       // The link is still a link, and the target holds exactly the
       // user's bytes - nothing was written anywhere.
       expect(lstatSync(gitignorePath()).isSymbolicLink()).toBe(true);
