@@ -10,8 +10,9 @@
  * disposition and killed the process wherever it happened to be, which
  * for a `tools/call` is mid-dispatch with no frame written. It now shares
  * the HTTP transport's register (`./drain.ts`): a drain stops the loop at
- * a request boundary, waits for the one request that can be in flight,
- * and only then closes the reader. Nothing here handles a signal - that
+ * a request boundary and waits for every dispatched request - under the
+ * bounded parallel reads that can be several at once - and only then
+ * closes the reader. Nothing here handles a signal - that
  * belongs to the CLI, which owns the process (`src/cli/mcp-drain.ts`).
  */
 

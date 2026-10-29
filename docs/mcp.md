@@ -16,6 +16,15 @@ in Open Second Brain depends on the MCP server being running.
   below). No `prompts` or `sampling`.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
+- Request ordering (stdio, since the parallel-reads release): read-classified
+  calls run concurrently, up to a small in-flight cap, while write-classified
+  calls (every tool that CAN mutate vault state — the registry's `kind`
+  classification is write-mode-dominant) run one at a time and never beside a
+  read. Responses may therefore arrive out of arrival order, which is legal
+  JSON-RPC: correlate by response `id`, and progress by `progressToken`. Each
+  request's own notifications all precede its response, and every frame stays
+  newline-terminated. On EOF or drain the server still waits for every
+  dispatched request before the process exits.
 
 ### Argument contract (since v1.46.0)
 
@@ -74,7 +83,7 @@ A request with no `_meta`, or a `_meta` carrying other members but no
 
 | Transport | With a token | With no token |
 |---|---|---|
-| stdio | Emits `notifications/progress` frames as the operation runs, all of them ahead of the response frame | No notification frames at all |
+| stdio | Emits `notifications/progress` frames as the operation runs, all of them ahead of that request's response frame (two concurrent calls may interleave each other's frames; correlate by the frame's own `progressToken`) | No notification frames at all |
 | HTTP | Answers the call normally and carries a typed refusal on `result._meta` | No `_meta` on the result |
 
 stdio owns a duplex newline-delimited stream, so it can write a frame
