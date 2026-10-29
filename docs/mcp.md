@@ -21,9 +21,16 @@ in Open Second Brain depends on the MCP server being running.
   at the cap so the bound holds by construction — while write-classified
   calls (every tool that CAN mutate vault state — the registry's `kind`
   classification is write-mode-dominant) run one at a time and never beside a
-  read. Responses may therefore arrive out of arrival order, which is legal
-  JSON-RPC: correlate by response `id`, and progress by `progressToken`. Each
-  request's own notifications all precede its response, and every frame stays
+  read. The overlap pays only across awaited I/O: a read handler whose work
+  runs synchronously between awaits (the SQLite, filesystem and scoring
+  reads) finishes no sooner than serialized dispatch, so pipelining does not
+  shrink a batch's total time, and its responses shift toward the end of the
+  batch — the first response can arrive later than arrival-order delivery
+  would. Write-classified tools, including `brain_search` (write-classified
+  by the write-mode-dominant rule), still run one at a time. Responses may
+  therefore arrive out of arrival order, which is legal JSON-RPC: correlate
+  by response `id`, and progress by `progressToken`. Each request's own
+  notifications all precede its response, and every frame stays
   newline-terminated. On EOF the server still waits for every dispatched
   request before the process exits. A signal drain instead stops at a request
   boundary and waits only up to its deadline (10 000 ms, `O2B_MCP_DRAIN_MS`;
