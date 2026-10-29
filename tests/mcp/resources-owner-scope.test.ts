@@ -106,6 +106,15 @@ function setGate(mode: string): void {
   );
 }
 
+/** The `## Actions` section of a digest render: its heading through the next. */
+function actionsSection(digest: string): string {
+  const start = digest.indexOf("\n## Actions");
+  if (start === -1) return "";
+  const rest = digest.slice(start + 1);
+  const next = rest.indexOf("\n## ");
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
 /** Read one resource AS `agentName`, folding a refusal into the answer. */
 function read(uri: string, agentName: string = OWNER_B): string {
   const ctx: ResourceContext = { vault, agentName };
@@ -207,11 +216,12 @@ test("gate off leaves every resource unfiltered", () => {
  * sections beside it.
  *
  * The fixture separates the two halves: an ownerless, in-window
- * preference keeps the digest non-empty (the markdown digest renders an
- * Actions section only then, and the shared half must keep travelling),
- * while the marked page is dated far enough back to be stale on any run
- * date and confirmed, so the ONLY section that can name it is
- * `## Actions`.
+ * preference keeps the windowed sections non-empty (the shared half must
+ * keep travelling), while the marked page is dated far enough back to be
+ * stale on any run date and confirmed. Its `## Actions` lifecycle row is
+ * the row under test, so the assertions below check THAT row in THAT
+ * section - a marker check over the whole render would pass on the
+ * fixture's windowed sections alone and prove nothing about Actions.
  */
 test("osb://digest/latest: the actions section carries the ownership rule too", () => {
   const now = new Date();
@@ -245,6 +255,14 @@ test("osb://digest/latest: the actions section carries the ownership rule too", 
   const unscoped = read("osb://digest/latest");
   expect(unscoped).toContain("digest-window-active");
   expect(unscoped).toContain(MARKER);
+  // The row under test, in the section under test: a lifecycle action row
+  // naming the marked page. The fixture can surface the marked page
+  // elsewhere too (its applied_count feeds a windowed section), so only
+  // this pins the Actions surface.
+  const unscopedActions = actionsSection(unscoped);
+  const row = unscopedActions.split("\n").find((line) => line.includes(`pref-${MARKER}-stale`));
+  expect(row, `an Actions row must name the marked page:\n${unscopedActions}`).toBeDefined();
+  expect(row).toMatch(/^- \[lifecycle\] impact \d+ — /);
 
   setGate(GATE_MODE.fail);
   const scoped = read("osb://digest/latest");
@@ -252,6 +270,12 @@ test("osb://digest/latest: the actions section carries the ownership rule too", 
   // ownership rule and not an empty digest.
   expect(scoped).toContain("digest-window-active");
   expect(scoped).not.toContain(MARKER);
+  // And within the section under test: it still renders, the ownerless
+  // stale page's row still travels in it, and the marked page's row is
+  // the one withheld.
+  const scopedActions = actionsSection(scoped);
+  expect(scopedActions).toContain("pref-shared");
+  expect(scopedActions).not.toContain(`pref-${MARKER}-stale`);
 
   // Its own owner still reads the maintenance suggestion.
   expect(read("osb://digest/latest", OWNER_A)).toContain(MARKER);
