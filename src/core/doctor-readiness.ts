@@ -77,7 +77,10 @@
  * guardrail's own vocabulary, and the symlink refusal - lives in
  * `brain/writeback-contract.ts`, whose docblock is the settled marker
  * contract an installed block must satisfy. No repair or installer is
- * built here, so a file without the block is skipped, not failed.
+ * built here, so a file without the block is skipped, not failed. Since
+ * t_00b617b6 the probe also grades placement shadowing: a host reading a
+ * contract-free file while another candidate carries the contract is a
+ * proved `fail`, because the operative host never sees the gate.
  */
 
 import { readFileSync } from "node:fs";
@@ -120,8 +123,11 @@ import { looksLikeServerEntry } from "./install/adapters/opencode.ts";
 import {
   AGENT_INSTRUCTION_FILES,
   WRITEBACK_CONTRACT_FINDING,
+  WRITEBACK_CONTRACT_RECOVERY,
   auditWorkspaceWritebackContract,
+  resolveShadowedInstructionContracts,
   type WritebackContractFinding,
+  type WritebackContractShadow,
 } from "./brain/writeback-contract.ts";
 import type { InstallEnv, ManifestEntry } from "./install/types.ts";
 
@@ -1714,6 +1720,22 @@ function statusForContractFinding(finding: WritebackContractFinding): ReadinessS
 }
 
 /**
+ * The detail of one placement-shadow row (t_00b617b6): the file the host
+ * reads, the host by name, the file that actually carries the contract,
+ * and the same read-only recovery clause the per-file rows carry - adding
+ * the block to the file the host reads is content-editing, so the probe
+ * offers recovery prose, never a command that writes.
+ */
+function writebackShadowRowDetail(shadow: WritebackContractShadow): string {
+  return (
+    `${shadow.readsPath} is the instruction file the ${shadow.host} host reads, but it ` +
+    `carries no Open Second Brain managed block while ${shadow.contractPath} carries the ` +
+    `write-back contract - the operative host never sees the same-turn atomic-fact write ` +
+    `gate; ${WRITEBACK_CONTRACT_RECOVERY}`
+  );
+}
+
+/**
  * Does the vault's workspace agent-instruction file(s) carry the same-turn
  * atomic-fact memory write gate? Reads the candidates
  * {@link AGENT_INSTRUCTION_FILES} at the vault root through
@@ -1738,6 +1760,18 @@ function statusForContractFinding(finding: WritebackContractFinding): ReadinessS
  * while one conforming file among absent peers passes: the absent
  * candidates did not participate, and the census in the detail says so
  * rather than hiding them.
+ *
+ * Placement shadowing (t_00b617b6) grades beside the per-file rows: a host
+ * whose preferred file (`HOST_INSTRUCTION_PRECEDENCE` in
+ * `brain/writeback-contract.ts`) carries no managed block while another
+ * candidate carries the contract is a proved fault of the surface - the
+ * operative host never sees the gate, however conforming the file it does
+ * not read is. Each shadow triple becomes one `fail` row keyed by the file
+ * the host reads, naming the host, both files and the read-only recovery
+ * clause; shadow-free multi-file workspaces and absent-only workspaces
+ * grade exactly as before. Shadow rows enter the census and the worst-of
+ * aggregate like any other row, which is why the fail header counts
+ * findings, not files.
  */
 export async function probeWritebackContract(opts: ReadinessOptions): Promise<ReadinessVerdict> {
   const workspace = opts.vault;
@@ -1747,10 +1781,16 @@ export async function probeWritebackContract(opts: ReadinessOptions): Promise<Re
     status: statusForContractFinding(audit.finding),
     detail: audit.detail,
   }));
-  const counts = countByStatus(rows.map((row) => row.status));
+  const shadowRows = resolveShadowedInstructionContracts(audits).map((shadow) => ({
+    path: shadow.readsPath,
+    status: READINESS_STATUS.fail,
+    detail: writebackShadowRowDetail(shadow),
+  }));
+  const graded = [...rows, ...shadowRows];
+  const counts = countByStatus(graded.map((row) => row.status));
   // Worst rows lead the detail; toSorted is stable, so within one bucket
   // the candidate list's priority order stands.
-  const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
+  const ordered = graded.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
   const rowText = ordered.map((row) => `${row.path}: ${row.detail}`).join("; ");
   const census =
     `(${counts.pass} pass, ${counts.fail} fail, ` +
@@ -1758,7 +1798,7 @@ export async function probeWritebackContract(opts: ReadinessOptions): Promise<Re
   if (counts.fail > 0) {
     return {
       status: READINESS_STATUS.fail,
-      detail: `${counts.fail} agent-instruction file(s) fail the write-back contract ${census}: ${rowText}`,
+      detail: `${counts.fail} agent-instruction finding(s) fail the write-back contract ${census}: ${rowText}`,
     };
   }
   if (counts.unknown > 0) {

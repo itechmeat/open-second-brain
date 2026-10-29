@@ -28,6 +28,7 @@ import { buildPayload } from "../../src/core/install/payload.ts";
 import { serializeMcpServerTable } from "../../src/core/install/grok-config.ts";
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
 import { manifestPath } from "../../src/core/install/manifest.ts";
+import { WRITEBACK_CONTRACT_RECOVERY } from "../../src/core/brain/writeback-contract.ts";
 
 // The probes read the embedding config through `resolveSearchConfig`, which
 // consults `process.env` before the config file. Clear the embedding env keys
@@ -874,6 +875,74 @@ describe("probeWritebackContract", () => {
     const v = await probeWritebackContract(installedRuntimeOpts());
     expect(v.status).toBe(READINESS_STATUS.pass);
     expect(v.detail).toContain("2 skipped");
+  });
+
+  test("a bare CLAUDE.md beside a conforming AGENTS.md fails, naming host, both files and recovery", async () => {
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
+    const claude = join(tmp, "CLAUDE.md");
+    writeFileSync(claude, "# Claude\n\nplain instructions, no managed block\n");
+    const before = [agents, claude].map((p) => readFileSync(p, "utf8"));
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("claude-code");
+    expect(v.detail).toContain(claude);
+    expect(v.detail).toContain(agents);
+    expect(v.detail).toContain(WRITEBACK_CONTRACT_RECOVERY);
+    expect(v.detail).toContain("1 pass");
+    expect(v.detail).toContain("1 fail");
+    expect(v.detail).toContain("2 skipped");
+    // The probe is read-only: audited bytes are exactly what it found.
+    expect([agents, claude].map((p) => readFileSync(p, "utf8"))).toEqual(before);
+  });
+
+  test("the shadow verdict exits non-zero under --readiness", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), "plain\n");
+    const report = await runReadinessProbes({ vault: tmp, config: configPath, home, cwd: tmp });
+    const probe = report.probes.find((p) => p.name === READINESS_PROBE.writebackContract);
+    expect(probe!.status).toBe(READINESS_STATUS.fail);
+    expect(report.failed).toBeGreaterThanOrEqual(1);
+    expect(doctorExitCode(0, report)).toBe(DOCTOR_EXIT.failed);
+  });
+
+  test("shadowing is host-symmetric: a bare AGENTS.md beside a conforming CLAUDE.md fails the agents.md family", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "CLAUDE.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, "# Workspace\n\nplain\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("codex");
+    expect(v.detail).toContain(agents);
+    expect(v.detail).toContain(join(tmp, "CLAUDE.md"));
+    expect(v.detail).toContain("4 fail");
+  });
+
+  test("a shadow coexisting with a malformed block keeps the worst-of aggregate and census correct", async () => {
+    writeConfig("");
+    // A lone begin marker: a block installed and then broken.
+    writeFileSync(join(tmp, "AGENTS.md"), "# >>> open-second-brain managed >>>\nhalf a block\n");
+    writeFileSync(join(tmp, "CLAUDE.md"), "plain claude instructions\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("claude-code");
+    // Rows: AGENTS.md fails (broken block); CLAUDE.md is the shadowed
+    // reads side (fail) and also the missing-block skip; GEMINI.md absent
+    // is the second skip.
+    expect(v.detail).toContain("2 fail");
+    expect(v.detail).toContain("2 skipped");
+  });
+
+  test("a shadow-free multi-file workspace keeps passing", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("2 pass");
   });
 
   test("the probe is registered in DEFAULT_PROBES beside registered_commands", () => {
