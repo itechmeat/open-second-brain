@@ -35,8 +35,11 @@ const USAGE =
   "[--recall-floor <n>] [--sample-seed <value>] [--sample-cap <n>] " +
   "[--resume <run-id>] [--runs-dir <dir>] [--json]";
 
-// Named in `path-constants.ts` beside the derived store it sits in, so
-// the gitignore guard seeded at brain init provably covers it too.
+// Named in `path-constants.ts` as a member of the derived store, not as
+// a path of its own: the runs dir is gitignored only once brain init has
+// seeded the vault's .gitignore guard, whose single vault-root-anchored
+// `/.open-second-brain/` entry covers the whole store, bench-runs
+// included - until that seeding, nothing here is ignored.
 const DEFAULT_RUNS_DIR = BENCH_RUNS_REL;
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
 
