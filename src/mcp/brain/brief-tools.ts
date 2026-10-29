@@ -53,7 +53,7 @@ import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
-import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { eventAtReach, eventsAtReach, recordRefs, requestRefView } from "./reach-events.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -208,8 +208,15 @@ async function toolBrainDigest(
   // window even when the caller omitted `until`.
   const effectiveUntil = until ?? new Date();
   const agentScope = coerceAgentScope(ctx, args, true);
-  // Below local reach the digest is rendered for this reader: a record it
-  // cannot read is absent from every row and count.
+  // The digest is rendered for this reader whenever any rule is live: a
+  // record below the caller's reach, or withheld by the enforced ownership
+  // scope, is absent from every row and count. Passing the predicate
+  // whenever it would withhold anything - rather than only below local
+  // reach - is the view the `osb://digest/latest` resource renders the
+  // same caller with, so the agent summary, the backlink counts and the
+  // connection health cannot count the events and records those sections
+  // beside them already withhold. With no rule live the predicate is
+  // absent and the render stays byte-identical to the unfiltered one.
   const restricted = contextReach(ctx) !== TRANSPORT_REACH.local;
   // The enforced ownership scope (null unless
   // `integrity.owner_scope_delivery` is `fail` with a resolved identity)
@@ -224,7 +231,7 @@ async function toolBrainDigest(
       ...(agentScope !== undefined ? { agentScope } : {}),
       ...(readable !== undefined ? { readable } : {}),
     });
-  const result = renderFor(format, restricted ? readableAtContextReach(ctx) : undefined);
+  const result = renderFor(format, readableAtContextReachOrUndefined(ctx));
 
   const envelope: Record<string, unknown> = {
     format,

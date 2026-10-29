@@ -27,7 +27,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendLogEvent } from "../../src/core/brain/log.ts";
-import { brainConfigPath } from "../../src/core/brain/paths.ts";
+import { renderDigest } from "../../src/core/brain/digest.ts";
+import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import {
   BRAIN_CONFIDENCE,
@@ -36,6 +37,7 @@ import {
 } from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { readResource } from "../../src/mcp/resources.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
@@ -83,10 +85,19 @@ function makePref(slug: string, owner?: string): void {
   });
 }
 
-function log(timestamp: string, eventType: string, body: Record<string, unknown>): void {
-  appendLogEvent(vault, { timestamp, eventType, body } as Parameters<typeof appendLogEvent>[1], {
-    deviceId: "",
-  });
+function log(
+  timestamp: string,
+  eventType: string,
+  body: Record<string, unknown>,
+  agent?: string,
+): void {
+  appendLogEvent(
+    vault,
+    { timestamp, eventType, ...(agent !== undefined ? { agent } : {}), body } as Parameters<
+      typeof appendLogEvent
+    >[1],
+    { deviceId: "" },
+  );
 }
 
 /**
@@ -143,6 +154,10 @@ interface TransitionRow {
 describe("brain_brief views honour the caller's enforced owner scope", () => {
   const weekEnd = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const month = new Date().toISOString().slice(0, 7);
+  // A pinned instant one hour ahead, so the digest's window ([until-24h,
+  // until]) covers the fixtures' now-1h events and the rendered markdown
+  // carries no moving timestamp between two calls.
+  const digestUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
   test("view=weekly hides another owner's rows under fail and keeps the caller's own", async () => {
     seedTwoOwnerActivity();
@@ -239,22 +254,179 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
         daily: await call({ view: "daily" }),
         monthly: await call({ view: "monthly", month }),
         today: await call({ view: "today" }),
+        digest: await call({ view: "digest", until: digestUntil }),
       };
       // Not vacuous: the private rows really are on the unscoped envelopes.
       expect(stableText(unscoped.weekly)).toContain(OWNED_BY_A);
+      expect(stableText(unscoped.digest)).toContain(OWNED_BY_A);
 
       const scoped = {
         weekly: await call({ view: "weekly", week_end: weekEnd }, OWNER_B),
         daily: await call({ view: "daily" }, OWNER_B),
         monthly: await call({ view: "monthly", month }, OWNER_B),
         today: await call({ view: "today" }, OWNER_B),
+        digest: await call({ view: "digest", until: digestUntil }, OWNER_B),
       };
       expect(stableText(scoped.weekly)).toBe(stableText(unscoped.weekly));
       expect(stableText(scoped.daily)).toBe(stableText(unscoped.daily));
       expect(stableText(scoped.monthly)).toBe(stableText(unscoped.monthly));
       expect(stableText(scoped.today)).toBe(stableText(unscoped.today));
+      expect(stableText(scoped.digest)).toBe(stableText(unscoped.digest));
     });
   }
+});
+
+// ----- the digest tool against the digest resource --------------------------
+
+/**
+ * One `## Heading` section of a digest markdown render, heading included:
+ * the text from the heading through the line before the next one.
+ */
+function digestSection(digest: string, heading: string): string {
+  const start = digest.indexOf(`## ${heading}`);
+  if (start === -1) return "";
+  const rest = digest.slice(start);
+  const next = rest.indexOf("\n## ", 1);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe("brain_brief view=digest answers the same caller as the digest resource", () => {
+  /**
+   * The two-owner fixture whose rows the digest tool at local reach read
+   * unfiltered: the retired record is a real file because
+   * `connection_health` counts the retired directory directly, and the
+   * events carry their author so `agent_summary` groups them per agent.
+   */
+  function seedDigestResourceFixture(): void {
+    makePref(SHARED);
+    makePref(OWNED_BY_A, OWNER_A);
+    writeFileSync(
+      join(brainDirs(vault).retired, `ret-${OWNED_BY_A}.md`),
+      [
+        "---",
+        "kind: brain-retired",
+        `id: ret-${OWNED_BY_A}`,
+        `owner: ${OWNER_A}`,
+        "created_at: 2026-05-01T00:00:00Z",
+        "tags: []",
+        `topic: ${OWNED_BY_A}`,
+        "principle: retired private principle",
+        "provenance: observed",
+        "retired_at: 2026-05-03T00:00:00Z",
+        `retired_by: "[[pref-${SHARED}]]"`,
+        "retired_reason: superseded-by-context",
+        "_status: retired",
+        "_evidenced_by: []",
+        "---",
+        "",
+        "retired.",
+        "",
+      ].join("\n"),
+    );
+    setGate(GATE_MODE.fail);
+    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    for (let i = 0; i < 3; i++) {
+      log(
+        recent,
+        BRAIN_LOG_EVENT_KIND.applyEvidence,
+        {
+          path: `Brain/preferences/pref-${OWNED_BY_A}.md`,
+          preference: `[[pref-${OWNED_BY_A}]]`,
+          artifact: `[[Notes/${OWNED_BY_A}-applied-${i}]]`,
+          result: "applied",
+        },
+        OWNER_A,
+      );
+    }
+    log(
+      recent,
+      BRAIN_LOG_EVENT_KIND.applyEvidence,
+      {
+        path: `Brain/preferences/pref-${SHARED}.md`,
+        preference: `[[pref-${SHARED}]]`,
+        artifact: `[[Notes/${SHARED}-applied]]`,
+        result: "applied",
+      },
+      OWNER_B,
+    );
+  }
+
+  function digestResource(agentName: string): string {
+    return readResource({ vault, agentName, reach: TRANSPORT_REACH.local }, "osb://digest/latest")
+      .text;
+  }
+
+  test("at local reach under fail the tool's sections are the resource's", async () => {
+    seedDigestResourceFixture();
+
+    const toolMarkdown = String(
+      (await call({ view: "digest", format: "markdown" }, OWNER_B))["content"],
+    );
+    const resourceMarkdown = digestResource(OWNER_B);
+
+    // The sections whose rows and counts the unfiltered render filled from
+    // the other owner's events and records must match, character for
+    // character, what the resource hands the same caller.
+    for (const heading of ["Agent summary", "Connection health", "Top referenced"]) {
+      expect(digestSection(toolMarkdown, heading)).toBe(digestSection(resourceMarkdown, heading));
+    }
+    // Not vacuous: the caller's own activity and the shared record travel.
+    expect(digestSection(toolMarkdown, "Agent summary")).toContain(OWNER_B);
+    expect(digestSection(toolMarkdown, "Connection health")).toContain("Total nodes: 1");
+    expect(digestSection(toolMarkdown, "Top referenced")).toContain(`pref-${SHARED}`);
+    // The other owner's name and records are absent from the tool's answer.
+    expect(toolMarkdown).not.toContain(OWNER_A);
+    expect(toolMarkdown).not.toContain(OWNED_BY_A);
+  });
+
+  test("the scoped tool counts the caller's own events and none of the other owner's", async () => {
+    seedDigestResourceFixture();
+
+    const asB = JSON.parse(
+      String((await call({ view: "digest", format: "json" }, OWNER_B))["content"]),
+    );
+    expect(asB["agent_summary"]).toEqual([
+      {
+        agent: OWNER_B,
+        total_events: 1,
+        feedback_count: 0,
+        apply_evidence_count: 1,
+        note_count: 0,
+        confirmed_attributed: 0,
+        retired_attributed: 0,
+      },
+    ]);
+    // The shared preference is the only node left: the other owner's
+    // retired record moves no count either.
+    expect(asB["connection_health"]).toMatchObject({
+      total_nodes: 1,
+      linked_nodes: 1,
+      orphan_nodes: 0,
+    });
+
+    // The records' own owner still counts both sides - the scope withholds,
+    // it does not destroy: two preferences plus the retired record.
+    const asA = JSON.parse(
+      String((await call({ view: "digest", format: "json" }, OWNER_A))["content"]),
+    );
+    expect(asA["connection_health"]).toMatchObject({ total_nodes: 3 });
+    expect((asA["agent_summary"] as ReadonlyArray<{ agent: string }>).map((r) => r.agent)).toEqual([
+      OWNER_A,
+      OWNER_B,
+    ]);
+  });
+
+  test("an unscoped digest under fail stays byte-identical to the unfiltered render", async () => {
+    seedDigestResourceFixture();
+    const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    const toolMarkdown = String((await call({ view: "digest", until }, undefined))["content"]);
+    // Not vacuous: the unfiltered render really carries the other owner's rows.
+    expect(toolMarkdown).toContain(OWNED_BY_A);
+    // With no resolved identity nothing is narrowed, so the tool's render is
+    // the renderer's own - the pre-gate output, byte for byte.
+    expect(toolMarkdown).toBe(renderDigest(vault, { until: new Date(until) }).content);
+  });
 });
 
 // ----- the report snapshot --------------------------------------------------
