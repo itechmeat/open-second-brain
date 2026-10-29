@@ -27,6 +27,7 @@ import type {
   BenchSuiteRegistration,
 } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
+import { BENCH_RUNS_REL } from "../../../core/brain/path-constants.ts";
 import { CliError, fail, parse } from "../helpers.ts";
 
 const USAGE =
@@ -34,7 +35,9 @@ const USAGE =
   "[--recall-floor <n>] [--sample-seed <value>] [--sample-cap <n>] " +
   "[--resume <run-id>] [--runs-dir <dir>] [--json]";
 
-const DEFAULT_RUNS_DIR = join(".open-second-brain", "bench-runs");
+// Named in `path-constants.ts` beside the derived store it sits in, so
+// the gitignore guard seeded at brain init provably covers it too.
+const DEFAULT_RUNS_DIR = BENCH_RUNS_REL;
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
 
 /**
