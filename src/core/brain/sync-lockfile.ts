@@ -99,9 +99,10 @@ type LockIdentity = { readonly dev: bigint; readonly ino: bigint } | null;
 
 /**
  * The body this holder wrote into its lock file: the unique token that
- * decides ownership when the filesystem hands a freed inode straight back
- * to the next create. Device and inode alone cannot tell a reused identity
- * apart, so release reads the stamp back and compares prefixes.
+ * decides ownership when a POSIX filesystem hands a freed inode straight
+ * back to the next create. Device and inode alone cannot tell a reused
+ * identity apart, so release reads the stamp back and compares prefixes.
+ * Empty on Windows, where ownership stays the device-and-inode check.
  */
 type LockHolder = { readonly identity: LockIdentity; readonly token: string };
 
@@ -258,14 +259,19 @@ export function acquireLockSync(target: string): LockHandle {
   const identity = identityOf(fd);
 
   // Stamp pid, a unique holder token and the timestamp into the lock
-  // body. The token decides ownership at release (the doctor surface
-  // reads the rest when reporting stale locks). Failure to write is
-  // non-fatal for acquisition; the handle then carries no token and
-  // release falls back to the device-and-inode check alone.
+  // body. On POSIX the token decides ownership at release: a filesystem
+  // there can hand a freed inode straight back to the next holder's
+  // create, and only the stamp tells the files apart (the doctor
+  // surface reads the rest when reporting stale locks). Windows keeps
+  // the device-and-inode check alone: its delete-pending windows make
+  // a just-written body unreliable to read back, and its volumes
+  // allocate fresh identities for recreated files, where the reuse
+  // race has never been observed. A failed write leaves no token and
+  // release falls back to the same check.
   let stampBytes = 0;
-  let token: string | null = null;
+  let token: string | null =
+    process.platform === "win32" ? null : `${process.pid}\n${randomUUID()}`;
   try {
-    token = `${process.pid}\n${randomUUID()}`;
     const stamp = Buffer.from(`${token}\n${new Date().toISOString()}\n`, "utf8");
     stampBytes = writeSync(fd, stamp, 0, stamp.byteLength);
   } catch {
