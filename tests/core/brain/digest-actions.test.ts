@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
+import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
 
 // A forwarding mock over the dedup scan (the claim-provenance precedent):
 // inert unless this file's failing-scan test turns it on, so the mocks
@@ -204,5 +206,109 @@ describe("brain_digest actions surface", () => {
     expect(payload.actions.length).toBeGreaterThanOrEqual(1);
     expect(payload.actions[0]!.category).toBe("dedup");
     expect(payload.actions[0]!.impact).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The actions list is collected vault-wide, so it can name a preference
+ * every section beside it withholds under
+ * `integrity.owner_scope_delivery: fail`. These rows pin the same
+ * isolation the other digest sections already honour: another owner's
+ * stale page is absent from `actions` on every format, while an action
+ * whose target the caller may see still appears (no over-filtering),
+ * and a scope requested without the gate changes nothing.
+ */
+function setGate(mode: string | null): void {
+  const body = mode === null ? "" : `integrity:\n  owner_scope_delivery: ${mode}\n`;
+  writeFileSync(brainConfigPath(vault), `schema_version: 1\n${body}`);
+}
+
+describe("digest actions honor the caller's agent scope", () => {
+  const OURS = "our-stale-page";
+  const THEIRS = "their-stale-page";
+  /** Old enough to be past the stale-stable cap on any run date. */
+  const OLD = "2024-01-01T00:00:00Z";
+
+  function seedTwoOwnerStalePages(): void {
+    for (const [slug, owner] of [
+      [OURS, undefined],
+      [THEIRS, "agent-a"],
+    ] as const) {
+      writePref(slug, {
+        topic: slug,
+        principle: `principle for ${slug}`,
+        status: "unconfirmed",
+        created_at: OLD,
+        unconfirmed_until: "2024-06-01T00:00:00Z",
+        ...(owner !== undefined ? { owner } : {}),
+      });
+    }
+  }
+
+  test("under fail, another owner's stale page is absent from actions and the caller's own still appear", () => {
+    seedTwoOwnerStalePages();
+    setGate(GATE_MODE.fail);
+
+    const json = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-b",
+    });
+    const payload = JSON.parse(json.content) as {
+      actions: Array<{ id: string; category: string; title: string; target?: string }>;
+    };
+    expect(payload.actions.some((a) => a.target === `pref-${THEIRS}`)).toBe(false);
+    expect(json.content).not.toContain(THEIRS);
+    // No over-filtering: the action whose target the caller may see is
+    // still ranked, category and target intact.
+    expect(
+      payload.actions.some((a) => a.category === "lifecycle" && a.target === `pref-${OURS}`),
+    ).toBe(true);
+
+    // The markdown renderer draws from the same filtered rows.
+    const md = renderDigest(vault, {
+      format: "markdown",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-b",
+    });
+    expect(md.content).toContain("## Actions");
+    expect(md.content).toContain(`pref-${OURS}`);
+    expect(md.content).not.toContain(THEIRS);
+
+    // Its own owner still sees the maintenance suggestion.
+    const asOwner = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-a",
+    });
+    expect(asOwner.content).toContain(THEIRS);
+  });
+
+  test("a scope requested under off or warn changes no action", () => {
+    seedTwoOwnerStalePages();
+    const unscoped = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+    });
+    const baseline = JSON.parse(unscoped.content).actions;
+    // The fixture really does rank both pages, so the comparison below
+    // is not an agreement over an empty list.
+    expect(baseline.some((a: { target?: string }) => a.target === `pref-${THEIRS}`)).toBe(true);
+    expect(baseline.some((a: { target?: string }) => a.target === `pref-${OURS}`)).toBe(true);
+
+    for (const mode of [GATE_MODE.off, GATE_MODE.warn]) {
+      setGate(mode);
+      const scoped = renderDigest(vault, {
+        format: "json",
+        since: new Date(OLD),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      });
+      expect(JSON.parse(scoped.content).actions).toEqual(baseline);
+    }
   });
 });

@@ -394,6 +394,12 @@ function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView):
   const rendered = renderDigest(ctx.vault, {
     format: "markdown",
     ...(view.refs.filtersNothing ? {} : { readable: view.refs.visible }),
+    // Ownership is pushed into the render's SELECTION as well as its
+    // row filter, the way `readActive` does: `view.refs` already
+    // carries the rule on the filter side, and the digest's
+    // vault-wide sections (the maintenance actions) are scoped by the
+    // render itself rather than by which rows an id happens to name.
+    ...(view.ownerScope !== null ? { agentScope: view.ownerScope } : {}),
   });
   return {
     uri,

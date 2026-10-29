@@ -30,7 +30,11 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
-import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
+import {
+  BRAIN_CONFIDENCE,
+  BRAIN_LOG_EVENT_KIND,
+  BRAIN_PREFERENCE_STATUS,
+} from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
 import { pinHome, tempDirs } from "../helpers/temp-dir.ts";
@@ -192,4 +196,63 @@ test("the shared half of every resource still travels under the gate", () => {
 test("gate off leaves every resource unfiltered", () => {
   setGate(GATE_MODE.off);
   for (const { uri } of OWNER_BEARING_URIS) expect(read(uri)).toContain(MARKER);
+});
+
+/**
+ * The digest resource renders its maintenance actions from a vault-wide
+ * scan, so an owned page past the stale-stable cap can reach this
+ * surface through `actions` long after it stopped appearing in any
+ * windowed section. The scope is threaded into the render itself (the
+ * way `osb://preferences/active` does), so the row is judged like the
+ * sections beside it.
+ *
+ * The fixture separates the two halves: an ownerless, in-window
+ * preference keeps the digest non-empty (the markdown digest renders an
+ * Actions section only then, and the shared half must keep travelling),
+ * while the marked page is dated far enough back to be stale on any run
+ * date and confirmed, so the ONLY section that can name it is
+ * `## Actions`.
+ */
+test("osb://digest/latest: the actions section carries the ownership rule too", () => {
+  const now = new Date();
+  writePreference(vault, {
+    slug: "digest-window-active",
+    topic: "digest-window-active",
+    principle: "principle for digest-window-active",
+    created_at: now.toISOString(),
+    unconfirmed_until: new Date(now.getTime() + 7 * 86_400_000).toISOString(),
+    status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+    evidenced_by: ["[[sig-digest-window-active]]"],
+  });
+  writePreference(vault, {
+    slug: `${MARKER}-stale`,
+    topic: `${MARKER}-stale`,
+    principle: `principle for ${MARKER}-stale`,
+    created_at: "2024-01-01T00:00:00Z",
+    unconfirmed_until: "2024-01-08T00:00:00Z",
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+    evidenced_by: [`[[sig-2024-01-01-${MARKER}]]`],
+    confirmed_at: "2024-01-02T00:00:00Z",
+    applied_count: 1,
+    violated_count: 0,
+    last_evidence_at: "2024-01-02T00:00:00Z",
+    confidence: BRAIN_CONFIDENCE.high,
+    confidence_value: 0.8,
+    owner: OWNER_A,
+  });
+
+  setGate(GATE_MODE.off);
+  const unscoped = read("osb://digest/latest");
+  expect(unscoped).toContain("digest-window-active");
+  expect(unscoped).toContain(MARKER);
+
+  setGate(GATE_MODE.fail);
+  const scoped = read("osb://digest/latest");
+  // The shared half still travels, so the marker's absence is the
+  // ownership rule and not an empty digest.
+  expect(scoped).toContain("digest-window-active");
+  expect(scoped).not.toContain(MARKER);
+
+  // Its own owner still reads the maintenance suggestion.
+  expect(read("osb://digest/latest", OWNER_A)).toContain(MARKER);
 });

@@ -38,7 +38,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import { readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
+import { everyArtifactRefView, readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { logEntriesAtReach, logEntryAtReach } from "./log-events-at-reach.ts";
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
@@ -61,6 +61,7 @@ import {
   resolveOwnerScopeDelivery,
 } from "./preferences-collect.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
+import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
@@ -642,6 +643,19 @@ function collectDigestData(
   // the digest can say why its actions list came back thin.
   const collectErrors: MaintenanceCollectError[] = [];
 
+  // The actions list is collected vault-wide (lint demotions, dedup
+  // candidates, merged-link rewrites), so a row can name a preference
+  // every section beside it already withholds. The enforced ownership
+  // rule therefore joins the reach view for these rows alone -
+  // `gatedOwnerScopeView` is the same adapter `brain_doctor`'s
+  // `suggested_actions` and the operator summary's `top_actions` ask
+  // over the same collector output, so the three sinks cannot disagree
+  // about what "hidden" means. It hides nothing until
+  // `integrity.owner_scope_delivery` is `fail` with a scope, so an
+  // unscoped digest stays byte-identical; under `warn` it withholds
+  // nothing too, matching every section above.
+  const actionRefs = everyArtifactRefView(gatedOwnerScopeView(vault, agentScope), refs);
+
   return {
     new_unconfirmed,
     confirmed,
@@ -654,7 +668,7 @@ function collectDigestData(
     agent_summary,
     most_applied,
     connection_health: computeConnectionHealth(vault, inbound, preferences, refs),
-    actions: refs.keep(
+    actions: actionRefs.keep(
       collectMaintenanceActions(vault, { onError: (e) => collectErrors.push(e) }),
       (action) => [action.target],
     ),
