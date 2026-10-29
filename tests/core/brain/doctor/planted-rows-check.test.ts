@@ -31,6 +31,9 @@ import {
 } from "../../../../src/core/brain/doctor/planted-rows-check.ts";
 import { planPlantedRows } from "../../../../src/core/brain/planted-rows.ts";
 import { writeCaptureNote } from "../../../../src/core/brain/capture/capture-note.ts";
+import { intakeExtraction } from "../../../../src/core/brain/intake/extract-intake.ts";
+import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import { distillSource } from "../../../../src/core/brain/distill/distill-source.ts";
 import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../../../../src/core/brain/text/neutralize-markdown.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import type {
@@ -229,11 +232,14 @@ describe("plantedRowsCheck (the counting check)", () => {
       `summary of the source\n\n${sections}`,
     );
     expect(planPlantedRows(vault).planted).toEqual([]);
-    // Every provenance level is a writer-rendered heading spelling.
+    // Every provenance level is a writer-rendered heading spelling. The
+    // writer renders Premises only AFTER its own ## Sources citation
+    // (renderProvenanceSection emits Sources first), so the fixture carries
+    // the citation a real summary page always has.
     writePlainPage(
       "Brain/sources/s2.md",
       "kind: brain-source\nsource_path: notes/b.md",
-      "summary\n\n## Premises (inferred)\n\n- [[fact-two]]",
+      "summary\n\n## Sources\n\n- [[cap-2026-08-01-100000-ab12cd34]]\n\n## Premises (inferred)\n\n- [[fact-two]]",
     );
     expect(planPlantedRows(vault).planted).toEqual([]);
   });
@@ -269,7 +275,7 @@ describe("plantedRowsCheck (the counting check)", () => {
     writePlainPage(
       "Brain/sources/t.md",
       "kind: brain-source\nsource_path: data/t.csv",
-      `summary of the table\n\n${derivation}`,
+      `summary of the table\n\n## Sources\n\n- [[cap-2026-08-01-100000-ab12cd34]]\n\n${derivation}`,
     );
     expect(planPlantedRows(vault).planted).toEqual([]);
   });
@@ -283,6 +289,159 @@ describe("plantedRowsCheck (the counting check)", () => {
     );
     const warning = plantedWarning(vault)!;
     expect(warning.message).toContain("2 live structure row(s) across 1 Brain page(s)");
+  });
+
+  test("a quarantined entity page's writer sections are writer output, not planted", () => {
+    // The registry composes every quarantined entity page as the writer's
+    // `# <name>` H1 plus the provenance citation (`## Sources` with its
+    // `- [[source]]` bullet, renderProvenanceSection) - review H2: without
+    // the brain-entity writer rules a CLEAN untrusted ingest reported its
+    // own writer as planted, a permanent warning on any vault that ever
+    // ingested an untrusted source.
+    intakeExtraction(
+      vault,
+      { entities: [{ category: "person", name: "Alice Example" }], relations: [] },
+      {
+        agent: "claude",
+        now: NOW,
+        provenance: { level: "stated", sources: ["[[https://example.test/x]]"], premises: [] },
+      },
+    );
+    const plan = planPlantedRows(vault);
+    expect(plan.planted.find((p) => p.path.startsWith("Brain/entities/"))).toBeUndefined();
+  });
+
+  test("a planted name on an entity page is exactly that row beside the writer's sections", () => {
+    // The writer's H1 shape (`# ` on the first body line) and its citation
+    // sections are exempt; the NAME content is caller text, so a wikilink
+    // planted inside it counts - the heading row on the same line does not.
+    intakeExtraction(
+      vault,
+      {
+        entities: [{ category: "person", name: "Alice [[evil-target]] Example" }],
+        relations: [],
+      },
+      {
+        agent: "claude",
+        now: NOW,
+        provenance: { level: "stated", sources: ["[[https://example.test/x]]"], premises: [] },
+      },
+    );
+    const page = planPlantedRows(vault).planted.find((p) => p.path.startsWith("Brain/entities/"));
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["wikilink"]);
+    expect(page!.count).toBe(1);
+  });
+
+  test("a distillation page's writer sections are writer output, not planted", () => {
+    // distill-source.ts composes every distillation page from its own
+    // `## Claims`, `## Excerpt` and `## Sources` sections (review H2): a
+    // clean untrusted distillation reported 4 planted rows of the writer's
+    // own output.
+    distillSource(
+      vault,
+      {
+        sourcePath: "https://example.test/y",
+        claims: [{ text: "The sky is blue" }],
+        excerpt: "The sky is blue today",
+      },
+      { agent: "claude", now: NOW },
+    );
+    const plan = planPlantedRows(vault);
+    expect(plan.planted.find((p) => p.path.startsWith("Brain/distillations/"))).toBeUndefined();
+  });
+
+  test("a planted claim is exactly that row beside the writer's block citation", () => {
+    // The writer's claim-bullet citation `([[source#^block]])` ties to the
+    // page's own source_path frontmatter and is exempt; a wikilink planted
+    // in the caller's claim TEXT ties to nothing and counts.
+    distillSource(
+      vault,
+      {
+        sourcePath: "https://example.test/y",
+        claims: [{ text: "The [[planted]] claim", block: "abc" }],
+      },
+      { agent: "claude", now: NOW },
+    );
+    const page = planPlantedRows(vault).planted.find((p) =>
+      p.path.startsWith("Brain/distillations/"),
+    );
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["wikilink"]);
+    expect(page!.count).toBe(1);
+  });
+
+  test("a quoted writer heading in the prose is planted when the writer rendered no such section", () => {
+    // Review M1, reproduced end to end: the writer emits no ## Entities
+    // section when the extraction named no entities (ingest.ts renders the
+    // link sections only when non-empty), so a summary QUOTING the heading
+    // is its last occurrence and its planted bullets used to be masked.
+    const summary = [
+      "Some prose about the source.",
+      "",
+      "## Entities",
+      "",
+      "- [[evil-target]]",
+      "- [[another-planted]]",
+    ].join("\n");
+    const res = ingestSource(
+      vault,
+      {
+        sourcePath: "https://example.test/z",
+        summary,
+        extraction: { entities: [], relations: [] },
+      },
+      { agent: "claude", now: NOW },
+    );
+    const page = planPlantedRows(vault).planted.find((p) => p.path === res.summaryPath);
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["atx-heading", "wikilink"]);
+    expect(page!.count).toBe(3);
+  });
+
+  test("a quoted section reports while the writer's own section after the citation stays exempt", () => {
+    // The writer's sections all render after its ## Sources citation, so
+    // that heading is the writer's prose boundary: an occurrence before it
+    // is a caller quotation and counts, the writer's own occurrence after
+    // it stays exempt.
+    writePlainPage(
+      "Brain/sources/q.md",
+      "kind: brain-source\nsource_path: notes/a.md",
+      [
+        "prose",
+        "",
+        "## Entities",
+        "",
+        "- [[evil-target]]",
+        "",
+        "## Sources",
+        "",
+        "- [[cap-one]]",
+        "",
+        "## Entities",
+        "",
+        "- [[ent-real]]",
+      ].join("\n"),
+    );
+    const page = planPlantedRows(vault).planted.find((p) => p.path === "Brain/sources/q.md");
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["atx-heading", "wikilink"]);
+    expect(page!.count).toBe(2);
+  });
+
+  test("a quoted ### Rows heading outside the writer's derivation region is planted", () => {
+    // The ranged Rows headings are writer output only inside the writer's
+    // own region (after its ## Sources citation); the prefix match no
+    // longer exempts every occurrence anywhere in the body.
+    writePlainPage(
+      "Brain/sources/r.md",
+      "kind: brain-source\nsource_path: data/t.csv",
+      "prose\n\n### Rows 0-9\n\n[[planted]]\n\n## Sources\n\n- [[cap-one]]",
+    );
+    const page = planPlantedRows(vault).planted.find((p) => p.path === "Brain/sources/r.md");
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["atx-heading", "wikilink"]);
+    expect(page!.count).toBe(2);
   });
 
   test("a staged copy is reported when its published twin is unreadable to the caller", () => {

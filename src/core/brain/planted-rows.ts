@@ -42,19 +42,36 @@
  * and both would vanish from the report.
  *
  * The writers' own output is not planted, and the scan knows it. A
- * capture's trailing `## Guidance` section and a source summary's
- * citation and derivation sections (`## Sources`, `## Premises (level)`,
+ * capture's trailing `## Guidance` section, a source summary's citation
+ * and derivation sections (`## Sources`, `## Premises (level)`,
  * `## Entities`, `## Connections to existing notes`, `## Parts`,
- * `## Table`, `### Rows a-b`) are shapes THIS vault rendered on its lane
- * pages - without the exclusion a clean capture carrying guidance or a
- * clean ingest carrying its citations reports the vault's own writer as
+ * `## Table`, `### Rows a-b`), a quarantined entity page's writer H1 and
+ * provenance citation, and a distillation page's `## Claims`, `## Excerpt`
+ * and `## Sources` sections are shapes THIS vault rendered on its lane
+ * pages - without the exclusion a clean capture carrying guidance, a
+ * clean ingest carrying its citations, a clean untrusted intake carrying
+ * the entity H1 or a clean distillation reports the vault's own writer as
  * planted. The exclusion is a static list keyed by page kind and section
  * heading ({@link WRITER_AUTHORED_SECTIONS}), never a whole-page pass,
  * and the capture heading only counts as the writer's when the
- * `capture_guidance` frontmatter marker authorizes it. A caller
- * quotation of the same heading stays planted: caller text occupies only
- * the leading prose region of these pages, so for every heading the
- * writer renders once, the LAST occurrence in the body is the writer's.
+ * `capture_guidance` frontmatter marker authorizes it.
+ *
+ * Authorship follows what the writer actually rendered, not the heading
+ * text alone. The citation, link and derivation sections render only
+ * AFTER the writer's own `## Sources` heading - the writer's prose
+ * boundary, since caller text occupies only the leading prose region of
+ * these pages - so an occurrence before that boundary is a caller
+ * quotation and stays planted even when the writer rendered its own
+ * occurrence later, and a section the writer did not render at all is
+ * never exempt (a summary quoting `## Entities` over planted bullets
+ * while the extraction named no entities reports). A fenced `## Sources`
+ * line never bounds anything: the boundary is the last one the section
+ * readers render as a heading. The entity H1 exemption covers the
+ * writer's heading sigil only - the name content is caller text, so a
+ * wikilink planted inside the name counts. A distillation claim bullet's
+ * writer citation is exempt only where its target ties to the page's own
+ * `source_path` frontmatter; the claim TEXT around it is caller content
+ * and every other wikilink on the line stays planted.
  *
  * Read-only by contract: nothing here writes, and a page that cannot be
  * read between the walk and the body scan is skipped rather than thrown
@@ -70,8 +87,10 @@ import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 import { hasUntrustedSourceMarker } from "./trust/untrusted-provenance.ts";
 import { BRAIN_CAPTURE_KIND } from "./capture/capture-note.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
+import { BRAIN_DISTILLATION_KIND } from "./distill/claim.ts";
 import { BRAIN_ENTITY_KIND, BRAIN_ENTITY_STATUS } from "./entities/types.ts";
 import { PROVENANCE_LEVELS } from "./provenance/provenance.ts";
+import { fencedLineMask } from "./source-links.ts";
 import {
   MARKDOWN_STRUCTURE_KIND,
   detectMarkdownStructure,
@@ -165,6 +184,29 @@ interface WriterSectionRule {
    * occurrence is a caller quotation and stays planted.
    */
   readonly trailingOnly?: boolean;
+  /**
+   * The occurrence counts as the writer's only when it sits AFTER the
+   * writer's own `## Sources` citation heading - the writer's prose
+   * boundary. The citation, link and derivation sections render only
+   * after that heading (ingest.ts composes caller prose first, then the
+   * provenance and link sections), so an occurrence before the boundary
+   * is a caller quotation and stays planted EVEN when the writer rendered
+   * its own occurrence of the same heading later, and a section the
+   * writer did not render at all is never exempt. Absent from the body
+   * entirely, the `## Sources` heading bounds nothing and every
+   * after-boundary rule exempts nothing (fail closed toward reporting).
+   */
+  readonly afterBoundary?: boolean;
+  /**
+   * The `- ` bullet lines under the heading are the writer's ONLY where a
+   * live wikilink on them targets the page's own value of this frontmatter
+   * field (the writer's `([[source#^block]])` block citation, whose target
+   * is the cited source exactly or with a `#` block suffix). The claim
+   * TEXT around that citation is caller content: any other wikilink on the
+   * line stays planted, so a claim bullet is reported per wikilink rather
+   * than masked per line.
+   */
+  readonly bulletsTiedToSource?: string;
 }
 
 /**
@@ -184,11 +226,25 @@ interface WriterSectionRule {
  *     sections, and the html/table derivation sections
  *     (`## Parts` per extract-html.ts, `## Table` with one
  *     `### Rows a-b` heading per group per table-note.ts - the writer
- *     renders many, so every occurrence is its own).
+ *     renders many, so every occurrence in the writer's own region is its
+ *     own). Every section but `## Sources` renders after it, so all of
+ *     them answer to the writer's prose boundary.
+ *   - `brain-entity` composes every quarantined entity page as the
+ *     writer's `# <name>` H1 plus the provenance citation
+ *     (extract-intake.ts bodyOnCreate over renderProvenanceSection): the
+ *     H1's heading sigil is the writer's template, its provenance
+ *     sections are the citation sections. The NAME content is caller
+ *     text - the H1 exemption covers the heading row only, and a
+ *     wikilink planted inside the name is reported.
+ *   - `brain-distillation` composes every page from its own sections
+ *     (distill-source.ts): `## Claims` (whose bullets carry caller claim
+ *     text plus the writer's source-tied block citation), the optional
+ *     `## Excerpt` heading (its content is fenced, inert), and the
+ *     `## Sources` provenance citation.
  *
  * Keyed by KIND, not by lane membership: an untrusted-stamped page whose
- * kind renders no such sections gets no exclusion, and a brain-source
- * page keeps its exclusions whether or not it is also untrusted-stamped.
+ * kind renders no such sections gets no exclusion, and a lane page keeps
+ * its exclusions whether or not it is also untrusted-stamped.
  */
 const WRITER_AUTHORED_SECTIONS: ReadonlyMap<string, readonly WriterSectionRule[]> = new Map([
   [
@@ -209,12 +265,42 @@ const WRITER_AUTHORED_SECTIONS: ReadonlyMap<string, readonly WriterSectionRule[]
         heading: `## Premises (${level})`,
         bullets: true,
         trailingOnly: true,
+        afterBoundary: true,
       })),
-      { heading: "## Entities", bullets: true, trailingOnly: true },
-      { heading: "## Connections to existing notes", bullets: true, trailingOnly: true },
-      { heading: "## Parts", trailingOnly: true },
-      { heading: "## Table", trailingOnly: true },
-      { heading: "### Rows ", prefix: true },
+      { heading: "## Entities", bullets: true, trailingOnly: true, afterBoundary: true },
+      {
+        heading: "## Connections to existing notes",
+        bullets: true,
+        trailingOnly: true,
+        afterBoundary: true,
+      },
+      { heading: "## Parts", trailingOnly: true, afterBoundary: true },
+      { heading: "## Table", trailingOnly: true, afterBoundary: true },
+      { heading: "### Rows ", prefix: true, afterBoundary: true },
+    ],
+  ],
+  [
+    BRAIN_ENTITY_KIND,
+    [
+      { heading: "## Sources", bullets: true, trailingOnly: true },
+      ...PROVENANCE_LEVELS.map((level): WriterSectionRule => ({
+        heading: `## Premises (${level})`,
+        bullets: true,
+        trailingOnly: true,
+        afterBoundary: true,
+      })),
+    ],
+  ],
+  [
+    BRAIN_DISTILLATION_KIND,
+    [
+      // The writer's `## Claims` is the page's opening line; a claim text
+      // can never reproduce it (claims are single `- ` bullet lines), and
+      // an occurrence inside the fenced `## Excerpt` renders as no heading
+      // at all - so every exact occurrence is the writer's or inert.
+      { heading: "## Claims", bulletsTiedToSource: "source_path" },
+      { heading: "## Excerpt" },
+      { heading: "## Sources", bullets: true, trailingOnly: true },
     ],
   ],
 ]);
@@ -226,16 +312,52 @@ function frontmatterMarked(meta: FrontmatterMap, field: string): boolean {
 }
 
 /**
- * The writer-authored line indexes of `body` for the page's kind, with
- * each line's start offset, or `null` when the kind renders no writer
+ * The writer's prose boundary on citation-section pages: the LAST
+ * `## Sources` heading the section readers render as a heading. A fenced
+ * occurrence (a quoted document's fence carrying the heading) bounds
+ * nothing - it renders as no heading at all, so it must not move the
+ * writer region into the caller's prose.
+ */
+const WRITER_BOUNDARY_HEADING = "## Sources";
+
+/**
+ * True when `text` is the writer's H1 template shape on an entity page:
+ * the registry renders every entity body opening with `# <name>`.
+ */
+function isEntityH1(line: string): boolean {
+  return line.startsWith("# ");
+}
+
+/**
+ * Does the wikilink matched at `spanText` target the page's own source?
+ * The writer's block citation renders `[[source#^block]]`, so the target
+ * is the frontmatter source exactly or with a `#` block suffix; an alias
+ * pipe is decoration on the same target.
+ */
+function wikilinkTiesToSource(spanText: string, source: string): boolean {
+  const inner = spanText.slice(2, -2);
+  const target = inner.split("|")[0] ?? "";
+  const hash = target.indexOf("#");
+  return (hash === -1 ? target : target.slice(0, hash)) === source;
+}
+
+/**
+ * The writer-authored lines of `body` for the page's kind, with each
+ * line's start offset, or `null` when the kind renders no writer
  * sections. Heading comparisons are exact (CR-tolerant); a bullet mask
  * runs from the heading past blank lines and stops at the first line
- * that is neither blank nor a `- ` item.
+ * that is neither blank nor a `- ` item. `citationLines` names the `- `
+ * lines where a source-tied wikilink is the writer's own citation
+ * (masked per match, never per line - the claim text around the
+ * citation is caller content).
  */
-function writerAuthoredLines(
-  meta: FrontmatterMap,
-  body: string,
-): { masked: Set<number>; lineStarts: number[] } | null {
+interface WriterMask {
+  readonly masked: Set<number>;
+  readonly lineStarts: number[];
+  readonly citationLines: Set<number>;
+}
+
+function writerAuthoredLines(meta: FrontmatterMap, body: string): WriterMask | null {
   const kind = typeof meta["kind"] === "string" ? meta["kind"] : "";
   const rules = WRITER_AUTHORED_SECTIONS.get(kind);
   if (rules === undefined) return null;
@@ -246,7 +368,18 @@ function writerAuthoredLines(
     lineStarts.push(offset);
     offset += line.length + 1;
   }
+  // The heading mask the section readers run: a heading inside a fence
+  // renders as no heading, so a fenced occurrence neither bounds the
+  // writer region nor needs masking (its lines are inert to every family
+  // the section rules could otherwise over-mask).
+  const fenced = fencedLineMask(lines.map((line) => line.replace(/\r$/, "")));
+  const boundaryIndex = rules.some((rule) => rule.afterBoundary === true)
+    ? lines.findLastIndex(
+        (line, i) => !fenced[i] && line.replace(/\r$/, "") === WRITER_BOUNDARY_HEADING,
+      )
+    : -1;
   const masked = new Set<number>();
+  const citationLines = new Set<number>();
   for (const rule of rules) {
     if (rule.requiresMarker !== undefined && !frontmatterMarked(meta, rule.requiresMarker)) {
       continue;
@@ -260,6 +393,7 @@ function writerAuthoredLines(
     if (at.length === 0) continue;
     const occurrences = rule.trailingOnly === true ? [at[at.length - 1]!] : at;
     for (const i of occurrences) {
+      if (rule.afterBoundary === true && (boundaryIndex < 0 || i <= boundaryIndex)) continue;
       masked.add(i);
       if (rule.bullets !== true) continue;
       for (let j = i + 1; j < lines.length; j++) {
@@ -272,15 +406,33 @@ function writerAuthoredLines(
         break;
       }
     }
+    if (rule.bulletsTiedToSource === undefined) continue;
+    const source = meta[rule.bulletsTiedToSource];
+    if (typeof source !== "string" || source.length === 0) continue;
+    // The `- ` bullet lines of THIS section: from the heading until the
+    // next heading line. The claim text on them is caller content, so
+    // they are never masked wholesale - the match-level tie check in
+    // {@link excludeWriterAuthoredRows} keeps only the writer's citation.
+    const sectionStart = at[0]!;
+    for (let j = sectionStart + 1; j < lines.length; j++) {
+      const text = lines[j]!.replace(/\r$/, "");
+      if (text.startsWith("#")) break;
+      if (text.startsWith("- ")) citationLines.add(j);
+    }
   }
-  return { masked, lineStarts };
+  return { masked, lineStarts, citationLines };
 }
 
 /**
  * Drop the writer-authored rows from `matches`: a row whose span starts
  * on a writer-rendered line is this vault's own output, not planted
  * structure. `matches` arrive sorted by start offset, so one forward
- * line walk answers every row.
+ * line walk answers every row. Two per-match exemptions ride beside the
+ * line mask, for the shapes whose lines carry caller content too: an
+ * entity page's H1 line exempts the writer's heading sigil only (the
+ * name content is caller text), and a distillation claim bullet exempts
+ * the writer's source-tied citation only (the claim text around it is
+ * caller content).
  */
 function excludeWriterAuthoredRows(
   meta: FrontmatterMap,
@@ -289,12 +441,27 @@ function excludeWriterAuthoredRows(
 ): ReadonlyArray<MarkdownStructureMatch> {
   const mask = writerAuthoredLines(meta, body);
   if (mask === null) return matches;
-  const { masked, lineStarts } = mask;
+  const { masked, lineStarts, citationLines } = mask;
+  const kind = typeof meta["kind"] === "string" ? meta["kind"] : "";
+  const sourcePath =
+    typeof meta["source_path"] === "string" ? (meta["source_path"] as string) : undefined;
+  const entityH1 =
+    kind === BRAIN_ENTITY_KIND && isEntityH1((body.split("\n")[0] ?? "").replace(/\r$/, ""));
   const live: MarkdownStructureMatch[] = [];
   let line = 0;
   for (const match of matches) {
     while (line + 1 < lineStarts.length && lineStarts[line + 1]! <= match.start) line++;
-    if (!masked.has(line)) live.push(match);
+    if (masked.has(line)) continue;
+    if (entityH1 && line === 0 && match.kind === MARKDOWN_STRUCTURE_KIND.heading) continue;
+    if (
+      citationLines.has(line) &&
+      match.kind === MARKDOWN_STRUCTURE_KIND.wikilink &&
+      sourcePath !== undefined &&
+      wikilinkTiesToSource(body.slice(match.start, match.end), sourcePath)
+    ) {
+      continue;
+    }
+    live.push(match);
   }
   return live;
 }
