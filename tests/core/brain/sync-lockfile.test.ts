@@ -14,10 +14,12 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,6 +127,28 @@ describe("acquireLockSync", () => {
       second.release();
     }
     expect(existsSync(target + ".lock")).toBe(false);
+  });
+  test("release keeps a reused-identity lock that carries a foreign holder token", () => {
+    // A filesystem can hand a freed inode straight back to the next
+    // create, so the lock file that answers this holder's device and
+    // inode can be another holder's. Ownership is decided by the body's
+    // holder token as well: overwriting the body in place keeps the
+    // identity while replacing the holder, and the first release must
+    // read the foreign stamp, judge the name not its own, and leave the
+    // file in place.
+    const target = join(tmpRoot, "pref-reused.md");
+    const lockPath = target + ".lock";
+    const first = acquireLockSync(target);
+    const identity = statSync(lockPath, { bigint: true });
+    writeFileSync(lockPath, `${process.pid}\n${randomUUID()}\n`);
+    const reused = statSync(lockPath, { bigint: true });
+    expect(reused.dev).toBe(identity.dev);
+    expect(reused.ino).toBe(identity.ino);
+    first.release();
+    expect(existsSync(lockPath)).toBe(true);
+    expect(() => acquireLockSync(target)).toThrow(/lock busy/);
+    unlinkSync(lockPath);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
 

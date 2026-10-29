@@ -66,12 +66,14 @@ import {
   constants as fsConstants,
   fstatSync,
   lstatSync,
+  readFileSync,
   mkdirSync,
   openSync,
   readdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "./path-constants.ts";
@@ -91,23 +93,29 @@ const LOCK_SUFFIX = ".lock";
 
 /**
  * The file a holder created: device and inode as exact bigints. `null` when
- * the platform reports no inode (some network and FAT volumes answer 0),
- * where ownership cannot be told apart and release falls back to removing
- * the name.
+ * the platform reports no inode (some network and FAT volumes answer 0).
  */
 type LockIdentity = { readonly dev: bigint; readonly ino: bigint } | null;
 
+/**
+ * The body this holder wrote into its lock file: the unique token that
+ * decides ownership when the filesystem hands a freed inode straight back
+ * to the next create. Device and inode alone cannot tell a reused identity
+ * apart, so release reads the stamp back and compares prefixes.
+ */
+type LockHolder = { readonly identity: LockIdentity; readonly token: string };
+
 // Held locks and the file each holder created, tracked at module scope so the
 // exit hook can clean up.
-const heldLocks = new Map<string, LockIdentity>();
+const heldLocks = new Map<string, LockHolder>();
 let exitHookInstalled = false;
 
 function ensureExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const [lockPath, identity] of heldLocks) {
-      if (ownsLockName(lockPath, identity)) {
+    for (const [lockPath, holder] of heldLocks) {
+      if (ownsLockName(lockPath, holder.identity, holder.token)) {
         try {
           unlinkSync(lockPath);
         } catch {
@@ -131,13 +139,24 @@ function identityOf(fd: number): LockIdentity {
 
 /**
  * Whether `lockPath` still names the file this holder created. A missing name
- * is not owned (nothing to remove); an unknown identity is presumed owned, the
- * behaviour before ownership was tracked.
+ * is not owned (nothing to remove). The device and inode must match, and the
+ * body must still open with this holder's token: a filesystem that reuses a
+ * freed inode for the next holder's create answers the same identity for a
+ * file this holder no longer owns, and only the stamp tells them apart. On a
+ * volume without inodes the token alone decides.
  */
-function ownsLockName(lockPath: string, identity: LockIdentity): boolean {
+function ownsLockName(lockPath: string, identity: LockIdentity, token: string): boolean {
   try {
+    if (
+      !readFileSync(lockPath)
+        .subarray(0, Buffer.byteLength(token, "utf8"))
+        .equals(Buffer.from(token, "utf8"))
+    ) {
+      return false;
+    }
+    if (identity === null) return true;
     const st = lstatSync(lockPath, { bigint: true });
-    return identity === null || (st.dev === identity.dev && st.ino === identity.ino);
+    return st.dev === identity.dev && st.ino === identity.ino;
   } catch {
     return false;
   }
@@ -230,16 +249,20 @@ export function acquireLockSync(target: string): LockHandle {
 
   const identity = identityOf(fd);
 
-  // Stamp pid + timestamp into the lock body. The contents are
-  // purely diagnostic - the doctor surface reads them when reporting
-  // stale locks. Failure to write is non-fatal: the lock semantics
-  // come from the exclusive create, not from the body.
+  // Stamp pid, a unique holder token and the timestamp into the lock
+  // body. The token decides ownership at release (the doctor surface
+  // reads the rest when reporting stale locks). Failure to write is
+  // non-fatal for acquisition; the handle then carries no token and
+  // release falls back to the device-and-inode check alone.
   let stampBytes = 0;
+  let token: string | null = null;
   try {
-    const stamp = Buffer.from(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+    token = `${process.pid}\n${randomUUID()}`;
+    const stamp = Buffer.from(`${token}\n${new Date().toISOString()}\n`, "utf8");
     stampBytes = writeSync(fd, stamp, 0, stamp.byteLength);
   } catch {
-    // ignore; diagnostic-only payload
+    // ignore; the body cannot be trusted as an ownership marker
+    token = null;
   } finally {
     try {
       closeSync(fd);
@@ -248,7 +271,11 @@ export function acquireLockSync(target: string): LockHandle {
     }
   }
 
-  heldLocks.set(lockPath, identity);
+  const holder: LockHolder =
+    token !== null && stampBytes >= Buffer.byteLength(token, "utf8")
+      ? { identity, token }
+      : { identity, token: "" };
+  heldLocks.set(lockPath, holder);
   let released = false;
   return {
     path: lockPath,
@@ -257,10 +284,10 @@ export function acquireLockSync(target: string): LockHandle {
       released = true;
       // A newer handle in this process may have re-registered the path; its
       // registration is the one the exit sweep must still see.
-      if (heldLocks.get(lockPath) === identity) heldLocks.delete(lockPath);
+      if (heldLocks.get(lockPath) === holder) heldLocks.delete(lockPath);
       // The name no longer holds this holder's file: whoever holds it now
       // keeps it. Removing it would admit a second holder beside them.
-      if (!ownsLockName(lockPath, identity)) return;
+      if (!ownsLockName(lockPath, holder.identity, holder.token)) return;
       // Anything past our own stamp was appended by a waiter (see
       // `markWaiting`): someone is queued for this lock, so a re-acquire from
       // this process steps back first. Best-effort, like the stamp itself.
