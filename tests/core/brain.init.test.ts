@@ -307,9 +307,19 @@ describe("bootstrapBrain — Bases view definitions", () => {
 });
 
 describe("bootstrapBrain — gitignore guard (t_206562ae)", () => {
-  /** `git` in the vault; git is on PATH everywhere this suite runs. */
+  /**
+   * `git` in the vault; git is on PATH everywhere this suite runs. A
+   * fixture command that fails must fail the test it sets up: this helper
+   * used to drop the exit code, so a no-op `git commit` left
+   * `porcelain()` asserting an empty repository and the guard was
+   * "proven" by a measurement that never happened. Same posture as the
+   * degradation suite's helper below.
+   */
   function git(...args: string[]): void {
-    Bun.spawnSync(["git", ...args], { cwd: vault, stdout: "ignore", stderr: "ignore" });
+    const run = Bun.spawnSync(["git", ...args], { cwd: vault, stdout: "pipe", stderr: "pipe" });
+    if (run.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${run.stderr.toString()}`);
+    }
   }
 
   function porcelain(): string {
@@ -321,6 +331,15 @@ describe("bootstrapBrain — gitignore guard (t_206562ae)", () => {
       .stdout.toString()
       .replace(/\r\n/g, "\n");
   }
+
+  test("the git helper refuses a failing git command instead of passing silently", () => {
+    // Before `git init` the vault is not a repository, so this invocation
+    // exits non-zero. The helper must surface that: a fixture whose setup
+    // commands silently no-op would leave `porcelain()` asserting an empty
+    // repository - "no dirt" because nothing was ever committed - and the
+    // guard would be proven by a measurement that never happened.
+    expect(() => git("status", "--porcelain")).toThrow(/git status --porcelain failed/);
+  });
 
   test("fresh init seeds the guard block beside the identity stamp", () => {
     const result = bootstrapBrain(vault, { configPath });
