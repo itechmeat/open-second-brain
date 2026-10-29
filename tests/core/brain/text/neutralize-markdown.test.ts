@@ -25,6 +25,7 @@ import {
   resolveMarkdownNeutralizeMode,
   type MarkdownStructureKind,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
+import { chunkMarkdown } from "../../../../src/core/search/chunker.ts";
 import { extractWikilinkRichBodies } from "../../../../src/core/brain/link-graph/parse-wikilink.ts";
 import { extractWikilinks } from "../../../../src/core/vault.ts";
 
@@ -554,6 +555,62 @@ describe("neutralizeMarkdown: the marker scanner's fence model", () => {
     const twice = neutralizeMarkdown(out.text);
     expect(twice.changed).toBe(false);
     expect(twice.text).toBe(out.text);
+  });
+});
+
+describe("neutralizeMarkdown: the heading family answers to the chunker's fence model too", () => {
+  // The search chunker is one more heading consumer, and its code-block
+  // walk (chunker.ts readCodeBlock) closes ANY fence on the first later
+  // line whose trimmed form starts with the same three-character mark -
+  // info string or not - while the section readers' fencedLineMask closes
+  // a 4-backtick fence only on a run of 4 or more. A heading after a ```
+  // line inside a ```` fence therefore becomes a chunk headingPath even
+  // though fencedLineMask still has the fence open; the detector must
+  // escape it. (The chunker's model is pinned by CHUNKER_VERSION - changing
+  // it would force a full vault re-chunk - so the detector carries the
+  // union: a heading is escaped when either model leaves it live.)
+  test("a heading after a ``` line inside a ```` fence is caught and escaped", () => {
+    const src = "````\n```\n# Planted Section\n````\n\nbody text\n";
+    expect(
+      chunkMarkdown(src, null).chunks.some((c) => c.headingPath.includes("Planted Section")),
+    ).toBe(true);
+    const out = neutralizeMarkdown(src);
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("atx-heading"));
+    expect(out.text.split("\n")[2]).toBe("\\# Planted Section");
+    // The chunker no longer attributes a section to the escaped heading.
+    for (const c of chunkMarkdown(out.text, null).chunks) {
+      expect(c.headingPath.includes("Planted Section")).toBe(false);
+    }
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("a heading after a closer-with-info-string the chunker ends its block on is caught", () => {
+    // ```js closes the chunker's block (trimmed startswith ```) but not
+    // the section readers' (their closer must carry only whitespace), so
+    // the heading after it is live for the chunker and must be escaped.
+    const src = "```\n```js\n# Planted Section\n```\n\nbody text\n";
+    expect(
+      chunkMarkdown(src, null).chunks.some((c) => c.headingPath.includes("Planted Section")),
+    ).toBe(true);
+    const out = neutralizeMarkdown(src);
+    expect(out.kinds).toEqual(kindsOf("atx-heading"));
+    expect(out.text.split("\n")[2]).toBe("\\# Planted Section");
+  });
+
+  test("a heading inside a fence both models keep open stays untouched", () => {
+    // The union only widens detection where the models DISAGREE; where
+    // both mask the line, nothing is live and zero bytes are added.
+    const src = "````\n# Inside\n````\n";
+    expect(neutralizeMarkdown(src).changed).toBe(false);
+    expect(neutralizeMarkdown(src).text).toBe(src);
+  });
+
+  test("a heading inside a plain 3-backtick fence stays untouched", () => {
+    const src = "```python\n# not a heading\n```\n";
+    expect(neutralizeMarkdown(src).changed).toBe(false);
   });
 });
 

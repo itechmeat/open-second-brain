@@ -35,8 +35,10 @@
  *     grammars disagree about what a fence even is: the marker scanner
  *     (`inline.ts`) knows exactly-3-backtick lines and nothing else, the
  *     section readers (`source-links.ts` `fencedLineMask`, shared with the
- *     block resolver) know 3-or-more backtick or tilde runs, and the link
- *     readers share {@link codeRegions}. Masking an `@osb` row with the
+ *     block resolver) know 3-or-more backtick or tilde runs, the search
+ *     chunker (`chunker.ts` `readCodeBlock`) closes any fence on the first
+ *     line starting with the same three-character mark, and the link
+ *     readers share {@link maskCodeRegions}. Masking an `@osb` row with the
  *     one model and scanning it with the other is how a planted marker
  *     inside a tilde fence would slip through: detection answers
  *     "would MY consumer parse this" for each family separately.
@@ -235,6 +237,42 @@ function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch |
 }
 
 /**
+ * The search chunker's code-block walk (`chunker.ts` `FENCE_RE` +
+ * `readCodeBlock`), mirrored line for line: a block opens on a line whose
+ * RAW form starts with three backticks or tildes (the chunker tests the
+ * untrimmed line) and closes on the first later line whose TRIMMED form
+ * starts with the same three-character mark - info string or not - and an
+ * unclosed block runs to end of text. This is deliberately NOT
+ * {@link fencedLineMask}'s rule: the chunker is pinned by
+ * `CHUNKER_VERSION` (changing how it reads a page forces a full vault
+ * re-chunk), so the detector carries the chunker's shape as its own
+ * second heading mask rather than the chunker carrying the section
+ * readers'.
+ */
+const CHUNKER_FENCE_OPEN_RE = /^(?:```|~~~)/;
+
+function chunkerCodeBlockMask(lines: ReadonlyArray<Line>): boolean[] {
+  const mask = Array.from({ length: lines.length }, () => false);
+  let i = 0;
+  while (i < lines.length) {
+    if (!CHUNKER_FENCE_OPEN_RE.test(lines[i]!.text)) {
+      i++;
+      continue;
+    }
+    const mark = lines[i]!.text.trim().startsWith("```") ? "```" : "~~~";
+    mask[i] = true;
+    i++;
+    while (i < lines.length) {
+      mask[i] = true;
+      const closed = lines[i]!.text.trim().startsWith(mark);
+      i++;
+      if (closed) break;
+    }
+  }
+  return mask;
+}
+
+/**
  * Every planted structure row in `text`, left to right. Each family is
  * masked by the fence model its own readers run, because "is this row
  * inert?" has one answer per consumer grammar and they do not agree:
@@ -243,10 +281,18 @@ function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch |
  *     (`inline.ts`): its exactly-3-backtick boundary walk is the only
  *     fencing that exists there, so a planted marker inside a tilde fence
  *     or a 4-backtick fence is live and gets reported;
- *   - the atx-heading family answers to the section readers
- *     (`source-links.ts` `fencedLineMask`, shared with the block
- *     resolver): 3-or-more backtick or tilde fences, and an unterminated
- *     fence fences nothing;
+ *   - the atx-heading family answers to TWO fence grammars: the section
+ *     readers (`source-links.ts` `fencedLineMask`, shared with the block
+ *     resolver; a 3-or-more backtick or tilde fence closes only on a run
+ *     at least as long carrying nothing but whitespace, and an
+ *     unterminated fence fences nothing) and the search chunker
+ *     (`chunker.ts` `readCodeBlock`, which closes ANY fence on the first
+ *     later line whose trimmed form starts with the same three-character
+ *     mark, info string or not). A heading is escaped when EITHER grammar
+ *     leaves it live - the chunker's shorter-close rule exposes a heading
+ *     after a ``` line inside a ```` fence, which masking with
+ *     `fencedLineMask` alone left unescaped and attributable as a chunk
+ *     `headingPath`;
  *   - the wikilink family answers to the link readers (`vault.ts`
  *     `extractWikilinks`, page-lint) and runs the readers' own recipe:
  *     code regions (fences and inline spans) are masked out of the scan
@@ -283,9 +329,14 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
     matches.push({ kind: "wikilink", start, end });
   }
   const headingMasked = fencedLineMask(lines.map((line) => line.text));
+  const chunkerMasked = chunkerCodeBlockMask(lines);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    if (!headingMasked[i]) {
+    // The heading escapes unless BOTH fence grammars mask the line: the
+    // family's consumers disagree about where a fence ends (see the
+    // family bullet above), and a line either consumer treats as
+    // fence-open but the other does not is live for the latter.
+    if (!headingMasked[i] || !chunkerMasked[i]) {
       const heading = ATX_HEADING_RE.exec(line.text);
       if (heading !== null) {
         const runStart = line.start + heading[0].indexOf("#");
