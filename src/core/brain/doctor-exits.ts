@@ -158,6 +158,19 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "reviewed",
   },
   {
+    // The planted-structure-rows audit (t_c2ac4fc8). The rows are
+    // third-party text already in the vault; un-planting them means
+    // rewriting content nobody here authored, which the audit refuses to
+    // do and no single command can do for an operator.
+    code: "planted-structure-rows",
+    reason:
+      "the rows are third-party text already written into the vault, and un-planting them means " +
+      "rewriting or re-capturing content nobody here authored; the audit is read-only by " +
+      "contract, and the enforce-mode gate prevents the next write rather than repairing the " +
+      "last one, so the exit is the operator's decision to re-capture specific pages or to run " +
+      "a later repair pass",
+  },
+  {
     code: "stale-lock",
     reason:
       "the lock primitive is a single-attempt exclusive create, so no timeout distinguishes a " +
