@@ -18,11 +18,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -286,6 +288,60 @@ describe("ensureVaultGitignoreEntries", () => {
       const result = ensureVaultGitignoreEntries(vault);
       expect(result.status).toBe("skipped");
       expect(readFileSync(gitignorePath(), "utf8")).toBe(harmless);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked .gitignore is a conflict: the link is kept, the target untouched", () => {
+    // An operator who manages the vault .gitignore as a link into their
+    // dotfiles loses the link silently if the seeder writes: the atomic
+    // write renames a regular file over the LINK path, and init would
+    // report a clean `updated`. The seeder must refuse like every other
+    // writer in this tree, naming the link target, and the doctor row
+    // then reports the still-unprotected store.
+    vault = freshVault();
+    try {
+      const target = join(vault, "dotfiles.gitignore");
+      const user = "# my patterns\n";
+      writeFileSync(target, user, "utf8");
+      symlinkSync("dotfiles.gitignore", gitignorePath());
+      let result!: ReturnType<typeof ensureVaultGitignoreEntries>;
+      const { stderr } = captureStderr(() => {
+        result = ensureVaultGitignoreEntries(vault);
+      });
+      expect(result.status).toBe("conflict");
+      expect(result.detail).toContain("dotfiles.gitignore");
+      expect(result.detail.length).toBeGreaterThan(0);
+      // The link is still a link, and the target holds exactly the
+      // user's bytes - nothing was written anywhere.
+      expect(lstatSync(gitignorePath()).isSymbolicLink()).toBe(true);
+      expect(readFileSync(target, "utf8")).toBe(user);
+      expect(stderr).toMatch(/warning:/);
+      expect(stderr).toContain("derived-brain-state");
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("a dangling .gitignore link is a conflict too, never replaced by a created file", () => {
+    // existsSync is false through a dangling link, which used to route
+    // the seeder into the created branch - renaming a regular file over
+    // the link. The refusal must see the link itself, so the same
+    // conflict applies and the (broken, but the operator's) link stays.
+    vault = freshVault();
+    try {
+      symlinkSync("gone-target.gitignore", gitignorePath());
+      let result!: ReturnType<typeof ensureVaultGitignoreEntries>;
+      const { stderr } = captureStderr(() => {
+        result = ensureVaultGitignoreEntries(vault);
+      });
+      expect(result.status).toBe("conflict");
+      expect(result.detail).toContain("gone-target.gitignore");
+      expect(lstatSync(gitignorePath()).isSymbolicLink()).toBe(true);
+      expect(existsSync(gitignorePath())).toBe(false);
+      expect(existsSync(join(vault, "gone-target.gitignore"))).toBe(false);
+      expect(stderr).toMatch(/warning:/);
     } finally {
       rmSync(vault, { recursive: true, force: true });
     }

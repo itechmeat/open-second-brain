@@ -38,6 +38,12 @@
  *     and the doctor's git tracked-state row reports the still-unprotected
  *     state. Surgery on a block a human or another tool mangled is not a
  *     decision for a seeder to make.
+ *   - A `.gitignore` that is itself a symbolic link - live or dangling -
+ *     is the same named conflict: every write this seeder makes is an
+ *     atomic rename over the path, which would silently replace the
+ *     operator's link with a regular file. The refusal names the link
+ *     target, writes nothing, and the doctor row reports the
+ *     still-unprotected store.
  *   - CRLF files keep their line endings, inside the block too (the
  *     managed-block editor detects and restores them).
  *   - No git subprocess is ever spawned: git is asked only by the
@@ -45,7 +51,7 @@
  *     happened on disk.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -98,7 +104,7 @@ export type GitignoreGuardStatus =
   | "created" // the file did not exist and was written with only the block
   | "updated" // an existing file gained the block (or the block gained entries)
   | "skipped" // every entry already present as an exact line; no bytes moved
-  | "conflict"; // malformed markers, or a later line negates the entry; nothing written, warning emitted
+  | "conflict"; // malformed markers, a later line negates the entry, or the file is a symlink; nothing written, warning emitted
 
 export interface GitignoreGuardResult {
   readonly status: GitignoreGuardStatus;
@@ -158,6 +164,25 @@ function negationAfterEntry(lines: ReadonlyArray<string>): string | null {
  */
 export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult {
   const file = join(vault, GITIGNORE_GUARD_FILE);
+
+  // A symlinked .gitignore is refused, never written through or over:
+  // every write below lands an atomic rename on `file`, and rename(2)
+  // swaps the LINK itself for a regular file - an operator who manages
+  // the vault .gitignore as a link into their dotfiles (or a shared
+  // file) would lose the link with a clean `updated` (or, through the
+  // created branch, a dangling link with `created`) reported as if
+  // nothing happened. lstat does not follow the link, so it sees the
+  // link itself in both the live and the dangling case, before either
+  // branch; the doctor's git tracked-state row then reports the still-
+  // unprotected store, the same as every other conflict.
+  let linkTarget: string | null = null;
+  try {
+    if (lstatSync(file).isSymbolicLink()) linkTarget = readlinkSync(file);
+  } catch {
+    // No path at all (ENOENT and friends): the created branch below
+    // owns that case. A stat here is not a read of protected bytes.
+  }
+  if (linkTarget !== null) return symlinkConflict(linkTarget, file);
 
   if (!existsSync(file)) {
     atomicWriteFileSync(file, blockBody(GITIGNORE_GUARD_ENTRIES));
@@ -242,6 +267,25 @@ function conflict(detail: string, file: string): GitignoreGuardResult {
     `warning: the ${GITIGNORE_GUARD_BLOCK_ID} .gitignore guard is negated ` +
       `(derived brain state stays visible to git): ${file}: ${detail}` +
       "(git last-match-wins: the derived store stays visible to git)\n",
+  );
+  return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
+}
+
+/**
+ * Report a symlinked `.gitignore`: warn on stderr, write nothing. Same
+ * conflict convention as {@link conflict} - `status: "conflict"` with a
+ * detail naming the link target - because the store stays unprotected
+ * either way; only the reason differs. The warning mirrors the
+ * malformed-marker wording ("could not seed"), since seeding is exactly
+ * what did not happen.
+ */
+function symlinkConflict(target: string, file: string): GitignoreGuardResult {
+  const detail =
+    `the file is a symbolic link to ${target} - seeding would replace the link ` +
+    "with a regular file, so nothing was written";
+  process.stderr.write(
+    `warning: could not seed the ${GITIGNORE_GUARD_BLOCK_ID} .gitignore block ` +
+      `(derived brain state stays visible to git): ${file}: ${detail}\n`,
   );
   return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
 }
