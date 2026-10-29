@@ -224,10 +224,16 @@ async function toolBrainDoctor(
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
     // because nothing here downgrades the `ok` flag - actions are
-    // suggestions, not invariant violations.
+    // suggestions, not invariant violations. The view's predicate is
+    // threaded INTO the collector, so hidden candidates are dropped
+    // before the scorer caps: a hidden top-ranked action takes no slot
+    // a visible one could fill.
     suggested_actions: view
       .keep(
-        collectMaintenanceActions(ctx.vault, { onError: (e) => collectErrors.push(e) }),
+        collectMaintenanceActions(ctx.vault, {
+          onError: (e) => collectErrors.push(e),
+          visible: view.visible,
+        }),
         (a) => [a.target],
       )
       .map((a) => ({

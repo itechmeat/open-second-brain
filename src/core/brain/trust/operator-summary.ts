@@ -121,6 +121,16 @@ export interface BuildOperatorSummaryOptions {
    */
   readonly keepAction?: (action: ActionItem) => boolean;
   /**
+   * Whether the caller may see an artifact reference - a page id, a
+   * vault-relative path, or a wikilink-spelled one. Threaded into the
+   * maintenance collector so it applies to the candidate inputs BEFORE
+   * the scorer caps: a hidden top-ranked action takes no slot a visible
+   * one could fill, and a dedup count excludes hidden secondaries.
+   * Omitted, every candidate is ranked. `keepAction` stays as the
+   * per-row filter beside it.
+   */
+  readonly visibleRef?: (ref: string | null | undefined) => boolean;
+  /**
    * Whether the caller may see a verification-delta entry. The entries
    * and their summary counts - and the trust verdict over them - are
    * taken over the entries it keeps. Omitted, every entry counts.
@@ -157,6 +167,7 @@ export function buildOperatorSummary(
     opts.keepAction,
     collectErrors,
     opts.readable !== undefined,
+    opts.visibleRef,
   );
 
   const trust = computeTrustVerdict({
@@ -349,6 +360,7 @@ function safeTopActions(
   keepAction: BuildOperatorSummaryOptions["keepAction"],
   collectErrors: { scan: MaintenanceCollectSignal; message: string }[],
   restricted: boolean,
+  visibleRef?: BuildOperatorSummaryOptions["visibleRef"],
 ): ReadonlyArray<ActionItem> {
   try {
     const all = collectMaintenanceActions(vault, {
@@ -358,6 +370,11 @@ function safeTopActions(
         const shown = restricted ? closedCollectError(e) : e;
         collectErrors.push({ scan: shown.signal, message: shown.message });
       },
+      // Candidate-level visibility, before the scorer caps: the same
+      // predicate brain_doctor's suggested_actions and the digest's
+      // actions ask, so the sinks cannot disagree about what a scoped
+      // caller is shown.
+      ...(visibleRef !== undefined ? { visible: visibleRef } : {}),
     });
     const kept = keepAction === undefined ? all : all.filter(keepAction);
     return Object.freeze(kept.slice(0, Math.max(0, topN)));

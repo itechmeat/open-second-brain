@@ -656,10 +656,13 @@ function collectDigestData(
   // `gatedOwnerScopeView` is the same adapter `brain_doctor`'s
   // `suggested_actions` and the operator summary's `top_actions` ask
   // over the same collector output, so the sinks cannot disagree
-  // about what "hidden" means. It hides nothing until
-  // `integrity.owner_scope_delivery` is `fail` with a scope, so an
-  // unscoped digest stays byte-identical; under `warn` it withholds
-  // nothing too, matching every section above.
+  // about what "hidden" means. The composed predicate is threaded INTO
+  // the collector, so it applies to the candidate inputs before the
+  // scorer caps: hidden top-ranked rows take no slot a visible one
+  // could fill, and a dedup count excludes hidden secondaries. It
+  // hides nothing until `integrity.owner_scope_delivery` is `fail`
+  // with a scope, so an unscoped digest stays byte-identical; under
+  // `warn` it withholds nothing too, matching every section above.
   return {
     new_unconfirmed,
     confirmed,
@@ -673,7 +676,10 @@ function collectDigestData(
     most_applied,
     connection_health: computeConnectionHealth(vault, inbound, preferences, refs),
     actions: scopedRefs.keep(
-      collectMaintenanceActions(vault, { onError: (e) => collectErrors.push(e) }),
+      collectMaintenanceActions(vault, {
+        onError: (e) => collectErrors.push(e),
+        visible: scopedRefs.visible,
+      }),
       (action) => [action.target],
     ),
     collect_errors: collectErrors,

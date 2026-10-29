@@ -570,6 +570,12 @@ async function toolBrainOperatorSummary(
       : {
           keepIssue: (issue: DoctorIssueNaming) => view.row(...doctorIssueRefs(ctx.vault, issue)),
           keepAction: (action: ActionItem) => view.row(action.target),
+          // Candidate-level visibility for the maintenance collector:
+          // applied before the scorer caps, so a hidden top-ranked
+          // action takes no slot a visible one could fill - the same
+          // question brain_doctor's suggested_actions and the digest's
+          // actions ask over the same collector output.
+          visibleRef: view.visible,
           keepVerification: (entry: VerificationDeltaEntry) =>
             view.row(...recordRefs(entry.id), entry.path),
         }),

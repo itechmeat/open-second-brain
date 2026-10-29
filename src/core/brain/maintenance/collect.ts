@@ -57,6 +57,22 @@ export interface CollectMaintenanceActionsOptions {
    * scan refused.
    */
   readonly onError?: (error: MaintenanceCollectError) => void;
+  /**
+   * Whether the caller may see an artifact reference - a page id, a
+   * vault-relative path, or a wikilink-spelled one; the same grammar
+   * `ArtifactRefView.visible` answers. Applied to the CANDIDATE INPUTS
+   * before scoring and capping: a hidden canonical drops its whole dedup
+   * row, a hidden duplicate stops counting toward a visible canonical's
+   * title, a hidden demotion id and a rewrite naming a hidden page take
+   * no ranked slot. Applied here rather than by the sinks after the call,
+   * because the scorer caps at `topN` - post-hoc filtering let hidden
+   * top-ranked candidates consume the cap and left a scoped caller with
+   * fewer actions (or none) while visible lower-ranked ones existed, a
+   * shortfall that itself hinted at withheld rows. Omitted, every
+   * candidate is ranked and the output is byte-identical to the plain
+   * call.
+   */
+  readonly visible?: (ref: string | null | undefined) => boolean;
 }
 
 /**
@@ -87,6 +103,9 @@ export function collectMaintenanceActions(
   opts: CollectMaintenanceActionsOptions = {},
 ): ReadonlyArray<ActionItem> {
   const onError = opts.onError ?? (() => {});
+  // An omitted predicate sees everything: the fallback keeps an
+  // unscoped call's output byte-identical to the pre-predicate shape.
+  const visible = opts.visible ?? (() => true);
   let dedupCandidates: Array<{ canonicalId: string; secondaryCount: number }> = [];
   let staleByLifecycle: Array<{ id: string; ageDays: number }> = [];
   let brokenLinks: Array<{ path: string; from: string }> = [];
@@ -94,18 +113,31 @@ export function collectMaintenanceActions(
 
   const dedup = collectSignal("dedup", onError, () => findDuplicateCandidates(vault));
   if (dedup !== undefined) {
-    dedupCandidates = dedup.candidates.map((c) => ({
-      canonicalId: c.canonical.id,
-      secondaryCount: c.secondaries.length,
-    }));
+    dedupCandidates = dedup.candidates
+      // A hidden canonical drops the whole row: its id is the row's
+      // title and target, and re-pointing the merge at a visible
+      // duplicate would invent a recommendation the scorer never made.
+      .filter((c) => visible(c.canonical.id))
+      .map((c) => ({
+        canonicalId: c.canonical.id,
+        // The count is the leak beside a visible canonical: a duplicate
+        // the caller may not see contributes nothing to the title.
+        secondaryCount: c.secondaries.filter((s) => visible(s.id)).length,
+      }));
   }
   const lint = collectSignal("lint", onError, () => lintConsolidate(vault, { apply: false }));
   if (lint !== undefined) {
-    staleByLifecycle = lint.demotions.map((d) => ({
-      id: d.id,
-      ageDays: d.ageDays,
-    }));
-    brokenLinks = lint.fixes.map((f) => ({ path: f.path, from: f.from }));
+    staleByLifecycle = lint.demotions
+      .filter((d) => visible(d.id))
+      .map((d) => ({
+        id: d.id,
+        ageDays: d.ageDays,
+      }));
+    brokenLinks = lint.fixes
+      // A rewrite row names the file it edits and counts one link per
+      // merged source: a hidden page in either position leaks through.
+      .filter((f) => visible(f.path) && visible(f.from))
+      .map((f) => ({ path: f.path, from: f.from }));
   }
   const footprint = collectSignal("token-footprint", onError, () => computeTokenFootprint(vault));
   if (footprint !== undefined) {

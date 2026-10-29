@@ -225,6 +225,11 @@ function setGate(mode: string | null): void {
   writeFileSync(brainConfigPath(vault), `schema_version: 1\n${body}`);
 }
 
+/** The digest JSON payload's ranked `actions` array. */
+function actionsOf(content: string): ReadonlyArray<{ target?: string }> {
+  return (JSON.parse(content) as { actions: ReadonlyArray<{ target?: string }> }).actions;
+}
+
 describe("digest actions honor the caller's agent scope", () => {
   const OURS = "our-stale-page";
   const THEIRS = "their-stale-page";
@@ -312,6 +317,128 @@ describe("digest actions honor the caller's agent scope", () => {
       });
       expect(JSON.parse(scoped.content).actions).toEqual(baseline);
     }
+  });
+});
+
+/**
+ * The digest passes its composed visibility view INTO the maintenance
+ * collector, so the predicate is applied to the candidate inputs before
+ * scoring and capping. Before, the collector capped at the default ten
+ * and the scope filtered afterwards: another owner's top-ranked rows
+ * took slots and were dropped, leaving a scoped caller with fewer than
+ * ten actions (or none) while visible lower-ranked ones existed - and a
+ * shortfall that itself hinted at withheld rows.
+ */
+describe("digest actions are visibility-filtered before they are capped", () => {
+  /** Old enough to make impact strictly larger than the OURS pages'. */
+  const ANCIENT = "2020-01-01T00:00:00Z";
+  const OLDER = "2024-01-01T00:00:00Z";
+
+  function seedRankedStalePages(): void {
+    for (let i = 0; i < 12; i += 1) {
+      writePref(`theirs-${i}`, {
+        topic: `theirs-${i}`,
+        principle: `principle theirs ${i}`,
+        created_at: ANCIENT,
+        owner: "agent-a",
+      });
+    }
+    for (let i = 0; i < 10; i += 1) {
+      writePref(`ours-${i}`, {
+        topic: `ours-${i}`,
+        principle: `principle ours ${i}`,
+        created_at: OLDER,
+      });
+    }
+  }
+
+  test("a scoped caller sees exactly topN rows, all visible, when hidden rows outrank them", () => {
+    seedRankedStalePages();
+    setGate(GATE_MODE.fail);
+
+    const scoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      }).content,
+    );
+    expect(scoped).toHaveLength(10);
+    for (const action of scoped) expect(action.target).not.toContain("theirs");
+
+    // Unscoped, the hidden rows still rank exactly as before the
+    // predicate existed: the cap is filled by the top-ranked hidden
+    // pages, so the caller who asked for nothing sees no change.
+    const unscoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+      }).content,
+    );
+    expect(unscoped).toHaveLength(10);
+    for (const action of unscoped) expect(action.target).toContain("pref-theirs-");
+
+    // And a scope requested without the gate still changes nothing.
+    setGate(GATE_MODE.off);
+    const off = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      }).content,
+    );
+    expect(JSON.stringify(off)).toBe(JSON.stringify(unscoped));
+  });
+
+  test("a dedup row's secondary count excludes secondaries the caller may not see", () => {
+    // The count is the leak: "Merge 2 duplicate(s)" tells a caller a
+    // second page they may not see exists. Owner scope cannot produce a
+    // mixed group (per-scope keying never groups pages across owners),
+    // but the reach half of the composed view can: one duplicate is
+    // unreadable at this caller's reach, its sibling canonical is not.
+    writePref("canonical", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-01-01T00:00:00Z",
+    });
+    writePref("dup-visible", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-02-01T00:00:00Z",
+    });
+    writePref("dup-hidden", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-03-01T00:00:00Z",
+    });
+
+    const scopedJson = renderDigest(vault, {
+      format: "json",
+      since: new Date("2025-04-01T00:00:00Z"),
+      until: new Date("2025-04-02T00:00:00Z"),
+      readable: (rel) => !rel.includes("dup-hidden"),
+    });
+    const scoped = actionsOf(scopedJson.content);
+    const dedup = scoped.find((a) => (a as { category?: string }).category === "dedup");
+    expect(dedup).toBeDefined();
+    expect((dedup as { title?: string }).title).toBe("Merge 1 duplicate(s) into pref-canonical");
+    expect(scopedJson.content).not.toContain("dup-hidden");
+
+    // A caller at full reach still counts both duplicates.
+    const unscoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date("2025-04-01T00:00:00Z"),
+        until: new Date("2025-04-02T00:00:00Z"),
+      }).content,
+    );
+    const openDedup = unscoped.find((a) => (a as { category?: string }).category === "dedup");
+    expect((openDedup as { title?: string }).title).toBe(
+      "Merge 2 duplicate(s) into pref-canonical",
+    );
   });
 });
 
