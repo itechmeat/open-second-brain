@@ -334,18 +334,32 @@ describe("bootstrapBrain — gitignore guard (t_206562ae)", () => {
   test("derived runtime state created after init never shows as git dirt", () => {
     // A real repository: init, then commit the vault as the operator
     // would, then let the runtime create the derived store. Without the
-    // seeded guard the store shows as untracked dirt here.
+    // seeded guard the store shows as untracked dirt here. Several git
+    // subprocesses deep - an explicit timeout keeps hosted Windows
+    // runners clear of the 5s default; commit.gpgsign=false keeps a
+    // machine with commit.gpgsign=true from failing for unrelated
+    // reasons.
     bootstrapBrain(vault, { configPath });
     git("init");
     git("add", "-A");
-    git("-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "commit", "-m", "vault");
+    git(
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "vault",
+    );
     expect(porcelain()).toBe("");
 
     mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
     writeFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "bytes", "utf8");
     expect(porcelain()).toBe("");
     expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite"))).toBe(true);
-  });
+  }, 20000);
 
   test("a second init reports no creations and stays byte-identical on .gitignore", () => {
     bootstrapBrain(vault, { configPath });

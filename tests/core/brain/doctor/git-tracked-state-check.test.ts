@@ -51,11 +51,26 @@ function git(cwd: string, ...args: string[]): void {
   }
 }
 
-/** A real repository around the vault, with its content committed. */
+/**
+ * A real repository around the vault, with its content committed.
+ * `commit.gpgsign=false` keeps a machine whose global config signs
+ * commits from failing these fixtures for unrelated reasons.
+ */
 function gitRepoWithCommit(): void {
   git(vault, "init");
   git(vault, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
-  git(vault, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "commit", "-m", "vault");
+  git(
+    vault,
+    "-c",
+    "user.email=o2b@example.com",
+    "-c",
+    "user.name=o2b",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "vault",
+  );
 }
 
 function withStore(): void {
@@ -81,7 +96,7 @@ describe("the git tracked-state doctor check", () => {
     gitRepoWithCommit();
     expect(findingsOf("error")).toHaveLength(0);
     expect(findingsOf("warning")).toHaveLength(0);
-  });
+  }, 20000);
 
   test("errors when the store is committed, naming the untrack command and the ignore line", () => {
     withStore();
@@ -92,7 +107,7 @@ describe("the git tracked-state doctor check", () => {
     expect(message).toContain("git rm -r --cached .open-second-brain/brain.sqlite");
     expect(message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
     expect(message).toContain("never edits");
-  });
+  }, 20000);
 
   test("errors even when the tracked store is ALSO ignored - tracking is measured, not inferred", () => {
     withStore();
@@ -104,7 +119,7 @@ describe("the git tracked-state doctor check", () => {
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
     expect(errors[0]!.severity).toBe("error");
-  });
+  }, 20000);
 
   test("warns (not errors) for a present-but-unignored untracked store", () => {
     // The repository is committed BEFORE the store exists, so the store
@@ -117,7 +132,7 @@ describe("the git tracked-state doctor check", () => {
     const warnings = findingsOf("warning");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
-  });
+  }, 20000);
 
   test("is silent after the full remediation: untrack plus the seeded ignore line", () => {
     withStore();
@@ -141,13 +156,15 @@ describe("the git tracked-state doctor check", () => {
       "user.email=o2b@example.com",
       "-c",
       "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "-m",
       "untrack derived state",
     );
     expect(findingsOf("error")).toHaveLength(0);
     expect(findingsOf("warning")).toHaveLength(0);
-  });
+  }, 20000);
 
   test("is silent in a vault nested in a bigger repo, naming vault-relative paths", () => {
     const nested = join(tmp, "nested");
@@ -166,11 +183,22 @@ describe("the git tracked-state doctor check", () => {
     // The repo root is `tmp`; only the nested vault's store is tracked.
     git(tmp, "init");
     git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
-    git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "commit", "-m", "repo");
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "repo",
+    );
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toContain("git rm -r --cached .open-second-brain/brain.sqlite");
-  });
+  }, 20000);
 
   test("never edits anything", () => {
     withStore();
@@ -181,7 +209,7 @@ describe("the git tracked-state doctor check", () => {
       storeBefore,
     );
     expect(existsSync(join(vault, ".gitignore"))).toBe(false);
-  });
+  }, 20000);
 });
 
 describe("the probe underneath the check", () => {
@@ -202,7 +230,7 @@ describe("the probe underneath the check", () => {
       if (savedPath === undefined) delete process.env.PATH;
       else process.env.PATH = savedPath;
     }
-  });
+  }, 20000);
 
   test("the check is failSoft", () => {
     expect(gitTrackedStateCheck.failSoft).toBe(true);
