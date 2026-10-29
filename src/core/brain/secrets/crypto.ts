@@ -60,10 +60,16 @@ const KEY_BYTES = 32;
 const SYNC_EXCLUSION_CONTENT = "*\n!.gitignore\n";
 
 /**
- * Drop the exclusion marker into `dir`, once, best-effort. Nothing in
- * src ever writes a `.gitignore` elsewhere (every other reference in the
- * tree is a reader), so this file IS the guarantee that the keyfile and
- * the ciphertext do not ride a git commit to another machine.
+ * Drop the exclusion marker into `dir`, once, best-effort. Exactly two
+ * writers in src ever create a `.gitignore`, both deliberate and named
+ * here so the guarantee cannot silently rot: this marker, kept separate
+ * because the secrets directory can pre-date brain init (an operator may
+ * store a secret long before the first `o2b brain init`), and the
+ * vault-level managed block seeded beside the identity stamp by
+ * `ensureVaultGitignoreEntries` in `../gitignore-guard.ts`. This file and
+ * that seeder are the whole guarantee that the keyfile and the ciphertext
+ * do not ride a git commit to another machine; every other reference in
+ * the tree is a reader.
  */
 function ensureSyncExclusionMarker(dir: string): void {
   const marker = join(dir, ".gitignore");

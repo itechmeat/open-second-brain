@@ -14,6 +14,7 @@ import { join, posix } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
+import { DEFAULT_BEGIN_MARKER, DEFAULT_END_MARKER } from "../../src/core/install/managed-block.ts";
 
 // Shared temp scratch for both vault and machine-config directories.
 // Tests that need to assert the "missing machine config" path can
@@ -61,10 +62,11 @@ describe("bootstrapBrain — empty vault", () => {
     // (context-integrity-gates, Unit J).
     expect(existsSync(join(vault, "Brain", "vault-id.json"))).toBe(true);
 
-    // Counts: seven created (vault-id.json, _brain.yaml, _BRAIN.md, and
-    // the four Brain/bases/*.base view definitions stamped at init),
-    // none overwritten, none skipped.
-    expect(result.created.length).toBe(7);
+    // Counts: eight created (vault-id.json, _brain.yaml, _BRAIN.md, the
+    // four Brain/bases/*.base view definitions stamped at init, and the
+    // seeded .gitignore guard), none overwritten, none skipped.
+    expect(result.created.length).toBe(8);
+    expect(result.created).toContain(".gitignore");
     expect(result.overwritten.length).toBe(0);
     expect(result.skipped.length).toBe(0);
 
@@ -138,7 +140,10 @@ describe("bootstrapBrain — force overwrite", () => {
 
     expect(result.overwritten).toContain(posix.join("Brain", "_brain.yaml"));
     expect(result.overwritten).toContain(posix.join("Brain", "_BRAIN.md"));
-    expect(result.skipped.length).toBe(0);
+    // The gitignore guard does not take part in force: a managed block
+    // merge never rewrites over the operator's file, so the second run
+    // leaves it in skipped (t_206562ae).
+    expect(result.skipped).toEqual([".gitignore"]);
 
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
       DEFAULT_BRAIN_CONFIG_YAML,
@@ -272,5 +277,75 @@ describe("bootstrapBrain — Bases view definitions", () => {
 
     expect(result.overwritten).toContain(posix.join("Brain", "bases", "daily.base"));
     expect(readFileSync(stomped, "utf8")).toContain('file.inFolder("Brain/log")');
+  });
+});
+
+describe("bootstrapBrain — gitignore guard (t_206562ae)", () => {
+  /** `git` in the vault; git is on PATH everywhere this suite runs. */
+  function git(...args: string[]): void {
+    Bun.spawnSync(["git", ...args], { cwd: vault, stdout: "ignore", stderr: "ignore" });
+  }
+
+  function porcelain(): string {
+    return Bun.spawnSync(["git", "status", "--porcelain"], {
+      cwd: vault,
+      stdout: "pipe",
+      stderr: "ignore",
+    })
+      .stdout.toString()
+      .replace(/\r\n/g, "\n");
+  }
+
+  test("fresh init seeds the guard block beside the identity stamp", () => {
+    const result = bootstrapBrain(vault, { configPath });
+    const content = readFileSync(join(vault, ".gitignore"), "utf8");
+    expect(result.created).toContain(".gitignore");
+    expect(content).toContain(DEFAULT_BEGIN_MARKER);
+    expect(content).toContain("/.open-second-brain/");
+    expect(content).toContain(DEFAULT_END_MARKER);
+  });
+
+  test("derived runtime state created after init never shows as git dirt", () => {
+    // A real repository: init, then commit the vault as the operator
+    // would, then let the runtime create the derived store. Without the
+    // seeded guard the store shows as untracked dirt here.
+    bootstrapBrain(vault, { configPath });
+    git("init");
+    git("add", "-A");
+    git("-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "commit", "-m", "vault");
+    expect(porcelain()).toBe("");
+
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    writeFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "bytes", "utf8");
+    expect(porcelain()).toBe("");
+    expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite"))).toBe(true);
+  });
+
+  test("a second init reports no creations and stays byte-identical on .gitignore", () => {
+    bootstrapBrain(vault, { configPath });
+    const before = readFileSync(join(vault, ".gitignore"), "utf8");
+    const second = bootstrapBrain(vault, { configPath });
+    expect(second.created).not.toContain(".gitignore");
+    expect(second.created.length).toBe(0);
+    expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe(before);
+  });
+
+  test("a pre-existing user .gitignore survives init byte-preserved outside the block", () => {
+    const user = "# my patterns\n*.tmp\n.obsidian/workspace.json\n";
+    writeFileSync(join(vault, ".gitignore"), user, "utf8");
+    const result = bootstrapBrain(vault, { configPath });
+    const content = readFileSync(join(vault, ".gitignore"), "utf8");
+    expect(content.startsWith(user)).toBe(true);
+    expect(content).toContain(DEFAULT_BEGIN_MARKER);
+    expect(result.created).not.toContain(".gitignore");
+  });
+
+  test("init into a non-git folder succeeds identically — no git dependency at init", () => {
+    // The default fixtures here are plain temp dirs (no git), so this is
+    // the non-git path: the seeder runs, git is never consulted, and the
+    // result reports the created .gitignore like any other step.
+    const result = bootstrapBrain(vault, { configPath });
+    expect(result.created).toContain(".gitignore");
+    expect(existsSync(join(vault, ".gitignore"))).toBe(true);
   });
 });

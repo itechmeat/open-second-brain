@@ -11,6 +11,9 @@
  *   - `Brain/_brain.yaml` and `Brain/_BRAIN.md` are written on first
  *     run; subsequent runs without `force` skip them. `force: true`
  *     overwrites both.
+ *   - `<vault>/.gitignore` gains the derived-state guard block
+ *     (`/.open-second-brain/`) on first run, merged with any existing
+ *     content; later runs skip it when the entries are already present.
  *   - Bootstrap refuses to run if the machine-level plugin config (the
  *     one `o2b init` writes) is missing, since callers must register
  *     the vault before any Brain operation. The error message names
@@ -26,6 +29,7 @@ import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
+import { ensureVaultGitignoreEntries } from "./gitignore-guard.ts";
 import {
   BRAIN_BASES_REL,
   BRAIN_ROOT_REL,
@@ -362,6 +366,26 @@ export function bootstrapBrain(
   const identityExisted = existsSync(identityPath);
   writeVaultIdentity(vault);
   if (!identityExisted) created.push(vaultRelative(identityPath, vault));
+
+  // 1c. `<vault>/.gitignore` — the derived-state guard (t_206562ae).
+  //     Every derived runtime state lives under `.open-second-brain/`, so
+  //     one vault-root-anchored entry covers it; without the seed, a
+  //     fresh init in a git repository left brain.sqlite visible to `git
+  //     status`. The seeder merges a managed block and never clobbers
+  //     user content; a git repository is NOT required (a plain folder
+  //     gets the same seed, and git is never consulted here). A created
+  //     file reports as created; an existing file that gained the block
+  //     reports as overwritten (its bytes changed on disk); a skip or a
+  //     named conflict (malformed markers, warned on stderr by the
+  //     seeder) leaves the file untouched and reports as skipped.
+  const gitignore = ensureVaultGitignoreEntries(vault);
+  if (gitignore.status === "created") {
+    created.push(gitignore.file);
+  } else if (gitignore.status === "updated") {
+    overwritten.push(gitignore.file);
+  } else {
+    skipped.push(gitignore.file);
+  }
 
   // 2. `_brain.yaml` — default config (with optional primary_agent).
   const brainYamlPath = brainConfigPath(vault);
