@@ -453,10 +453,13 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
 export { REMOVED_TOOLS };
 
 // The set is named after the original payload (mutating writers). As
-// of v0.10.10 it also hosts `brain_context`, a *reader* tool that has
-// to be always-loaded to be useful at session start. Renaming the
-// MCP server itself is deferred — see
-// `docs/plans/2026-05-20-v0.10.10-design.md` §12.
+// of v0.10.10 it also hosts `brain_context`, which has to be
+// always-loaded to be useful at session start. It was admitted here as
+// "a reader tool" back then, but its handler regenerates the shared
+// `Brain/active.md`, so under the write-mode-dominant concurrency kind
+// (`tool-contract.ts`) it is a writer too and the set name now
+// describes it exactly. Renaming the MCP server itself is deferred —
+// see `docs/plans/2026-05-20-v0.10.10-design.md` §12.
 const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "brain_apply_evidence",
   "brain_context",

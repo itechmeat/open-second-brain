@@ -328,7 +328,7 @@ async function toolBrainAnalytics(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   // attention_flows requires an `operation`; the consolidated surface
-  // defaults it to the read-only `list` so `{view}` alone is valid.
+  // defaults it to `list` so `{view}` alone is valid.
   const withDefaults = args["view"] === "attention_flows" ? { operation: "list", ...args } : args;
   return localizeEnvelope(ctx, await dispatchByView(ANALYTICS_VIEW_HANDLERS, ctx, withDefaults));
 }
@@ -336,10 +336,16 @@ async function toolBrainAnalytics(
 export const ANALYTICS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_analytics",
-    kind: "read",
+    // Write-mode-dominant (tool-contract.ts), not "read": every
+    // attention_flows operation lists the flow recipes first, and
+    // `listAttentionFlows` seeds `Brain/attention-flows/open-loops.md`
+    // through `ensureDefaultAttentionFlows` (mkdir + frontmatter write,
+    // under the vault-identity write guard) whenever the vault lacks it.
+    // A fresh vault therefore gets files written by a "read" view.
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain analytics, one tool for every lens: view=timeline (event history), attention_flows, belief_evolution, concept_synthesis, or dedup (exact-hash ingest dedup trend). Replaces the per-lens analytics tools.",
+      "Brain analytics, one tool for every lens: view=timeline (event history), attention_flows (seeds its default recipe when missing), belief_evolution, concept_synthesis, or dedup (exact-hash ingest dedup trend). Replaces the per-lens analytics tools.",
     inputSchema: {
       type: "object",
       properties: {

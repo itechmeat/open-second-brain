@@ -705,10 +705,16 @@ async function toolBrainBrief(
 export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_brief",
-    kind: "read",
+    // Write-mode-dominant (tool-contract.ts), not "read": view=digest
+    // persists the window's structured snapshot under `Brain/reports/`
+    // through `captureReportDelta` when report snapshots are enabled, so
+    // the next digest run can diff against it. The write is opt-in and
+    // skipped for restricted or scope-narrowed callers, but an opt-in
+    // durable write still classifies the whole tool `write`.
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain summary, one tool for every window: view=morning, daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
+      "Brain summary, one tool for every window: view=morning, daily, weekly, monthly, operator (maintenance dashboard), digest (activity window + report snapshot), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
     inputSchema: {
       type: "object",
       properties: {

@@ -1,11 +1,12 @@
 /**
  * MCP tool registry slice for Brain Search.
  *
- * Exposes `brain_search` (read-only, agent-facing) and the
- * `search.*` enrichment used by `second_brain_status`. Index management
- * verbs (`index`, `reindex`, `check`) are intentionally NOT exposed
- * over MCP — they are operator business, never agent business
- * (design doc §3, principle 5).
+ * Exposes `brain_search` (agent-facing; write-classified - it persists
+ * ranking-state ledgers under `Brain/search/`, see the kind comment at
+ * the definition) and the `search.*` enrichment used by
+ * `second_brain_status`. Index management verbs (`index`, `reindex`,
+ * `check`) are intentionally NOT exposed over MCP — they are operator
+ * business, never agent business (design doc §3, principle 5).
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §9.
  */
@@ -1931,9 +1932,18 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_search",
-    kind: "read",
+    // Write-mode-dominant (tool-contract.ts), not "read". The handler's
+    // writes are ranking STATE, not accepted-loss telemetry appends:
+    // `reinforce` persists boost events the fold reads back
+    // (`recordReinforce` -> Brain/search/reinforce/), access recording is
+    // default-on and writes activation events plus the derived state
+    // (`recordAccessEvent` -> Brain/search/activation/), and under the
+    // telemetry opt-in the recall-telemetry and query-demand ledgers
+    // append. All of these feed later searches' behaviour, so they fail
+    // the fail-soft-appends carve-out and gate the write path.
+    kind: "write",
     description:
-      "Full-text search across the vault. Optional semantic layer when configured. Read-only. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
+      "Full-text search across the vault. Optional semantic layer when configured. Persists access events and opt-in reinforce/telemetry ledgers under Brain/search/. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,

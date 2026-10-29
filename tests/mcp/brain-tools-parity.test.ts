@@ -232,6 +232,19 @@ const FROZEN_BRAIN_TOOL_NAMES = [
  * (record) and `brain_context_pack_outcome` (post) - both gated ledger
  * writes - and `brain_delete_by_source`.
  *
+ * Round-4 OCR-review corrections, each verified at its handler chain and
+ * reclassified read -> write under write-mode-dominant (a tool that CAN
+ * write is `write`; an opt-in or defaulted write still counts):
+ * `brain_context` (the bootstrap path calls `regenerateActive`, which
+ * writes the shared `Brain/active.md` when absent or stale),
+ * `brain_brief` (view=digest persists the window snapshot under
+ * `Brain/reports/` through `captureReportDelta` when report snapshots
+ * are enabled), and `brain_analytics` (every attention_flows operation
+ * lists flows first, seeding `Brain/attention-flows/open-loops.md`
+ * through `ensureDefaultAttentionFlows` on a vault without it). The
+ * same review reclassified `brain_search`, which lives outside this
+ * slice - see the full-table pin below.
+ *
  * Deliberately READ despite a fail-soft observability append (metrics
  * appends are accepted loss under concurrency, per the stdio
  * parallel-reads design, not gated writes): `brain_storage` (usage
@@ -240,12 +253,15 @@ const FROZEN_BRAIN_TOOL_NAMES = [
  * receipts), `brain_recall_telemetry` (opt-in emit).
  */
 const FROZEN_BRAIN_WRITE_TOOL_NAMES = [
+  "brain_analytics",
   "brain_anticipatory_context",
   "brain_append_note",
   "brain_apply_evidence",
   "brain_bridges",
+  "brain_brief",
   "brain_claims",
   "brain_clusters",
+  "brain_context",
   "brain_context_pack_outcome",
   "brain_create_note",
   "brain_dead_ends",
@@ -307,80 +323,37 @@ const FROZEN_BRAIN_WRITE_TOOL_NAMES = [
  * above - both directions, so a move without re-pinning fails and a stale
  * pin fails too.
  *
- * The Brain-slice pin cannot see the three writers that live OUTSIDE
- * `BRAIN_TOOLS`, and they are exactly where a silent flip to `read` would
- * park a mutator on the stdio transport's concurrent read path:
+ * Derived from the Brain-slice pin instead of retyped: the full table
+ * CONTAINS `BRAIN_TOOLS`, so every Brain writer must classify `write`
+ * here as well, and retyping sixty-odd names a second time is exactly how
+ * the two pins drift apart under maintenance (the round-4 review had to
+ * correct four tools in both lists in lockstep). Deriving keeps the
+ * full-table pin independent where it matters: the Brain names stay
+ * independently pinned against `BRAIN_TOOLS` itself by the slice test
+ * above, and this pin stays independently sensitive to the writers that
+ * live OUTSIDE `BRAIN_TOOLS` - exactly where a silent flip to `read`
+ * would park a mutator on the stdio transport's concurrent read path:
  *
- *   - `brain_watchdog` - recovery probes that persist their findings;
+ *   - `brain_watchdog` - EVERY run appends its audit record under
+ *     `Brain/log/` (failing that, `.open-second-brain/watchdog-audit/`),
+ *     probe or not; `remediate=true` additionally creates the missing
+ *     Brain directories;
  *   - `brain_recall_feedback` - records one event receipt plus bounded
  *     weights;
+ *   - `brain_search` - writes the reinforce ledger, records activation
+ *     access events by default (events plus the derived state), and
+ *     appends the opt-in recall-telemetry and query-demand ledgers -
+ *     ranking state later searches read back, not accepted-loss appends;
  *   - `schema_apply_mutations` - applies schema edits.
  *
  * The read half is the complement: every registered name not listed here
  * must classify `read`.
  */
 const FROZEN_FULL_TABLE_WRITE_TOOL_NAMES = [
-  "brain_anticipatory_context",
-  "brain_append_note",
-  "brain_apply_evidence",
-  "brain_bridges",
-  "brain_claims",
-  "brain_clusters",
-  "brain_context_pack_outcome",
-  "brain_create_note",
-  "brain_dead_ends",
-  "brain_decision",
-  "brain_deep_synthesis",
-  "brain_delete_by_source",
-  "brain_derive_fact",
-  "brain_design_note",
-  "brain_distill_source",
-  "brain_doctor",
-  "brain_dream",
-  "brain_expire",
-  "brain_extract_signals",
-  "brain_feedback",
-  "brain_generation_reports",
-  "brain_hygiene",
-  "brain_idea_discovery",
-  "brain_ingest_batch_plan",
-  "brain_ingest_source",
-  "brain_intake_entities",
-  "brain_intake_pledges",
-  "brain_intention",
-  "brain_labels",
-  "brain_lifecycle",
-  "brain_maintenance",
-  "brain_memory_bridge",
-  "brain_note",
-  "brain_note_lifecycle",
-  "brain_obligation",
-  "brain_observed_use",
-  "brain_pinned_context",
-  "brain_pledge",
-  "brain_pre_compact_extract",
-  "brain_procedural_graph",
-  "brain_procedural_memory",
+  ...FROZEN_BRAIN_WRITE_TOOL_NAMES,
   "brain_recall_feedback",
-  "brain_receipts",
-  "brain_recurrence",
-  "brain_research_report",
-  "brain_scaffold_stub",
-  "brain_secrets",
-  "brain_session_checkpoint",
-  "brain_session_summary",
-  "brain_skill_proposals",
-  "brain_switch_vault",
-  "brain_tension",
-  "brain_tiers",
-  "brain_token_impact",
-  "brain_trigger",
-  "brain_truth",
-  "brain_tune",
-  "brain_update_note",
+  "brain_search",
   "brain_watchdog",
-  "brain_write_batch",
-  "brain_write_session",
   "schema_apply_mutations",
 ] as const;
 
@@ -441,8 +414,8 @@ describe("read/write classification", () => {
     // The same two-way sensitivity as the Brain-slice pin, over the table
     // the transports actually classify against. The registry-guard walk
     // above only checks that `kind` is a valid value, so without this pin
-    // a silent flip of one of the three writers outside BRAIN_TOOLS
-    // (`brain_watchdog`, `brain_recall_feedback`,
+    // a silent flip of one of the four writers outside BRAIN_TOOLS
+    // (`brain_watchdog`, `brain_recall_feedback`, `brain_search`,
     // `schema_apply_mutations`) to `read` would pass the suite - and park
     // a mutator on the concurrent read path this partition exists to
     // prevent. A stale pin fails the same equality the other way.
