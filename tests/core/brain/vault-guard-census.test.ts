@@ -91,6 +91,11 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "bootstrap. This is the path that CREATES the tree and stamps the marker; " +
     "gating it on the marker it is about to write would refuse `o2b brain init` " +
     "on the very root it exists to serve.",
+  "src/core/brain/gitignore-guard.ts":
+    "bootstrap beside the identity stamp, and outside the guarded tree: it writes " +
+    "the vault-root `.gitignore`, not anything under `Brain/`, so there is no " +
+    "knowledge-tree identity to assert, and the managed-block merge preserves " +
+    "every operator byte outside the block.",
   "src/core/brain/inject-failopen.ts":
     "fail-open injection cache. The hook contract is that a degraded injection " +
     "still returns something; a refusal here would turn a cache miss into a " +
