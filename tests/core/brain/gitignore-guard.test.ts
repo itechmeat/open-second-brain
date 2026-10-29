@@ -225,6 +225,10 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   ["core/brain/dead-letter.ts", "dead letters under the store"],
   ["core/brain/gitignore-guard.ts", "composes the seeded guard entry from the constant"],
   ["core/brain/init.ts", "bootstraps the seed; names the entry in its step 1c docblock"],
+  [
+    "core/brain/doctor/git-tracked-state-check.ts",
+    "composes the ls-files pathspec and the guard ignore line from the constant",
+  ],
   ["core/brain/ingest/checkpoint.ts", "ingest checkpoints under the store"],
   [
     "core/brain/ingest/content-manifest.ts",

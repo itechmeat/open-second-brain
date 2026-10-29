@@ -96,19 +96,22 @@ describe("the git tracked-state doctor check", () => {
 
   test("errors even when the tracked store is ALSO ignored - tracking is measured, not inferred", () => {
     withStore();
-    writeFileSync(join(vault, ".gitignore"), `${GITIGNORE_GUARD_IGNORE_LINE}\n`);
     gitRepoWithCommit();
-    // The add above had to force nothing: a tracked file under an
-    // ignored directory stays in the index, and status would not show
-    // it. ls-files must.
+    // The ignore line arrives AFTER the commit: the path stays in the
+    // index (only untracking removes it from there) and `git status`
+    // would never show it again. ls-files must.
+    writeFileSync(join(vault, ".gitignore"), `${GITIGNORE_GUARD_IGNORE_LINE}\n`);
     const errors = findingsOf("error");
     expect(errors).toHaveLength(1);
     expect(errors[0]!.severity).toBe("error");
   });
 
   test("warns (not errors) for a present-but-unignored untracked store", () => {
-    withStore();
+    // The repository is committed BEFORE the store exists, so the store
+    // is genuinely untracked: exactly the vault an init ran in without
+    // git knowing.
     gitRepoWithCommit();
+    withStore();
     const errors = findingsOf("error");
     expect(errors).toHaveLength(0);
     const warnings = findingsOf("warning");
