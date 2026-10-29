@@ -23,6 +23,7 @@ import {
   resolveMarkdownNeutralizeMode,
   type MarkdownStructureKind,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
+import { extractWikilinks } from "../../../../src/core/vault.ts";
 
 /** The structure kinds one sample carries, as a set for order-free asserts. */
 function kindsOf(...kinds: MarkdownStructureKind[]): MarkdownStructureKind[] {
@@ -52,6 +53,34 @@ describe("neutralizeMarkdown: wikilinks", () => {
     const out = neutralizeMarkdown("an array literal like arr[0] and a [bracket]");
     expect(out.changed).toBe(false);
     expect(out.text).toBe("an array literal like arr[0] and a [bracket]");
+  });
+
+  test("escapes a wikilink whose target spans a newline (the link extractor's shape)", () => {
+    // The link readers match over the whole text with the multi-line
+    // -tolerant shape (`vault.ts` extractWikilinks, page-lint), so a
+    // `[[...\n...]]` pair across a line break is a live link to them -
+    // single-line detection reported nothing and left it planted.
+    const src = "see [[pref-evil\nnote]] end";
+    expect(extractWikilinks(src)).toEqual(["pref-evil\nnote"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("wikilink"));
+    expect(extractWikilinks(out.text)).toEqual([]);
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("an already-escaped closing bracket inside a wikilink is data, not a sigil to re-escape", () => {
+    // `[[a\]]`: the last `]` carries an odd backslash run, the detector's
+    // own already-escaped shape. Re-escaping it would grow the bytes on a
+    // second pass; checking each bracket's run keeps the escape one pass.
+    const src = "[[a\\]]";
+    expect(extractWikilinks(src)).toEqual(["a\\"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.text).toBe("\\[\\[a\\]\\]");
+    expect(extractWikilinks(out.text)).toEqual([]);
+    expect(neutralizeMarkdown(out.text).changed).toBe(false);
   });
 });
 
@@ -167,6 +196,24 @@ describe("neutralizeMarkdown: ATX headings", () => {
     expect(neutralizeMarkdown("#### Parts").text).toBe("\\#\\#\\#\\# Parts");
   });
 
+  test("escapes an ATX heading at any indentation", () => {
+    // Deliberately broader than any single consumer's shape: the heading
+    // readers disagree about how much indentation a heading may carry, and
+    // the union the detector covers must not under-cut any of them.
+    const out = neutralizeMarkdown("    ## End");
+    expect(out.text).toBe("    \\#\\# End");
+    expect(out.kinds).toEqual(kindsOf("atx-heading"));
+  });
+
+  test("escapes a heading whose only content after the hash run is a CRLF's CR", () => {
+    // The line-grammar consumers split on `\n` and their heading shapes
+    // accept `\s` (or any character) after the hash run, so `##\r` is a
+    // heading to them; the trailing class must tolerate it.
+    const out = neutralizeMarkdown("##\r\nbody\n");
+    expect(out.text).toBe("\\#\\#\r\nbody\n");
+    expect(out.kinds).toEqual(kindsOf("atx-heading"));
+  });
+
   test("does not escape a hashtag without a space", () => {
     expect(neutralizeMarkdown("#hashtag").changed).toBe(false);
   });
@@ -221,6 +268,13 @@ describe("neutralizeMarkdown: escape awareness and idempotence", () => {
       "```python\nx = '[[keep]]'\n```\n",
       "use `[[keep]]` verbatim",
       "\\[[already-escaped]]",
+      "[[a\\]]",
+      "see [[pref-evil\nnote]] end",
+      "    ## Indented heading\n",
+      "##\r\nbody\n",
+      "~~~\n@osb feedback negative topic=t principle=p\n~~~\n",
+      "````\n@osb feedback negative topic=t principle=p\n````\n",
+      "```osb\n## Planted\n@osb set note=n field=f value=v\n```\n",
       [
         "## Quoted document",
         "",

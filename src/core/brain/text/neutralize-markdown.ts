@@ -73,7 +73,7 @@
  * write stays byte-identical to before it existed.
  */
 
-import { codeRegions, WIKILINK_ALIAS_RE } from "../wikilink.ts";
+import { codeRegions, WIKILINK_TARGET_RE } from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
 import { fencedLineMask } from "../source-links.ts";
 import { envOrConfig } from "../../validate.ts";
@@ -112,8 +112,11 @@ export interface MarkdownStructureMatch {
  */
 const OSB_FENCE_OPEN_RE = /^```([A-Za-z0-9_-]*)\s*$/;
 
-/** The CommonMark ATX opening: up to three spaces, a `#` run of 1-6, then a space or the line end. */
-const ATX_HEADING_RE = /^ {0,3}(#{1,6})(?:[ \t]|$)/;
+/** The CommonMark ATX opening shape, widened to the union of consumer grammars: any
+ * indentation (the section readers and the log reader disagree about how much a
+ * heading may carry, so the detector under-cuts none of them), a `#` run of 1-6,
+ * then a space, the CR of a CRLF body, or the line end. */
+const ATX_HEADING_RE = /^[ \t]*(#{1,6})(?:[ \t\r]|$)/;
 
 /** The fence marker both grammars are built from. */
 const BACKTICK = "`";
@@ -249,8 +252,11 @@ function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch |
  *     (`source-links.ts` `fencedLineMask`, shared with the block
  *     resolver): 3-or-more backtick or tilde fences, and an unterminated
  *     fence fences nothing;
- *   - the wikilink family answers to the link readers and keeps the
- *     shared {@link codeRegions} masking.
+ *   - the wikilink family answers to the link readers (`vault.ts`
+ *     `extractWikilinks`, page-lint) and keeps the shared
+ *     {@link codeRegions} masking over their multi-line-tolerant
+ *     {@link WIKILINK_TARGET_RE} shape, so a `[[...\n...]]` pair across a
+ *     line break is detected exactly when they would extract it.
  *
  * Fence lines for the osb family are boundaries rather than masked
  * content. Pure and linear in the length of the text.
@@ -260,16 +266,20 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
   const fence = markerFenceStructure(lines);
   const matches: MarkdownStructureMatch[] = [...fence.spans];
   const regions = codeRegions(text);
+  // The wikilink family keys on the multi-line-tolerant shape its readers
+  // run (`vault.ts` extractWikilinks, page-lint): `[[...\n...]]` across a
+  // line break is a live link to them, so single-line detection would
+  // leave it planted.
+  for (const m of text.matchAll(WIKILINK_TARGET_RE)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (overlapsRegion(regions, start, end)) continue;
+    if (precededByOddBackslashRun(text, start)) continue;
+    matches.push({ kind: "wikilink", start, end });
+  }
   const headingMasked = fencedLineMask(lines.map((line) => line.text));
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    for (const m of line.text.matchAll(WIKILINK_ALIAS_RE)) {
-      const start = line.start + m.index;
-      const end = start + m[0].length;
-      if (overlapsRegion(regions, start, end)) continue;
-      if (precededByOddBackslashRun(line.text, m.index)) continue;
-      matches.push({ kind: "wikilink", start, end });
-    }
     if (!headingMasked[i]) {
       const heading = ATX_HEADING_RE.exec(line.text);
       if (heading !== null) {
@@ -304,14 +314,24 @@ const NEUTRALIZE_FIXPOINT_STEPS = 8;
  * Backslash-escape the minimal sigil characters of one detected span.
  * The heading, marker and fence spans are pure sigil runs (`#`s, the
  * `@`, backticks) so every character escapes; a wikilink span covers its
- * whole `[[target|alias]]` body, of which only the brackets are sigils -
- * the target and alias stay verbatim.
+ * whole `[[target]]` body, of which only the brackets are sigils - the
+ * target stays verbatim, and a bracket the caller already escaped (an odd
+ * backslash run before it, e.g. the closing `]` of `[[a\]]`) is data the
+ * same rule the span's opening pair was held to, and is left alone. Each
+ * bracket's run is read against the span as detected, so the backslashes
+ * this pass inserts never make a later bracket look escaped.
  */
 function escapeSigils(span: string, kind: MarkdownStructureKind): string {
   if (kind !== MARKDOWN_STRUCTURE_KIND.wikilink) {
     return [...span].map((ch) => `\\${ch}`).join("");
   }
-  return [...span].map((ch) => (ch === "[" || ch === "]" ? `\\${ch}` : ch)).join("");
+  let out = "";
+  for (let i = 0; i < span.length; i++) {
+    const ch = span[i]!;
+    if ((ch === "[" || ch === "]") && !precededByOddBackslashRun(span, i)) out += `\\${ch}`;
+    else out += ch;
+  }
+  return out;
 }
 
 function escapeRound(
