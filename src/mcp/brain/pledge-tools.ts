@@ -366,6 +366,7 @@ async function toolBrainIntakePledges(
 export const PLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_pledge",
+    kind: "write",
     description:
       "One-off pledges under Brain/pledges/ - a promise made in prose, with a due date, a cited source page and evidence quotes verified against that source at write time: add, fulfill (stamps the date), list (optionally overdue-only), show, remove (archives the page).",
     inputSchema: {
@@ -442,6 +443,7 @@ export const PLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: INTAKE_TOOL,
+    kind: "write",
     description:
       "Intake pledges extracted from a vault page; this server runs no model. Supply `source` plus typed `pledges` (title, due, evidence quotes from it, counterparty NAMES). Validated whole before any write; counterparty names anchor server-side, unanchored names reported not stored, repeats are no-ops.",
     inputSchema: {

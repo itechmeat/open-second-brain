@@ -336,6 +336,7 @@ async function toolBrainAnalytics(
 export const ANALYTICS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_analytics",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only Brain analytics, one tool for every lens: view=timeline (event history), attention_flows, belief_evolution, concept_synthesis, or dedup (exact-hash ingest dedup trend). Replaces the per-lens analytics tools.",

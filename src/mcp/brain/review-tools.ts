@@ -250,6 +250,7 @@ async function toolBrainStaleScan(
 export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_intent_review",
+    kind: "read",
     description:
       "Read-only pre-dream intent review over active signal clusters. Returns each topic's decision, signal count, risk band, risk score, and reasons without mutating files.",
     inputSchema: {
@@ -267,6 +268,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_retention",
+    kind: "read",
     description:
       "Recommendation-only lifecycle review over retired preferences and processed signals. Returns keep/improve/park/prune candidates and never deletes or moves artifacts.",
     inputSchema: {
@@ -284,6 +286,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_review_candidates",
+    kind: "read",
     description:
       "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, intent reviews, and opt-in retire_siblings (lexical or stored-vector pairs; tier status in retire_siblings_semantic). Mutates nothing.",
     inputSchema: {
@@ -301,6 +304,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_stale_scan",
+    kind: "read",
     description:
       "Structural staleness report: preferences, signals, and Brain/log files inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
     inputSchema: {

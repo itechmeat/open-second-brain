@@ -212,6 +212,7 @@ function toolSkillsAttach(
 export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "list_skills",
+    kind: "read",
     description:
       "List agent skills shipped with Open Second Brain (and vault-local Brain/skills/) with one-line descriptions. Each entry carries a shadowed array naming the same-named skill directories it overrode, empty when discovery found none. Read-only.",
     inputSchema: {
@@ -224,6 +225,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   },
   {
     name: "get_skill",
+    kind: "read",
     description:
       "Fetch a skill's SKILL.md content by name; optional file_path reads an auxiliary file inside the same skill directory. An offer_id from skills_attach is echoed back on the result; a malformed one is refused, never dropped. Read-only.",
     inputSchema: {
@@ -250,6 +252,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   },
   {
     name: "skills_attach",
+    kind: "read",
     description:
       "Score skills against the turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none). Candidates without a discriminating term are dropped. Usage-ordered when skills_attach_usage_ordering is on. enabled:false unless skill_auto_attach is set.",
     inputSchema: {

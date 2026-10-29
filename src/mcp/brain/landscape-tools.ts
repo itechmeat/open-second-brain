@@ -28,6 +28,7 @@ async function toolMcpLandscape(ctx: ServerContext): Promise<Record<string, unkn
 export const LANDSCAPE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_mcp_landscape",
+    kind: "read",
     description:
       "List the Model Context Protocol servers configured across the vault: each server's name, the config file that declares it, the packages it pulls, and the env-var NAMES it requires. Environment values are never read. Discovery is vault-relative. Read-only.",
     inputSchema: {

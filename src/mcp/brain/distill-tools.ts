@@ -127,6 +127,7 @@ function distillWithQuoteCode(
 export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     // The guarantee is stated here, in the idiom `brain_intake_entities` uses:
     // a caller choosing a tool reads this, and a write that quarantines what it
     // just wrote must say so where the choice is made.

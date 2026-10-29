@@ -976,6 +976,7 @@ const BRAIN_QUERY_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
 export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_query",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only lookup: one preference + its evidence trail, all artifacts under a topic, or every log event after a timestamp. Exactly one of `preference`, `topic`, `since` must be supplied.",
@@ -1044,6 +1045,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_agent_query",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit; returns deterministic matched contributions plus a summary.",
@@ -1088,6 +1090,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_writes",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "List recorded note writes (create, update, append, revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. plan_revert returns the sealed plan for undoing them. Read-only.",
@@ -1139,6 +1142,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_write_destinations",
+    kind: "read",
     description:
       "One row per vault-relative destination the note-write and write-session events " +
       "name, with per-kind counts, contributing agents and devices, newest touch, and a " +
@@ -1182,6 +1186,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_agent_diff",
+    kind: "read",
     description:
       "Read-only comparison between source agents using the same provenance foundation as brain_agent_query. Supports browse, search, diff, and map modes.",
     inputSchema: {
@@ -1227,6 +1232,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_backlinks",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "List inbound references to a Brain artifact id (preference, retired, or signal). Returns every source that points at the id via wikilink, in any preference/retired frontmatter field, body prose, signal source, or log payload. Read-only.",
@@ -1246,6 +1252,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_audit",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Return a preference's full mutation audit trail (create / promote / update / retire / merge), oldest first, with agent, reason, and revisions. Accepts pref-/ret-/bare/wikilink ids. Read-only.",
@@ -1265,6 +1272,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_sources",
+    kind: "read",
     description:
       "Read-only dashboard of the brain's signals grouped by (agent, source_type) with active/processed and distinct-topic counts plus totals.",
     inputSchema: {
@@ -1276,6 +1284,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_unlinked_mentions",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Raw-text mentions of a target's title / aliases not already inside `[[...]]`; walks Brain/preferences and Brain/retired. Boundaries are Unicode-aware and language-agnostic. `total` is exact once the walk exhausts; mid-walk it reports the page's scan bound, never a silent cap. Read-only.",

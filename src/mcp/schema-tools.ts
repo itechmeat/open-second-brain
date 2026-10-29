@@ -102,6 +102,7 @@ function toolSchemaInspect(
 export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "schema_inspect",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Read-only Brain schema inspection, one tool for every view: graph, lint, stats, orphans, explain_type (needs token), active_pack, or packs. Replaces the per-view schema read tools.",
@@ -122,6 +123,7 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
   },
   {
     name: "schema_apply_mutations",
+    kind: "write",
     description:
       "Apply an atomic batch of schema mutations to Brain/_brain.yaml and write an audit record. With dry_run, returns the pack that would result and its diff instead, writing nothing.",
     inputSchema: {

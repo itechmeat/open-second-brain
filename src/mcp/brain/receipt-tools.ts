@@ -185,6 +185,7 @@ async function toolBrainReceipts(
 export const RECEIPT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_receipts",
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Receipt compaction. `scan` (default) inventories both ledgers read-only; `compact` folds " +

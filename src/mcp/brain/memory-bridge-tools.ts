@@ -111,6 +111,7 @@ const MEMORY_BRIDGE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
 export const MEMORY_BRIDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_memory_bridge",
+    kind: "write",
     description:
       "Host memory bridge: persist a Hermes built-in memory write (action add|replace, target memory|user) into the vault as a durable host_memory_write continuity record. Called by the provider on_memory_write hook; pass `operations` for an atomic batch.",
     inputSchema: {

@@ -82,6 +82,7 @@ async function toolBrainDesignNote(
 export const DESIGN_NOTE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "One-shot design note; runs no model. Without `note` it grounds the topic in the vault's tensions, decisions and truth projections and returns one needs-llm-step envelope, naming any store the vault holds nothing in. With `note` it commits under Brain/decisions/; not one recommendation refuses.",
     inputSchema: {

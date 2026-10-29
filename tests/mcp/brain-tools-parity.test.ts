@@ -84,6 +84,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
+import type { ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
 const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_agenda",
@@ -189,6 +191,112 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_writes",
 ] as const;
 
+/**
+ * The `kind: "write"` half of the frozen BRAIN_TOOLS surface, pinned
+ * beside the name list so the read/write partition cannot drift in
+ * either direction. The read half is the complement: every frozen name
+ * not listed here must classify `read`, and no name outside the frozen
+ * list may appear.
+ *
+ * The rule is write-mode-dominant (`src/mcp/tool-contract.ts`): a tool
+ * that CAN write is `write`. Every entry was verified against its
+ * handler, and four recon-seeded entries were corrected the other way:
+ *
+ *   - `brain_retention` and `brain_review_candidates` are READ. Their
+ *     planners fold read-only reports (`buildRetentionReview`; `dream`
+ *     with `dryRun: true`, which performs no writes per dream.ts), and
+ *     their own descriptions say so ("never deletes or moves
+ *     artifacts", "Mutates nothing").
+ *   - `brain_entity` is READ: `view` is `get | list` only - the CRUD
+ *     halves moved to the CLI and the write-batch kernels.
+ *
+ * Writers the seed list missed, each verified at its handler:
+ * `brain_doctor` (repair+apply), `brain_tiers` (restore/accept),
+ * `brain_secrets` (run executes an allowlisted command),
+ * `brain_pinned_context` (write/append/clear), `brain_obligation`
+ * (add/done/remove), `brain_dead_ends` (record), `brain_skill_proposals`
+ * (accept/reject), `brain_procedural_memory` (mark_used/mark_outcome),
+ * `brain_recurrence` (learn/forget/purge_source),
+ * `brain_procedural_graph` and `brain_claims` (rebuild persists the
+ * projection), `brain_deep_synthesis` and `brain_idea_discovery`
+ * (triggers=true enqueues into the trigger queue),
+ * `brain_pre_compact_extract` (extracts into continuity storage),
+ * `brain_anticipatory_context` (refresh persists the warm cache),
+ * `brain_ingest_batch_plan` (clears its checkpoint on a drained resume),
+ * `brain_generation_reports` (action=record), `brain_session_summary`
+ * and `brain_session_checkpoint` (write operations), `brain_token_impact`
+ * (record) and `brain_context_pack_outcome` (post) - both gated ledger
+ * writes - and `brain_delete_by_source`.
+ *
+ * Deliberately READ despite a fail-soft observability append (metrics
+ * appends are accepted loss under concurrency, per the stdio
+ * parallel-reads design, not gated writes): `brain_storage` (usage
+ * sample), `brain_benchmark` (recall_benchmark metric),
+ * `brain_context_pack` / `brain_pre_compress_pack` (opt-in context
+ * receipts), `brain_recall_telemetry` (opt-in emit).
+ */
+const FROZEN_BRAIN_WRITE_TOOL_NAMES = [
+  "brain_anticipatory_context",
+  "brain_append_note",
+  "brain_apply_evidence",
+  "brain_bridges",
+  "brain_claims",
+  "brain_clusters",
+  "brain_context_pack_outcome",
+  "brain_create_note",
+  "brain_dead_ends",
+  "brain_decision",
+  "brain_deep_synthesis",
+  "brain_delete_by_source",
+  "brain_derive_fact",
+  "brain_design_note",
+  "brain_distill_source",
+  "brain_doctor",
+  "brain_dream",
+  "brain_expire",
+  "brain_extract_signals",
+  "brain_feedback",
+  "brain_generation_reports",
+  "brain_hygiene",
+  "brain_idea_discovery",
+  "brain_ingest_batch_plan",
+  "brain_ingest_source",
+  "brain_intake_entities",
+  "brain_intake_pledges",
+  "brain_intention",
+  "brain_labels",
+  "brain_lifecycle",
+  "brain_maintenance",
+  "brain_memory_bridge",
+  "brain_note",
+  "brain_note_lifecycle",
+  "brain_obligation",
+  "brain_observed_use",
+  "brain_pinned_context",
+  "brain_pledge",
+  "brain_pre_compact_extract",
+  "brain_procedural_graph",
+  "brain_procedural_memory",
+  "brain_receipts",
+  "brain_recurrence",
+  "brain_research_report",
+  "brain_scaffold_stub",
+  "brain_secrets",
+  "brain_session_checkpoint",
+  "brain_session_summary",
+  "brain_skill_proposals",
+  "brain_switch_vault",
+  "brain_tension",
+  "brain_tiers",
+  "brain_token_impact",
+  "brain_trigger",
+  "brain_truth",
+  "brain_tune",
+  "brain_update_note",
+  "brain_write_batch",
+  "brain_write_session",
+] as const;
+
 describe("BRAIN_TOOLS frozen surface", () => {
   test("advertises exactly the v1.x tool-name set", () => {
     const names = BRAIN_TOOLS.map((t) => t.name).toSorted();
@@ -205,5 +313,36 @@ describe("BRAIN_TOOLS frozen surface", () => {
       expect(typeof tool.handler).toBe("function");
       expect(tool.inputSchema).toBeDefined();
     }
+  });
+});
+
+describe("read/write classification", () => {
+  /** Every registered tool, not just the Brain slice: the walk is over the full table. */
+  const FULL_TABLE: ReadonlyArray<ToolDefinition> = buildToolTable("full");
+
+  test("every registered tool carries kind read or write (registry-guard walk)", () => {
+    const unclassified = FULL_TABLE.filter((t) => t.kind !== "read" && t.kind !== "write");
+    expect(unclassified.map((t) => `${t.name}: ${String(t.kind)}`)).toEqual([]);
+  });
+
+  test("the write half is exactly the pinned partition (both directions)", () => {
+    const writes = BRAIN_TOOLS.filter((t) => t.kind === "write")
+      .map((t) => t.name)
+      .toSorted();
+    const pinned = [...FROZEN_BRAIN_WRITE_TOOL_NAMES].toSorted();
+    // A deliberately wrong entry fails one direction or the other, so the
+    // pin is sensitive to moves in both ways: a tool that starts writing
+    // without re-pinning fails the equality, and so does a stale pin.
+    expect(writes).toEqual(pinned);
+  });
+
+  test("the read half is the exact complement of the pinned writes", () => {
+    const reads = BRAIN_TOOLS.filter((t) => t.kind === "read")
+      .map((t) => t.name)
+      .toSorted();
+    const complement = FROZEN_BRAIN_TOOL_NAMES.filter(
+      (name) => !(FROZEN_BRAIN_WRITE_TOOL_NAMES as readonly string[]).includes(name),
+    ).toSorted();
+    expect(reads).toEqual(complement);
   });
 });

@@ -64,6 +64,7 @@ async function toolBrainIntakeEntities(
 export const NER_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Intake entities the agent extracted from note text into the entity registry (this server runs no model). Supply `entities` (category, name, optional aliases), the `source` they came from, and optional typed `relations`. Entities are quarantined unless the source names a file that exists.",
     inputSchema: {

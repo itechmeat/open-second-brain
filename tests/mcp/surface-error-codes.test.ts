@@ -286,6 +286,7 @@ describe("refusal codes", () => {
       properties: { query: { type: "string", description: "The search text." } },
       additionalProperties: false,
     },
+    kind: "read",
     handler: () => ({}),
   };
 

@@ -211,6 +211,7 @@ async function toolBrainLifecycle(
 export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Cross-type lifecycle. action: tombstone marks a memory tombstoned in place; supersede links a successor; temporal-replace closes one fact and opens another at a shared instant; tip resolves a chain tip; curator slices observed-use verdicts; correct sweeps a correction, dry run by default.",
     inputSchema: {

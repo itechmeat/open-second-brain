@@ -771,6 +771,7 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
 export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_write_session",
+    kind: "write",
     description:
       "Provider-agnostic Brain write sessions (artifact and decision-panel kinds): open returns a generation prompt, submit validates the text, only clean artifacts commit. Correction loop, retry cap, collision guard, optional operator review. The calling agent generates; the Brain never does.",
     inputSchema: {
@@ -837,6 +838,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_pinned_context",
+    kind: "write",
     description:
       "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences. Pass `operations` to apply an ordered batch atomically (all-or-nothing).",
     inputSchema: {
@@ -880,6 +882,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context",
+    kind: "read",
     description:
       "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
     inputSchema: {

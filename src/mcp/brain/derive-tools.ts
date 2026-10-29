@@ -56,6 +56,7 @@ async function toolBrainDeriveFact(
 export const DERIVE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Commit a derived fact (a conclusion the agent reasoned from premises) as an unconfirmed preference with premise provenance. Supply `slug`, `topic`, `principle`, `premises` (ids), and `level` (deduced/inferred). OSB validates each premise exists. Opt-in: requires guardrails.derived_fact_synthesis.",
     inputSchema: {

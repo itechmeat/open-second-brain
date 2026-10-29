@@ -32,6 +32,7 @@ export const TOOL_HYDRATE_NAME = "tool_hydrate";
 export function buildHydrateTool(getTable: () => ReadonlyArray<ToolDefinition>): ToolDefinition {
   return {
     name: TOOL_HYDRATE_NAME,
+    kind: "read",
     description:
       "Two-pass tool discovery: no arguments returns the compact tool catalog (name, one-line description, group); names returns full schemas for the requested tools. Hidden tools stay callable via tools/call.",
     inputSchema: {

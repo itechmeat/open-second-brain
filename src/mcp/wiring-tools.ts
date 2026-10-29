@@ -215,6 +215,7 @@ function toolWiring(ctx: ServerContext, args: Record<string, unknown>): unknown 
 export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: WIRING_TOOL_NAME,
+    kind: "read",
     // Under the 300-character registry cap: the path policy and the
     // per-view field tables are long-form guidance, and `registry-guard.ts`
     // states that those belong in docs/mcp.md rather than in a schema every

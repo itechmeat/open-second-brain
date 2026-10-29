@@ -1913,6 +1913,7 @@ async function toolBrainSearchExpand(
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_feedback",
+    kind: "write",
     description:
       "Record explicit recall feedback (up/down) for one search result. Feeds the deterministic learned-weight fold; events land under Brain/search/feedback/.",
     inputSchema: RECALL_FEEDBACK_INPUT_SCHEMA,
@@ -1921,6 +1922,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_recall_gate",
+    kind: "read",
     description:
       "Classify whether recall should run. Diagnostics only; does not search. Pass `scores` AND `match_quality` together for an adequacy verdict; either alone is INVALID_PARAMS (see `dependentRequired`). A measurement decides the verdict: below-floor quality answers retrieve false. `admit` echoes it.",
     inputSchema: RECALL_GATE_INPUT_SCHEMA,
@@ -1929,6 +1931,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_search",
+    kind: "read",
     description:
       "Full-text search across the vault. Optional semantic layer when configured. Read-only. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
     inputSchema: SEARCH_INPUT_SCHEMA,
@@ -1938,6 +1941,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_search_expand",
+    kind: "read",
     description:
       "Progressive disclosure layers 2 + 3: drill a brain_search card (by chunk_id) into the fuller note and the paginated raw chunk transcript. Read-only; reuses the existing index.",
     inputSchema: SEARCH_EXPAND_INPUT_SCHEMA,
@@ -1947,6 +1951,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_eval",
+    kind: "read",
     description:
       "Score retrieval quality over a dataset against the active vault: hit@k, MRR, answer-containment@k, source-utilization, citation-depth, source warnings. Read-only.",
     inputSchema: EVAL_INPUT_SCHEMA,
@@ -1956,6 +1961,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_file_context",
+    kind: "read",
     description:
       "Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with terms derived from the path. A size gate skips trivial files. Read-only; no LLM.",
     inputSchema: FILE_CONTEXT_INPUT_SCHEMA,

@@ -225,6 +225,7 @@ function sourceRefArgs(raw: unknown): ReadonlyArray<ContinuitySourceRef> {
 export const GENERATION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Inbound, opt-in LLM generation tracing; the kernel never calls an LLM. action=record posts a generation's usage for a handoff, gated default-off via enable or generation_trace_enabled, storing prompt_hash + token counts only, never the prompt. action=list/summary read and join to memory paths.",

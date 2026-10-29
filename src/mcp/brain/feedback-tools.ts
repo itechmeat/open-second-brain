@@ -1147,6 +1147,7 @@ async function toolBrainExpire(
 export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_feedback",
+    kind: "write",
     description:
       "Record one Brain taste signal in `Brain/inbox/sig-*.md`. With `force_confirmed: true`, create the preference directly (skips the dream trial window).",
     inputSchema: {
@@ -1212,6 +1213,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_dream",
+    kind: "write",
     description:
       "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list and retriage. Typically scheduled via cron.",
     inputSchema: {
@@ -1282,6 +1284,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_apply_evidence",
+    kind: "write",
     description:
       "Record whether an active preference was applied, violated, or marked outdated against a freshly-produced durable artifact. Appends one event to `Brain/log/<today>.md`. A single `outdated` event triggers retire on the next dream pass.",
     inputSchema: {
@@ -1324,6 +1327,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_note",
+    kind: "write",
     description:
       "Append one narrative-milestone line (release shipped, PR merged, fact discovered) to today's Brain log under the `note` event kind. Use when neither brain_feedback nor brain_apply_evidence fits.",
     inputSchema: {
@@ -1346,6 +1350,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_observed_use",
+    kind: "write",
     description:
       "Record session-end observed-use verdicts (USED/IGNORED/CONTRADICTED) per injected memory. The host supplies structured verdicts; the kernel stores and aggregates them into the observed-reuse recall-ranking signal (no LLM).",
     inputSchema: {
@@ -1380,6 +1385,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: EXPIRE_TOOL,
+    kind: "write",
     description:
       "Set, change or clear the expiration_date of one signal or preference, by id. An expired memory is filtered out of default reads and never deleted or moved. Clearing is the explicit word 'none'.",
     inputSchema: {

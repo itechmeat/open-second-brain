@@ -155,6 +155,7 @@ async function toolBrainStorage(
 export const STORAGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_storage",
+    kind: "read",
     description:
       "Storage report: per-surface byte census (measured or refused by name), the growth forecast against the cap with its tier, and the usage sample this invocation records. Below local reach the census is not taken: measured: false, reason named. Read-only over vault content; appends one usage sample.",
     inputSchema: {

@@ -193,6 +193,7 @@ async function toolBrainTension(
 export const TENSION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Persisted-contradiction (tension) lifecycle. detect persists contradictions from notes.read_paths as open tensions (idempotent); list/show read; confirm, dismiss, resolve transition. verify: read-only advisory verdict from the optional tension decision-model use; never changes a tension.",
     inputSchema: {

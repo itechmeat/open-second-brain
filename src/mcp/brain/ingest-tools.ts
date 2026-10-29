@@ -783,6 +783,7 @@ async function toolBrainIngestBatchPlan(
 export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Ingest one text-bearing source into the brain. Supply `source_path` (vault path or URL), a `summary`, the extracted `entities`, and optional `relations`. OSB creates/updates entity pages and a per-source summary page that backlinks the source and lists its connections. Idempotent; no model, no OCR.",
     inputSchema: {
@@ -859,6 +860,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: SEARCH_TOOL,
+    kind: "read",
     description:
       "Find every Brain page derived from one EXACT source file (`source_file`: a vault path or URL): the ingest summary page, session-derived signals, `[[source]]` provenance wikilinks, and preferences folded from those signals. Read-only; each entry flags deletable vs protected mention.",
     inputSchema: {
@@ -882,6 +884,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: DELETE_TOOL,
+    kind: "write",
     description:
       "Remove everything derived from one EXACT source file. DRY-RUN BY DEFAULT: no `confirm` reports the blast radius, deletes nothing. `confirm` deletes derived entries + ingest index artifacts (shared/aggregate pages only reported); originals outside Brain/ only with `include_originals`. Auditable.",
     inputSchema: {
@@ -922,6 +925,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: BATCH_PLAN_TOOL,
+    kind: "write",
     description:
       "Plan a folder ingest into bounded parallel batches. Walks `source_dir` for ingestible files, skips unchanged ones via the content-hash manifest, and packs the new/modified remainder into batches bounded by `max_batch_bytes`/`max_batch_files`. Read-only; the caller dispatches each batch.",
     inputSchema: {

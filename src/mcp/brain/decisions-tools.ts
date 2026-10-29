@@ -405,6 +405,7 @@ async function toolBrainDecision(
 export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Decision tool. record captures a decision note (chosen, assumption, review date); outcome backfills it; rate rates it; show, list, compare and similar read past ones; history reads receipts; recall resurfaces a rated one; open parks a question with its options; resolve picks one; discard closes it.",
     inputSchema: {

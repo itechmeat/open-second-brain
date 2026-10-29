@@ -444,6 +444,7 @@ async function toolBrainHygiene(
 export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_hygiene",
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Memory hygiene. `scan`: contested truth slots, near-duplicate preferences, stale or orphaned pages, low-usefulness candidates, knowledge resting on url-only sources. `apply`: run selected finding ids. `refresh`: recompile stale pages. `archive_get`: archived source bytes by hash, local only.",

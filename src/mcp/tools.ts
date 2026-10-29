@@ -478,6 +478,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
   const all: ToolDefinition[] = [
     {
       name: CAPABILITY_DIAGNOSTIC_TOOL,
+      kind: "read",
       description:
         "Report runtime MCP tool availability and withheld-tool reasons for this server process.",
       inputSchema: {
@@ -490,6 +491,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "second_brain_status",
+      kind: "read",
       description: "Report Open Second Brain configuration and vault status.",
       inputSchema: {
         type: "object",
@@ -507,6 +509,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "second_brain_query",
+      kind: "read",
       description: "List vault pages with optional title substring filter.",
       inputSchema: {
         type: "object",
@@ -536,6 +539,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     ...SEARCH_TOOLS,
     {
       name: "vault_health",
+      kind: "read",
       description:
         "Run vault, config, and plugin manifest health checks, and report every state surface in the vault with its path, reachability, and the override that placed it.",
       inputSchema: {
@@ -552,6 +556,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "brain_artifact_get",
+      kind: "read",
       description:
         "Fetch the full payload of a previously preview-truncated tool result by its artifact_id. Read-only.",
       inputSchema: {
