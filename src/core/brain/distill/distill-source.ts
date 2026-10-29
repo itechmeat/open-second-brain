@@ -44,6 +44,17 @@
  * ({@link readSourceOrigin}, the byte-keeping form of `classifySourceOrigin`),
  * so a source this vault does not own commits in the quarantine lane the
  * retrieval trust gate can actually see.
+ *
+ * MARKDOWN NEUTRALIZATION (t_c2ac4fc8, review M4). The claim text is caller
+ * text composed into the page verbatim - on the untrusted lane it is
+ * third-party material the same way an untrusted summary's prose is. Under
+ * the markdown-neutralization gate's enforce mode, an UNTRUSTED source's
+ * claim text passes through the pure neutralizer at body assembly, after
+ * the quote check (which must verify the spans the caller actually sent);
+ * the writer's own block citation after the text is composed live. The
+ * page stamps `neutralized_markers` with the families it escaped, on
+ * change only. Off, shadow and the trusted lane write the claims
+ * verbatim.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -66,6 +77,7 @@ import {
   assertResponseShape,
 } from "../response-shape.ts";
 import {
+  INTAKE_TRUST,
   sourceContentHashFrontmatter,
   untrustedSourceFrontmatter,
   type IntakeTrust,
@@ -78,6 +90,13 @@ import {
 } from "../provenance/provenance.ts";
 import { isoSecond } from "../time.ts";
 import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  neutralizeMarkdown,
+  neutralizedMarkersFrontmatter,
+  resolveMarkdownNeutralizeModeForProcess,
+  type MarkdownStructureKind,
+} from "../text/neutralize-markdown.ts";
+import {
   CAPTURE_SCOPE,
   EXCERPT_HASH_KEY,
   assertExcerptAdmissible,
@@ -88,6 +107,7 @@ import {
   type CaptureScope,
 } from "../provenance/capture-scope.ts";
 import { BLOCK_ID_RE } from "./block-resolve.ts";
+import { BRAIN_DISTILLATION_KIND } from "./claim.ts";
 import type { DistillClaim } from "./claim.ts";
 import { checkClaimQuotes, type QuoteEvidence } from "./quote-check.ts";
 import {
@@ -98,8 +118,8 @@ import {
   type QuoteCheckReport,
 } from "./quote-verdict.ts";
 
-/** Frontmatter `kind:` marker of a distillation page. */
-export const BRAIN_DISTILLATION_KIND = "brain-distillation";
+/** Frontmatter `kind:` marker of a distillation page (defined in the claim leaf). */
+export { BRAIN_DISTILLATION_KIND };
 
 export type { DistillClaim } from "./claim.ts";
 
@@ -302,6 +322,13 @@ export function distillSource(
 ): DistillSourceResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // The write-time markdown neutralization gate (t_c2ac4fc8, review M4),
+  // resolved BEFORE ANY WRITE like every seam: a misconfigured mode is a
+  // misconfiguration of the process, not a verdict about this source, and
+  // refusing it after the page exists would half-apply the distillation.
+  // Whether the gate has work to do is decided below (untrusted origin,
+  // enforce only); resolving it here only moves the refusal earlier.
+  const gate = resolveMarkdownNeutralizeModeForProcess();
   validate(input);
 
   // The SAME normaliser the trust classifier uses, so the identity this page
@@ -351,10 +378,32 @@ export function distillSource(
   const createdAt = existed ? readCreatedAt(absPath, stamp) : stamp;
   const priorUpdatedAt = existed ? readUpdatedAt(absPath, stamp) : stamp;
 
+  // Claim-text neutralization (t_c2ac4fc8, review M4): the claims are the
+  // caller's text ABOUT the source, and an untrusted source makes them
+  // third-party material - under enforce mode each claim's text passes
+  // through the pure neutralizer before the bullets compose, so a planted
+  // `[[wikilink]]` (or any other structure row) lands escaped while the
+  // writer's own block citation after it composes live. The quote check
+  // above already ran on the text the caller actually sent: verification
+  // answers "does the source say this", which escaping would corrupt.
+  // Off, shadow and the trusted lane leave every claim verbatim.
+  let pageClaims = checked.claims;
+  let neutralized: FrontmatterMap = {};
+  if (origin.trust === INTAKE_TRUST.untrusted && gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
+    const kinds = new Set<MarkdownStructureKind>();
+    pageClaims = checked.claims.map((claim) => {
+      const neutral = neutralizeMarkdown(claim.text);
+      if (!neutral.changed) return claim;
+      for (const kind of neutral.kinds) kinds.add(kind);
+      return { ...claim, text: neutral.text };
+    });
+    neutralized = neutralizedMarkersFrontmatter([...kinds].toSorted());
+  }
+
   const claimsSection = [
     "## Claims",
     "",
-    ...checked.claims.map((c) => renderClaim(c, canonicalSource)),
+    ...pageClaims.map((c) => renderClaim(c, canonicalSource)),
   ].join("\n");
   // The rendered section ends in a newline; the join supplies the separation.
   const excerptSection = excerpt !== undefined ? renderExcerptSection(excerpt).trimEnd() : "";
@@ -382,6 +431,10 @@ export function distillSource(
       // rather than ranking it beside the operator's own notes. A trusted
       // source adds nothing, keeping its page byte-identical to before.
       ...untrustedSourceFrontmatter(origin.trust),
+      // Names the structure families enforce-mode neutralization removed from
+      // the claim text, ON CHANGE ONLY - the same conditional-spread shape as
+      // the marker above, so an unchanged page gains zero bytes.
+      ...neutralized,
       // How much of the source the page holds; nothing for a local file, so
       // its page stays byte-identical to before.
       ...captureScopeFrontmatter(capture.scope),

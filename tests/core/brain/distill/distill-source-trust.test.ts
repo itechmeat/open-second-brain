@@ -55,6 +55,11 @@ import {
   type DistillSourceResult,
 } from "../../../../src/core/brain/distill/distill-source.ts";
 import { hashFile } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { planPlantedRows } from "../../../../src/core/brain/planted-rows.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeModeError,
+} from "../../../../src/core/brain/text/neutralize-markdown.ts";
 import {
   SOURCE_HASH_MAX_BYTES,
   SourceTrustError,
@@ -306,5 +311,133 @@ describe("distillSource - a trusted page is what it was, plus what was added", (
     const added = `${SOURCE_CONTENT_HASH_FRONTMATTER_KEY}: ${hashFile(abs)}\n`;
     expect(md).toContain(added);
     expect(md.replace(added, "")).toBe(BEFORE_THIS_UNIT.replace("HASH", hashFile(abs)));
+  });
+});
+
+/**
+ * Claim-text neutralization on the untrusted distill lane (review M4): the
+ * claims are caller text composed into the page verbatim, so a planted
+ * `[[...]]` in a claim stayed live on the quarantined page even under
+ * enforce - the summary seam neutralized, the distill seam did not.
+ */
+
+/** Run `run` with the gate mode env twin set, restoring it afterwards. */
+function withGateMode(mode: string, run: () => void): void {
+  const saved = process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+  process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = mode;
+  try {
+    run();
+  } finally {
+    if (saved === undefined) delete process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+    else process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = saved;
+  }
+}
+
+function pageBody(res: DistillSourceResult): string {
+  return parseFrontmatter(join(vault, res.distillationPath))[1];
+}
+
+describe("distillSource - claim neutralization on the untrusted lane", () => {
+  const URL_SOURCE = "https://example.test/claims";
+  const PLANTED_CLAIM = "The [[planted]] claim";
+
+  test("enforce escapes planted structure in claim text; the writer citation stays live", () => {
+    withGateMode("enforce", () => {
+      const res = distillSource(
+        vault,
+        { sourcePath: URL_SOURCE, claims: [{ text: PLANTED_CLAIM, block: "abc" }] },
+        { agent: "claude", now: NOW },
+      );
+      const body = pageBody(res);
+      // The caller's claim text is escaped; the writer's own block citation
+      // after it is not.
+      expect(body).toContain(
+        "- The \\[\\[planted\\]\\] claim ([[https://example.test/claims#^abc]])",
+      );
+      // The conditional provenance key names what changed, on change only.
+      expect(pageMeta(res)["neutralized_markers"]).toEqual(["wikilink"]);
+      // The page is silent for the planted-rows audit: the Claims, Excerpt
+      // and Sources sections and the source-tied citation are the writer's.
+      expect(planPlantedRows(vault).planted.map((p) => p.path)).not.toContain(res.distillationPath);
+    });
+  });
+
+  test("quote verification runs on the claim text the caller sent", () => {
+    withGateMode("enforce", () => {
+      // A URL source with an admitted excerpt is untrusted AND quotable:
+      // the excerpt is the evidence the spans are checked against.
+      const res = distillSource(
+        vault,
+        {
+          sourcePath: URL_SOURCE,
+          claims: [{ text: 'The "sky is blue" [[planted]] today' }],
+          excerpt: "The sky is blue today",
+        },
+        { agent: "claude", now: NOW },
+      );
+      // The verified quote is counted against the ORIGINAL text; only the
+      // planted link's sigils are escaped on the page.
+      expect(res.quotes?.verified_in_source).toBe(1);
+      const body = pageBody(res);
+      expect(body).toContain('- The "sky is blue" \\[\\[planted\\]\\] today');
+      // The scanner hands the frontmatter scalar back as written ("1").
+      expect(pageMeta(res)["quotes_verified"]).toBe("1");
+    });
+  });
+
+  test("gate off stores the claim text verbatim and the audit reports the planted row", () => {
+    const res = distillSource(
+      vault,
+      { sourcePath: URL_SOURCE, claims: [{ text: PLANTED_CLAIM, block: "abc" }] },
+      { agent: "claude", now: NOW },
+    );
+    const body = pageBody(res);
+    expect(body).toContain("- The [[planted]] claim ([[https://example.test/claims#^abc]])");
+    expect(pageMeta(res)["neutralized_markers"]).toBeUndefined();
+    const planted = planPlantedRows(vault).planted.find((p) => p.path === res.distillationPath);
+    expect(planted).toBeDefined();
+    expect(planted!.kinds).toEqual(["wikilink"]);
+    expect(planted!.count).toBe(1);
+  });
+
+  test("shadow stores the claim text verbatim", () => {
+    withGateMode("shadow", () => {
+      const res = distillSource(
+        vault,
+        { sourcePath: URL_SOURCE, claims: [{ text: PLANTED_CLAIM }] },
+        { agent: "claude", now: NOW },
+      );
+      expect(pageBody(res)).toContain("- The [[planted]] claim");
+      expect(pageMeta(res)["neutralized_markers"]).toBeUndefined();
+    });
+  });
+
+  test("a trusted source's claims stay verbatim under enforce", () => {
+    withGateMode("enforce", () => {
+      seed(SOURCE);
+      const res = distillSource(
+        vault,
+        { sourcePath: SOURCE, claims: [{ text: PLANTED_CLAIM }] },
+        { agent: "claude", now: NOW },
+      );
+      expect(res.trust).toBe(INTAKE_TRUST.trusted);
+      // Neutralization keys off provenance: the claims about the operator's
+      // own file are the caller's writing about trusted material.
+      expect(pageBody(res)).toContain("- The [[planted]] claim");
+      expect(pageMeta(res)["neutralized_markers"]).toBeUndefined();
+    });
+  });
+
+  test("an invalid gate mode refuses before any write", () => {
+    expect(() =>
+      withGateMode("yes", () =>
+        distillSource(
+          vault,
+          { sourcePath: URL_SOURCE, claims: [{ text: "A claim" }] },
+          { agent: "claude", now: NOW },
+        ),
+      ),
+    ).toThrow(MarkdownNeutralizeModeError);
+    expect(distillationPages()).toEqual([]);
   });
 });

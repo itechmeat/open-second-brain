@@ -31,6 +31,21 @@
  * records of what an untrusted source claimed rather than edits to what the
  * operator already holds.
  *
+ * Markdown neutralization (t_c2ac4fc8, review M4): the entity page H1 is
+ * composed FROM the third-party display name, and the aliases are
+ * third-party strings stored beside it - on the untrusted lane those are
+ * caller text the same way a summary's prose is, so under the
+ * markdown-neutralization gate's enforce mode they pass through the pure
+ * neutralizer before any page bytes compose. A name whose text plants a
+ * `[[wikilink]]` (or any other structure row) then writes an H1 whose
+ * sigils - the planted ones and, with them, the writer's own heading
+ * sigil - are escaped, so the page's line grammars see no live row on it.
+ * Identity is untouched: the frontmatter name and the id key on the raw
+ * label, relations still resolve by it, and the escaped H1 is a rendering
+ * of the record, not a different record. Off and shadow write verbatim;
+ * the trusted lane never neutralizes (its names are the caller's writing
+ * about the operator's own material).
+ *
  * Disposition contract (write-side trust, Task 12): the CALLING lane resolves
  * the review disposition ONCE for the logical write this intake belongs to and
  * hands the verdict in through {@link IntakeOptions.disposition}. The arms:
@@ -83,6 +98,11 @@ import {
 } from "../entities/canonical.ts";
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  neutralizeMarkdown,
+  resolveMarkdownNeutralizeModeForProcess,
+} from "../text/neutralize-markdown.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
 import {
   UNTRUSTED_ORIGIN,
@@ -346,7 +366,23 @@ function remotelyReadable(vault: string): (rel: string) => boolean {
 }
 
 /**
- * Intake a typed extraction into the entity registry. Validates the full
+ * The H1 heading text this intake renders for an entity display name.
+ * Verbatim unless `active` - the untrusted lane under the gate's enforce
+ * mode - in which case the name passes through the neutralizer, and when
+ * the NAME itself carries structure the whole composed H1 line (the
+ * writer's heading sigil included) is escaped, so the page's line
+ * grammars see no live row anywhere on it. Detection runs on the name
+ * ALONE first: the writer's `# ` template is the writer's, and a clean
+ * name must not lose its heading to it.
+ */
+function entityH1Name(displayName: string, active: boolean): string {
+  if (!active) return displayName;
+  if (!neutralizeMarkdown(displayName).changed) return displayName;
+  return neutralizeMarkdown(`# ${displayName}`).text;
+}
+
+/**
+ * Intake one typed extraction into the entity registry. Validates the full
  * payload first (throwing {@link IntakeValidationError} with no write on
  * failure), then upserts entities and applies relations idempotently.
  */
@@ -356,12 +392,27 @@ export function intakeExtraction(
   opts: IntakeOptions,
 ): IntakeResult {
   validateIntake(intake);
+  // The write-time markdown neutralization gate (t_c2ac4fc8, review M4),
+  // resolved BEFORE ANY WRITE like every seam: a misconfigured mode is a
+  // misconfiguration of the process, not a verdict about this extraction,
+  // and refusing it after the first entity page exists would half-apply
+  // the intake. Whether the gate has work to do is decided per entity
+  // below (untrusted origin, enforce only); resolving it here only moves
+  // the refusal earlier.
+  const gate = resolveMarkdownNeutralizeModeForProcess();
   // Before any write, like the payload validation above: an intake that
   // cannot be classified must not leave half its entities behind.
   const origin = resolveIntakeOrigin(vault, opts.provenance, opts.readable);
 
   const provenanceSection = renderProvenanceSection(opts.provenance);
   const untrustedOrigin = origin.trust === INTAKE_TRUST.untrusted;
+  // The lane the neutralizer answers to: an untrusted intake's entity
+  // display text is third-party material the same way a summary's prose
+  // is, so under enforce mode the name's H1 rendering and the aliases
+  // pass through the pure neutralizer before any page bytes compose. The
+  // frontmatter name and the identity key stay raw - the escaped H1 is a
+  // rendering of the record, not a different record.
+  const neutralizeActive = untrustedOrigin && gate === MARKDOWN_NEUTRALIZE_MODE.enforce;
 
   const entitiesCreated: string[] = [];
   const entitiesUpdated: string[] = [];
@@ -383,16 +434,25 @@ export function intakeExtraction(
     // Stamp provenance into the body only when creating the page, so a later
     // mention of the same entity does not overwrite its first citation. The
     // registry decides whether this is a creation, in the lane it writes in;
-    // asking here would answer for the canonical lane only.
+    // asking here would answer for the canonical lane only. The H1's name
+    // text is the lane-neutralized rendering (review M4); the record's name
+    // below stays raw.
     const bodyOnCreate = provenanceSection
-      ? `# ${entity.name.trim()}\n\n${provenanceSection}`
+      ? `# ${entityH1Name(entity.name.trim(), neutralizeActive)}\n\n${provenanceSection}`
       : undefined;
+    // Aliases are third-party strings stored beside the name; on the
+    // neutralizing lane they are stored with their structure sigils
+    // escaped, so no reader of the page extracts a link from one.
+    const laneAliases =
+      entity.aliases !== undefined && neutralizeActive
+        ? entity.aliases.map((alias) => neutralizeMarkdown(alias).text)
+        : entity.aliases;
     let res;
     try {
       res = upsertEntity(vault, {
         category,
         name: entity.name,
-        ...(entity.aliases !== undefined ? { aliases: entity.aliases } : {}),
+        ...(laneAliases !== undefined ? { aliases: laneAliases } : {}),
         agent: opts.agent,
         now: opts.now,
         ...(entity.confidence !== undefined ? { confidence: entity.confidence } : {}),
