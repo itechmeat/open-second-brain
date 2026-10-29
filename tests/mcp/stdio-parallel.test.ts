@@ -26,8 +26,11 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { serveStdio, STDIO_READ_CONCURRENCY } from "../../src/mcp/stdio.ts";
+import { RequestDrain, type DrainOutcome } from "../../src/mcp/drain.ts";
 import { MCPServer, type JsonRpcRequest, type JsonRpcResponse } from "../../src/mcp/server.ts";
-import { JSONRPC_VERSION } from "../../src/mcp/protocol.ts";
+import { JSONRPC_VERSION, PROTOCOL_VERSION } from "../../src/mcp/protocol.ts";
+import { PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
 
 const temps: string[] = [];
 
@@ -109,19 +112,38 @@ const READ_TOOL = "brain_search";
 const WRITE_TOOL = "brain_note";
 
 /** Start a loop over a scripted server; returns everything the test drives. */
-function startScripted(): {
+function startScripted(opts: { drainDeadlineMs?: number } = {}): {
   loop: Promise<number>;
   server: ScriptedServer;
   stdin: PassThrough;
   frames: () => string[];
+  close: () => Promise<DrainOutcome>;
 } {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const chunks: string[] = [];
   stdout.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
   const server = new ScriptedServer({ vault: tempVault() });
-  const loop = serveStdio({ vault: server.vault }, { stdin, stdout, server });
-  return { loop, server, stdin, frames: () => chunks.join("").split("\n").filter(Boolean) };
+  let drain: RequestDrain | undefined;
+  const loop = serveStdio(
+    { vault: server.vault },
+    {
+      stdin,
+      stdout,
+      ...(opts.drainDeadlineMs !== undefined ? { drainDeadlineMs: opts.drainDeadlineMs } : {}),
+      onStart: (handle) => {
+        drain = handle.drain;
+      },
+      server,
+    },
+  );
+  return {
+    loop,
+    server,
+    stdin,
+    frames: () => chunks.join("").split("\n").filter(Boolean),
+    close: () => drain!.drain(opts.drainDeadlineMs ?? 10_000),
+  };
 }
 
 describe("stdio parallel reads", () => {
@@ -246,6 +268,156 @@ describe("stdio parallel reads", () => {
     await Bun.sleep(25);
     expect(settled).toBe(false);
     release(1);
+    expect(await loop).toBe(0);
+  });
+});
+
+/**
+ * The frame-integrity invariants, on a real stream against the real
+ * dispatch table (no scripted server): whatever the concurrency does to
+ * ORDER, it must never touch FRAMES.
+ */
+describe("stdio frame integrity under concurrency", () => {
+  function realLoop(vault: string): {
+    loop: Promise<number>;
+    stdin: PassThrough;
+    chunks: () => string;
+  } {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const collected: string[] = [];
+    stdout.on("data", (c: Buffer) => collected.push(c.toString("utf8")));
+    const loop = serveStdio({ vault }, { stdin, stdout });
+    return { loop, stdin, chunks: () => collected.join("") };
+  }
+
+  test("every frame stays newline-terminated and parses under N concurrent calls", async () => {
+    const vault = tempVault();
+    bootstrapBrain(vault);
+    const { loop, stdin, chunks } = realLoop(vault);
+    stdin.write(
+      JSON.stringify({
+        jsonrpc: JSONRPC_VERSION,
+        id: 0,
+        method: "initialize",
+        params: { protocolVersion: PROTOCOL_VERSION },
+      }) + "\n",
+    );
+    const N = 8;
+    for (let id = 1; id <= N; id++) {
+      stdin.write(
+        JSON.stringify({
+          jsonrpc: JSONRPC_VERSION,
+          id,
+          method: "tools/call",
+          params: { name: "second_brain_status", arguments: {} },
+        }) + "\n",
+      );
+    }
+    stdin.end();
+    expect(await loop).toBe(0);
+
+    // Frame atomicity: every write was exactly one newline-terminated
+    // frame, so the joined stream splits into clean JSON lines and no
+    // chunk ever ends mid-frame.
+    const raw = chunks();
+    for (const chunk of raw.split("\n").slice(0, -1)) {
+      expect(() => JSON.parse(chunk)).not.toThrow();
+    }
+    const frames = raw
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as JsonRpcResponse);
+    const ids = frames.map((f) => f.id).toSorted();
+    expect(ids).toEqual([0, ...Array.from({ length: N }, (_, i) => i + 1)].toSorted());
+    // N+1 distinct answers for N+1 requests: an id was neither lost nor
+    // answered twice.
+    expect(new Set(ids).size).toBe(N + 1);
+  });
+
+  test("cross-request progress interleaving is legal and adjacency holds per request", async () => {
+    const vault = tempVault();
+    bootstrapBrain(vault);
+    const { loop, stdin, chunks } = realLoop(vault);
+    const briefCall = (id: number, token: string): string =>
+      JSON.stringify({
+        jsonrpc: JSONRPC_VERSION,
+        id,
+        method: "tools/call",
+        params: {
+          name: "brain_brief",
+          arguments: { view: "operator" },
+          _meta: { progressToken: token },
+        },
+      });
+    // Two read-classified calls issued back-to-back: both dispatch
+    // concurrently on the real stream.
+    stdin.write(briefCall(2, "tok-a") + "\n");
+    stdin.write(briefCall(3, "tok-b") + "\n");
+    await until(() => chunks().includes('"id":2'), "response 2");
+    await until(() => chunks().includes('"id":3'), "response 3");
+    stdin.end();
+    expect(await loop).toBe(0);
+
+    const frames = chunks()
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // No spliced frame anywhere: the split above parsed every line
+    // cleanly, which only holds when no notification was spliced inside
+    // a response frame.
+    // Per-request adjacency: ALL of a request's progress notifications
+    // precede ITS response, whichever order the two responses arrive in.
+    const indexOf = (id: number) => frames.findIndex((f) => f["id"] === id);
+    const response2 = indexOf(2);
+    const response3 = indexOf(3);
+    expect(response2).toBeGreaterThan(-1);
+    expect(response3).toBeGreaterThan(-1);
+    const notifications = frames
+      .map((f, i) => ({ f, i }))
+      .filter(({ f }) => f["method"] === PROGRESS_NOTIFICATION_METHOD);
+    expect(notifications.length).toBeGreaterThan(0);
+    for (const { f, i } of notifications) {
+      const token = (f["params"] as Record<string, unknown>)["progressToken"];
+      expect(i).toBeLessThan(token === "tok-a" ? response2 : response3);
+    }
+    // Both requests were answered by their own ids, whatever the order.
+    expect(new Set([frames[response2]!["id"], frames[response3]!["id"]])).toEqual(new Set([2, 3]));
+  });
+});
+
+describe("the stdio drain under parallel dispatch", () => {
+  test("the drain deadline names the reads it abandoned", async () => {
+    const { loop, server, stdin, close } = startScripted({ drainDeadlineMs: 60 });
+    stdin.write(call(1, READ_TOOL) + "\n" + call(2, READ_TOOL) + "\n");
+    await until(() => server.log.filter((e) => e.event === "start").length === 2, "both reads");
+    const outcome = await close();
+    expect(outcome.state).toBe("deadline_expired");
+    expect(outcome.abandoned.map((r) => r.label).toSorted()).toEqual([
+      "tools/call (id 1)",
+      "tools/call (id 2)",
+    ]);
+    // The abandoned reads still settle and still answer: abandoning the
+    // WAIT is not dropping the work.
+    release(1);
+    release(2);
+    stdin.end();
+    expect(await loop).toBe(0);
+    expect(server.log.filter((e) => e.event === "end").length).toBe(2);
+  });
+
+  test("close() resolves drained once the held reads settle, however many", async () => {
+    const { loop, server, stdin, close } = startScripted({ drainDeadlineMs: 5_000 });
+    stdin.write([1, 2, 3].map((id) => call(id, READ_TOOL)).join("\n") + "\n");
+    await until(() => server.log.filter((e) => e.event === "start").length === 3, "all three");
+    const closing = close();
+    release(1);
+    release(2);
+    release(3);
+    const outcome = await closing;
+    expect(outcome.state).toBe("drained");
+    expect(outcome.abandoned).toEqual([]);
+    stdin.end();
     expect(await loop).toBe(0);
   });
 });
