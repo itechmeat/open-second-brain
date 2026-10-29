@@ -75,8 +75,11 @@ describe("neutralizeMarkdown: wikilinks", () => {
     // `[[a\]]`: the last `]` carries an odd backslash run, the detector's
     // own already-escaped shape. Re-escaping it would grow the bytes on a
     // second pass; checking each bracket's run keeps the escape one pass.
+    // The readers hold the span to the same rule - an escaped `]` closes
+    // no link, so the span extracts as nothing (the closing-bracket half
+    // of the reader-parity guarantee below).
     const src = "[[a\\]]";
-    expect(extractWikilinks(src)).toEqual(["a\\"]);
+    expect(extractWikilinks(src)).toEqual([]);
     const out = neutralizeMarkdown(src);
     expect(out.text).toBe("\\[\\[a\\]\\]");
     expect(extractWikilinks(out.text)).toEqual([]);
@@ -316,6 +319,45 @@ describe("neutralizeMarkdown: escape awareness and idempotence", () => {
     // if a seam ever leaked them, so a silent leak is visible here.
     expect(neutralizeMarkdown("- [[some-id]]").text).toBe("- \\[\\[some-id\\]\\]");
     expect(neutralizeMarkdown("## Guidance").text).toBe("\\#\\# Guidance");
+  });
+});
+
+describe("neutralizeMarkdown: wikilink reader parity (escaped brackets)", () => {
+  // The detector and extractWikilinks must answer "is this a link?" with
+  // ONE truth: whatever the detector leaves (already-escaped data) the
+  // extractor must find inert, so an enforce-mode write can never leave
+  // bytes that still join the link graph - and the doctor's planted-rows
+  // audit, which runs the same detection, counts exactly the rows the
+  // readers would have extracted.
+  const adversarial = [
+    "\\[[pref-evil]] see",
+    "\\[[pref-evil\nnote]] see",
+    "\\\\[[pref-evil]] see",
+    "[[pref-evil\\]] see",
+    "[[pref-evil\nnote\\]] see",
+  ];
+
+  test("neutralize output of adversarial escaped-bracket inputs extracts zero links", () => {
+    for (const src of adversarial) {
+      const out = neutralizeMarkdown(src);
+      expect(extractWikilinks(out.text)).toEqual([]);
+    }
+  });
+
+  test("an escaped multi-line wikilink is inert to both the detector and the extractor", () => {
+    const src = "\\[[pref-evil\nnote]] see";
+    expect(detectMarkdownStructure(src)).toEqual([]);
+    expect(neutralizeMarkdown(src).changed).toBe(false);
+    expect(extractWikilinks(src)).toEqual([]);
+  });
+
+  test("the idempotence fixpoint holds on the escaped-bracket inputs", () => {
+    for (const src of adversarial) {
+      const once = neutralizeMarkdown(src);
+      const twice = neutralizeMarkdown(once.text);
+      expect(twice.text).toBe(once.text);
+      expect(twice.changed).toBe(false);
+    }
   });
 });
 

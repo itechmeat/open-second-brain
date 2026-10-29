@@ -114,6 +114,20 @@ describe("lintWrittenPages - findings", () => {
     expect(report.truncated).toBe(false);
   });
 
+  test("an escaped bracket opens no wikilink to lint", () => {
+    // `\[[pref-ghost]]` is literal text by the same odd-backslash-run
+    // rule every link reader applies; it names no target, so it raises
+    // no broken-link row, while a link after an even run stays live.
+    const escaped = writeNote("Notes/Escaped.md", "---\ntitle: E\n---\n\nsee \\[[pref-ghost]]\n");
+    expect(lintWrittenPages(vault, [escaped], READ_ALL).findings).toEqual([]);
+    const closed = writeNote("Notes/EscClose.md", "---\ntitle: C\n---\n\nsee [[pref-ghost\\]]\n");
+    expect(lintWrittenPages(vault, [closed], READ_ALL).findings).toEqual([]);
+    const live = writeNote("Notes/Live.md", "---\ntitle: L\n---\n\nsee \\\\[[pref-ghost]]\n");
+    const report = lintWrittenPages(vault, [live], READ_ALL);
+    expect(report.findings.length).toBe(1);
+    expect(report.findings[0]).toMatchObject({ code: "broken-wikilink", path: "pref-ghost" });
+  });
+
   test("a link to a merged page names the FULLY resolved canonical target", () => {
     writePref("canon");
     writePref("mid", { merged_into: "pref-canon" });

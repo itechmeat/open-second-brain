@@ -61,6 +61,20 @@ describe("lintConsolidate — fix-merged-link", () => {
     expect(content).toContain("[[pref-canon#section]]");
   });
 
+  test("an escaped bracket names no link to converge", () => {
+    // `\[[pref-dup]]` is literal text by the odd-backslash-run rule every
+    // link reader applies; a merge over its target would mutate bytes
+    // that hold no link, so the rewriter skips the span entirely.
+    writePref("canon", { topic: "x", principle: "y" });
+    writePref("dup", { topic: "x", principle: "y", merged_into: "pref-canon" });
+    const path = join(vault, "Brain", "log", "2026-05-25.md");
+    writeFileSync(path, "saw \\[[pref-dup]] today\n");
+
+    const report = lintConsolidate(vault, { apply: true });
+    expect(report.fixes).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe("saw \\[[pref-dup]] today\n");
+  });
+
   test("a two-step merge converges in ONE pass", () => {
     // A -> B -> C. The single-hop merge map rewrote [[pref-a]] to
     // [[pref-b]], reported a `to` that was itself merged away, and needed

@@ -50,7 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
-import { WIKILINK_TARGET_RE, maskCodeRegions } from "./brain/wikilink.ts";
+import { WIKILINK_TARGET_RE, isLiveWikilinkSpan, maskCodeRegions } from "./brain/wikilink.ts";
 import {
   FileAlreadyExistsError,
   atomicCreateFileSyncExclusive,
@@ -569,13 +569,17 @@ export function slugify(value: string): string {
 
 /**
  * Extract unique `[[wikilink]]` targets from Markdown content. Skips media
- * file extensions and links inside fenced or inline code blocks.
+ * file extensions, links inside fenced or inline code blocks, and links
+ * whose opening or closing bracket is backslash-escaped (an odd backslash
+ * run before it - the same rule the neutralizer's detector applies, so a
+ * `\[[literal]]` span is data here too and never joins the link graph).
  */
 export function extractWikilinks(content: string): string[] {
   const masked = maskCodeRegions(content, () => " ");
   const seen = new Set<string>();
   const result: string[] = [];
   for (const m of masked.matchAll(WIKILINK_TARGET_RE)) {
+    if (!isLiveWikilinkSpan(masked, m.index!, m.index! + m[0].length)) continue;
     const target = m[1]!;
     const dot = target.lastIndexOf(".");
     const ext = dot >= 0 ? target.slice(dot).toLowerCase() : "";

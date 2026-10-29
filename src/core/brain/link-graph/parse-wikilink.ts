@@ -29,7 +29,12 @@
 
 import { basename } from "node:path";
 
-import { ANCHORED_WIKILINK_RE, RICH_WIKILINK_RE, maskCodeRegions } from "../wikilink.ts";
+import {
+  ANCHORED_WIKILINK_RE,
+  RICH_WIKILINK_RE,
+  isLiveWikilinkSpan,
+  maskCodeRegions,
+} from "../wikilink.ts";
 
 /**
  * Local regex for the rich extractor. Captures the full bracket
@@ -167,7 +172,10 @@ export function parseWikilinkRich(value: string): WikilinkParse {
  * each through {@link parseWikilinkRich}.
  *
  * Skips text inside fenced or inline code blocks (mirrors the
- * masking pass in `extractWikilinks` from `vault.ts`). Media-extension
+ * masking pass in `extractWikilinks` from `vault.ts`), and links whose
+ * opening or closing bracket is backslash-escaped - the same
+ * odd-backslash-run rule `extractWikilinks` applies, so an escaped
+ * `[[body]]` is literal text and plants no backlink. Media-extension
  * targets (`.png`, `.pdf`, …) are dropped so an embed-style link
  * does not pollute the backlink index.
  *
@@ -178,6 +186,7 @@ export function extractWikilinkRichBodies(content: string): ReadonlyArray<string
   const masked = maskCodeRegions(content, () => " ");
   const out: string[] = [];
   for (const m of masked.matchAll(RICH_WIKILINK_RE)) {
+    if (!isLiveWikilinkSpan(masked, m.index!, m.index! + m[0].length)) continue;
     const body = m[1]!;
     // Drop embed-style media links - same filter as
     // `extractWikilinks` in `vault.ts`. The check inspects the

@@ -73,7 +73,7 @@
  * write stays byte-identical to before it existed.
  */
 
-import { codeRegions, WIKILINK_TARGET_RE } from "../wikilink.ts";
+import { codeRegions, precededByOddBackslashRun, WIKILINK_TARGET_RE } from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
 import { fencedLineMask } from "../source-links.ts";
 import { envOrConfig } from "../../validate.ts";
@@ -146,21 +146,6 @@ function backtickRun(s: string): number {
   let n = 0;
   while (n < s.length && s[n] === BACKTICK) n++;
   return n;
-}
-
-/**
- * Whether the character at `index` is preceded by an ODD run of
- * backslashes - the CommonMark shape of "already escaped by the author",
- * which the detectors treat as data rather than structure.
- */
-function precededByOddBackslashRun(s: string, index: number): boolean {
-  let n = 0;
-  let i = index - 1;
-  while (i >= 0 && s[i] === "\\") {
-    n++;
-    i--;
-  }
-  return n % 2 === 1;
 }
 
 /**

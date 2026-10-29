@@ -12,6 +12,7 @@
  */
 
 import type { FrontmatterMap } from "../types.ts";
+import { isLiveWikilinkSpan } from "./wikilink.ts";
 
 /** Heading of the canonical provenance section (`provenance.ts`). */
 const SOURCES_HEADING_RE = /^##\s+Sources\s*$/;
@@ -120,7 +121,13 @@ export function sourcesSectionTargets(body: string): ReadonlyArray<string> {
       inSection = false;
       continue;
     }
-    for (const match of line.matchAll(WIKILINK_RE)) targets.push(wikilinkTarget(match[0]));
+    for (const match of line.matchAll(WIKILINK_RE)) {
+      // A bracket behind an odd backslash run is escaped data and opens
+      // or closes no link - the same rule `extractWikilinks` and the
+      // neutralizer's detector apply - so an escaped span cites nothing.
+      if (!isLiveWikilinkSpan(line, match.index!, match.index! + match[0].length)) continue;
+      targets.push(wikilinkTarget(match[0]));
+    }
   }
   return targets;
 }

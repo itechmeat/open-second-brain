@@ -155,4 +155,13 @@ describe("sourcesSectionTargets", () => {
       "a.md",
     ]);
   });
+
+  test("an escaped bracket opens no source link", () => {
+    // A backslash-escaped `[[` is literal text, so the row cites nothing
+    // - the same odd-backslash-run rule the neutralizer's detector and
+    // the other link readers apply.
+    expect(sourcesSectionTargets("## Sources\n\n- \\[[a.md]]\n")).toEqual([]);
+    expect(sourcesSectionTargets("## Sources\n\n- [[a.md\\]]\n")).toEqual([]);
+    expect(sourcesSectionTargets("## Sources\n\n- \\[[a.md]] and [[b.md]]\n")).toEqual(["b.md"]);
+  });
 });
