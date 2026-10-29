@@ -14,6 +14,11 @@ import { join, posix } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
+import { runDoctor } from "../../src/core/brain/doctor.ts";
+import {
+  GITIGNORE_GUARD_IGNORE_LINE,
+  GIT_TRACKED_DERIVED_STATE_CODE,
+} from "../../src/core/brain/doctor/git-tracked-state-check.ts";
 import { DEFAULT_BEGIN_MARKER, DEFAULT_END_MARKER } from "../../src/core/install/managed-block.ts";
 
 // Shared temp scratch for both vault and machine-config directories.
@@ -38,6 +43,22 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });
+
+/** Run `fn`, capturing everything it writes to stderr; restore afterwards. */
+function captureStderr(fn: () => unknown): { stderr: string } {
+  const original = process.stderr.write.bind(process.stderr);
+  let captured = "";
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    fn();
+  } finally {
+    process.stderr.write = original;
+  }
+  return { stderr: captured };
+}
 
 describe("bootstrapBrain — empty vault", () => {
   test("creates every Brain directory and the three managed files", () => {
@@ -69,6 +90,9 @@ describe("bootstrapBrain — empty vault", () => {
     expect(result.created).toContain(".gitignore");
     expect(result.overwritten.length).toBe(0);
     expect(result.skipped.length).toBe(0);
+    // The guard outcome is carried structurally, so machine readers can
+    // tell a clean seed from an unresolved one without parsing stderr.
+    expect(result.guard).toEqual({ status: "created" });
 
     // _brain.yaml byte-equals the default constant.
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
@@ -142,8 +166,10 @@ describe("bootstrapBrain — force overwrite", () => {
     expect(result.overwritten).toContain(posix.join("Brain", "_BRAIN.md"));
     // The gitignore guard does not take part in force: a managed block
     // merge never rewrites over the operator's file, so the second run
-    // leaves it in skipped (t_206562ae).
+    // leaves it in skipped (t_206562ae) — a CLEAN skip, reflected in the
+    // guard outcome.
     expect(result.skipped).toEqual([".gitignore"]);
+    expect(result.guard?.status).toBe("skipped");
 
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
       DEFAULT_BRAIN_CONFIG_YAML,
@@ -348,4 +374,108 @@ describe("bootstrapBrain — gitignore guard (t_206562ae)", () => {
     expect(result.created).toContain(".gitignore");
     expect(existsSync(join(vault, ".gitignore"))).toBe(true);
   });
+});
+
+describe("bootstrapBrain — gitignore guard degradation (warn-and-continue)", () => {
+  /** `git` in the vault; git is on PATH everywhere this suite runs. */
+  function git(...args: string[]): void {
+    const run = Bun.spawnSync(["git", ...args], { cwd: vault, stdout: "pipe", stderr: "pipe" });
+    if (run.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${run.stderr.toString()}`);
+    }
+  }
+
+  test("a directory .gitignore cannot abort the bootstrap: warn, report skipped, continue", () => {
+    // A chmod-denied, mandatory-locked or directory .gitignore used to
+    // kill init midway — after the Brain dirs and the identity stamp
+    // were written, before _brain.yaml existed: a half-bootstrapped
+    // vault, taken down by a hygiene write the doctor reports anyway.
+    mkdirSync(join(vault, ".gitignore"), { recursive: true });
+
+    let result!: ReturnType<typeof bootstrapBrain>;
+    const { stderr } = captureStderr(() => {
+      result = bootstrapBrain(vault, { configPath });
+    });
+
+    // The bootstrap completed: the managed files below the guard exist.
+    expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "_BRAIN.md"))).toBe(true);
+
+    // The result names the guard failure: the file is skipped and the
+    // guard outcome is "failed" with a detail, not a clean skip.
+    expect(result.skipped).toContain(".gitignore");
+    expect(result.created).not.toContain(".gitignore");
+    expect(result.guard?.status).toBe("failed");
+    expect(typeof result.guard?.detail).toBe("string");
+    expect((result.guard?.detail ?? "").length).toBeGreaterThan(0);
+
+    // ...and the degradation is visible on stderr, named.
+    expect(stderr).toMatch(/warning:/);
+    expect(stderr).toContain(".gitignore");
+  });
+
+  test("a malformed managed block reports a named conflict, not a plain skip", () => {
+    // Nothing is written and the seeder warns, but the result used to
+    // say plain `skipped` — indistinguishable from "already covered".
+    const broken = "# mine\n# >>> open-second-brain managed >>>\n*.tmp\n";
+    writeFileSync(join(vault, ".gitignore"), broken, "utf8");
+
+    let result!: ReturnType<typeof bootstrapBrain>;
+    const { stderr } = captureStderr(() => {
+      result = bootstrapBrain(vault, { configPath });
+    });
+
+    // Bootstrap continued past the guard.
+    expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
+    // The file is exactly as the operator left it and reports as skipped...
+    expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe(broken);
+    expect(result.skipped).toContain(".gitignore");
+    expect(result.created).not.toContain(".gitignore");
+    expect(result.overwritten).not.toContain(".gitignore");
+    // ...but the guard outcome distinguishes the conflict from a clean
+    // skip, for stderr readers and machine readers alike.
+    expect(result.guard?.status).toBe("conflict");
+    expect(typeof result.guard?.detail).toBe("string");
+    expect((result.guard?.detail ?? "").length).toBeGreaterThan(0);
+    expect(stderr).toMatch(/warning:/);
+    expect(stderr).toContain("derived-brain-state");
+  });
+
+  test("the doctor's tracked-state row reports the state a failed guard left behind", () => {
+    // Init degraded past the unwritable guard; the protection the guard
+    // would have seeded is genuinely absent, and the doctor's row is the
+    // thing that says so — exactly what the step's docblock claims.
+    mkdirSync(join(vault, ".gitignore"), { recursive: true });
+    captureStderr(() => bootstrapBrain(vault, { configPath }));
+
+    git("init");
+    git(
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "add",
+      "-A",
+    );
+    git(
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "vault",
+    );
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    writeFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "bytes", "utf8");
+
+    const report = runDoctor(vault);
+    const rows = report.warnings.filter((i) => i.code === GIT_TRACKED_DERIVED_STATE_CODE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
+  }, 20000);
 });
