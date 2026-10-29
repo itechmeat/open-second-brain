@@ -20,7 +20,7 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
 import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
-import { errorResponse, type JsonRpcResponse } from "./server.ts";
+import { errorResponse, internalErrorResponse, type JsonRpcResponse } from "./server.ts";
 import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protocol.ts";
 import { RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
@@ -204,6 +204,15 @@ export async function serveStdio(
     try {
       const response = await server.handleRequest(request);
       if (response !== null) writeFrame(stdout, response);
+    } catch (exc) {
+      // A dispatch failure still answers its id. An unanswered request is
+      // worse than a failed one - the caller waits for a correlation that
+      // never arrives - so the catch frames the error here rather than
+      // letting the rejection escape into the bookkeeping below. The
+      // dispatcher's own INTERNAL_ERROR builder, the same framing the
+      // HTTP catch-all uses: the prose goes through the redactor for this
+      // transport's reach, and the code comes from the classifier.
+      writeFrame(stdout, internalErrorResponse(request["id"], exc, server.vault, server.reach));
     } finally {
       finish();
     }
@@ -215,13 +224,21 @@ export async function serveStdio(
   let readsInFlight = 0;
   let slotFreed: (() => void) | null = null;
   const dispatchRead = (request: Record<string, unknown>): void => {
-    const run = dispatch(request);
-    readPromises.add(run);
-    readsInFlight++;
-    void run.then(
+    // Swallowed ONCE, here, and every hook below derived from the
+    // swallow. Deriving the bookkeeping from the RAW promise - a bare
+    // `void run.finally(...)` beside a swallowed `run` - creates a SECOND
+    // promise that rejects when `run` does, and voiding it leaves an
+    // unhandled rejection the runtime kills the process for, while the
+    // request it belongs to never sees an error frame. The set holds the
+    // settled twin, so every `Promise.all` over it (the write gate's
+    // wait, this loop's exit barrier) stays rejection-free by
+    // construction.
+    const run = dispatch(request).then(
       () => undefined,
       () => undefined,
     );
+    readPromises.add(run);
+    readsInFlight++;
     void run.finally(() => {
       readsInFlight--;
       readPromises.delete(run);
@@ -237,17 +254,23 @@ export async function serveStdio(
   const writeGate = new WriteGate();
   const writePromises = new Set<Promise<void>>();
   const dispatchWrite = (request: Record<string, unknown>): Promise<void> => {
-    const run = writeGate.run(async () => {
-      while (readPromises.size > 0) {
-        await Promise.all(readPromises);
-      }
-      await dispatch(request);
-    });
+    // Swallowed once, for the same reason the read path swallows: the
+    // gate body can only settle cleanly when every promise it waits on
+    // does, and the loop awaits this twin - a rejection here would fall
+    // out of the `for await` and kill the loop a framed error already
+    // answered for.
+    const run = writeGate
+      .run(async () => {
+        while (readPromises.size > 0) {
+          await Promise.all(readPromises);
+        }
+        await dispatch(request);
+      })
+      .then(
+        () => undefined,
+        () => undefined,
+      );
     writePromises.add(run);
-    void run.then(
-      () => undefined,
-      () => undefined,
-    );
     void run.finally(() => {
       writePromises.delete(run);
     });
@@ -259,7 +282,7 @@ export async function serveStdio(
   // `serveStdio` returns (the search store WAL checkpoint, the
   // sync-lockfile unlink) must never run under floating handlers.
   try {
-    for await (const rawLine of rl) {
+    readLoop: for await (const rawLine of rl) {
       // Stopped accepting. A line that arrives after a drain has started
       // is left unread rather than answered with an error frame: the
       // client is being disconnected either way, and a half-served
@@ -304,6 +327,16 @@ export async function serveStdio(
           await new Promise<void>((resolve) => {
             slotFreed = resolve;
           });
+          // The park sits between the drain-break check above and the
+          // dispatch below, so the boundary is re-checked once it is
+          // over: this line was read BEFORE the drain began, but it was
+          // held behind a full cap, and dispatching it after the drain
+          // resolved would serve it outside the drain's wait - past
+          // `rl.close()`, where the client may have stopped reading. So
+          // it is left unread, under the same rule the check at the top
+          // of the loop states: a line that arrives after a drain has
+          // started is not answered.
+          if (drain.draining) break readLoop;
         }
         dispatchRead(record);
       }

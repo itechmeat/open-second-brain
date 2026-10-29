@@ -28,7 +28,7 @@ import { PassThrough } from "node:stream";
 import { serveStdio, STDIO_READ_CONCURRENCY } from "../../src/mcp/stdio.ts";
 import { RequestDrain, type DrainOutcome } from "../../src/mcp/drain.ts";
 import { MCPServer, type JsonRpcRequest, type JsonRpcResponse } from "../../src/mcp/server.ts";
-import { JSONRPC_VERSION, PROTOCOL_VERSION } from "../../src/mcp/protocol.ts";
+import { INTERNAL_ERROR, JSONRPC_VERSION, PROTOCOL_VERSION } from "../../src/mcp/protocol.ts";
 import { PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 
@@ -419,5 +419,72 @@ describe("the stdio drain under parallel dispatch", () => {
     expect(outcome.abandoned).toEqual([]);
     stdin.end();
     expect(await loop).toBe(0);
+  });
+
+  test("a line parked behind the read cap is left unread once a drain has started", async () => {
+    const { loop, server, stdin, frames, close } = startScripted({ drainDeadlineMs: 5_000 });
+    // Fill the cap and park one more line behind it: the fifth line is
+    // READ by the loop, then held at the backpressure gate.
+    stdin.write([1, 2, 3, 4, 5].map((id) => call(id, READ_TOOL)).join("\n") + "\n");
+    await until(
+      () => server.log.filter((e) => e.event === "start").length === STDIO_READ_CONCURRENCY,
+      "the cap to fill",
+    );
+    await Bun.sleep(25);
+    expect(server.log.some((e) => e.id === 5)).toBe(false);
+    // Drain while the fifth line is parked. Every dispatched read is
+    // released together, so the drain's register empties before the
+    // parked line's wake-up runs again.
+    const closing = close();
+    release(1);
+    release(2);
+    release(3);
+    release(4);
+    const outcome = await closing;
+    expect(outcome.state).toBe("drained");
+    // Let any post-drain dispatch surface before judging.
+    await Bun.sleep(25);
+    // The parked line was left unread, not served outside the drain's
+    // wait: no dispatch, no answer.
+    expect(server.log.some((e) => e.id === 5)).toBe(false);
+    expect(frames().length).toBe(STDIO_READ_CONCURRENCY);
+    stdin.end();
+    expect(await loop).toBe(0);
+  });
+});
+
+/**
+ * A dispatcher whose every request fails: the transport, not the server,
+ * owns what the caller sees when dispatch itself throws.
+ */
+class ExplodingServer extends MCPServer {
+  override async handleRequest(): Promise<JsonRpcResponse | null> {
+    throw new Error("handler exploded");
+  }
+}
+
+describe("dispatch failures answer their id", () => {
+  test("a rejecting handler yields a JSON-RPC error frame and the loop survives", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const chunks: string[] = [];
+    stdout.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
+    const server = new ExplodingServer({ vault: tempVault() });
+    const loop = serveStdio({ vault: server.vault }, { stdin, stdout, server });
+    stdin.write(call(7, READ_TOOL) + "\n" + call(8, READ_TOOL) + "\n");
+    stdin.end();
+    // The loop resolves cleanly instead of dying on the rejection.
+    expect(await loop).toBe(0);
+    const frames = chunks
+      .join("")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as JsonRpcResponse);
+    // Both requests were answered, by their own ids, with error frames.
+    expect(frames.map((f) => f.id).toSorted((a, b) => Number(a) - Number(b))).toEqual([7, 8]);
+    for (const frame of frames) {
+      expect(frame.error?.code).toBe(INTERNAL_ERROR);
+      expect(frame.error?.message).toContain("handler exploded");
+    }
   });
 });
