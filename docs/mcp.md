@@ -16,15 +16,20 @@ in Open Second Brain depends on the MCP server being running.
   below). No `prompts` or `sampling`.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
-- Request ordering (stdio, since the parallel-reads release): read-classified
-  calls run concurrently, up to a small in-flight cap, while write-classified
+- Request ordering (stdio, since v1.96.0): read-classified calls run
+  concurrently, up to four in flight — a constant, not a knob, backpressured
+  at the cap so the bound holds by construction — while write-classified
   calls (every tool that CAN mutate vault state — the registry's `kind`
   classification is write-mode-dominant) run one at a time and never beside a
   read. Responses may therefore arrive out of arrival order, which is legal
   JSON-RPC: correlate by response `id`, and progress by `progressToken`. Each
   request's own notifications all precede its response, and every frame stays
-  newline-terminated. On EOF or drain the server still waits for every
-  dispatched request before the process exits.
+  newline-terminated. On EOF the server still waits for every dispatched
+  request before the process exits. A signal drain instead stops at a request
+  boundary and waits only up to its deadline (10 000 ms, `O2B_MCP_DRAIN_MS`;
+  see "Shutdown and draining" below): a request still open when the deadline
+  expires is named on stderr, and a line read but parked behind the
+  concurrency cap when the drain started is left unanswered.
 
 ### Argument contract (since v1.46.0)
 
@@ -955,7 +960,7 @@ trapped by it.
 | --- | --- | --- |
 | new work | answered `503` with `Retry-After: 1` and `Connection: close` — a code a client retries, not a protocol error | the next line is left unread; the loop stops cleanly at a request boundary rather than half-serving the shutdown |
 | the listener | deliberately stays up until the drain finishes, so a supervisor can watch | — |
-| in-flight | tracked from the first header to the response's `close` event, so a request is not counted as finished while its bytes are still queued | tracked across the dispatch AND the response write |
+| in-flight | tracked from the first header to the response's `close` event, so a request is not counted as finished while its bytes are still queued | tracked from acceptance — a write parked behind in-flight reads included — across the dispatch AND the response write, so a drain waits for queued work it cannot see running yet |
 
 `GET /health` gains a third field and is **never refused during a drain** — a
 shutdown a supervisor cannot observe is a shutdown it will report as a
