@@ -59,7 +59,12 @@
  *     at most once and the bound is a safety net, never reached. The exit
  *     condition IS the doctrine: the output no longer matches the
  *     detector, therefore `neutralize(neutralize(x))` is byte-identical
- *     to `neutralize(x)`.
+ *     to `neutralize(x)`. Should the bound ever run out with live
+ *     structure still detected - an input the walk cannot converge on -
+ *     the walk fails CLOSED with a {@link MarkdownNeutralizeFixpointError}
+ *     instead of returning those bytes as if they were neutralized: the
+ *     bound guards against the impossible by refusing it, not by
+ *     shipping it.
  *
  * ## One detection grammar, two consumers
  *
@@ -285,13 +290,15 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
 
 /**
  * How many detect-and-escape rounds {@link neutralizeMarkdown} may run
- * before it returns the text it has. Two rounds are the deep case: round
- * one escapes an ```osb fence's boundary lines, the escape dissolves the
- * fence for the line-grammar consumers, and round two escapes the interior
- * the dissolve exposed. No round can create a sigil or escape one twice
- * (see the doctrine block above), so the walk converges and the bound is
- * a safety net - asserting the post-condition instead, the output's own
- * detection being empty, is exactly the loop's exit.
+ * before it refuses: two rounds are the deep case (round one escapes an
+ * ```osb fence's boundary lines, the escape dissolves the fence for the
+ * line-grammar consumers, and round two escapes the interior the dissolve
+ * exposed), and no round can create a sigil or escape one twice (see the
+ * doctrine block above), so the walk converges and the bound is a safety
+ * net honest input never reaches. The post-condition is asserted, not
+ * assumed: a bound exhausted with the output's own detection still
+ * non-empty is a {@link MarkdownNeutralizeFixpointError}, never a
+ * `changed: true` carrying live structure.
  */
 const NEUTRALIZE_FIXPOINT_STEPS = 8;
 
@@ -362,11 +369,38 @@ const UNCHANGED: NeutralizedMarkdown = Object.freeze({
  * each detected span's sigils are backslash-escaped (see the module
  * docblock for the doctrine) and {@link kinds} names every family that
  * was neutralized, for the seams' conditional provenance key.
+ *
+ * The walk is bounded by {@link NEUTRALIZE_FIXPOINT_STEPS} and FAILS
+ * CLOSED: a bound exhausted with live structure still detected throws
+ * {@link MarkdownNeutralizeFixpointError} rather than returning the exact
+ * bytes this module exists to neutralize (see
+ * {@link neutralizeMarkdownWithBound}).
  */
 export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
+  return neutralizeMarkdownWithBound(text, NEUTRALIZE_FIXPOINT_STEPS);
+}
+
+/**
+ * {@link neutralizeMarkdown} with the fixpoint bound made explicit -
+ * `maxRounds` is the highest step index the detect-and-escape loop may
+ * reach, so `0` still runs the one round that decides "nothing to do"
+ * versus "escape once". Exported as the seam that lets tests force the
+ * bound low (the production bound is a safety net that honest input
+ * cannot reach); callers in the vault lanes use
+ * {@link neutralizeMarkdown} and its settled bound.
+ *
+ * The post-condition is the doctrine's exit condition: the returned text
+ * no longer matches {@link detectMarkdownStructure}. If the bound runs
+ * out with detection still finding spans, the walk did not converge and
+ * returning `changed: true` would ship live structure as if it were
+ * neutralized - so the refusal is thrown, by name
+ * ({@link MarkdownNeutralizeFixpointError}), and the caller's write dies
+ * before any bytes are persisted.
+ */
+export function neutralizeMarkdownWithBound(text: string, maxRounds: number): NeutralizedMarkdown {
   let current = text;
   let kinds = new Set<MarkdownStructureKind>();
-  for (let step = 0; step <= NEUTRALIZE_FIXPOINT_STEPS; step++) {
+  for (let step = 0; step <= maxRounds; step++) {
     const round = escapeRound(current);
     if (round === null) break;
     current = round.text;
@@ -375,11 +409,33 @@ export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
   if (kinds.size === 0) {
     return { text, changed: false, kinds: UNCHANGED.kinds };
   }
+  const remaining = detectMarkdownStructure(current);
+  if (remaining.length > 0) {
+    throw new MarkdownNeutralizeFixpointError(
+      `markdown neutralization did not reach its fixpoint within ` +
+        `${maxRounds + 1} detect-and-escape round(s): ` +
+        `${remaining.length} planted structure span(s) would remain in the output`,
+    );
+  }
   return Object.freeze({
     text: current,
     changed: true,
     kinds: Object.freeze([...kinds].toSorted()),
   });
+}
+
+/**
+ * Refusal raised when {@link neutralizeMarkdown}'s fixpoint bound ran out
+ * with live structure still detected - the fail-closed posture for the
+ * safety net honest input never reaches (see the doctrine block: the exit
+ * condition IS an empty detection, so anything else is a refusal, never a
+ * silently under-neutralized write).
+ */
+export class MarkdownNeutralizeFixpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MarkdownNeutralizeFixpointError";
+  }
 }
 
 // ----- The provenance record ------------------------------------------------

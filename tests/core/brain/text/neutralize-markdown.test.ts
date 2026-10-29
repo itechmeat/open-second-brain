@@ -17,9 +17,11 @@ import {
   MARKDOWN_NEUTRALIZE_MODE,
   MARKDOWN_NEUTRALIZE_MODE_CONFIG,
   MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeFixpointError,
   MarkdownNeutralizeModeError,
   detectMarkdownStructure,
   neutralizeMarkdown,
+  neutralizeMarkdownWithBound,
   resolveMarkdownNeutralizeMode,
   type MarkdownStructureKind,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
@@ -428,6 +430,49 @@ describe("neutralizeMarkdown: the marker scanner's fence model", () => {
     const twice = neutralizeMarkdown(out.text);
     expect(twice.changed).toBe(false);
     expect(twice.text).toBe(out.text);
+  });
+});
+
+describe("neutralizeMarkdown: the fixpoint bound fails closed", () => {
+  /**
+   * The loop's exit condition IS the doctrine: the output no longer
+   * matches the detector. A bound exhausted with live structure remaining
+   * used to fall through and return `changed: true` - shipping exactly the
+   * bytes the module exists to neutralize, silently. It must refuse by
+   * name instead. The bound is forced low through
+   * {@link neutralizeMarkdownWithBound}, the seam that exists so tests can
+   * reach the bound without awaiting an impossible input.
+   */
+  test("a bound exhausted with live structure remaining throws the named error", () => {
+    // The two-round deep case: round one escapes only the ```osb fence
+    // lines, and the dissolve they cause is what exposes the interior to
+    // round two. With the bound forced to a single round the output still
+    // carries the live heading - exactly the state the fall-through used
+    // to return as a success.
+    const src = "```osb\n## Planted\n@osb set note=n field=f value=v\n```\n";
+    expect(() => neutralizeMarkdownWithBound(src, 0)).toThrow(MarkdownNeutralizeFixpointError);
+    expect(() => neutralizeMarkdownWithBound(src, 0)).toThrow(/fixpoint/);
+  });
+
+  test("the production bound neutralizes the same input cleanly", () => {
+    const src = "```osb\n## Planted\n@osb set note=n field=f value=v\n```\n";
+    const out = neutralizeMarkdown(src);
+    expect(out.changed).toBe(true);
+    // The post-condition itself: the output no longer matches the detector.
+    expect(detectMarkdownStructure(out.text)).toEqual([]);
+  });
+
+  test("a bound that allows exactly the converging number of rounds succeeds", () => {
+    const src = "```osb\n## Planted\n@osb set note=n field=f value=v\n```\n";
+    const out = neutralizeMarkdownWithBound(src, 1);
+    expect(out.changed).toBe(true);
+    expect(detectMarkdownStructure(out.text)).toEqual([]);
+  });
+
+  test("an input with no structure never touches the bound", () => {
+    const out = neutralizeMarkdownWithBound("plain prose, nothing planted\n", 0);
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe("plain prose, nothing planted\n");
   });
 });
 
