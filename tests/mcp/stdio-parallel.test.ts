@@ -19,7 +19,7 @@
  * file pins the transport's concurrency invariants.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,6 +65,14 @@ function release(id: unknown): void {
   if (next === undefined) throw new Error(`no held handler for id ${String(id)}`);
   next();
 }
+
+beforeEach(() => {
+  // The held-handler register is module-level and the tests reuse ids
+  // (1..6): a failure that leaves resolvers queued would strand every
+  // LATER test's hold() behind stale entries and turn one failure into a
+  // pile of 5000 ms timeouts. Each test starts from an empty register.
+  RELEASES.clear();
+});
 
 /** Hold every handler until released, one `hold()` per in-flight call. */
 function hold(id: unknown): Promise<void> {
@@ -142,7 +150,9 @@ function startScripted(opts: { drainDeadlineMs?: number } = {}): {
     server,
     stdin,
     frames: () => chunks.join("").split("\n").filter(Boolean),
-    close: () => drain!.drain(opts.drainDeadlineMs ?? 10_000),
+    // A later call with a longer deadline is how a test waits out work a
+    // first drain's deadline abandoned.
+    close: (deadlineMs?: number) => drain!.drain(deadlineMs ?? opts.drainDeadlineMs ?? 10_000),
   };
 }
 
@@ -269,6 +279,27 @@ describe("stdio parallel reads", () => {
     expect(settled).toBe(false);
     release(1);
     expect(await loop).toBe(0);
+  });
+
+  test("EOF does not resolve the loop while a dispatched write is still running", async () => {
+    const { loop, server, stdin, frames } = startScripted();
+    stdin.write(call(1, WRITE_TOOL) + "\n");
+    await until(() => server.log.some((e) => e.id === 1 && e.event === "start"), "the write");
+    stdin.end();
+    // The loop must be pending under the floating write, exactly as it is
+    // under a floating read: the exit barrier covers both paths.
+    let settled = false;
+    void loop.then(() => {
+      settled = true;
+    });
+    await Bun.sleep(25);
+    expect(settled).toBe(false);
+    // The write completes and answers before the loop resolves: its
+    // response frame exists while the exit barrier is still holding.
+    release(1);
+    await until(() => frames().length === 1, "the write's answer");
+    expect(await loop).toBe(0);
+    expect(frames().length).toBe(1);
   });
 });
 
@@ -448,6 +479,27 @@ describe("the stdio drain under parallel dispatch", () => {
     // wait: no dispatch, no answer.
     expect(server.log.some((e) => e.id === 5)).toBe(false);
     expect(frames().length).toBe(STDIO_READ_CONCURRENCY);
+    stdin.end();
+    expect(await loop).toBe(0);
+  });
+
+  test("the drain deadline names the write it abandoned, and the write still settles", async () => {
+    const { loop, server, stdin, frames, close } = startScripted({ drainDeadlineMs: 60 });
+    stdin.write(call(1, WRITE_TOOL) + "\n");
+    await until(() => server.log.some((e) => e.id === 1 && e.event === "start"), "the held write");
+    const outcome = await close();
+    // The deadline names the write it abandoned: the label is the
+    // write's, so an operator reading the report knows the exclusive
+    // path is what was still open.
+    expect(outcome.state).toBe("deadline_expired");
+    expect(outcome.abandoned.map((r) => r.label)).toEqual(["tools/call (id 1)"]);
+    // Abandoning the wait is not dropping the work: released, the write
+    // settles and answers, and a second drain resolves drained.
+    release(1);
+    await until(() => frames().length === 1, "the write's answer");
+    const settled = await close(5_000);
+    expect(settled.state).toBe("drained");
+    expect(settled.abandoned).toEqual([]);
     stdin.end();
     expect(await loop).toBe(0);
   });
