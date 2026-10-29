@@ -81,9 +81,13 @@
  * server-side against the canonical entity registry).
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import { MCPServer, type JsonRpcRequest } from "../../src/mcp/server.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
@@ -200,7 +204,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
  *
  * The rule is write-mode-dominant (`src/mcp/tool-contract.ts`): a tool
  * that CAN write is `write`. Every entry was verified against its
- * handler, and four recon-seeded entries were corrected the other way:
+ * handler, and three recon-seeded entries were corrected the other way:
  *
  *   - `brain_retention` and `brain_review_candidates` are READ. Their
  *     planners fold read-only reports (`buildRetentionReview`; `dream`
@@ -297,6 +301,89 @@ const FROZEN_BRAIN_WRITE_TOOL_NAMES = [
   "brain_write_session",
 ] as const;
 
+/**
+ * The `kind: "write"` half of the FULL registry (`buildToolTable("full")`),
+ * pinned for the same reason and in the same shape as the Brain slice
+ * above - both directions, so a move without re-pinning fails and a stale
+ * pin fails too.
+ *
+ * The Brain-slice pin cannot see the three writers that live OUTSIDE
+ * `BRAIN_TOOLS`, and they are exactly where a silent flip to `read` would
+ * park a mutator on the stdio transport's concurrent read path:
+ *
+ *   - `brain_watchdog` - recovery probes that persist their findings;
+ *   - `brain_recall_feedback` - records one event receipt plus bounded
+ *     weights;
+ *   - `schema_apply_mutations` - applies schema edits.
+ *
+ * The read half is the complement: every registered name not listed here
+ * must classify `read`.
+ */
+const FROZEN_FULL_TABLE_WRITE_TOOL_NAMES = [
+  "brain_anticipatory_context",
+  "brain_append_note",
+  "brain_apply_evidence",
+  "brain_bridges",
+  "brain_claims",
+  "brain_clusters",
+  "brain_context_pack_outcome",
+  "brain_create_note",
+  "brain_dead_ends",
+  "brain_decision",
+  "brain_deep_synthesis",
+  "brain_delete_by_source",
+  "brain_derive_fact",
+  "brain_design_note",
+  "brain_distill_source",
+  "brain_doctor",
+  "brain_dream",
+  "brain_expire",
+  "brain_extract_signals",
+  "brain_feedback",
+  "brain_generation_reports",
+  "brain_hygiene",
+  "brain_idea_discovery",
+  "brain_ingest_batch_plan",
+  "brain_ingest_source",
+  "brain_intake_entities",
+  "brain_intake_pledges",
+  "brain_intention",
+  "brain_labels",
+  "brain_lifecycle",
+  "brain_maintenance",
+  "brain_memory_bridge",
+  "brain_note",
+  "brain_note_lifecycle",
+  "brain_obligation",
+  "brain_observed_use",
+  "brain_pinned_context",
+  "brain_pledge",
+  "brain_pre_compact_extract",
+  "brain_procedural_graph",
+  "brain_procedural_memory",
+  "brain_recall_feedback",
+  "brain_receipts",
+  "brain_recurrence",
+  "brain_research_report",
+  "brain_scaffold_stub",
+  "brain_secrets",
+  "brain_session_checkpoint",
+  "brain_session_summary",
+  "brain_skill_proposals",
+  "brain_switch_vault",
+  "brain_tension",
+  "brain_tiers",
+  "brain_token_impact",
+  "brain_trigger",
+  "brain_truth",
+  "brain_tune",
+  "brain_update_note",
+  "brain_watchdog",
+  "brain_write_batch",
+  "brain_write_session",
+  "schema_apply_mutations",
+] as const;
+
 describe("BRAIN_TOOLS frozen surface", () => {
   test("advertises exactly the v1.x tool-name set", () => {
     const names = BRAIN_TOOLS.map((t) => t.name).toSorted();
@@ -344,5 +431,91 @@ describe("read/write classification", () => {
       (name) => !(FROZEN_BRAIN_WRITE_TOOL_NAMES as readonly string[]).includes(name),
     ).toSorted();
     expect(reads).toEqual(complement);
+  });
+
+  test("the full table's write half is exactly the pinned partition (both directions)", () => {
+    const writes = FULL_TABLE.filter((t) => t.kind === "write")
+      .map((t) => t.name)
+      .toSorted();
+    const pinned = [...FROZEN_FULL_TABLE_WRITE_TOOL_NAMES].toSorted();
+    // The same two-way sensitivity as the Brain-slice pin, over the table
+    // the transports actually classify against. The registry-guard walk
+    // above only checks that `kind` is a valid value, so without this pin
+    // a silent flip of one of the three writers outside BRAIN_TOOLS
+    // (`brain_watchdog`, `brain_recall_feedback`,
+    // `schema_apply_mutations`) to `read` would pass the suite - and park
+    // a mutator on the concurrent read path this partition exists to
+    // prevent. A stale pin fails the same equality the other way.
+    expect(writes).toEqual(pinned);
+  });
+});
+
+/**
+ * The write classifier's fail-closed branches, unit-tested at the server
+ * the transports consult. `MCPServer.classifiesWrite` decides the stdio
+ * transport's write gate, and its rule is that every failure to KNOW is a
+ * write - the gate only ever costs serialization, while a guessed "read"
+ * could run a mutator beside another dispatch. Each of those escape
+ * hatches is pinned here, beside the partition it guards.
+ */
+describe("MCPServer.classifiesWrite fail-closed gates", () => {
+  const tempVaults: string[] = [];
+
+  afterEach(() => {
+    while (tempVaults.length > 0) rmSync(tempVaults.pop()!, { recursive: true, force: true });
+  });
+
+  function serverWithVault(): MCPServer {
+    const dir = mkdtempSync(join(tmpdir(), "osb-write-classifier-"));
+    tempVaults.push(dir);
+    return new MCPServer({ vault: dir });
+  }
+
+  function callFrame(params: unknown): JsonRpcRequest {
+    return { jsonrpc: "2.0", id: 1, method: "tools/call", params };
+  }
+
+  test("a tools/call it cannot name is a write: absent params, absent name, non-string name", () => {
+    const server = serverWithVault();
+    expect(server.classifiesWrite({ jsonrpc: "2.0", id: 1, method: "tools/call" })).toBe(true);
+    expect(server.classifiesWrite(callFrame({}))).toBe(true);
+    expect(server.classifiesWrite(callFrame({ arguments: {} }))).toBe(true);
+    expect(server.classifiesWrite(callFrame({ name: 42 }))).toBe(true);
+    expect(server.classifiesWrite(callFrame({ name: null }))).toBe(true);
+  });
+
+  test("an unknown tool name is a write, not a parallelizable refusal", () => {
+    const server = serverWithVault();
+    expect(server.classifiesWrite(callFrame({ name: "no_such_tool" }))).toBe(true);
+  });
+
+  test("everything that is not a tools/call is a read", () => {
+    const server = serverWithVault();
+    expect(server.classifiesWrite({ jsonrpc: "2.0", id: 1, method: "ping" })).toBe(false);
+    expect(server.classifiesWrite({ jsonrpc: "2.0", id: 2, method: "tools/list" })).toBe(false);
+    expect(server.classifiesWrite({ jsonrpc: "2.0", id: 3, method: "resources/read" })).toBe(false);
+  });
+
+  test("a known read classifies read and a known write classifies write", () => {
+    const server = serverWithVault();
+    expect(server.classifiesWrite(callFrame({ name: "second_brain_status", arguments: {} }))).toBe(
+      false,
+    );
+    expect(server.classifiesWrite(callFrame({ name: "brain_note", arguments: {} }))).toBe(true);
+  });
+
+  test("a hand-built definition that carries no kind is gated as a write", () => {
+    const server = serverWithVault();
+    // `kind` is required on ToolDefinition, so a definition without one
+    // reached this table only by casting the field away - exactly the
+    // hand-built case the classifier must fail closed on.
+    const handBuilt = {
+      name: "hand_built_untyped",
+      description: "a definition that lost its kind",
+      inputSchema: { type: "object" },
+      handler: async () => ({}),
+    } as unknown as ToolDefinition;
+    (server as { tools: ToolDefinition[] }).tools = [...server.tools, handBuilt];
+    expect(server.classifiesWrite(callFrame({ name: "hand_built_untyped" }))).toBe(true);
   });
 });
