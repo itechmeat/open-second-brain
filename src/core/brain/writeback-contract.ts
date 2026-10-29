@@ -40,6 +40,15 @@
  * of scope: a check that silently reads through a link would audit a file
  * the agent instruction surface does not contain.
  *
+ * Shadowing (t_00b617b6): the candidates are audited in isolation, but a
+ * host reads exactly ONE of them - its entry in
+ * {@link HOST_INSTRUCTION_PRECEDENCE}. A workspace where the file a host
+ * reads carries no managed block while another candidate carries it is
+ * shadowed: the operative host never sees the contract no matter how
+ * conforming the other file is. {@link resolveShadowedInstructionContracts}
+ * resolves that from the audit rows alone - pure, no I/O, no writes - and
+ * the doctor-readiness probe grades each triple as a `fail`.
+ *
  * Findings are the closed {@link WRITEBACK_CONTRACT_FINDING} vocabulary:
  * `conforming`, `malformed-block`, `missing-clauses` (a block is present
  * and was measured - pass/fail material), `missing-block` (the file
@@ -50,7 +59,7 @@
  */
 
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   DEFAULT_BEGIN_MARKER,
@@ -74,6 +83,50 @@ export const AGENT_INSTRUCTION_FILES: ReadonlyArray<string> = Object.freeze([
   "CLAUDE.md",
   "GEMINI.md",
 ]);
+
+/**
+ * Host family to the ordered agent-instruction files the host reads at a
+ * workspace root, first existing entry wins per host (t_00b617b6). This is
+ * the PRECEDENCE table - which file an operative host actually reads - and
+ * is deliberately a different shape from {@link AGENT_INSTRUCTION_FILES},
+ * which is the existence-loop list this audit walks. The installer lane
+ * (sibling card t_af5e252f) is expected to share this definition, which is
+ * why each value is an ordered list even where the repo today names only
+ * one file per host.
+ *
+ * Evidence, entry by entry:
+ *
+ *   - `claude-code` reads `CLAUDE.md` - REPO-CITED,
+ *     `docs/cross-project-pointer.md:15`.
+ *   - `codex`, `cursor`, `aider` read `AGENTS.md` - REPO-CITED,
+ *     `docs/cross-project-pointer.md:16-17` ("Codex, Cursor, Aider, and
+ *     other tools that follow the `agents.md` convention").
+ *   - `opencode` reads `AGENTS.md` - REPO-CITED,
+ *     `docs/brainstorm/opencode-native-integration/variants.md` ("opencode
+ *     reads AGENTS.md natively").
+ *   - `gemini-cli` reads `GEMINI.md` - NAME-IMPLIED ONLY. No repo document
+ *     states it (the cross-project pointer predates the Gemini entry), and
+ *     upstream `context.fileName` can rename the surface. Recorded as the
+ *     open question the instruction-file-ceiling and removed-tool-sweep
+ *     docblocks carry; the finding vocabulary stays honest because a
+ *     shadow is claimed only from files this tree actually audited.
+ *
+ * There is no claude-code INSTALL target (the adapters write MCP configs
+ * only), so "which host is operative here" cannot be derived from an
+ * install manifest - detection keys on which candidate files co-exist plus
+ * this table, never on manifests.
+ */
+export const HOST_INSTRUCTION_PRECEDENCE = Object.freeze({
+  "claude-code": Object.freeze(["CLAUDE.md"]),
+  codex: Object.freeze(["AGENTS.md"]),
+  cursor: Object.freeze(["AGENTS.md"]),
+  opencode: Object.freeze(["AGENTS.md"]),
+  aider: Object.freeze(["AGENTS.md"]),
+  "gemini-cli": Object.freeze(["GEMINI.md"]),
+} as const);
+
+/** Closed union over {@link HOST_INSTRUCTION_PRECEDENCE} keys. */
+export type HostInstructionName = keyof typeof HOST_INSTRUCTION_PRECEDENCE;
 
 /**
  * Recovery clause an audit carries when the block is missing or broken.
@@ -301,4 +354,78 @@ export function auditWorkspaceWritebackContract(
 function reason(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   return message.replace(/\s+/g, " ").trim();
+}
+
+// ----- Shadow resolution (t_00b617b6) ---------------------------------------
+
+/**
+ * One host reading a contract-free instruction file while another
+ * workspace candidate carries the write-back contract: the operative host
+ * never sees the gate. Pure data - resolved from audit rows, never from
+ * the filesystem.
+ */
+export interface WritebackContractShadow {
+  /** The host family whose preferred file misses the contract. */
+  readonly host: HostInstructionName;
+  /** Absolute path of the file the host reads, without the managed block. */
+  readonly readsPath: string;
+  /** Absolute path of another candidate that carries the contract. */
+  readonly contractPath: string;
+}
+
+/**
+ * The findings that prove a file CARRIES the managed block, in any state:
+ * conforming, or installed-then-broken (`malformed-block`,
+ * `missing-clauses`). A block that is present is evidence a host is being
+ * shadowed away from, whatever its condition; `missing-block` is the one
+ * present-file finding that does not carry it, and `absent`, `symlink`,
+ * `unreadable` never measured a block at all.
+ */
+const BLOCK_BEARING_FINDINGS: ReadonlySet<WritebackContractFinding> = new Set([
+  WRITEBACK_CONTRACT_FINDING.conforming,
+  WRITEBACK_CONTRACT_FINDING.malformedBlock,
+  WRITEBACK_CONTRACT_FINDING.missingClauses,
+]);
+
+/**
+ * Resolve which hosts the workspace's contract placement shadows, PURELY
+ * over the per-candidate audits (as {@link auditWorkspaceWritebackContract}
+ * produces them): no reads, no lstats, no writes - synthetic audits of
+ * paths that exist nowhere resolve exactly like audited ones.
+ *
+ * A host is shadowed when its preferred candidate - the first entry of its
+ * {@link HOST_INSTRUCTION_PRECEDENCE} list that exists - is a file WITHOUT
+ * the managed block while another candidate carries the block in any state.
+ * A host whose preferred file is absent reads nothing and is not shadowed;
+ * a host whose preferred file carries the block is not shadowed even when
+ * a peer carries a better-formed one; a symlink or unreadable preferred
+ * file is refused evidence, so no shadow is claimed from it (whether a
+ * link between candidates should be admitted as evidence is a recorded
+ * open question, not decided here). The contract side is the first
+ * block-bearing candidate in the audits' given order - the candidate list's
+ * priority order for a workspace audit.
+ */
+export function resolveShadowedInstructionContracts(
+  audits: ReadonlyArray<WritebackContractFileAudit>,
+): ReadonlyArray<WritebackContractShadow> {
+  const contractPath = audits.find((audit) => BLOCK_BEARING_FINDINGS.has(audit.finding));
+  if (contractPath === undefined) return Object.freeze([]);
+  const byName = new Map<string, WritebackContractFileAudit>();
+  for (const audit of audits) byName.set(basename(audit.path), audit);
+  const shadows: WritebackContractShadow[] = [];
+  for (const [host, files] of Object.entries(HOST_INSTRUCTION_PRECEDENCE)) {
+    const preferred = files
+      .map((name) => byName.get(name))
+      .find((audit) => audit !== undefined && audit.finding !== WRITEBACK_CONTRACT_FINDING.absent);
+    if (preferred === undefined) continue;
+    if (preferred.finding !== WRITEBACK_CONTRACT_FINDING.missingBlock) continue;
+    shadows.push(
+      Object.freeze({
+        host: host as HostInstructionName,
+        readsPath: preferred.path,
+        contractPath: contractPath.path,
+      }),
+    );
+  }
+  return Object.freeze(shadows);
 }

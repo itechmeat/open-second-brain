@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
 
 import {
   AGENT_INSTRUCTION_FILES,
+  HOST_INSTRUCTION_PRECEDENCE,
   WRITEBACK_CONTRACT_FINDING,
   WRITEBACK_CONTRACT_REQUIREMENTS,
   WRITEBACK_CONTRACT_RECOVERY,
@@ -17,6 +18,7 @@ import {
   auditWritebackContractFile,
   locateAgentInstructionFiles,
   missingWritebackGateClauses,
+  resolveShadowedInstructionContracts,
 } from "../../../src/core/brain/writeback-contract.ts";
 
 let tmp: string;
@@ -178,5 +180,162 @@ describe("workspace audit", () => {
     for (const audit of audits) {
       expect(audit.finding).toBe(WRITEBACK_CONTRACT_FINDING.absent);
     }
+  });
+});
+
+describe("HOST_INSTRUCTION_PRECEDENCE", () => {
+  test("keys each host family on the instruction file it reads at the workspace root", () => {
+    expect(HOST_INSTRUCTION_PRECEDENCE["claude-code"]).toEqual(["CLAUDE.md"]);
+    expect(HOST_INSTRUCTION_PRECEDENCE.codex).toEqual(["AGENTS.md"]);
+    expect(HOST_INSTRUCTION_PRECEDENCE.cursor).toEqual(["AGENTS.md"]);
+    expect(HOST_INSTRUCTION_PRECEDENCE.opencode).toEqual(["AGENTS.md"]);
+    expect(HOST_INSTRUCTION_PRECEDENCE.aider).toEqual(["AGENTS.md"]);
+    expect(HOST_INSTRUCTION_PRECEDENCE["gemini-cli"]).toEqual(["GEMINI.md"]);
+  });
+
+  test("the table and every per-host list are frozen", () => {
+    expect(Object.isFrozen(HOST_INSTRUCTION_PRECEDENCE)).toBe(true);
+    for (const files of Object.values(HOST_INSTRUCTION_PRECEDENCE)) {
+      expect(Object.isFrozen(files)).toBe(true);
+    }
+  });
+});
+
+describe("resolveShadowedInstructionContracts", () => {
+  /**
+   * The resolver is pure over the workspace audit rows: these tests drive
+   * it through `auditWorkspaceWritebackContract` on real temp files and,
+   * for the purity case, through synthetic audits of paths that exist
+   * nowhere on disk.
+   */
+
+  test("a bare CLAUDE.md beside a conforming AGENTS.md shadows claude-code, naming both paths", () => {
+    const claude = join(tmp, "CLAUDE.md");
+    writeFileSync(claude, "# Claude\n\nplain instructions, no managed block\n");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
+    const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(shadows).toEqual([{ host: "claude-code", readsPath: claude, contractPath: agents }]);
+  });
+
+  test("a block in any carried state shadows: conforming, malformed and clause-incomplete", () => {
+    const claude = join(tmp, "CLAUDE.md");
+    writeFileSync(claude, "plain\n");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(
+      agents,
+      [
+        "# >>> open-second-brain managed >>>",
+        "use the open-second-brain note tools",
+        "# <<< open-second-brain managed <<<",
+      ].join("\n"),
+    );
+    const clauseIncomplete = resolveShadowedInstructionContracts(
+      auditWorkspaceWritebackContract(tmp),
+    );
+    expect(clauseIncomplete.map((s) => s.host)).toEqual(["claude-code"]);
+    expect(clauseIncomplete[0]).toEqual({
+      host: "claude-code",
+      readsPath: claude,
+      contractPath: agents,
+    });
+
+    writeFileSync(agents, `${DEFAULT_BEGIN_MARKER}\nhalf a block\n`);
+    const malformed = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(malformed.map((s) => s.host)).toEqual(["claude-code"]);
+    expect(malformed[0]!.contractPath).toBe(agents);
+  });
+
+  test("GEMINI.md-only and AGENTS.md-only workspaces yield no shadow", () => {
+    writeFileSync(join(tmp, "GEMINI.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+
+    rmSync(join(tmp, "GEMINI.md"));
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+
+    // And a bare AGENTS.md alone: nothing carries the block to shadow with.
+    writeFileSync(join(tmp, "AGENTS.md"), "plain\n");
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+  });
+
+  test("a workspace whose every existing file carries the block yields no shadow", () => {
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+  });
+
+  test("shadowing is host-symmetric: a bare AGENTS.md shadows the agents.md family, not claude-code", () => {
+    writeFileSync(join(tmp, "CLAUDE.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "AGENTS.md"), "plain\n");
+    const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(shadows.map((s) => s.host)).toEqual(["codex", "cursor", "opencode", "aider"]);
+    expect(shadows.every((s) => s.readsPath === join(tmp, "AGENTS.md"))).toBe(true);
+    expect(shadows.every((s) => s.contractPath === join(tmp, "CLAUDE.md"))).toBe(true);
+  });
+
+  test("several hosts can be shadowed at once, in table order", () => {
+    writeFileSync(join(tmp, "CLAUDE.md"), "plain\n");
+    writeFileSync(join(tmp, "GEMINI.md"), "plain\n");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(shadows.map((s) => s.host)).toEqual(["claude-code", "gemini-cli"]);
+    expect(shadows[0]).toEqual({
+      host: "claude-code",
+      readsPath: join(tmp, "CLAUDE.md"),
+      contractPath: join(tmp, "AGENTS.md"),
+    });
+    expect(shadows[1]).toEqual({
+      host: "gemini-cli",
+      readsPath: join(tmp, "GEMINI.md"),
+      contractPath: join(tmp, "AGENTS.md"),
+    });
+  });
+
+  test("absent-only workspaces yield nothing", () => {
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+  });
+
+  test("a symlink candidate is refused evidence: never read, never a shadow side", () => {
+    const real = join(tmp, "real-agents.md");
+    writeFileSync(real, `# W\n\n${CONFORMING_BLOCK}\n`);
+    symlinkSync(real, join(tmp, "AGENTS.md"));
+    writeFileSync(join(tmp, "CLAUDE.md"), "plain\n");
+    const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(shadows).toEqual([]);
+  });
+
+  test("the resolver is pure: synthetic audits of paths that exist nowhere still resolve", () => {
+    const synthetic = [
+      {
+        path: "/nowhere/o2b-purity/AGENTS.md",
+        finding: WRITEBACK_CONTRACT_FINDING.conforming,
+        detail: "synthetic",
+        missing: [],
+      },
+      {
+        path: "/nowhere/o2b-purity/CLAUDE.md",
+        finding: WRITEBACK_CONTRACT_FINDING.missingBlock,
+        detail: "synthetic",
+        missing: [],
+      },
+      {
+        path: "/nowhere/o2b-purity/GEMINI.md",
+        finding: WRITEBACK_CONTRACT_FINDING.absent,
+        detail: "synthetic",
+        missing: [],
+      },
+    ];
+    const shadows = resolveShadowedInstructionContracts(synthetic);
+    expect(shadows).toEqual([
+      {
+        host: "claude-code",
+        readsPath: "/nowhere/o2b-purity/CLAUDE.md",
+        contractPath: "/nowhere/o2b-purity/AGENTS.md",
+      },
+    ]);
+    // The resolver ran entirely on the given data: it created nothing and
+    // never touched the filesystem its input paths name.
+    expect(existsSync("/nowhere")).toBe(false);
   });
 });
