@@ -277,7 +277,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
     {   'name': 'brain_context',
         'description': 'Pull the current Brain/active.md body, pinned current-task context, '
                        'and active-preference counts. Use at session start when SessionStart '
-                       'hook is unavailable (Cursor, Aider, raw Claude API). Read-only.',
+                       'hook is unavailable (Cursor, Aider, raw Claude API). Regenerates '
+                       'Brain/active.md when absent or stale.',
         'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {   'name': 'brain_context_pack',
         'description': 'Return the highest-tier, most recent vault slice under `max_tokens` - '
@@ -1045,8 +1046,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                            'additionalProperties': False}},
     {   'name': 'brain_search',
         'description': 'Full-text search across the vault. Optional semantic layer when '
-                       'configured. Read-only. When a query misses, consult brain_recall_gate '
-                       'before widening recall: it classifies whether widening is warranted.',
+                       'configured. Persists access events and opt-in reinforce/telemetry '
+                       'ledgers under Brain/search/. When a query misses, consult '
+                       'brain_recall_gate before widening recall: it classifies whether '
+                       'widening is warranted.',
         'inputSchema': {   'type': 'object',
                            'properties': {   'query': {   'type': 'string',
                                                           'minLength': 1,
