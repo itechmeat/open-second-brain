@@ -18,7 +18,7 @@ import {
   auditWritebackContractFile,
   locateAgentInstructionFiles,
   missingWritebackGateClauses,
-  referencedImportBasenames,
+  referencedImportPaths,
   resolveShadowedInstructionContracts,
 } from "../../../src/core/brain/writeback-contract.ts";
 
@@ -230,39 +230,77 @@ describe("HOST_INSTRUCTION_PRECEDENCE", () => {
   });
 });
 
-describe("referencedImportBasenames", () => {
+describe("referencedImportPaths", () => {
   /**
-   * The Claude Code memory-import facts this tree implements, recorded
-   * where the matcher lives: a line whose FIRST character is `@`,
-   * immediately followed by a basename-shaped token that ends at
-   * whitespace or end of line. Anything looser is not matched, because a
-   * lookalike that suppressed a shadow would hide a live gate.
+   * The host memory-import facts this tree implements, recorded where the
+   * matcher lives: an `@` at a word boundary anywhere on a line (Claude
+   * Code accepts mid-line and list-item imports; Gemini CLI documents
+   * `@./file`), followed by a path-shaped token ending at whitespace or
+   * end of line. Imports inside code spans and fenced blocks are NOT
+   * imports - no host evaluates them - and `~/`, absolute and
+   * workspace-escaping paths are refused outright. Anything looser would
+   * suppress a shadow and hide a live gate.
    */
   test("a line-start @ followed by a basename records that basename", () => {
-    expect([...referencedImportBasenames("@AGENTS.md\n")]).toEqual(["AGENTS.md"]);
-    expect([...referencedImportBasenames("@AGENTS.md trailing prose\n")]).toEqual(["AGENTS.md"]);
-    expect([...referencedImportBasenames("# header\n\n@CLAUDE.md\nbody\n")]).toEqual(["CLAUDE.md"]);
+    expect([...referencedImportPaths("@AGENTS.md\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("@AGENTS.md trailing prose\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("# header\n\n@CLAUDE.md\nbody\n")]).toEqual(["CLAUDE.md"]);
   });
 
   test("CRLF line endings are normalized before the match", () => {
-    expect([...referencedImportBasenames("@AGENTS.md\r\nnext\r\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("@AGENTS.md\r\nnext\r\n")]).toEqual(["AGENTS.md"]);
   });
 
-  test("mid-line mentions, doubled sigils and prefixed paths are not imports", () => {
-    expect([...referencedImportBasenames("see @AGENTS.md for details\n")]).toEqual([]);
-    expect([...referencedImportBasenames("email me at me@example.com @AGENTS.md\n")]).toEqual([]);
-    expect([...referencedImportBasenames("@@AGENTS.md\n")]).toEqual([]);
-    expect([...referencedImportBasenames(" @AGENTS.md\n")]).toEqual([]);
-    expect([...referencedImportBasenames("@docs/AGENTS.md\n")]).toEqual([]);
+  test("the documented mid-line and list-item spellings are imports too", () => {
+    expect([...referencedImportPaths("Read @AGENTS.md before answering\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("- @AGENTS.md\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("  @AGENTS.md\n")]).toEqual(["AGENTS.md"]);
+  });
+
+  test("a leading ./ is stripped: the relative spelling names the same file", () => {
+    // Gemini CLI documents `@./file.md`.
+    expect([...referencedImportPaths("@./AGENTS.md\n")]).toEqual(["AGENTS.md"]);
+    expect([...referencedImportPaths("@./AGENTS.md\n@AGENTS.md\n")]).toEqual(["AGENTS.md"]);
+  });
+
+  test("workspace-relative paths are recorded verbatim", () => {
+    expect([...referencedImportPaths("@docs/AGENTS.md\n")]).toEqual(["docs/AGENTS.md"]);
+  });
+
+  test("tilde, absolute and workspace-escaping paths are refused", () => {
+    expect([...referencedImportPaths("@~/AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("@~/notes/AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("@/etc/AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("@../AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("@../shared/AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("@AGENTS.md/../../escape.md\n")]).toEqual([]);
+  });
+
+  test("doubled sigils and email addresses are not imports", () => {
+    expect([...referencedImportPaths("@@AGENTS.md\n")]).toEqual([]);
+    expect([...referencedImportPaths("contact me at bob@example.com\n")]).toEqual([]);
+    expect([...referencedImportPaths("email me at me@example.com @AGENTS.md\n")]).toEqual([
+      "AGENTS.md",
+    ]);
+  });
+
+  test("imports inside code spans and fenced blocks are not imports", () => {
+    // No host evaluates an import inside inline code or a fence: a
+    // fenced `@AGENTS.md` renders as literal text, so it must not excuse
+    // a shadow.
+    expect([...referencedImportPaths("the import is `@AGENTS.md` here\n")]).toEqual([]);
+    expect([...referencedImportPaths("```md\n@AGENTS.md\n```\n")]).toEqual([]);
+    expect([...referencedImportPaths("~~~\n@AGENTS.md\n~~~\n")]).toEqual([]);
+    expect([...referencedImportPaths("```md\nfenced\n```\n\n@AGENTS.md\n")]).toEqual(["AGENTS.md"]);
   });
 
   test("a token that only looks like the basename is recorded verbatim, never truncated", () => {
-    expect([...referencedImportBasenames("@AGENTS.md.bak\n")]).toEqual(["AGENTS.md.bak"]);
-    expect([...referencedImportBasenames("@AGENTS.MD\n")]).toEqual(["AGENTS.MD"]);
+    expect([...referencedImportPaths("@AGENTS.md.bak\n")]).toEqual(["AGENTS.md.bak"]);
+    expect([...referencedImportPaths("@AGENTS.MD\n")]).toEqual(["AGENTS.MD"]);
   });
 
-  test("the same basename twice is recorded once, in first-appearance order", () => {
-    expect([...referencedImportBasenames("@AGENTS.md\n\n@AGENTS.md\n@GEMINI.md\n")]).toEqual([
+  test("the same path twice is recorded once, in first-appearance order", () => {
+    expect([...referencedImportPaths("@AGENTS.md\n\n@./AGENTS.md\n@GEMINI.md\n")]).toEqual([
       "AGENTS.md",
       "GEMINI.md",
     ]);
@@ -459,13 +497,45 @@ describe("resolveShadowedInstructionContracts", () => {
     ).toEqual(["claude-code"]);
   });
 
+  test("the documented import spellings all excuse the shadow", () => {
+    // Claude Code accepts mid-line and list-item imports and Gemini CLI
+    // documents the `@./file` spelling: every one of these renders the
+    // contract file into the surface the host reads, so none may false-
+    // fail readiness.
+    const spellings = [
+      "@./AGENTS.md\n", // Gemini CLI's relative spelling
+      "Read @AGENTS.md first\n", // mid-line
+      "- @AGENTS.md\n", // list item
+      "see @AGENTS.md for details\n", // mid-line prose
+      "  @AGENTS.md\n", // indented
+    ];
+    for (const body of spellings) {
+      writeFileSync(join(tmp, "CLAUDE.md"), body);
+      writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+      const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+      expect(shadows, body).toEqual([]);
+    }
+  });
+
+  test("a GEMINI.md importing @./AGENTS.md is not shadowed either", () => {
+    // gemini-cli's preferred file misses the block but renders the
+    // contract through its documented relative-import spelling; CLAUDE.md
+    // is absent, so only the gemini-cli row is at stake.
+    writeFileSync(join(tmp, "GEMINI.md"), "@./AGENTS.md\n");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    expect(resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp))).toEqual([]);
+  });
+
   test("malformed import lookalikes do not suppress the shadow", () => {
     const lookalikes = [
-      "see @AGENTS.md for details\n", // mid-line mention
       "@@AGENTS.md\n", // doubled sigil
-      " @AGENTS.md\n", // not at line start
-      "@docs/AGENTS.md\n", // a path the token grammar cannot name
       "@AGENTS.md.bak\n", // a different file
+      "@docs/AGENTS.md\n", // resolves elsewhere in the workspace
+      "@AGENTS.MD\n", // a different file by case
+      "@~/AGENTS.md\n", // refused: outside the workspace
+      "@../AGENTS.md\n", // refused: escapes the workspace
+      "```md\n@AGENTS.md\n```\n", // fenced: no host evaluates imports there
+      "the import is `@AGENTS.md` in code\n", // a code span is not an import
     ];
     for (const body of lookalikes) {
       writeFileSync(join(tmp, "CLAUDE.md"), body);

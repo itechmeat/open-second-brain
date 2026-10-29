@@ -929,6 +929,32 @@ describe("probeWritebackContract", () => {
     expect(v.detail).toContain("0 fail");
   });
 
+  test("a CLAUDE.md importing @./AGENTS.md passes: the relative spelling is an import too", async () => {
+    // Gemini CLI documents `@./file`; Claude Code accepts it as well.
+    // The matcher resolves the token against the workspace, so the
+    // spelled-differently-same-file import keeps the gate green.
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), "# Claude\n\n@./AGENTS.md\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("0 fail");
+  });
+
+  test("a fenced @AGENTS.md is not an import: the shadow fails readiness", async () => {
+    // No host evaluates an import inside a fenced block - the line
+    // renders as literal text - so a fenced `@AGENTS.md` must not excuse
+    // the shadow the way a bare one does.
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
+    writeFileSync(join(tmp, "CLAUDE.md"), "# Claude\n\n```md\n@AGENTS.md\n```\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("claude-code");
+  });
+
   test("the shadow verdict exits non-zero under --readiness", async () => {
     writeConfig("");
     writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
