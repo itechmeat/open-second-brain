@@ -71,7 +71,6 @@ import {
   neutralizeMarkdown,
   neutralizedMarkersFrontmatter,
   resolveMarkdownNeutralizeModeForProcess,
-  type MarkdownStructureKind,
 } from "../text/neutralize-markdown.ts";
 
 /** Frontmatter `kind:` marker of a staged inbound capture. */
@@ -288,9 +287,7 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
       storedBody = neutralBody.text;
       if (neutralGuidance !== null) storedGuidance = neutralGuidance.text;
       neutralized = neutralizedMarkersFrontmatter(
-        [
-          ...new Set([...neutralBody.kinds, ...(neutralGuidance?.kinds ?? [])]),
-        ].toSorted<MarkdownStructureKind>(),
+        [...new Set([...neutralBody.kinds, ...(neutralGuidance?.kinds ?? [])])].toSorted(),
       );
     }
   } else if (gate === MARKDOWN_NEUTRALIZE_MODE.shadow) {

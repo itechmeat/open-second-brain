@@ -23,7 +23,7 @@ import {
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
 
 /** The structure kinds one sample carries, as a set for order-free asserts. */
-function kindsOf(...kinds: MarkdownStructureKind[]): string[] {
+function kindsOf(...kinds: MarkdownStructureKind[]): MarkdownStructureKind[] {
   return [...new Set(kinds)].toSorted();
 }
 

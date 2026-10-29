@@ -919,7 +919,6 @@ describe("doctor registry order: planted-structure-rows after privacy-marker-uns
     atomicWriteFileSync(
       join(tmp, "Brain", "reserved.md"),
       ["---", "kind: note", "access: private", "---", "", "a private note", ""].join("\n"),
-      "utf8",
     );
     // Planted rows: a capture page carrying live structure.
     writeCaptureNote(tmp, {
