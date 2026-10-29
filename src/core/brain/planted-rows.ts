@@ -365,17 +365,30 @@ export function planPlantedRows(
   // never enters the set and never matches: two unreadable pages are not
   // the same page, and a staged copy the audit cannot hash is reported,
   // never silently dropped.
+  //
+  // The hash is memoized by path: only pages that reported are hashed at
+  // all (a page with no rows never meets a dedupe question), and each of
+  // those is read for hashing exactly once, however the two passes below
+  // consult it - the walk and the body scan already read every page, so
+  // this keeps the audit's synchronous reads per reported page at three
+  // and per skipped page at two, instead of hashing the whole population
+  // whenever a staged copy exists.
+  const hashMemo = new Map<string, string | undefined>();
+  const hashOf = (absPath: string): string | undefined => {
+    if (!hashMemo.has(absPath)) hashMemo.set(absPath, contentHash(absPath));
+    return hashMemo.get(absPath);
+  };
   const publishedReportedHashes = new Set<string>();
   for (const hit of hits) {
     if (isStaged(hit.page)) continue;
     if (readable !== undefined && !readable(hit.entry.path)) continue;
-    const hash = contentHash(hit.page.path);
+    const hash = hashOf(hit.page.path);
     if (hash !== undefined) publishedReportedHashes.add(hash);
   }
   const planted = hits
     .filter((hit) => {
       if (!isStaged(hit.page)) return true;
-      const stagedHash = contentHash(hit.page.path);
+      const stagedHash = hashOf(hit.page.path);
       return stagedHash === undefined || !publishedReportedHashes.has(stagedHash);
     })
     .map((hit) => hit.entry);
