@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
@@ -21,6 +21,7 @@ import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeModeError,
   detectMarkdownStructure,
 } from "../../../../src/core/brain/text/neutralize-markdown.ts";
 
@@ -204,6 +205,51 @@ function existsPendingIngest(vault: string): boolean {
     return false;
   }
 }
+
+/**
+ * Every file under `root` as `[relative path, bytes]`, sorted - the whole
+ * vault as data, so a "refused before any write" claim is asserted against
+ * everything the seam could have touched (entity pages, the trusted
+ * archive, the summary, manifest rows, log events) and not just the
+ * surfaces the test author remembered.
+ */
+function vaultSnapshot(root: string): Array<[string, Buffer]> {
+  const out: Array<[string, Buffer]> = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else out.push([relative(root, path), readFileSync(path)]);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+describe("ingestSource gate misconfiguration refuses before any write", () => {
+  test("an invalid gate mode throws and leaves the vault byte-identical", () => {
+    // A trusted LOCAL source: the trusted lane is the one that also
+    // captures the durable archive, so a half-applied ingest here is the
+    // widest mess the old ordering could leave - entity pages and archived
+    // bytes on disk, no summary page. The gate never has work to do on a
+    // trusted ingest, but a misconfiguration is refused all the same,
+    // before anything is written (the capture seam's contract).
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, LOCAL_SOURCE), "source bytes\n", "utf8");
+
+    const before = vaultSnapshot(vault);
+    expect(() =>
+      withGateMode("yes", () => {
+        ingestSource(vault, input(LOCAL_SOURCE, "plain summary"), { agent: "claude", now: NOW });
+      }),
+    ).toThrow(MarkdownNeutralizeModeError);
+    // Zero writes: no entity page, no archive, no summary, no manifest
+    // row, no log event - every path and every byte as before the call.
+    expect(vaultSnapshot(vault)).toEqual(before);
+  });
+});
 
 describe("ingestSource marker neutralization (byte-identity lanes)", () => {
   test("gate off and an untrusted source: the summary persists live, with no provenance key", () => {

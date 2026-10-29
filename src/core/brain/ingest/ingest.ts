@@ -347,6 +347,16 @@ export function ingestSource(
   // the one an absent page gets: its path is deterministic, so `created`
   // would otherwise tell the caller the page exists.
   const summaryPath = canonicalNotePath(relative(vault, absPath));
+  // Write-time marker neutralization gate (t_c2ac4fc8), resolved beside the
+  // disposition and BEFORE ANY FILESYSTEM EFFECT - the capture seam's
+  // contract. A misconfigured mode is a misconfiguration of the process,
+  // not a verdict about this source: refusing it after the intake has
+  // written entity pages or the trusted archive has persisted its bytes
+  // would half-apply an ingest, and it would do so on the TRUSTED lane
+  // too, which never uses the gate at all. Whether the gate has work to do
+  // is decided at the summary write below (untrusted summaries, enforce
+  // only); resolving it here only moves the refusal earlier.
+  const gate = resolveMarkdownNeutralizeModeForProcess();
   // Review disposition (write-side trust, Tasks 9 and 12), resolved BEFORE
   // the intake so a refusal lands before ANY write - no entity page, no
   // manifest row, no summary page. With no permissions document the ingest
@@ -414,11 +424,12 @@ export function ingestSource(
   // passes through the neutralizer. Off and shadow leave the summary
   // byte-identical: shadow's preview is the doctor's planted-rows audit,
   // which recomputes the would-be rows from the vault's bytes on its own,
-  // so a shadow-mode seam has nothing to run.
+  // so a shadow-mode seam has nothing to run. The gate itself was resolved
+  // at the top of this function, before any write: only the DECISION lives
+  // here.
   const summaryText = input.summary.trim();
   let storedSummary = summaryText;
   let neutralized: FrontmatterMap = {};
-  const gate = resolveMarkdownNeutralizeModeForProcess();
   if (trust === INTAKE_TRUST.untrusted) {
     if (gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
       const neutralSummary = neutralizeMarkdown(summaryText);
