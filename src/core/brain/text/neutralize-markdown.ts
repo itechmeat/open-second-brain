@@ -30,23 +30,33 @@
  *     before ASCII punctuation as the literal character, so the text
  *     stays readable and the bytes stay honest; no HTML entities, no
  *     zero-width anything.
- *   - **Fence-aware.** Text inside fenced code blocks and inline code
- *     spans is inert - the shared {@link codeRegions} masking decides,
- *     so the neutralizer can never escape what the link and mention
- *     readers could not see either. ```osb fence lines are boundaries,
- *     not masked content, and are detected through the same fence walk
- *     `discoverMarkers` uses.
+ *   - **Fence-aware, per consumer grammar.** Every family is masked by the
+ *     fence model the readers of that family actually run, because the
+ *     grammars disagree about what a fence even is: the marker scanner
+ *     (`inline.ts`) knows exactly-3-backtick lines and nothing else, the
+ *     section readers (`source-links.ts` `fencedLineMask`, shared with the
+ *     block resolver) know 3-or-more backtick or tilde runs, and the link
+ *     readers share {@link codeRegions}. Masking an `@osb` row with the
+ *     one model and scanning it with the other is how a planted marker
+ *     inside a tilde fence would slip through: detection answers
+ *     "would MY consumer parse this" for each family separately.
  *   - **Escape-aware detectors.** A sigil preceded by an odd backslash
  *     run is data the caller already escaped, not structure; it is never
  *     re-escaped. (Line-anchored families get this for free: `\@osb` and
  *     `\#\#` fail the anchor.)
- *   - **Idempotent by construction.** Escaping a fence line dissolves
- *     the fence, which can expose previously masked interior text - so
+ *   - **Idempotent by construction.** Escaping a fence line dissolves the
+ *     fence, which can expose previously masked interior text - so
  *     {@link neutralizeMarkdown} re-detects its own output until the
  *     detector finds nothing left (bounded by
- *     {@link NEUTRALIZE_FIXPOINT_STEPS}; each step only ever inserts
- *     backslashes before sigils that lacked an odd run, so every sigil
- *     is escaped at most once and the walk terminates). The exit
+ *     {@link NEUTRALIZE_FIXPOINT_STEPS}). The walk terminates because
+ *     each round only inserts backslashes before sigils that lacked an
+ *     odd run - a backslashed sigil fails the same detection on the next
+ *     pass (the odd-run rule, and the line anchors), so no sigil is ever
+ *     escaped twice, and escaping cannot CREATE a sigil: a backslash
+ *     before a sigil never starts a line the way `@osb`, `#` or ` ``` `
+ *     must. A round can only ever EXPOSE sigils that were already in the
+ *     text (a dissolved fence's interior), so the walk visits each sigil
+ *     at most once and the bound is a safety net, never reached. The exit
  *     condition IS the doctrine: the output no longer matches the
  *     detector, therefore `neutralize(neutralize(x))` is byte-identical
  *     to `neutralize(x)`.
@@ -65,6 +75,7 @@
 
 import { codeRegions, WIKILINK_ALIAS_RE } from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
+import { fencedLineMask } from "../source-links.ts";
 import { envOrConfig } from "../../validate.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { discoverConfig } from "../../config.ts";
@@ -93,7 +104,7 @@ export interface MarkdownStructureMatch {
 }
 
 /**
- * The fence-open shape `discoverMarkers` walks: exactly three backticks,
+ * The ```osb fence-open shape `discoverMarkers` walks: exactly three backticks,
  * a plain info string, end of line. The marker grammar never learned
  * about longer runs or tilde fences, and this module does not teach it -
  * "would a marker scanner consume this" is the question the osb-fence
@@ -150,15 +161,26 @@ function precededByOddBackslashRun(s: string, index: number): boolean {
 }
 
 /**
- * The ```osb fence lines, found by the same walk `discoverMarkers` runs:
- * an open fence line per {@link OSB_FENCE_OPEN_RE} consumes lines until a
- * line whose trimmed form starts with three backticks (or the end of
- * text), and an `osb`-info block contributes its open and close fence
- * lines. Fence lines are boundaries rather than masked content, so these
- * matches are exempt from the code-region filter below.
+ * The ```osb fence lines plus the body mask, found by the same walk
+ * `discoverMarkers` runs: an open fence line per {@link OSB_FENCE_OPEN_RE}
+ * consumes lines until a line whose trimmed form starts with three backticks
+ * (or the end of text), and an `osb`-info block contributes its open and
+ * close fence lines. This is the marker grammar's ENTIRE fence concept -
+ * exactly-3-backtick boundaries and nothing else: a tilde fence or a
+ * 4-backtick fence fences nothing for the scanner, so the rows inside are
+ * live and the mask must not cover them, while an unterminated fence
+ * consumes the rest of the text and the mask must cover that.
  */
-function osbFenceMatches(lines: ReadonlyArray<Line>): MarkdownStructureMatch[] {
-  const out: MarkdownStructureMatch[] = [];
+interface MarkerFenceStructure {
+  /** The osb fence boundary-line sigil spans, in document order. */
+  readonly spans: MarkdownStructureMatch[];
+  /** True for body lines the marker scanner consumes as fenced (not parsed). */
+  readonly bodyMasked: boolean[];
+}
+
+function markerFenceStructure(lines: ReadonlyArray<Line>): MarkerFenceStructure {
+  const spans: MarkdownStructureMatch[] = [];
+  const bodyMasked = Array.from({ length: lines.length }, () => false);
   let i = 0;
   while (i < lines.length) {
     const line = lines[i]!;
@@ -170,7 +192,7 @@ function osbFenceMatches(lines: ReadonlyArray<Line>): MarkdownStructureMatch[] {
     const isOsb = (open[1] ?? "") === "osb";
     if (isOsb) {
       const indent = line.text.length - line.text.trimStart().length;
-      out.push({ kind: "osb-fence", start: line.start + indent, end: line.start + indent + 3 });
+      spans.push({ kind: "osb-fence", start: line.start + indent, end: line.start + indent + 3 });
     }
     i++;
     while (i < lines.length) {
@@ -179,7 +201,7 @@ function osbFenceMatches(lines: ReadonlyArray<Line>): MarkdownStructureMatch[] {
         if (isOsb) {
           const indent = inner.text.length - inner.text.trimStart().length;
           const run = backtickRun(inner.text.trimStart());
-          out.push({
+          spans.push({
             kind: "osb-fence",
             start: inner.start + indent,
             end: inner.start + indent + run,
@@ -188,10 +210,11 @@ function osbFenceMatches(lines: ReadonlyArray<Line>): MarkdownStructureMatch[] {
         i++;
         break;
       }
+      bodyMasked[i] = true;
       i++;
     }
   }
-  return out;
+  return { spans, bodyMasked };
 }
 
 /** Whether `[start, end)` overlaps any code region (fences and inline code). */
@@ -214,15 +237,30 @@ function inlineMarkerMatch(line: Line, lineNo: number): MarkdownStructureMatch |
 }
 
 /**
- * Every planted structure row in `text`, left to right: the ```osb fence
- * lines plus the per-line families (wikilinks, inline markers, ATX
- * headings) with every span that falls inside a fenced block or an inline
- * code span dropped. Pure and linear in the length of the text.
+ * Every planted structure row in `text`, left to right. Each family is
+ * masked by the fence model its own readers run, because "is this row
+ * inert?" has one answer per consumer grammar and they do not agree:
+ *
+ *   - the osb-inline and osb-fence families answer to the marker scanner
+ *     (`inline.ts`): its exactly-3-backtick boundary walk is the only
+ *     fencing that exists there, so a planted marker inside a tilde fence
+ *     or a 4-backtick fence is live and gets reported;
+ *   - the atx-heading family answers to the section readers
+ *     (`source-links.ts` `fencedLineMask`, shared with the block
+ *     resolver): 3-or-more backtick or tilde fences, and an unterminated
+ *     fence fences nothing;
+ *   - the wikilink family answers to the link readers and keeps the
+ *     shared {@link codeRegions} masking.
+ *
+ * Fence lines for the osb family are boundaries rather than masked
+ * content. Pure and linear in the length of the text.
  */
 export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStructureMatch> {
   const lines = splitLines(text);
-  const matches = osbFenceMatches(lines);
+  const fence = markerFenceStructure(lines);
+  const matches: MarkdownStructureMatch[] = [...fence.spans];
   const regions = codeRegions(text);
+  const headingMasked = fencedLineMask(lines.map((line) => line.text));
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     for (const m of line.text.matchAll(WIKILINK_ALIAS_RE)) {
@@ -232,17 +270,18 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
       if (precededByOddBackslashRun(line.text, m.index)) continue;
       matches.push({ kind: "wikilink", start, end });
     }
-    const heading = ATX_HEADING_RE.exec(line.text);
-    if (heading !== null) {
-      const runStart = line.start + heading[0].indexOf("#");
-      const start = runStart;
-      const end = runStart + heading[1]!.length;
-      if (!overlapsRegion(regions, start, end)) matches.push({ kind: "atx-heading", start, end });
+    if (!headingMasked[i]) {
+      const heading = ATX_HEADING_RE.exec(line.text);
+      if (heading !== null) {
+        const runStart = line.start + heading[0].indexOf("#");
+        const start = runStart;
+        const end = runStart + heading[1]!.length;
+        matches.push({ kind: "atx-heading", start, end });
+      }
     }
+    if (fence.bodyMasked[i]) continue;
     const marker = inlineMarkerMatch(line, i);
-    if (marker !== null && !overlapsRegion(regions, marker.start, marker.end)) {
-      matches.push(marker);
-    }
+    if (marker !== null) matches.push(marker);
   }
   return matches.toSorted((a, b) => a.start - b.start || a.end - b.end);
 }
@@ -251,11 +290,13 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
 
 /**
  * How many detect-and-escape rounds {@link neutralizeMarkdown} may run
- * before it returns the text it has. One round is the common case; the
- * extra rounds exist because escaping a fence line dissolves the fence
- * and can expose its interior to the next round. Each round only inserts
- * backslashes before sigils that had no odd run, so no sigil is ever
- * escaped twice and the bound is never reached in practice.
+ * before it returns the text it has. Two rounds are the deep case: round
+ * one escapes an ```osb fence's boundary lines, the escape dissolves the
+ * fence for the line-grammar consumers, and round two escapes the interior
+ * the dissolve exposed. No round can create a sigil or escape one twice
+ * (see the doctrine block above), so the walk converges and the bound is
+ * a safety net - asserting the post-condition instead, the output's own
+ * detection being empty, is exactly the loop's exit.
  */
 const NEUTRALIZE_FIXPOINT_STEPS = 8;
 

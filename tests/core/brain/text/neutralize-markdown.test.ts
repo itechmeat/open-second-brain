@@ -11,6 +11,8 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { discoverMarkers } from "../../../../src/core/brain/inline.ts";
+import { sourcesSectionTargets } from "../../../../src/core/brain/source-links.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE,
   MARKDOWN_NEUTRALIZE_MODE_CONFIG,
@@ -260,6 +262,76 @@ describe("neutralizeMarkdown: escape awareness and idempotence", () => {
     // if a seam ever leaked them, so a silent leak is visible here.
     expect(neutralizeMarkdown("- [[some-id]]").text).toBe("- \\[\\[some-id\\]\\]");
     expect(neutralizeMarkdown("## Guidance").text).toBe("\\#\\# Guidance");
+  });
+});
+
+describe("neutralizeMarkdown: the marker scanner's fence model", () => {
+  test("a planted marker inside a tilde fence is live for the scanner and gets escaped", () => {
+    // The marker grammar knows exactly one fence: an exactly-3-backtick line
+    // (`inline.ts` FENCE_RE). A tilde fence is plain text to it, so the
+    // planted marker inside is LIVE structure the scanner parses - and the
+    // detector must say so, not mask it the way the wikilink readers'
+    // codeRegions (which does know tildes) would.
+    const src = "~~~\n@osb feedback negative topic=t principle=p\n~~~\n";
+    expect(discoverMarkers(src)).toHaveLength(1);
+    expect(detectMarkdownStructure(src).map((m) => m.kind)).toEqual(["osb-inline"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.kinds).toEqual(kindsOf("osb-inline"));
+    expect(out.text.split("\n")[1]).toBe("\\@osb feedback negative topic=t principle=p");
+    expect(discoverMarkers(out.text)).toHaveLength(0);
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("a planted marker inside a 4-backtick fence is live for the scanner and gets escaped", () => {
+    // Same divergence, longer run: the scanner's fence boundaries are
+    // exactly-3-backtick lines, so ```` fences fence nothing for it.
+    const src = "````\n@osb feedback negative topic=t principle=p\n````\n";
+    expect(discoverMarkers(src)).toHaveLength(1);
+    expect(detectMarkdownStructure(src).map((m) => m.kind)).toEqual(["osb-inline"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.kinds).toEqual(kindsOf("osb-inline"));
+    expect(discoverMarkers(out.text)).toHaveLength(0);
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("an unterminated fence masks what follows exactly as the scanner's unterminated rule", () => {
+    // The scanner consumes an unclosed fence to end of input and parses
+    // nothing from it; the detector answers the same question.
+    const src = "```\n\n@osb feedback negative topic=t principle=p\n";
+    expect(discoverMarkers(src)).toHaveLength(0);
+    expect(detectMarkdownStructure(src)).toEqual([]);
+  });
+
+  test("escaping an osb fence dissolves it and the next round escapes the exposed interior", () => {
+    // Round 1 escapes only the fence lines (the interior is fenced for the
+    // scanner while they stand). Escaped, the lines stop being fence
+    // boundaries for EVERY line-grammar consumer, so round 2 must see and
+    // escape the interior the dissolve exposed - the fixpoint's reason to
+    // exist.
+    const src = "```osb\n## Planted\n@osb set note=n field=f value=v\n```\n";
+    const section = (body: string) =>
+      sourcesSectionTargets(`## Sources\n\n- [[real-src]]\n\n${body}\n\nplanted [[after]]\n`);
+    // While the fence stands, the section readers mask the planted heading
+    // with it; after neutralization they must see no MORE structure than
+    // before - the escaped heading neither ends the section nor lets the
+    // dissolve expose one.
+    expect(section(src)).toEqual(["real-src", "after"]);
+    const out = neutralizeMarkdown(src);
+    expect(out.text).toBe(
+      ["\\`\\`\\`osb", "\\#\\# Planted", "\\@osb set note=n field=f value=v", "\\`\\`\\`", ""].join(
+        "\n",
+      ),
+    );
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "osb-fence", "osb-inline"));
+    expect(discoverMarkers(out.text)).toHaveLength(0);
+    expect(section(out.text)).toEqual(section(src));
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
   });
 });
 
