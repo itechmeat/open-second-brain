@@ -10,9 +10,10 @@
  * disposition and killed the process wherever it happened to be, which
  * for a `tools/call` is mid-dispatch with no frame written. It now shares
  * the HTTP transport's register (`./drain.ts`): a drain stops the loop at
- * a request boundary and waits for every dispatched request - under the
- * bounded parallel reads that can be several at once - and only then
- * closes the reader. Nothing here handles a signal - that
+ * a request boundary and waits for every request it has accepted - under
+ * the bounded parallel reads that can be several at once, and including a
+ * write still parked behind them - and only then closes the reader.
+ * Nothing here handles a signal - that
  * belongs to the CLI, which owns the process (`src/cli/mcp-drain.ts`).
  */
 
@@ -141,8 +142,10 @@ class WriteGate {
  * without being awaited, up to {@link STDIO_READ_CONCURRENCY} in flight;
  * the loop backpressures on a free slot before reading further lines.
  * Writes run one at a time through {@link WriteGate}. Every response is
- * written inside its own drain window, so a request is tracked from
- * dispatch until after its answer frame is queued.
+ * written inside its own drain window: a read is tracked from its
+ * dispatch, a write from its ACCEPTANCE - before it parks behind the
+ * gate - so a drain that starts while the write is parked waits for it,
+ * and no request is marked finished before its answer frame is queued.
  */
 export async function serveStdio(
   ctx: MCPServerOptions,
@@ -198,9 +201,12 @@ export async function serveStdio(
   // One dispatch, read or write alike: the response write stays INSIDE
   // the tracked window, so a request is never marked finished before its
   // frame is queued (the drain could otherwise end the loop between the
-  // dispatch and the answer).
-  const dispatch = async (request: Record<string, unknown>): Promise<void> => {
-    const finish = drain.begin(requestLabel(request));
+  // dispatch and the answer). The window's `finish` is handed in rather
+  // than opened here because the two paths open it at different moments:
+  // a read at its dispatch, a WRITE at its acceptance - before it parks
+  // behind the gate - so a drain that starts while the write is parked
+  // already sees it (see dispatchWrite).
+  const dispatch = async (request: Record<string, unknown>, finish: () => void): Promise<void> => {
     try {
       const response = await server.handleRequest(request);
       if (response !== null) writeFrame(stdout, response);
@@ -233,7 +239,7 @@ export async function serveStdio(
     // settled twin, so every `Promise.all` over it (the write gate's
     // wait, this loop's exit barrier) stays rejection-free by
     // construction.
-    const run = dispatch(request).then(
+    const run = dispatch(request, drain.begin(requestLabel(request))).then(
       () => undefined,
       () => undefined,
     );
@@ -254,6 +260,17 @@ export async function serveStdio(
   const writeGate = new WriteGate();
   const writePromises = new Set<Promise<void>>();
   const dispatchWrite = (request: Record<string, unknown>): Promise<void> => {
+    // The drain window opens at ACCEPTANCE, not when the write finally
+    // dispatches. A write that arrives while reads are in flight parks in
+    // the gate body below until they settle, and a write left unregistered
+    // through that park was invisible to a drain: a SIGTERM in the window
+    // watched the reads empty the register, resolved `drained`, and the
+    // CLI exited - leaving the write to run afterward, its mutation landed
+    // with no response ever delivered. Begun here, the write holds the
+    // drain open from the moment the loop accepted it and is named in a
+    // deadline report that beats it; `finish` is idempotent, and the
+    // window closes when the response frame is written, inside `dispatch`.
+    const finish = drain.begin(requestLabel(request));
     // Swallowed once, for the same reason the read path swallows: the
     // gate body can only settle cleanly when every promise it waits on
     // does, and the loop awaits this twin - a rejection here would fall
@@ -264,7 +281,7 @@ export async function serveStdio(
         while (readPromises.size > 0) {
           await Promise.all(readPromises);
         }
-        await dispatch(request);
+        await dispatch(request, finish);
       })
       .then(
         () => undefined,

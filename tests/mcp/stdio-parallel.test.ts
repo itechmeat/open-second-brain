@@ -115,8 +115,14 @@ function call(id: number, name: string): string {
   });
 }
 
-/** The read and write names this fixture classifies through the real table. */
-const READ_TOOL = "brain_search";
+/**
+ * The read and write names this fixture classifies through the real
+ * table. `brain_search` used to be the read fixture until the round-4
+ * classification review found its handler writes ranking state (the
+ * reinforce ledger, default-on access recording) and reclassified it
+ * `write`; the fixtures moved to a tool whose every operation is a read.
+ */
+const READ_TOOL = "brain_recall_gate";
 const WRITE_TOOL = "brain_note";
 
 /** Start a loop over a scripted server; returns everything the test drives. */
@@ -366,7 +372,7 @@ describe("stdio frame integrity under concurrency", () => {
     expect(new Set(ids).size).toBe(N + 1);
   });
 
-  test("cross-request progress interleaving is legal and adjacency holds per request", async () => {
+  test("progress notifications precede their own response, whatever the dispatch order", async () => {
     const vault = tempVault();
     bootstrapBrain(vault);
     const { loop, stdin, chunks } = realLoop(vault);
@@ -381,8 +387,13 @@ describe("stdio frame integrity under concurrency", () => {
           _meta: { progressToken: token },
         },
       });
-    // Two read-classified calls issued back-to-back: both dispatch
-    // concurrently on the real stream.
+    // brain_brief is write-classified (round-4 review: its digest view
+    // persists the report snapshot), so the write gate runs these two
+    // calls one at a time rather than beside each other. brain_brief is
+    // also the one tool whose views emit progress, so the invariants
+    // this test pins are stated order-free: progress still flows for a
+    // write-classified call, and every notification lands before ITS
+    // OWN response.
     stdin.write(briefCall(2, "tok-a") + "\n");
     stdin.write(briefCall(3, "tok-b") + "\n");
     await until(() => chunks().includes('"id":2'), "response 2");
@@ -501,6 +512,115 @@ describe("the stdio drain under parallel dispatch", () => {
     expect(settled.state).toBe("drained");
     expect(settled.abandoned).toEqual([]);
     stdin.end();
+    expect(await loop).toBe(0);
+  });
+
+  test("the drain deadline names a write still parked behind in-flight reads", async () => {
+    const { loop, server, stdin, frames, close } = startScripted({ drainDeadlineMs: 60 });
+    stdin.write(call(1, READ_TOOL) + "\n" + call(2, READ_TOOL) + "\n");
+    await until(() => server.log.filter((e) => e.event === "start").length === 2, "both reads");
+    // The write arrives while both reads are held: the gate parks it, and
+    // it has not dispatched - a drain starting NOW must still see it.
+    stdin.write(call(3, WRITE_TOOL) + "\n");
+    await Bun.sleep(25);
+    expect(server.log.some((e) => e.id === 3)).toBe(false);
+    const outcome = await close();
+    // Not a drained-success over a queued write: the deadline expires,
+    // and the report names the WRITE beside the reads it was parked
+    // behind - it is the write an operator least expects a shutdown to
+    // drop, so it is the one the report must carry.
+    expect(outcome.state).toBe("deadline_expired");
+    expect(outcome.abandoned.map((r) => r.label).toSorted()).toEqual([
+      "tools/call (id 1)",
+      "tools/call (id 2)",
+      "tools/call (id 3)",
+    ]);
+    // Abandoning the wait is not dropping the work: the reads settle, the
+    // gate dispatches the parked write, and it answers.
+    release(1);
+    release(2);
+    await until(
+      () => server.log.some((e) => e.id === 3 && e.event === "start"),
+      "the parked write to dispatch",
+    );
+    release(3);
+    await until(
+      () => frames().some((f) => (JSON.parse(f) as JsonRpcResponse).id === 3),
+      "the parked write's answer",
+    );
+    const settled = await close(5_000);
+    expect(settled.state).toBe("drained");
+    expect(settled.abandoned).toEqual([]);
+    stdin.end();
+    expect(await loop).toBe(0);
+    expect(server.log.filter((e) => e.event === "end").length).toBe(3);
+  });
+
+  test("a drain started while a write is parked behind reads holds for the write", async () => {
+    const { loop, server, stdin, frames, close } = startScripted({ drainDeadlineMs: 5_000 });
+    stdin.write(call(1, READ_TOOL) + "\n" + call(2, READ_TOOL) + "\n");
+    await until(() => server.log.filter((e) => e.event === "start").length === 2, "both reads");
+    stdin.write(call(3, WRITE_TOOL) + "\n");
+    await Bun.sleep(25);
+    expect(server.log.some((e) => e.id === 3)).toBe(false);
+    const closing = close();
+    release(1);
+    release(2);
+    // The reads settle and the gate dispatches the queued write, which
+    // the fixture then holds: the drain must still be waiting on it, not
+    // have resolved the moment the reads emptied the register.
+    await until(
+      () => server.log.some((e) => e.id === 3 && e.event === "start"),
+      "the parked write to dispatch",
+    );
+    let settled = false;
+    void closing.then(() => {
+      settled = true;
+    });
+    await Bun.sleep(25);
+    expect(settled).toBe(false);
+    release(3);
+    const outcome = await closing;
+    expect(outcome.state).toBe("drained");
+    expect(outcome.abandoned).toEqual([]);
+    // The write's answer left inside the window: the frame exists by the
+    // time the drain resolved, so the client that sent it gets its
+    // correlation instead of a closed pipe.
+    await until(
+      () => frames().some((f) => (JSON.parse(f) as JsonRpcResponse).id === 3),
+      "the write's answer",
+    );
+    stdin.end();
+    expect(await loop).toBe(0);
+  });
+
+  test("EOF with a write parked behind held reads still waits for the write to answer", async () => {
+    const { loop, server, stdin, frames } = startScripted();
+    stdin.write(call(1, READ_TOOL) + "\n" + call(2, READ_TOOL) + "\n");
+    await until(() => server.log.filter((e) => e.event === "start").length === 2, "both reads");
+    stdin.write(call(3, WRITE_TOOL) + "\n");
+    await Bun.sleep(25);
+    stdin.end();
+    // EOF arrived with both reads held and the write parked behind them.
+    let settled = false;
+    void loop.then(() => {
+      settled = true;
+    });
+    await Bun.sleep(25);
+    expect(settled).toBe(false);
+    release(1);
+    release(2);
+    // The reads settle, the gate dispatches the parked write, and the
+    // loop is STILL pending under the held write: the exit barrier covers
+    // the parked shape, not just the already-dispatched one.
+    await until(
+      () => server.log.some((e) => e.id === 3 && e.event === "start"),
+      "the parked write to dispatch",
+    );
+    await Bun.sleep(25);
+    expect(settled).toBe(false);
+    release(3);
+    await until(() => frames().length === 3, "all three answers");
     expect(await loop).toBe(0);
   });
 });
