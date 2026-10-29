@@ -66,6 +66,8 @@
 import { codeRegions, WIKILINK_ALIAS_RE } from "../wikilink.ts";
 import { parseInlineMarker } from "../inline.ts";
 import { envOrConfig } from "../../validate.ts";
+import type { FrontmatterMap } from "../../types.ts";
+import { discoverConfig } from "../../config.ts";
 
 // ----- The shared detection grammar -----------------------------------------
 
@@ -334,6 +336,29 @@ export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
   });
 }
 
+// ----- The provenance record ------------------------------------------------
+
+/**
+ * Frontmatter key recording the structure families an enforce-mode write
+ * neutralized. A page carrying it says "these bytes are not what the
+ * caller sent" - the audit trail for the one mode that edits content -
+ * and a write that changed nothing adds nothing, keeping the untouched
+ * shape byte-identical to before the gate existed.
+ */
+export const MARKDOWN_NEUTRALIZED_FRONTMATTER_KEY = "neutralized_markers";
+
+/**
+ * The frontmatter fragment a seam merges when neutralization changed
+ * bytes: the key naming the neutralized kinds, sorted. An empty kind set
+ * adds NOTHING - the `untrustedSourceFrontmatter` conditional-spread
+ * precedent, so an unchanged body gains zero bytes.
+ */
+export function neutralizedMarkersFrontmatter(
+  kinds: ReadonlyArray<MarkdownStructureKind>,
+): FrontmatterMap {
+  return kinds.length === 0 ? {} : { [MARKDOWN_NEUTRALIZED_FRONTMATTER_KEY]: [...kinds] };
+}
+
 // ----- The gate -------------------------------------------------------------
 
 /**
@@ -404,4 +429,15 @@ export function resolveMarkdownNeutralizeMode(input: {
     );
   }
   return MARKDOWN_NEUTRALIZE_MODE.off;
+}
+
+/**
+ * Resolve the gate's mode the way the write seams do: the live process
+ * env over the machine config at its default discovery path. The one
+ * impure wrapper, so the capture and ingest seams cannot drift about
+ * where the inputs come from; tests drive the pure
+ * {@link resolveMarkdownNeutralizeMode} instead.
+ */
+export function resolveMarkdownNeutralizeModeForProcess(): MarkdownNeutralizeMode {
+  return resolveMarkdownNeutralizeMode({ env: process.env, config: discoverConfig().data });
 }
