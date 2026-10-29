@@ -55,6 +55,26 @@ function seededBlock(): string {
   return `${DEFAULT_BEGIN_MARKER}\n${GITIGNORE_GUARD_ENTRIES.join("\n")}\n${DEFAULT_END_MARKER}\n`;
 }
 
+/**
+ * The git-valid spellings of a negating line the matcher must catch.
+ * Beyond the two plain forms: a trailing slash, git's ignored unescaped
+ * trailing whitespace, and the double-star-slash prefix that matches
+ * zero or more directories (so it covers the vault root too). Spellings
+ * OUTSIDE this list - escaped-dot spellings, character-class and
+ * bracket-expression tricks - stay out of scope on purpose: the doctor's
+ * git-tracked-state row measures what git actually did, and is the
+ * authority for everything this matcher cannot name.
+ */
+const NEGATION_LINE_VARIANTS: ReadonlyArray<string> = [
+  "!.open-second-brain",
+  "!/.open-second-brain",
+  "!.open-second-brain/",
+  "!/.open-second-brain/",
+  "!.open-second-brain  ",
+  "!**/.open-second-brain",
+  "!**/.open-second-brain/",
+];
+
 describe("ensureVaultGitignoreEntries", () => {
   test("creates a .gitignore containing only the block when none exists", () => {
     vault = freshVault();
@@ -178,7 +198,7 @@ describe("ensureVaultGitignoreEntries", () => {
     // wins: with `!.open-second-brain` after the entry the store is NOT
     // ignored, so reporting a clean skip here would be optimistic. The
     // doctor row catches it later; the init report itself must not lie.
-    for (const negation of ["!.open-second-brain", "!/.open-second-brain"]) {
+    for (const negation of NEGATION_LINE_VARIANTS) {
       vault = freshVault();
       try {
         const hostile = `/.open-second-brain/\n*.tmp\n${negation}\n`;
@@ -188,7 +208,7 @@ describe("ensureVaultGitignoreEntries", () => {
           result = ensureVaultGitignoreEntries(vault);
         });
         expect(result.status).toBe("conflict");
-        expect(result.detail).toContain(negation);
+        expect(result.detail).toContain(negation.trim());
         // Warn-and-continue: the file is exactly as the user left it.
         expect(readFileSync(gitignorePath(), "utf8")).toBe(hostile);
         expect(stderr).toMatch(/warning:/);
@@ -196,6 +216,65 @@ describe("ensureVaultGitignoreEntries", () => {
       } finally {
         rmSync(vault, { recursive: true, force: true });
       }
+    }
+  });
+
+  test("a conforming block that a later negation defeats is a conflict, not a clean update", () => {
+    // The merge would land the entry INSIDE the earlier block, so the
+    // negation after the block still wins under git's last-match rule:
+    // a clean `updated` here would seed nothing effective while the
+    // report claimed the guard moved.
+    vault = freshVault();
+    try {
+      const hostile = `${DEFAULT_BEGIN_MARKER}\n*.log\n${DEFAULT_END_MARKER}\n!.open-second-brain\n`;
+      writeFileSync(gitignorePath(), hostile, "utf8");
+      let result!: ReturnType<typeof ensureVaultGitignoreEntries>;
+      const { stderr } = captureStderr(() => {
+        result = ensureVaultGitignoreEntries(vault);
+      });
+      expect(result.status).toBe("conflict");
+      expect(result.detail).toContain("!.open-second-brain");
+      // Warn-and-continue: the file is exactly as the user left it, and
+      // the store stays unprotected - reported, never claimed as seeded.
+      expect(readFileSync(gitignorePath(), "utf8")).toBe(hostile);
+      expect(stderr).toMatch(/warning:/);
+      expect(stderr).toContain("derived-brain-state");
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("a negation BEFORE the block is overridden by the merged entry - a clean update", () => {
+    // Last-match-wins favors the entry the merge adds, because it lands
+    // after the negation inside the block.
+    vault = freshVault();
+    try {
+      const user = `!.open-second-brain\n${DEFAULT_BEGIN_MARKER}\n*.log\n${DEFAULT_END_MARKER}\n`;
+      writeFileSync(gitignorePath(), user, "utf8");
+      const result = ensureVaultGitignoreEntries(vault);
+      expect(result.status).toBe("updated");
+      const next = readFileSync(gitignorePath(), "utf8");
+      expect(next).toContain(`/${DERIVED_STORE_DIR}/`);
+      expect(next).toContain("*.log");
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing empty block gains the entry without a stray blank line", () => {
+    // Begin marker directly followed by end marker: the block body is
+    // the empty string, and `"".split("\n")` yields [""], which used to
+    // open the merged block with a blank line.
+    vault = freshVault();
+    try {
+      writeFileSync(gitignorePath(), `${DEFAULT_BEGIN_MARKER}\n${DEFAULT_END_MARKER}\n`, "utf8");
+      const result = ensureVaultGitignoreEntries(vault);
+      expect(result.status).toBe("updated");
+      expect(readFileSync(gitignorePath(), "utf8")).toBe(
+        `${DEFAULT_BEGIN_MARKER}\n/${DERIVED_STORE_DIR}/\n${DEFAULT_END_MARKER}\n`,
+      );
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
     }
   });
 

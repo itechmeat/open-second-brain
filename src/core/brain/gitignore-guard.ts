@@ -20,7 +20,11 @@
  *     the block appended with one separating blank line (the
  *     `insertManagedBlock` merge). A conforming block already present is
  *     MERGED, never clobbered: its own entries survive and only the
- *     missing guard entries are added.
+ *     missing guard entries are added. The MERGED content is re-checked
+ *     for a negation after the entry before anything is written, because
+ *     a merge that lands the entry inside an earlier block does not move
+ *     it past a later `!.open-second-brain` - and a hit refuses the
+ *     write like every other conflict.
  *   - Exact-line membership is checked first, so a user who already
  *     ignores the path - inside the block or beside it - yields a skip,
  *     not a duplicate. The skip is only clean while no LATER line
@@ -80,6 +84,15 @@ export const GITIGNORE_GUARD_ENTRIES: ReadonlyArray<string> = Object.freeze([
   `/${DERIVED_STORE_DIR}/`,
 ]);
 
+/**
+ * The exact `.gitignore` line the seeded block carries: the entry list
+ * joined, so a remediation message that names "the exact line" quotes
+ * the same constant the seeder writes and the two cannot drift. The
+ * census in `tests/core/brain/gitignore-guard.test.ts` pins the list at
+ * exactly one entry, so the joined form IS one line.
+ */
+export const GITIGNORE_GUARD_IGNORE_LINE = GITIGNORE_GUARD_ENTRIES.join("\n");
+
 /** What one seeding pass did to `<vault>/.gitignore`. */
 export type GitignoreGuardStatus =
   | "created" // the file did not exist and was written with only the block
@@ -101,12 +114,25 @@ function blockBody(entries: ReadonlyArray<string>): string {
 }
 
 /**
- * A line that re-includes the derived store: `!.open-second-brain` or
- * the root-anchored `!/.open-second-brain`, with git's optional trailing
- * slash. Built from the directory constant so the guard and its negation
- * cannot drift apart.
+ * A line that re-includes the derived store. Built from the directory
+ * constant so the guard and its negation cannot drift apart, and
+ * matched over the git-valid spellings of the negation:
+ *
+ *   - `!.open-second-brain` and `!/.open-second-brain`, with or without
+ *     git's optional trailing slash;
+ *   - unescaped trailing whitespace, which git strips from a pattern
+ *     (only a backslash-escaped space is significant);
+ *   - the double-star-slash prefix, which matches zero or more
+ *     directories and so covers the vault root too.
+ *
+ * Everything else - escaped-dot spellings, character-class tricks - is
+ * deliberately out of scope: the doctor's git-tracked-state row measures
+ * what git actually did and is the authority for any spelling this
+ * matcher cannot name.
  */
-const NEGATED_ENTRY_RE = new RegExp(`^!/?${DERIVED_STORE_DIR.replaceAll(".", "\\.")}/?$`);
+const NEGATED_ENTRY_RE = new RegExp(
+  `^!(?:/?|\\*\\*/)${DERIVED_STORE_DIR.replaceAll(".", "\\.")}/?[ \\t]*$`,
+);
 
 /**
  * The first line after the LAST guard entry that negates it, or null.
@@ -155,14 +181,7 @@ export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult
     // malformed-marker case gets; write nothing either way.
     const negation = negationAfterEntry(lines);
     if (negation !== null) {
-      const detail =
-        `the guard entry is negated by the later line ${negation} ` +
-        "(git last-match-wins: the derived store stays visible to git)";
-      process.stderr.write(
-        `warning: the ${GITIGNORE_GUARD_BLOCK_ID} .gitignore guard is negated ` +
-          `(derived brain state stays visible to git): ${file}: ${detail}\n`,
-      );
-      return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
+      return conflict(`the guard entry is negated by the later line ${negation} `, file);
     }
     return { status: "skipped", file: GITIGNORE_GUARD_FILE };
   }
@@ -170,13 +189,27 @@ export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult
   try {
     // Merge, never clobber: a conforming block's own entries survive and
     // only the missing guard entries are added to it. Entries the user
-    // already wrote elsewhere in the file are not duplicated into it.
-    const blockEntries = hasManagedBlock(current)
-      ? (extractManagedBlock(current) ?? "").split("\n")
-      : [];
+    // already wrote elsewhere in the file are not duplicated into it. An
+    // empty existing block contributes no lines - the empty string splits
+    // to [""], which would open the merged block with a stray blank line.
+    const blockEntries = hasManagedBlock(current) ? blockEntryLines(current) : [];
     const next = insertManagedBlock(current, [...blockEntries, ...missing].join("\n"));
     if (next === current) {
       return { status: "skipped", file: GITIGNORE_GUARD_FILE };
+    }
+    // The merge moving the entry INSIDE the block does not move it after
+    // the file's other patterns: a negation later in the file still wins
+    // under git's last-match rule, so a clean `updated` here could seed
+    // an entry that protects nothing. The merged content is asked the
+    // same question the exact-line skip asks, and a hit refuses the
+    // write - the seeder's one conflict convention is warn-and-continue
+    // with the file byte-identical, and this case keeps it.
+    const negation = negationAfterEntry(next.replace(/\r\n/g, "\n").split("\n"));
+    if (negation !== null) {
+      return conflict(
+        `the merged block would still be negated by the later line ${negation} `,
+        file,
+      );
     }
     atomicWriteFileSync(file, next);
     return { status: "updated", file: GITIGNORE_GUARD_FILE };
@@ -189,4 +222,26 @@ export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult
     );
     return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
   }
+}
+
+/** The existing block's entry lines, [] for a block that holds none. */
+function blockEntryLines(current: string): ReadonlyArray<string> {
+  const body = extractManagedBlock(current) ?? "";
+  return body.length === 0 ? [] : body.split("\n");
+}
+
+/**
+ * Report the named negation conflict: warn on stderr, write nothing.
+ * The one conflict convention this seeder has - malformed markers behave
+ * the same way - and the init report's `guard.status` carries it to
+ * machine readers while the doctor's tracked-state row reports the
+ * still-unprotected store.
+ */
+function conflict(detail: string, file: string): GitignoreGuardResult {
+  process.stderr.write(
+    `warning: the ${GITIGNORE_GUARD_BLOCK_ID} .gitignore guard is negated ` +
+      `(derived brain state stays visible to git): ${file}: ${detail}` +
+      "(git last-match-wins: the derived store stays visible to git)\n",
+  );
+  return { status: "conflict", file: GITIGNORE_GUARD_FILE, detail };
 }
