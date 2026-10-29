@@ -1721,16 +1721,27 @@ function statusForContractFinding(finding: WritebackContractFinding): ReadinessS
 
 /**
  * The detail of one placement-shadow row (t_00b617b6): the file the host
- * reads, the host by name, the file that actually carries the contract,
- * and the same read-only recovery clause the per-file rows carry - adding
- * the block to the file the host reads is content-editing, so the probe
+ * reads, the host by name, the file that carries the contract, and the
+ * same read-only recovery clause the per-file rows carry - adding the
+ * block to the file the host reads is content-editing, so the probe
  * offers recovery prose, never a command that writes.
+ *
+ * The contract side's condition is the row's advice, so it is worded from
+ * the triple's own finding: a `conforming` contract file "carries the
+ * write-back contract" and copying its block is the right move, while any
+ * block-bearing-but-broken finding (`malformed-block`, `missing-clauses`)
+ * "carries a broken managed block" - following that file verbatim would
+ * copy a broken block, and the row must not say otherwise.
  */
 function writebackShadowRowDetail(shadow: WritebackContractShadow): string {
+  const carries =
+    shadow.contractFinding === WRITEBACK_CONTRACT_FINDING.conforming
+      ? "carries the write-back contract"
+      : "carries a broken managed block";
   return (
     `${shadow.readsPath} is the instruction file the ${shadow.host} host reads, but it ` +
-    `carries no Open Second Brain managed block while ${shadow.contractPath} carries the ` +
-    `write-back contract - the operative host never sees the same-turn atomic-fact write ` +
+    `carries no Open Second Brain managed block while ${shadow.contractPath} ${carries} - ` +
+    `the operative host never sees the same-turn atomic-fact write ` +
     `gate; ${WRITEBACK_CONTRACT_RECOVERY}`
   );
 }

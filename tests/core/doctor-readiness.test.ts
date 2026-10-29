@@ -890,11 +890,28 @@ describe("probeWritebackContract", () => {
     expect(v.detail).toContain(claude);
     expect(v.detail).toContain(agents);
     expect(v.detail).toContain(WRITEBACK_CONTRACT_RECOVERY);
+    // The row's advice tracks the contract side's condition: a conforming
+    // peer carries the contract, and the row says exactly that.
+    expect(v.detail).toContain(`${agents} carries the write-back contract`);
     expect(v.detail).toContain("1 pass");
     expect(v.detail).toContain("1 fail");
     expect(v.detail).toContain("2 skipped");
     // The probe is read-only: audited bytes are exactly what it found.
     expect([agents, claude].map((p) => readFileSync(p, "utf8"))).toEqual(before);
+  });
+
+  test("a shadow over a broken contract file says broken managed block, not contract", async () => {
+    // AGENTS.md carries a block that was installed and then broken: the
+    // shadow row must not advise following it as "the write-back contract",
+    // or an operator would copy a broken block.
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, "# >>> open-second-brain managed >>>\nhalf a block\n");
+    writeFileSync(join(tmp, "CLAUDE.md"), "plain claude instructions\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain(`${agents} carries a broken managed block`);
+    expect(v.detail).not.toContain(`${agents} carries the write-back contract`);
   });
 
   test("a CLAUDE.md that only imports the conforming AGENTS.md passes: the host sees the contract", async () => {

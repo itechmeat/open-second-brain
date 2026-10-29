@@ -434,6 +434,13 @@ export interface WritebackContractShadow {
   readonly readsPath: string;
   /** Absolute path of another candidate that carries the contract. */
   readonly contractPath: string;
+  /**
+   * The {@link WRITEBACK_CONTRACT_FINDING} of the contract side - what the
+   * advice on such a row depends on: a `conforming` contract file is a
+   * contract worth copying, while `malformed-block` or `missing-clauses`
+   * means the block the row points at is itself broken.
+   */
+  readonly contractFinding: WritebackContractFinding;
 }
 
 /**
@@ -498,6 +505,7 @@ export function resolveShadowedInstructionContracts(
         host: host as HostInstructionName,
         readsPath: preferred.path,
         contractPath: contract.path,
+        contractFinding: contract.finding,
       }),
     );
   }

@@ -283,7 +283,28 @@ describe("resolveShadowedInstructionContracts", () => {
     const agents = join(tmp, "AGENTS.md");
     writeFileSync(agents, `# W\n\n${CONFORMING_BLOCK}\n`);
     const shadows = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
-    expect(shadows).toEqual([{ host: "claude-code", readsPath: claude, contractPath: agents }]);
+    expect(shadows).toEqual([
+      {
+        host: "claude-code",
+        readsPath: claude,
+        contractPath: agents,
+        contractFinding: WRITEBACK_CONTRACT_FINDING.conforming,
+      },
+    ]);
+  });
+
+  test("the shadow triple carries the contract side's finding", () => {
+    // The row's advice depends on the contract side's condition: a block
+    // that was installed and then broken must not be worded as a contract
+    // worth copying.
+    const claude = join(tmp, "CLAUDE.md");
+    writeFileSync(claude, "plain\n");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, `${DEFAULT_BEGIN_MARKER}\nhalf a block\n`);
+    const malformed = resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp));
+    expect(malformed.map((s) => s.contractFinding)).toEqual([
+      WRITEBACK_CONTRACT_FINDING.malformedBlock,
+    ]);
   });
 
   test("a block in any carried state shadows: conforming, malformed and clause-incomplete", () => {
@@ -306,6 +327,7 @@ describe("resolveShadowedInstructionContracts", () => {
       host: "claude-code",
       readsPath: claude,
       contractPath: agents,
+      contractFinding: WRITEBACK_CONTRACT_FINDING.missingClauses,
     });
 
     writeFileSync(agents, `${DEFAULT_BEGIN_MARKER}\nhalf a block\n`);
@@ -352,11 +374,13 @@ describe("resolveShadowedInstructionContracts", () => {
       host: "claude-code",
       readsPath: join(tmp, "CLAUDE.md"),
       contractPath: join(tmp, "AGENTS.md"),
+      contractFinding: WRITEBACK_CONTRACT_FINDING.conforming,
     });
     expect(shadows[1]).toEqual({
       host: "gemini-cli",
       readsPath: join(tmp, "GEMINI.md"),
       contractPath: join(tmp, "AGENTS.md"),
+      contractFinding: WRITEBACK_CONTRACT_FINDING.conforming,
     });
   });
 
@@ -403,6 +427,7 @@ describe("resolveShadowedInstructionContracts", () => {
         host: "claude-code",
         readsPath: "/nowhere/o2b-purity/CLAUDE.md",
         contractPath: "/nowhere/o2b-purity/AGENTS.md",
+        contractFinding: WRITEBACK_CONTRACT_FINDING.conforming,
       },
     ]);
     // The resolver ran entirely on the given data: it created nothing and
