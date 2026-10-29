@@ -11,9 +11,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
@@ -115,8 +122,13 @@ describe("plantedRowsCheck (the counting check)", () => {
     expect(warning).toBeDefined();
     expect(warning!.severity).toBe("warning");
     expect(warning!.message).toContain("7 Brain page(s)");
-    for (let i = 0; i < 5; i++) {
-      expect(warning!.message).toContain(`Brain/captures/cap-2026-08-01-100000-`);
+    // The five named paths are distinct rows, all staged captures of this
+    // same-second batch, with the remainder counted after the cap.
+    const namedPaths = warning!.message.match(/Brain\/captures\/cap-\S+?\.md/g) ?? [];
+    expect(namedPaths).toHaveLength(5);
+    expect(new Set(namedPaths).size).toBe(5);
+    for (const path of namedPaths) {
+      expect(path).toMatch(/^Brain\/captures\/cap-2026-08-01-100000-/);
     }
     expect(warning!.message).toContain("and 2 more");
     // The paths are vault-relative: the vault root itself is never named.
@@ -143,6 +155,153 @@ describe("plantedRowsCheck (the counting check)", () => {
     expect(findings.issues[0]!.message).toContain("1 Brain page(s)");
     expect(findings.issues[0]!.message).toContain(note.path);
     expect(findings.issues[0]!.message).not.toContain("Brain/pending/ingest");
+  });
+
+  test("a capture's own guidance section is writer output, not planted", () => {
+    // The writer renders the trailing ## Guidance heading itself
+    // (capture-note.ts) under the capture_guidance marker; on this
+    // third-party lane the heading is a live atx row like any other, so
+    // without the writer-section exclusion a CLEAN capture reported its
+    // own writer as planted.
+    writeCaptureNote(vault, {
+      body: "a clean capture",
+      provenance: prov(),
+      guidance: "file this under projects after reading",
+    });
+    expect(plantedWarning(vault)).toBeUndefined();
+  });
+
+  test("an extra planted row beside a writer section is still exactly that row", () => {
+    // The exclusion covers the writer's ## Guidance heading, nothing
+    // else: planted rows in the caller's body count, and the writer's
+    // own heading does not.
+    writeCaptureNote(vault, {
+      body: "note [[planted-link]]\n\n## Planted Heading\n",
+      provenance: prov(),
+      guidance: "file this",
+    });
+    const warning = plantedWarning(vault)!;
+    expect(warning.message).toContain("2 live structure row(s) across 1 Brain page(s)");
+  });
+
+  test("a Guidance heading no marker authorizes is still planted", () => {
+    // The writer renders ## Guidance only when it set capture_guidance;
+    // an unmarked capture carrying the heading is quoting caller text
+    // (people quote documents), and the split is exactly what the marker
+    // authorizes.
+    writePlainPage(
+      "Brain/captures/cap-unmarked.md",
+      "kind: brain-capture",
+      "quoted material\n\n## Guidance\n\n[[planted-link]]",
+    );
+    const page = planPlantedRows(vault).planted.find(
+      (p) => p.path === "Brain/captures/cap-unmarked.md",
+    );
+    expect(page).toBeDefined();
+    expect(page!.kinds).toEqual(["atx-heading", "wikilink"]);
+  });
+
+  test("a source summary's own citation sections are writer output, not planted", () => {
+    // ingest.ts composes every summary page as prose plus the rendered
+    // provenance and link sections; the `## Sources` heading and its
+    // `- [[id]]` bullets are the writer's citation rows, so a clean
+    // ingest must report none of them.
+    const sections = [
+      "## Sources",
+      "",
+      "- [[cap-2026-08-01-100000-ab12cd34]]",
+      "",
+      "## Premises (stated)",
+      "",
+      "- [[fact-one]]",
+      "",
+      "## Entities",
+      "",
+      "- [[entity-one]]",
+      "",
+      "## Connections to existing notes",
+      "",
+      "- [[note-one]]",
+    ].join("\n");
+    writePlainPage(
+      "Brain/sources/s.md",
+      "kind: brain-source\nsource_path: notes/a.md",
+      `summary of the source\n\n${sections}`,
+    );
+    expect(planPlantedRows(vault).planted).toEqual([]);
+    // Every provenance level is a writer-rendered heading spelling.
+    writePlainPage(
+      "Brain/sources/s2.md",
+      "kind: brain-source\nsource_path: notes/b.md",
+      "summary\n\n## Premises (inferred)\n\n- [[fact-two]]",
+    );
+    expect(planPlantedRows(vault).planted).toEqual([]);
+  });
+
+  test("the derivation headings a summary writer renders are not planted either", () => {
+    // The html and table extractors append their own sections to the
+    // same summary page (extract-html.ts `## Parts`, table-note.ts
+    // `## Table` with one `### Rows a-b` heading per group); those
+    // headings are writer-rendered like the citation sections.
+    const derivation = [
+      "## Parts",
+      "",
+      "```parts",
+      "h1 Title | lines 0-3",
+      "```",
+      "",
+      "## Table",
+      "",
+      "```table",
+      "a | b",
+      "1 | 2",
+      "```",
+      "",
+      "### Rows 0-1",
+      "",
+      "```table",
+      "a | b",
+      "1 | 2",
+      "```",
+      "",
+      "Rendered 2 of 2 rows.",
+    ].join("\n");
+    writePlainPage(
+      "Brain/sources/t.md",
+      "kind: brain-source\nsource_path: data/t.csv",
+      `summary of the table\n\n${derivation}`,
+    );
+    expect(planPlantedRows(vault).planted).toEqual([]);
+  });
+
+  test("an extra planted row in the summary prose is still exactly that row", () => {
+    const sections = ["## Sources", "", "- [[cap-one]]"].join("\n");
+    writePlainPage(
+      "Brain/sources/s.md",
+      "kind: brain-source\nsource_path: notes/a.md",
+      `caller [[planted-link]] prose\n\n## Planted Heading\n\n${sections}`,
+    );
+    const warning = plantedWarning(vault)!;
+    expect(warning.message).toContain("2 live structure row(s) across 1 Brain page(s)");
+  });
+
+  test("a staged copy is reported when its published twin is unreadable to the caller", () => {
+    // Dedupe runs inside the planner, which knows nothing of
+    // ctx.readable; the check filters by it afterwards. A readable
+    // staged page whose hash-equal twin the caller may not read must
+    // still be reported - dropping the staged copy in favor of a twin
+    // the check then filters out would make BOTH disappear.
+    const note = writeCaptureNote(vault, { body: "twin [[a]]", provenance: prov() });
+    const stagedRel = "Brain/pending/ingest/ing-2026-08-01-x.md";
+    mkdirSync(dirname(join(vault, ...stagedRel.split("/"))), { recursive: true });
+    writeFileSync(
+      join(vault, ...stagedRel.split("/")),
+      readFileSync(join(vault, ...note.path.split("/")), "utf8"),
+    );
+    const findings = runCheck(vault, (rel) => rel !== note.path);
+    expect(findings.issues).toHaveLength(1);
+    expect(findings.issues[0]!.message).toContain(stagedRel);
+    expect(findings.issues[0]!.message).not.toContain(note.path);
   });
 
   test("the marker and fence families scan every readable Brain page; the rest stay lane-keyed", () => {
@@ -253,14 +412,21 @@ describe("plantedRowsCheck (the counting check)", () => {
     expect(fencePage!.kinds).toEqual(["osb-fence"]);
   });
 
-  test("the check never mutates and never throws over an unreadable page", () => {
+  test("the check never mutates and never throws over a NUL-byte page", () => {
     writeCaptureNote(vault, { body: "planted [[a]]", provenance: prov() });
-    // A corrupt page in the population: unreadable as frontmatter, still
-    // walked. The audit skips it rather than throwing.
+    // A NUL byte in the body is ordinary text, not structure: detection
+    // neither chokes on it nor counts it, and the page's live wikilink
+    // row is reported exactly as it would be without the byte.
     writePlainPage("Brain/captures/corrupt.md", "kind: brain-capture", "body [[x]]\n\x00binary");
     const before = snapshot(vault);
     expect(() => runCheck(vault)).not.toThrow();
     expect(runCheck(vault).issues.length).toBeGreaterThanOrEqual(1);
+    const nulPage = planPlantedRows(vault).planted.find(
+      (p) => p.path === "Brain/captures/corrupt.md",
+    );
+    expect(nulPage).toBeDefined();
+    expect(nulPage!.count).toBe(1);
+    expect(nulPage!.kinds).toEqual(["wikilink"]);
     expect(snapshot(vault)).toEqual(before);
   });
 

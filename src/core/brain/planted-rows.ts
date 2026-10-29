@@ -36,6 +36,21 @@
  * directory holds a byte-verbatim copy of the page under review, so the
  * same rows would otherwise be reported twice.
  *
+ * The writers' own output is not planted, and the scan knows it. A
+ * capture's trailing `## Guidance` section and a source summary's
+ * citation and derivation sections (`## Sources`, `## Premises (level)`,
+ * `## Entities`, `## Connections to existing notes`, `## Parts`,
+ * `## Table`, `### Rows a-b`) are shapes THIS vault rendered on its lane
+ * pages - without the exclusion a clean capture carrying guidance or a
+ * clean ingest carrying its citations reports the vault's own writer as
+ * planted. The exclusion is a static list keyed by page kind and section
+ * heading ({@link WRITER_AUTHORED_SECTIONS}), never a whole-page pass,
+ * and the capture heading only counts as the writer's when the
+ * `capture_guidance` frontmatter marker authorizes it. A caller
+ * quotation of the same heading stays planted: caller text occupies only
+ * the leading prose region of these pages, so for every heading the
+ * writer renders once, the LAST occurrence in the body is the writer's.
+ *
  * Read-only by contract: nothing here writes, and a page that cannot be
  * read between the walk and the body scan is skipped rather than thrown
  * - the doctor never throws.
@@ -51,6 +66,7 @@ import { hasUntrustedSourceMarker } from "./trust/untrusted-provenance.ts";
 import { BRAIN_CAPTURE_KIND } from "./capture/capture-note.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
 import { BRAIN_ENTITY_KIND, BRAIN_ENTITY_STATUS } from "./entities/types.ts";
+import { PROVENANCE_LEVELS } from "./provenance/provenance.ts";
 import {
   MARKDOWN_STRUCTURE_KIND,
   detectMarkdownStructure,
@@ -112,6 +128,171 @@ const ALWAYS_PLANTED_KINDS: ReadonlySet<MarkdownStructureKind> = new Set([
   MARKDOWN_STRUCTURE_KIND.osbFence,
 ]);
 
+/** Heading of the body section the capture contract renders for guidance (capture-note.ts). */
+const CAPTURE_GUIDANCE_HEADING = "## Guidance";
+
+/**
+ * Frontmatter field authorizing that section (capture-note.ts's
+ * `GUIDANCE_MARKER_FIELD`): the writer sets it exactly when IT rendered
+ * the heading, which is what keeps a caller's quoted `## Guidance` on
+ * the planted side of the line.
+ */
+const CAPTURE_GUIDANCE_MARKER = "capture_guidance";
+
+/**
+ * One writer-rendered section shape: the heading line that opens it and
+ * how much of what follows is the writer's too.
+ */
+interface WriterSectionRule {
+  /** The exact heading line the writer renders (a trailing CR is tolerated). */
+  readonly heading: string;
+  /** Match headings that BEGIN with this text (the ranged `### Rows a-b` shape). */
+  readonly prefix?: boolean;
+  /** Also mask the `- ` bullet lines under the heading (the `- [[id]]` citation rows). */
+  readonly bullets?: boolean;
+  /** The section is the writer's only when this frontmatter field is set true. */
+  readonly requiresMarker?: string;
+  /**
+   * Only the LAST occurrence of the heading in the body is the writer's.
+   * True for the headings each writer renders once: caller text occupies
+   * only the leading prose region of these pages, so an earlier
+   * occurrence is a caller quotation and stays planted.
+   */
+  readonly trailingOnly?: boolean;
+}
+
+/**
+ * The section shapes the Brain's own writers render on third-party lane
+ * pages, keyed by frontmatter `kind` - the pure exclusion list that keeps
+ * this audit from reporting the vault's own writer as planted.
+ *
+ *   - `brain-capture` renders ONE section, the trailing
+ *     {@link CAPTURE_GUIDANCE_HEADING}, and only under its marker
+ *     (capture-note.ts). The guidance CONTENT is caller text (the
+ *     neutralizer's business at write time), so only the heading line is
+ *     the writer's.
+ *   - `brain-source` composes every summary page as caller prose plus
+ *     rendered sections (ingest.ts): the provenance citation sections
+ *     (`## Sources`, `## Premises (<level>)` per provenance.ts, their
+ *     `- [[id]]` bullets the writer's own citation rows), the two link
+ *     sections, and the html/table derivation sections
+ *     (`## Parts` per extract-html.ts, `## Table` with one
+ *     `### Rows a-b` heading per group per table-note.ts - the writer
+ *     renders many, so every occurrence is its own).
+ *
+ * Keyed by KIND, not by lane membership: an untrusted-stamped page whose
+ * kind renders no such sections gets no exclusion, and a brain-source
+ * page keeps its exclusions whether or not it is also untrusted-stamped.
+ */
+const WRITER_AUTHORED_SECTIONS: ReadonlyMap<string, readonly WriterSectionRule[]> = new Map([
+  [
+    BRAIN_CAPTURE_KIND,
+    [
+      {
+        heading: CAPTURE_GUIDANCE_HEADING,
+        requiresMarker: CAPTURE_GUIDANCE_MARKER,
+        trailingOnly: true,
+      },
+    ],
+  ],
+  [
+    BRAIN_SOURCE_KIND,
+    [
+      { heading: "## Sources", bullets: true, trailingOnly: true },
+      ...PROVENANCE_LEVELS.map((level): WriterSectionRule => ({
+        heading: `## Premises (${level})`,
+        bullets: true,
+        trailingOnly: true,
+      })),
+      { heading: "## Entities", bullets: true, trailingOnly: true },
+      { heading: "## Connections to existing notes", bullets: true, trailingOnly: true },
+      { heading: "## Parts", trailingOnly: true },
+      { heading: "## Table", trailingOnly: true },
+      { heading: "### Rows ", prefix: true },
+    ],
+  ],
+]);
+
+/** A frontmatter boolean in both spellings the reader produces (true and "true"). */
+function frontmatterMarked(meta: FrontmatterMap, field: string): boolean {
+  const value = meta[field];
+  return value === true || value === "true";
+}
+
+/**
+ * The writer-authored line indexes of `body` for the page's kind, with
+ * each line's start offset, or `null` when the kind renders no writer
+ * sections. Heading comparisons are exact (CR-tolerant); a bullet mask
+ * runs from the heading past blank lines and stops at the first line
+ * that is neither blank nor a `- ` item.
+ */
+function writerAuthoredLines(
+  meta: FrontmatterMap,
+  body: string,
+): { masked: Set<number>; lineStarts: number[] } | null {
+  const kind = typeof meta["kind"] === "string" ? meta["kind"] : "";
+  const rules = WRITER_AUTHORED_SECTIONS.get(kind);
+  if (rules === undefined) return null;
+  const lines = body.split("\n");
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+  const masked = new Set<number>();
+  for (const rule of rules) {
+    if (rule.requiresMarker !== undefined && !frontmatterMarked(meta, rule.requiresMarker)) {
+      continue;
+    }
+    const at: number[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i]!.replace(/\r$/, "");
+      const hit = rule.prefix === true ? text.startsWith(rule.heading) : text === rule.heading;
+      if (hit) at.push(i);
+    }
+    if (at.length === 0) continue;
+    const occurrences = rule.trailingOnly === true ? [at[at.length - 1]!] : at;
+    for (const i of occurrences) {
+      masked.add(i);
+      if (rule.bullets !== true) continue;
+      for (let j = i + 1; j < lines.length; j++) {
+        const text = lines[j]!.replace(/\r$/, "");
+        if (text === "") continue;
+        if (text.startsWith("- ")) {
+          masked.add(j);
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  return { masked, lineStarts };
+}
+
+/**
+ * Drop the writer-authored rows from `matches`: a row whose span starts
+ * on a writer-rendered line is this vault's own output, not planted
+ * structure. `matches` arrive sorted by start offset, so one forward
+ * line walk answers every row.
+ */
+function excludeWriterAuthoredRows(
+  meta: FrontmatterMap,
+  body: string,
+  matches: ReadonlyArray<MarkdownStructureMatch>,
+): ReadonlyArray<MarkdownStructureMatch> {
+  const mask = writerAuthoredLines(meta, body);
+  if (mask === null) return matches;
+  const { masked, lineStarts } = mask;
+  const live: MarkdownStructureMatch[] = [];
+  let line = 0;
+  for (const match of matches) {
+    while (line + 1 < lineStarts.length && lineStarts[line + 1]! <= match.start) line++;
+    if (!masked.has(line)) live.push(match);
+  }
+  return live;
+}
+
 /**
  * Scan every readable Brain page for live structure rows. Pure over the
  * vault's bytes: nothing is written, nothing is mutated, and the result
@@ -160,7 +341,8 @@ export function planPlantedRows(vault: string): PlantedRowsPlan {
     }
     const matches = detectMarkdownStructure(body);
     const lane = inThirdPartyLane(page.metadata);
-    const live = lane ? matches : matches.filter((m) => ALWAYS_PLANTED_KINDS.has(m.kind));
+    const scoped = lane ? matches : matches.filter((m) => ALWAYS_PLANTED_KINDS.has(m.kind));
+    const live = excludeWriterAuthoredRows(page.metadata, body, scoped);
     if (live.length === 0) continue;
     planted.push({
       path: vaultRelative(page.path, vault),

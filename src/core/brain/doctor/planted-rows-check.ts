@@ -19,7 +19,11 @@
  * marker line or osb fence, so one anywhere is planted), while the
  * wikilink and heading families stay keyed to the third-party
  * provenance lanes, whose structure the Brain's own writers render by
- * design elsewhere. The lane classification stays in the finding as
+ * design elsewhere. On both populations the sections those writers
+ * themselves render - a capture's marker-authorized `## Guidance`, a
+ * source summary's `## Sources`/`## Premises`/link and derivation
+ * sections - are excluded as the vault's own output, never reported.
+ * The lane classification stays in the finding as
  * context: those pages are named first, and the message counts them. A
  * page the caller may not read is not named and does not move the count
  * (`ctx.readable`, the contract every other counting check follows).
@@ -98,7 +102,11 @@ export const plantedRowsCheck: DoctorCheck = {
         "every readable page under Brain/ - no Brain writer emits a live marker line or an " +
         "osb fence, so one anywhere in the derived layer is planted. The wikilink and heading " +
         "families stay keyed to the third-party provenance lanes, where caller text lands; " +
-        "the Brain's own writers render those shapes by design on other pages" +
+        "the Brain's own writers render those shapes by design on other pages. Neither " +
+        "population reports the sections those writers themselves render: a capture's " +
+        "marker-authorized ## Guidance section and a source summary's ## Sources, " +
+        "## Premises, ## Entities and ## Connections to existing notes citation sections, " +
+        "plus its ## Parts and ## Table derivation headings, are this vault's own output" +
         laneClause +
         ". Nothing was changed by this check; the rows leave only by re-capturing the text " +
         "with the markdown neutralization gate in enforce mode, or by a later repair pass" +
