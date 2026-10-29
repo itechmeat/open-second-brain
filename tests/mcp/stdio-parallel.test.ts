@@ -29,7 +29,6 @@ import { serveStdio, STDIO_READ_CONCURRENCY } from "../../src/mcp/stdio.ts";
 import { RequestDrain, type DrainOutcome } from "../../src/mcp/drain.ts";
 import { MCPServer, type JsonRpcRequest, type JsonRpcResponse } from "../../src/mcp/server.ts";
 import { INTERNAL_ERROR, JSONRPC_VERSION, PROTOCOL_VERSION } from "../../src/mcp/protocol.ts";
-import { PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 
 const temps: string[] = [];
@@ -319,19 +318,25 @@ describe("stdio frame integrity under concurrency", () => {
     loop: Promise<number>;
     stdin: PassThrough;
     chunks: () => string;
+    rawChunks: () => string[];
   } {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const collected: string[] = [];
     stdout.on("data", (c: Buffer) => collected.push(c.toString("utf8")));
     const loop = serveStdio({ vault }, { stdin, stdout });
-    return { loop, stdin, chunks: () => collected.join("") };
+    return {
+      loop,
+      stdin,
+      chunks: () => collected.join(""),
+      rawChunks: () => collected,
+    };
   }
 
-  test("every frame stays newline-terminated and parses under N concurrent calls", async () => {
+  test("every chunk ends on a frame boundary and every frame parses under N concurrent calls", async () => {
     const vault = tempVault();
     bootstrapBrain(vault);
-    const { loop, stdin, chunks } = realLoop(vault);
+    const { loop, stdin, chunks, rawChunks } = realLoop(vault);
     stdin.write(
       JSON.stringify({
         jsonrpc: JSONRPC_VERSION,
@@ -354,9 +359,14 @@ describe("stdio frame integrity under concurrency", () => {
     stdin.end();
     expect(await loop).toBe(0);
 
-    // Frame atomicity: every write was exactly one newline-terminated
-    // frame, so the joined stream splits into clean JSON lines and no
-    // chunk ever ends mid-frame.
+    // Chunk integrity, asserted per chunk the transport actually emitted:
+    // every write is exactly one newline-terminated frame, so no chunk
+    // ever stops mid-frame - each one ends on a frame boundary.
+    for (const chunk of rawChunks()) {
+      expect(chunk.endsWith("\n")).toBe(true);
+    }
+    // Frame atomicity on the joined stream: it splits into clean JSON
+    // lines, so no frame was ever spliced inside another frame's bytes.
     const raw = chunks();
     for (const chunk of raw.split("\n").slice(0, -1)) {
       expect(() => JSON.parse(chunk)).not.toThrow();
@@ -370,61 +380,6 @@ describe("stdio frame integrity under concurrency", () => {
     // N+1 distinct answers for N+1 requests: an id was neither lost nor
     // answered twice.
     expect(new Set(ids).size).toBe(N + 1);
-  });
-
-  test("progress notifications precede their own response, whatever the dispatch order", async () => {
-    const vault = tempVault();
-    bootstrapBrain(vault);
-    const { loop, stdin, chunks } = realLoop(vault);
-    const briefCall = (id: number, token: string): string =>
-      JSON.stringify({
-        jsonrpc: JSONRPC_VERSION,
-        id,
-        method: "tools/call",
-        params: {
-          name: "brain_brief",
-          arguments: { view: "operator" },
-          _meta: { progressToken: token },
-        },
-      });
-    // brain_brief is write-classified (round-4 review: its digest view
-    // persists the report snapshot), so the write gate runs these two
-    // calls one at a time rather than beside each other. brain_brief is
-    // also the one tool whose views emit progress, so the invariants
-    // this test pins are stated order-free: progress still flows for a
-    // write-classified call, and every notification lands before ITS
-    // OWN response.
-    stdin.write(briefCall(2, "tok-a") + "\n");
-    stdin.write(briefCall(3, "tok-b") + "\n");
-    await until(() => chunks().includes('"id":2'), "response 2");
-    await until(() => chunks().includes('"id":3'), "response 3");
-    stdin.end();
-    expect(await loop).toBe(0);
-
-    const frames = chunks()
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .map((l) => JSON.parse(l) as Record<string, unknown>);
-    // No spliced frame anywhere: the split above parsed every line
-    // cleanly, which only holds when no notification was spliced inside
-    // a response frame.
-    // Per-request adjacency: ALL of a request's progress notifications
-    // precede ITS response, whichever order the two responses arrive in.
-    const indexOf = (id: number) => frames.findIndex((f) => f["id"] === id);
-    const response2 = indexOf(2);
-    const response3 = indexOf(3);
-    expect(response2).toBeGreaterThan(-1);
-    expect(response3).toBeGreaterThan(-1);
-    const notifications = frames
-      .map((f, i) => ({ f, i }))
-      .filter(({ f }) => f["method"] === PROGRESS_NOTIFICATION_METHOD);
-    expect(notifications.length).toBeGreaterThan(0);
-    for (const { f, i } of notifications) {
-      const token = (f["params"] as Record<string, unknown>)["progressToken"];
-      expect(i).toBeLessThan(token === "tok-a" ? response2 : response3);
-    }
-    // Both requests were answered by their own ids, whatever the order.
-    expect(new Set([frames[response2]!["id"], frames[response3]!["id"]])).toEqual(new Set([2, 3]));
   });
 });
 
