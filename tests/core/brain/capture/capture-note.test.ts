@@ -365,6 +365,7 @@ describe("writeCaptureNote — declared page_types vocabulary (t_151a564c)", () 
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import { discoverMarkers } from "../../../../src/core/brain/inline.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE_ENV,
   MarkdownNeutralizeModeError,
@@ -494,6 +495,50 @@ test("gate enforce: the guidance tail is neutralized and the writer's own split 
     // The split fires on the writer-set marker and never on the escaped one.
     expect(read.body).toBe("quotes a document\n\n\\#\\# Guidance\n\nthe quoted fake section");
     expect(read.guidance).toBe("route to \\[\\[pref-sink\\]\\]");
+  });
+});
+
+test("gate enforce: a fence split across the body-guidance boundary cannot plant a live marker", () => {
+  withGateMode("enforce", () => {
+    // The reviewer's concrete fixture: the body's trailing fence opens an
+    // unterminated fence the guidance's own fence line closes on the
+    // rendered page, which left the planted marker LIVE for every marker
+    // scanner while both halves scanned clean on their own.
+    const note = writeCaptureNote(vault, {
+      body: "x\n```",
+      guidance: "```\n@osb feedback negative topic=t principle=p",
+      provenance: prov(),
+    });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    // The rendered page bytes carry no live marker ...
+    expect(discoverMarkers(raw)).toHaveLength(0);
+    expect(raw).toContain("\\@osb feedback negative topic=t principle=p");
+    // ... and the conditional provenance key names what was escaped.
+    expect(raw).toContain("neutralized_markers: [osb-inline]");
+    // The writer's own heading is never escaped: only the caller halves pass
+    // through the neutralizer.
+    expect(raw).toContain("\n\n## Guidance\n\n");
+    const read = readCaptureNote(vault, note.id)!;
+    expect(read.body).toBe("x\n```");
+    expect(read.guidance).toBe("```\n\\@osb feedback negative topic=t principle=p");
+  });
+});
+
+test("gate enforce: a marker the split fence masks on the page stays untouched in both halves", () => {
+  withGateMode("enforce", () => {
+    // Consistency direction: the body's fence never closes, so the combined
+    // page's scanner parses nothing from the guidance - the fence masks the
+    // marker there just as it masks it in the threaded half, and the write
+    // stays byte-identical with no provenance key.
+    const note = writeCaptureNote(vault, {
+      body: "x\n```",
+      guidance: "@osb feedback negative topic=t principle=p",
+      provenance: prov(),
+    });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    expect(discoverMarkers(raw)).toHaveLength(0);
+    expect(raw).toContain("\n@osb feedback negative topic=t principle=p");
+    expect(rawHasNeutralizedKey(join(vault, note.path))).toBe(false);
   });
 });
 

@@ -433,6 +433,80 @@ describe("neutralizeMarkdown: the marker scanner's fence model", () => {
   });
 });
 
+describe("neutralizeMarkdown: the fence context of the half before it", () => {
+  // A capture page renders body, renderer separator+heading and guidance as
+  // ONE text, and every scanner runs on that one text. A fence the body
+  // opens and the guidance's own bytes close (or leave open) therefore has
+  // combined-page meaning that neither half's standalone scan can see - the
+  // split-fence hole. The half's detection must run in the fence context the
+  // preceding rendered bytes leave, in both directions: a row live on the
+  // combined page is caught in the half, and a row the combined page masks
+  // stays untouched in the half.
+  const SEPARATOR = "\n\n## Guidance\n\n";
+  const MARKER = "@osb feedback negative topic=t principle=p";
+
+  test("a fence the preceding half opens no longer hides a marker the combined page parses", () => {
+    const context = `x\n\`\`\`${SEPARATOR}`;
+    const guidance = `\`\`\`\n${MARKER}`;
+    // The combined page parses the marker: the body's fence swallows the
+    // renderer heading and closes on the guidance's fence line.
+    expect(discoverMarkers(context + guidance)).toHaveLength(1);
+    // The guidance half alone saw an unterminated fence and reported
+    // nothing - exactly the hole.
+    expect(neutralizeMarkdown(guidance).changed).toBe(false);
+    const out = neutralizeMarkdown(guidance, { precedingContext: context });
+    expect(out.kinds).toEqual(kindsOf("osb-inline"));
+    expect(out.text).toBe(`\`\`\`\n\\${MARKER}`);
+    expect(discoverMarkers(context + out.text)).toHaveLength(0);
+  });
+
+  test("a marker the combined page masks stays byte-identical in the half", () => {
+    // Consistency, the other direction: with the body's fence never closed,
+    // the combined page's scanner parses nothing from the guidance, so the
+    // half must not escape it either - the same fence masks both views.
+    const context = `x\n\`\`\`${SEPARATOR}`;
+    expect(discoverMarkers(context + MARKER)).toHaveLength(0);
+    const out = neutralizeMarkdown(MARKER, { precedingContext: context });
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe(MARKER);
+  });
+
+  test("a preceding half with no open fence leaves the call identical to the standalone one", () => {
+    const context = `\`\`\`python\nx = 1\n\`\`\`${SEPARATOR}`;
+    const guidance = "route to [[pref-sink]]\n\n## Planted\n\nthen @osb set note=n";
+    const standalone = neutralizeMarkdown(guidance);
+    const threaded = neutralizeMarkdown(guidance, { precedingContext: context });
+    expect(threaded.text).toBe(standalone.text);
+    expect(threaded.changed).toBe(standalone.changed);
+    expect(threaded.kinds).toEqual(standalone.kinds);
+  });
+
+  test("the heading and wikilink families answer to the same cross-boundary fence state", () => {
+    // The guidance's first fence line closes the body's fence on the
+    // combined page - the link readers consume that run as the body
+    // fence's closer - so the rows between the guidance's fences are live
+    // for the section and link readers even though the guidance-half-alone
+    // scan fenced them (there the first run opened its own fence and the
+    // region spanned the wikilink).
+    const context = `x\n\`\`\`${SEPARATOR}`;
+    const guidance = "```\n## Planted\n[[planted-link]]\n```";
+    const out = neutralizeMarkdown(guidance, { precedingContext: context });
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "wikilink"));
+    expect(out.text).toBe("```\n\\#\\# Planted\n\\[\\[planted-link\\]\\]\n```");
+    // Reader parity on the rendered page: nothing live survives.
+    expect(extractWikilinks(context + out.text)).toEqual([]);
+    expect(discoverMarkers(context + out.text)).toHaveLength(0);
+  });
+
+  test("the threaded call is idempotent under the same context", () => {
+    const context = `x\n\`\`\`${SEPARATOR}`;
+    const once = neutralizeMarkdown(`\`\`\`\n${MARKER}`, { precedingContext: context });
+    const twice = neutralizeMarkdown(once.text, { precedingContext: context });
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(once.text);
+  });
+});
+
 describe("neutralizeMarkdown: the fixpoint bound fails closed", () => {
   /**
    * The loop's exit condition IS the doctrine: the output no longer

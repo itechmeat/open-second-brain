@@ -38,10 +38,17 @@
  * the kinds that changed. The writer's own `## Guidance` heading is
  * renderer-authored and never passes through the neutralizer, so a body
  * whose captured text quoted a guidance heading can never win the split
- * the frontmatter marker authorizes. `captureBaseId` hashes the
- * PERSISTED post-neutralize body, so identity follows what is on disk; a
- * gate flip between captures of the same text therefore yields a
- * different id - an honest duplicate, documented rather than accidental.
+ * the frontmatter marker authorizes. The two halves are neutralized in
+ * order and the guidance's detection runs in the fence context the
+ * rendered prefix leaves (body, separator, heading): the page is one text
+ * to every scanner, so a fence split across the two halves - opened by
+ * the body, closed or left open by the guidance's own bytes - has
+ * combined-page meaning neither half's standalone scan can see, and a
+ * marker that page-scanner verdict makes live is caught in the guidance
+ * half while a marker it masks stays untouched there. `captureBaseId`
+ * hashes the PERSISTED post-neutralize body, so identity follows what is
+ * on disk; a gate flip between captures of the same text therefore yields
+ * a different id - an honest duplicate, documented rather than accidental.
  * Under `off` (the default) and `shadow` the bytes are untouched: the
  * seam never reaches the neutralizer under either mode.
  */
@@ -232,6 +239,18 @@ function renderCaptureBody(body: string, guidance: string | null): string {
 }
 
 /**
+ * The exact rendered bytes ahead of the guidance on the page: the body
+ * half, the blank-line separator and the writer's own heading. This - not
+ * the body alone - is the fence context the guidance's neutralization runs
+ * in, because it is what every scanner of the rendered page sees before
+ * the guidance's first byte (see the seam comment in
+ * {@link writeCaptureNote}).
+ */
+function renderedGuidanceContext(body: string): string {
+  return `${body}\n\n${GUIDANCE_HEADING}\n\n`;
+}
+
+/**
  * Split a marked body back into its two halves.
  *
  * The leading `[\s\S]*` is greedy, so it takes as much of the body as it
@@ -279,13 +298,28 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   // The caller's body and guidance are the only caller-authored halves -
   // the guidance HEADING below is renderer-authored and never passes
   // through the neutralizer.
+  //
+  // The two halves are neutralized in order, and the guidance's detection
+  // runs in the fence context the rendered prefix leaves: the page is one
+  // text to every scanner, so a fence the body opens and the guidance's
+  // own bytes close (or leave open) has combined-page meaning neither
+  // half's standalone scan can see - the split-fence hole, where a
+  // planted marker live on the combined page scanned clean in both
+  // halves. The context is the exact rendered bytes ahead of the guidance
+  // (the neutralized body, the separator, the writer heading), so the
+  // half's verdict agrees with the combined page's in both directions.
   const gate = resolveMarkdownNeutralizeModeForProcess();
   let storedBody = body;
   let storedGuidance = guidance;
   let neutralized: FrontmatterMap = {};
   if (gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
     const neutralBody = neutralizeMarkdown(body);
-    const neutralGuidance = guidance === null ? null : neutralizeMarkdown(guidance);
+    const neutralGuidance =
+      guidance === null
+        ? null
+        : neutralizeMarkdown(guidance, {
+            precedingContext: renderedGuidanceContext(neutralBody.text),
+          });
     if (neutralBody.changed || (neutralGuidance !== null && neutralGuidance.changed)) {
       storedBody = neutralBody.text;
       if (neutralGuidance !== null) storedGuidance = neutralGuidance.text;

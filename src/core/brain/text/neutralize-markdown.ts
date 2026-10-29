@@ -327,20 +327,27 @@ function escapeSigils(span: string, kind: MarkdownStructureKind): string {
 }
 
 function escapeRound(
+  context: string,
   text: string,
 ): { text: string; kinds: ReadonlyArray<MarkdownStructureKind> } | null {
-  const matches = detectMarkdownStructure(text);
+  // Detection runs over the exact bytes the page's scanners see before
+  // `text`; only spans reaching past the context are this call's business
+  // (see {@link NeutralizeMarkdownOptions.precedingContext}).
+  const stitched = context + text;
+  const matches = detectMarkdownStructure(stitched).filter((m) => m.end > context.length);
   if (matches.length === 0) return null;
   let out = "";
-  let last = 0;
+  let last = context.length;
   const kinds = new Set<MarkdownStructureKind>();
   for (const m of matches) {
-    if (m.start < last) continue; // by construction disjoint; a guard, not a contract
-    out += text.slice(last, m.start) + escapeSigils(text.slice(m.start, m.end), m.kind);
+    const start = Math.max(m.start, context.length);
+    if (start < last) continue; // by construction disjoint; a guard, not a contract
+    out += text.slice(last - context.length, start - context.length);
+    out += escapeSigils(stitched.slice(start, m.end), m.kind);
     last = m.end;
     kinds.add(m.kind);
   }
-  out += text.slice(last);
+  out += text.slice(last - context.length);
   return { text: out, kinds: [...kinds].toSorted() };
 }
 
@@ -360,6 +367,44 @@ const UNCHANGED: NeutralizedMarkdown = Object.freeze({
   kinds: Object.freeze([]),
 });
 
+/** Optional inputs of {@link neutralizeMarkdown}. */
+export interface NeutralizeMarkdownOptions {
+  /**
+   * The bytes rendered before `text` on the same page, verbatim: an
+   * already-neutralized caller half plus whatever renderer-authored
+   * separator and heading the writer placed between the halves (the
+   * capture seam passes the neutralized body, the blank-line separator
+   * and its own `## Guidance` heading).
+   *
+   * The seam needs this because a rendered page is ONE text to every
+   * scanner: a fence the preceding half opens and `text`'s own bytes close
+   * (or leave open) has combined-page meaning that neither half's
+   * standalone scan can see - the split-fence hole, where a planted marker
+   * live on the combined page scanned clean in both halves. The three
+   * fence models the families answer to also disagree about what a fence
+   * even is, and the boundary state differs per model in ways a boolean
+   * cannot carry (an unterminated fence masks the rest of the page for the
+   * marker scanner while fencing nothing for the section readers unless a
+   * later fence closes it). So no state is summarized: detection runs over
+   * `precedingContext + text` - the exact bytes the page's scanners see
+   * ahead of `text` - and only spans reaching past the context are
+   * escaped, which makes the half's verdict agree with the combined page's
+   * in both directions.
+   *
+   * Skipping the context's own rows is safe by construction: caller
+   * context is the output of an earlier neutralize call, whose detection
+   * is empty (the fixpoint exit), and renderer-authored rows are the
+   * writer's, never this call's business. No span can straddle the
+   * boundary when the context carries the writer heading - the wikilink
+   * target grammar stops at its `#`, and every other family is
+   * line-anchored - so each escaped span lies wholly in `text`; a custom
+   * context that let one straddle would have only its `text`-side sigils
+   * escaped and fail closed at the fixpoint bound rather than ship a
+   * half-escaped span.
+   */
+  readonly precedingContext?: string;
+}
+
 /**
  * Escape the structure-bearing markdown in third-party text.
  *
@@ -376,8 +421,11 @@ const UNCHANGED: NeutralizedMarkdown = Object.freeze({
  * bytes this module exists to neutralize (see
  * {@link neutralizeMarkdownWithBound}).
  */
-export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
-  return neutralizeMarkdownWithBound(text, NEUTRALIZE_FIXPOINT_STEPS);
+export function neutralizeMarkdown(
+  text: string,
+  options: NeutralizeMarkdownOptions = {},
+): NeutralizedMarkdown {
+  return neutralizeMarkdownWithBound(text, NEUTRALIZE_FIXPOINT_STEPS, options);
 }
 
 /**
@@ -390,18 +438,25 @@ export function neutralizeMarkdown(text: string): NeutralizedMarkdown {
  * {@link neutralizeMarkdown} and its settled bound.
  *
  * The post-condition is the doctrine's exit condition: the returned text
- * no longer matches {@link detectMarkdownStructure}. If the bound runs
- * out with detection still finding spans, the walk did not converge and
- * returning `changed: true` would ship live structure as if it were
- * neutralized - so the refusal is thrown, by name
+ * no longer matches {@link detectMarkdownStructure} on the spans that
+ * reach past {@link NeutralizeMarkdownOptions.precedingContext} (the
+ * context's own rows are skipped by construction, see there). If the
+ * bound runs out with detection still finding such spans, the walk did
+ * not converge and returning `changed: true` would ship live structure as
+ * if it were neutralized - so the refusal is thrown, by name
  * ({@link MarkdownNeutralizeFixpointError}), and the caller's write dies
  * before any bytes are persisted.
  */
-export function neutralizeMarkdownWithBound(text: string, maxRounds: number): NeutralizedMarkdown {
+export function neutralizeMarkdownWithBound(
+  text: string,
+  maxRounds: number,
+  options: NeutralizeMarkdownOptions = {},
+): NeutralizedMarkdown {
+  const context = options.precedingContext ?? "";
   let current = text;
   let kinds = new Set<MarkdownStructureKind>();
   for (let step = 0; step <= maxRounds; step++) {
-    const round = escapeRound(current);
+    const round = escapeRound(context, current);
     if (round === null) break;
     current = round.text;
     for (const kind of round.kinds) kinds.add(kind);
@@ -409,7 +464,9 @@ export function neutralizeMarkdownWithBound(text: string, maxRounds: number): Ne
   if (kinds.size === 0) {
     return { text, changed: false, kinds: UNCHANGED.kinds };
   }
-  const remaining = detectMarkdownStructure(current);
+  const remaining = detectMarkdownStructure(context + current).filter(
+    (m) => m.end > context.length,
+  );
   if (remaining.length > 0) {
     throw new MarkdownNeutralizeFixpointError(
       `markdown neutralization did not reach its fixpoint within ` +
