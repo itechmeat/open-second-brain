@@ -44,6 +44,12 @@
  *     run is data the caller already escaped, not structure; it is never
  *     re-escaped. (Line-anchored families get this for free: `\@osb` and
  *     `\#\#` fail the anchor.)
+ *   - **Line breaks normalized first.** The enforce-mode walk folds CRLF
+ *     to `\n` and a lone CR, NEL (U+0085), U+2028 and U+2029 to `\n`
+ *     before detection, and records the rewrite as the `line-break` kind:
+ *     CommonMark, Obsidian and `/m`-regex readers end lines on those
+ *     characters while the `\n`-splitting detectors do not, so an
+ *     unfolded `x\r# Planted` renders a heading no family would see.
  *   - **Idempotent by construction.** Escaping a fence line dissolves the
  *     fence, which can expose previously masked interior text - so
  *     {@link neutralizeMarkdown} re-detects its own output until the
@@ -92,12 +98,18 @@ import { discoverConfig } from "../../config.ts";
 
 // ----- The shared detection grammar -----------------------------------------
 
-/** The structure families the neutralizer escapes and the auditor counts. */
+/** The structure families the neutralizer escapes and the auditor counts,
+ * plus the line-break token: the enforce-mode walk also folds unusual line
+ * separators to `\n` before detection and records that rewrite here, so the
+ * `neutralized_markers` provenance names every way the output departed from
+ * the input. The auditor counts only the structure families - the
+ * line-break token never appears in {@link detectMarkdownStructure} output. */
 export const MARKDOWN_STRUCTURE_KIND = Object.freeze({
   wikilink: "wikilink",
   osbInline: "osb-inline",
   osbFence: "osb-fence",
   heading: "atx-heading",
+  lineBreak: "line-break",
 } as const);
 
 /** One {@link MARKDOWN_STRUCTURE_KIND} token. */
@@ -292,6 +304,24 @@ export function detectMarkdownStructure(text: string): ReadonlyArray<MarkdownStr
 // ----- The neutralizer ------------------------------------------------------
 
 /**
+ * The line-separator normalization the enforce-mode walk runs before
+ * detection: `\r\n` folds to `\n`, and a lone CR, NEL (U+0085), LINE
+ * SEPARATOR (U+2028) or PARAGRAPH SEPARATOR (U+2029) becomes `\n`. These
+ * are the characters CommonMark, Obsidian and every `/m`-regex line reader
+ * treat as a line end while the `\n`-splitting detectors - OSB's own line
+ * readers included - do not, so a planted row hiding behind one (`x\r#
+ * Planted` renders a heading) would otherwise pass detection untouched.
+ * One pass, and the output carries none of the separators, so the rewrite
+ * is inherently idempotent.
+ */
+const LINE_BREAK_NORMALIZE_RE = /\r\n?|[\u0085\u2028\u2029]/g;
+
+function normalizeLineBreaks(text: string): { text: string; changed: boolean } {
+  const normalized = text.replace(LINE_BREAK_NORMALIZE_RE, "\n");
+  return normalized === text ? { text, changed: false } : { text: normalized, changed: true };
+}
+
+/**
  * How many detect-and-escape rounds {@link neutralizeMarkdown} may run
  * before it refuses: two rounds are the deep case (round one escapes an
  * ```osb fence's boundary lines, the escape dissolves the fence for the
@@ -358,9 +388,13 @@ function escapeRound(
 export interface NeutralizedMarkdown {
   /** The text with planted structure escaped; byte-identical input when `changed` is false. */
   readonly text: string;
-  /** Whether any structure was found and escaped. */
+  /** Whether any structure was found and escaped, or line separators were rewritten. */
   readonly changed: boolean;
-  /** The families that were neutralized, sorted, unique; empty when unchanged. */
+  /**
+   * The families that were neutralized plus the `line-break` token when
+   * unusual line separators were folded, sorted, unique; empty when
+   * unchanged.
+   */
   readonly kinds: ReadonlyArray<MarkdownStructureKind>;
 }
 
@@ -411,12 +445,20 @@ export interface NeutralizeMarkdownOptions {
 /**
  * Escape the structure-bearing markdown in third-party text.
  *
+ * Unusual line separators (a lone CR, NEL, U+2028, U+2029 - and CRLF) are
+ * folded to `\n` first and the fold is recorded as the `line-break` kind:
+ * the line-grammar consumers these families answer to disagree about what
+ * ends a line, and the fold removes the disagreement before detection. The
+ * gate puts every call under `enforce`, so the other two modes stay
+ * byte-identical by never reaching this function.
+ *
  * Returns the input unchanged - `changed: false`, identical bytes, zero
- * added bytes - when the detector finds nothing, which is the shape of
- * the overwhelming majority of caller text. When structure was found,
- * each detected span's sigils are backslash-escaped (see the module
- * docblock for the doctrine) and {@link kinds} names every family that
- * was neutralized, for the seams' conditional provenance key.
+ * added bytes - when nothing was found to normalize or escape, which is
+ * the shape of the overwhelming majority of caller text. When structure
+ * was found, each detected span's sigils are backslash-escaped (see the
+ * module docblock for the doctrine) and {@link kinds} names every family
+ * that was neutralized (plus `line-break` when separators were folded),
+ * for the seams' conditional provenance key.
  *
  * The walk is bounded by {@link NEUTRALIZE_FIXPOINT_STEPS} and FAILS
  * CLOSED: a bound exhausted with live structure still detected throws
@@ -456,8 +498,16 @@ export function neutralizeMarkdownWithBound(
   options: NeutralizeMarkdownOptions = {},
 ): NeutralizedMarkdown {
   const context = options.precedingContext ?? "";
-  let current = text;
+  // Unusual line separators fold to `\n` before any detection: the
+  // line-grammar consumers the families answer to disagree about what ends
+  // a line, and the fold puts `text` on the `\n`-only view every detector
+  // here scans. The context is prior neutralizer output (see
+  // {@link NeutralizeMarkdownOptions.precedingContext}), so it is already
+  // folded and needs no second pass.
+  const folded = normalizeLineBreaks(text);
+  let current = folded.text;
   let kinds = new Set<MarkdownStructureKind>();
+  if (folded.changed) kinds.add(MARKDOWN_STRUCTURE_KIND.lineBreak);
   for (let step = 0; step <= maxRounds; step++) {
     const round = escapeRound(context, current);
     if (round === null) break;
@@ -502,10 +552,11 @@ export class MarkdownNeutralizeFixpointError extends Error {
 
 /**
  * Frontmatter key recording the structure families an enforce-mode write
- * neutralized. A page carrying it says "these bytes are not what the
- * caller sent" - the audit trail for the one mode that edits content -
- * and a write that changed nothing adds nothing, keeping the untouched
- * shape byte-identical to before the gate existed.
+ * neutralized (and the `line-break` rewrite, when separators were folded).
+ * A page carrying it says "these bytes are not what the caller sent" - the
+ * audit trail for the one mode that edits content - and a write that
+ * changed nothing adds nothing, keeping the untouched shape byte-identical
+ * to before the gate existed.
  */
 export const MARKDOWN_NEUTRALIZED_FRONTMATTER_KEY = "neutralized_markers";
 

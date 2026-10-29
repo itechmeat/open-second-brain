@@ -215,10 +215,16 @@ describe("neutralizeMarkdown: ATX headings", () => {
   test("escapes a heading whose only content after the hash run is a CRLF's CR", () => {
     // The line-grammar consumers split on `\n` and their heading shapes
     // accept `\s` (or any character) after the hash run, so `##\r` is a
-    // heading to them; the trailing class must tolerate it.
+    // heading to them; the trailing class must tolerate it. The CRLF
+    // itself folds to LF before detection (the line-break normalization)
+    // and the fold is recorded in the kinds.
     const out = neutralizeMarkdown("##\r\nbody\n");
-    expect(out.text).toBe("\\#\\#\r\nbody\n");
-    expect(out.kinds).toEqual(kindsOf("atx-heading"));
+    expect(out.text).toBe("\\#\\#\nbody\n");
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "line-break"));
+    // The standalone detector still scans unfolded bytes (the doctor's
+    // audit runs it on stored pages), so the CR tolerance stays load-bearing there.
+    const detected = detectMarkdownStructure("##\r\nbody\n");
+    expect(detected.map((m) => m.kind)).toEqual(["atx-heading"]);
   });
 
   test("does not escape a hashtag without a space", () => {
@@ -231,6 +237,67 @@ describe("neutralizeMarkdown: ATX headings", () => {
 
   test("does not escape a hash mid-line", () => {
     expect(neutralizeMarkdown("issue #42 is open").changed).toBe(false);
+  });
+});
+
+describe("neutralizeMarkdown: unusual line breaks are normalized first", () => {
+  // CommonMark, Obsidian and every `/m`-regex line reader treat a bare CR,
+  // NEL (U+0085), LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029)
+  // as line ends, while the `\n`-splitting detectors (and OSB's own line
+  // readers) do not - so `x\r# Planted` renders a heading the detector
+  // would never see. The enforce-mode walk folds all of them to `\n`
+  // before detection and records the rewrite in the result kinds, so the
+  // `neutralized_markers` provenance names it. The capture and untrusted
+  // ingest seams invoke the neutralizer only under `enforce` (their gate
+  // branches precede every call), so `off` and `shadow` stay byte-identical
+  // - asserted at the seam level in the capture and ingest suites.
+  test("a planted heading behind a bare CR is caught and escaped", () => {
+    const out = neutralizeMarkdown("x\r# Planted\n");
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "line-break"));
+    expect(out.text).toBe("x\n\\# Planted\n");
+    expect(detectMarkdownStructure(out.text)).toEqual([]);
+  });
+
+  test("a planted marker behind NEL (U+0085) is caught and escaped", () => {
+    const out = neutralizeMarkdown("x\u0085@osb feedback positive topic=t principle=p");
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("osb-inline", "line-break"));
+    expect(out.text).toBe("x\n\\@osb feedback positive topic=t principle=p");
+  });
+
+  test("a planted heading behind LINE SEPARATOR (U+2028) is caught and escaped", () => {
+    const out = neutralizeMarkdown("x\u2028# Planted\n");
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "line-break"));
+    expect(out.text).toBe("x\n\\# Planted\n");
+  });
+
+  test("a planted heading behind PARAGRAPH SEPARATOR (U+2029) is caught and escaped", () => {
+    const out = neutralizeMarkdown("x\u2029# Planted\n");
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("atx-heading", "line-break"));
+    expect(out.text).toBe("x\n\\# Planted\n");
+  });
+
+  test("a CRLF body folds to LF and the rewrite is recorded even with no structure", () => {
+    const src = "plain\r\nprose\r\n";
+    const out = neutralizeMarkdown(src);
+    expect(out.changed).toBe(true);
+    expect(out.kinds).toEqual(kindsOf("line-break"));
+    expect(out.text).toBe("plain\nprose\n");
+    const twice = neutralizeMarkdown(out.text);
+    expect(twice.changed).toBe(false);
+    expect(twice.text).toBe(out.text);
+  });
+
+  test("the normalized-and-escaped output is idempotent per separator", () => {
+    for (const src of ["x\r# P\n", "x\u0085# P\n", "x\u2028# P\n", "x\u2029# P\n"]) {
+      const once = neutralizeMarkdown(src);
+      const twice = neutralizeMarkdown(once.text);
+      expect(twice.changed).toBe(false);
+      expect(twice.text).toBe(once.text);
+    }
   });
 });
 
