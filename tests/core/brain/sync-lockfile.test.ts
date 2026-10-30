@@ -155,6 +155,23 @@ describe("acquireLockSync", () => {
       expect(existsSync(lockPath)).toBe(false);
     },
   );
+
+  test("release unlinks a lock whose token's first byte lost to a racing waiter mark", () => {
+    // A waiter that opened the name in the microseconds before the
+    // holder's stamp landed writes its mark at position zero and
+    // clobbers the token's first byte. The body still carries the
+    // holder's unique token line, so the release must treat the file
+    // as its own and remove it.
+    const target = join(tmpRoot, "pref-clobbered.md");
+    const lockPath = target + ".lock";
+    const first = acquireLockSync(target);
+    const before = readFileSync(lockPath, "utf8");
+    writeFileSync(lockPath, `w${before.slice(1)}`);
+    first.release();
+    expect(existsSync(lockPath)).toBe(false);
+    const again = acquireLockSync(target);
+    again.release();
+  });
 });
 
 describe("exit sweep after a stale handle's release", () => {

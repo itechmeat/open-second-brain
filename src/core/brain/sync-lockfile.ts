@@ -74,6 +74,7 @@ import {
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "./path-constants.ts";
@@ -159,8 +160,15 @@ function ownsLockName(lockPath: string, identity: LockIdentity, token: string): 
   }
   if (body !== null && token !== "") {
     // The stamp answers for the whole file: a matching token is owned,
-    // a foreign one (a reused identity, a takeover survivor) is not.
-    return body.subarray(0, Buffer.byteLength(token, "utf8")).equals(Buffer.from(token, "utf8"));
+    // a foreign one (a reused identity, a takeover survivor) is not. A
+    // waiter mark that raced the stamp's own write clobbers the token's
+    // first byte, so a body that still carries this holder's unique
+    // token line is owned all the same; a foreign body cannot carry it.
+    if (body.subarray(0, Buffer.byteLength(token, "utf8")).equals(Buffer.from(token, "utf8"))) {
+      return true;
+    }
+    const uuidLine = Buffer.from(`\n${token.split("\n")[1] ?? ""}\n`, "utf8");
+    return uuidLine.byteLength > 2 && body.includes(uuidLine);
   }
   try {
     const st = lstatSync(lockPath, { bigint: true });
@@ -628,6 +636,12 @@ function waiterSleepMs(waitedMs: number): number {
 
 /** Upper bound on the bytes waiters append to one lock file. */
 const WAITER_MARK_LIMIT = 4_096;
+/**
+ * Below this size a lock body is still mid-stamp (pid, token line,
+ * timestamp and separators never fit in less), and a waiter mark at
+ * its end would land inside the token: leave such a file unmarked.
+ */
+const MIN_STAMP_BYTES = 48;
 const WAITER_MARK = Buffer.from("w", "utf8");
 /** Read-write, never create, and never follow a symlink where the platform can refuse one. */
 const MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
@@ -648,6 +662,10 @@ function markWaiting(lockPath: string): void {
     // one name. A symlink or hard link planted at the lock path (a synced
     // vault can carry one) must not turn the mark into a write elsewhere.
     if (!stat.isFile() || stat.nlink !== 1) return;
+    // A body still inside its own stamp write (a waiter can open the
+    // name in the microseconds before the holder's stamp lands) is left
+    // alone: an early mark would write over the holder token position.
+    if (stat.size < MIN_STAMP_BYTES) return;
     if (stat.size < WAITER_MARK_LIMIT) {
       writeSync(fd, WAITER_MARK, 0, WAITER_MARK.byteLength, stat.size);
     }
