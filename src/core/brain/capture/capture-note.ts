@@ -26,6 +26,31 @@
  * and hand the second to the `-2` allocator. Both additions are
  * conditional on the field being present, so a capture without guidance
  * is byte-identical to one written before the field existed.
+ *
+ * ## Write-time marker neutralization (t_c2ac4fc8)
+ *
+ * The body and the guidance are CALLER text - the one thing in the page
+ * this contract did not author - so under the markdown-neutralization
+ * gate's `enforce` mode they pass through the pure neutralizer
+ * (`text/neutralize-markdown.ts`) before anything is composed: planted
+ * wikilinks, `@osb` markers, ```osb fence lines and ATX headings are
+ * backslash-escaped, and the conditional `neutralized_markers` key names
+ * the kinds that changed. The writer's own `## Guidance` heading is
+ * renderer-authored and never passes through the neutralizer, so a body
+ * whose captured text quoted a guidance heading can never win the split
+ * the frontmatter marker authorizes. The two halves are neutralized in
+ * order and the guidance's detection runs in the fence context the
+ * rendered prefix leaves (body, separator, heading): the page is one text
+ * to every scanner, so a fence split across the two halves - opened by
+ * the body, closed or left open by the guidance's own bytes - has
+ * combined-page meaning neither half's standalone scan can see, and a
+ * marker that page-scanner verdict makes live is caught in the guidance
+ * half while a marker it masks stays untouched there. `captureBaseId`
+ * hashes the PERSISTED post-neutralize body, so identity follows what is
+ * on disk; a gate flip between captures of the same text therefore yields
+ * a different id - an honest duplicate, documented rather than accidental.
+ * Under `off` (the default) and `shadow` the bytes are untouched: the
+ * seam never reaches the neutralizer under either mode.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -48,6 +73,12 @@ import {
 } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { declaredPageTypes } from "../schema-pack.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  neutralizeMarkdown,
+  neutralizedMarkersFrontmatter,
+  resolveMarkdownNeutralizeModeForProcess,
+} from "../text/neutralize-markdown.ts";
 
 /** Frontmatter `kind:` marker of a staged inbound capture. */
 export const BRAIN_CAPTURE_KIND = "brain-capture";
@@ -208,6 +239,18 @@ function renderCaptureBody(body: string, guidance: string | null): string {
 }
 
 /**
+ * The exact rendered bytes ahead of the guidance on the page: the body
+ * half, the blank-line separator and the writer's own heading. This - not
+ * the body alone - is the fence context the guidance's neutralization runs
+ * in, because it is what every scanner of the rendered page sees before
+ * the guidance's first byte (see the seam comment in
+ * {@link writeCaptureNote}).
+ */
+function renderedGuidanceContext(body: string): string {
+  return `${body}\n\n${GUIDANCE_HEADING}\n\n`;
+}
+
+/**
  * Split a marked body back into its two halves.
  *
  * The leading `[\s\S]*` is greedy, so it takes as much of the body as it
@@ -246,9 +289,53 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   // refused capture creates no directory and consumes no allocator name.
   requireDeclaredCaptureKind(vault, BRAIN_CAPTURE_KIND);
 
+  // Write-time marker neutralization (t_c2ac4fc8), resolved before the
+  // id so the hash follows the bytes that will actually be persisted.
+  // Only `enforce` writes neutralized bytes; `off` and `shadow` leave
+  // the caller's text byte-identical - shadow's preview is the doctor's
+  // planted-rows audit, which recomputes the would-be rows from the
+  // vault's bytes on its own, so a shadow-mode seam has nothing to run.
+  // The caller's body and guidance are the only caller-authored halves -
+  // the guidance HEADING below is renderer-authored and never passes
+  // through the neutralizer.
+  //
+  // The two halves are neutralized in order, and the guidance's detection
+  // runs in the fence context the rendered prefix leaves: the page is one
+  // text to every scanner, so a fence the body opens and the guidance's
+  // own bytes close (or leave open) has combined-page meaning neither
+  // half's standalone scan can see - the split-fence hole, where a
+  // planted marker live on the combined page scanned clean in both
+  // halves. The context is the exact rendered bytes ahead of the guidance
+  // (the neutralized body, the separator, the writer heading), so the
+  // half's verdict agrees with the combined page's in both directions.
+  const gate = resolveMarkdownNeutralizeModeForProcess();
+  let storedBody = body;
+  let storedGuidance = guidance;
+  let neutralized: FrontmatterMap = {};
+  if (gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
+    const neutralBody = neutralizeMarkdown(body);
+    const neutralGuidance =
+      guidance === null
+        ? null
+        : neutralizeMarkdown(guidance, {
+            precedingContext: renderedGuidanceContext(neutralBody.text),
+          });
+    if (neutralBody.changed || (neutralGuidance !== null && neutralGuidance.changed)) {
+      storedBody = neutralBody.text;
+      if (neutralGuidance !== null) storedGuidance = neutralGuidance.text;
+      neutralized = neutralizedMarkersFrontmatter(
+        [...new Set([...neutralBody.kinds, ...(neutralGuidance?.kinds ?? [])])].toSorted(),
+      );
+    }
+  }
+
   const dir = capturesDir(vault);
   mkdirSync(dir, { recursive: true });
-  const { prefix, slug } = captureBaseId(body, { source, sender, capturedAt }, guidance);
+  const { prefix, slug } = captureBaseId(
+    storedBody,
+    { source, sender, capturedAt },
+    storedGuidance,
+  );
   const provenance: CaptureProvenance = { source, sender, capturedAt };
 
   // Allocation and creation are one step: two captures that hash to the
@@ -266,8 +353,8 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
       // CLI output and MCP envelopes and never says what collided.
       writeFrontmatterAtomic(
         allocation.path,
-        captureFrontmatter(captureId, provenance, guidance),
-        renderCaptureBody(body, guidance),
+        captureFrontmatter(captureId, provenance, storedGuidance, neutralized),
+        renderCaptureBody(storedBody, storedGuidance),
         {
           overwrite: false,
           existsErrorKind: "capture",
@@ -280,8 +367,10 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   return Object.freeze({
     id,
     path: vaultRelative(allocated.path, vault),
-    body,
-    guidance,
+    // What was persisted - under enforce mode the neutralized bytes, so
+    // the returned note answers for the file it shipped in.
+    body: storedBody,
+    guidance: storedGuidance,
     provenance,
     staged: true,
   });
@@ -291,6 +380,7 @@ function captureFrontmatter(
   id: string,
   provenance: CaptureProvenance,
   guidance: string | null,
+  neutralized: FrontmatterMap,
 ): FrontmatterMap {
   return {
     kind: BRAIN_CAPTURE_KIND,
@@ -301,6 +391,10 @@ function captureFrontmatter(
     // Emitted only when there IS guidance, so a capture without it is
     // byte-identical to one written before this field existed.
     ...(guidance === null ? {} : { [GUIDANCE_MARKER_FIELD]: true }),
+    // Emitted only when enforce-mode neutralization CHANGED bytes; a
+    // clean capture adds nothing and stays byte-identical to the shape
+    // this contract wrote before the gate existed.
+    ...neutralized,
     tags: ["brain", "brain/capture"],
   };
 }

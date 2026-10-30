@@ -125,6 +125,7 @@ async function toolBrainSwitchVault(
 export const ENTITY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_entity",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Look up (view: get) or list (view: list) canonical entities from the Brain/entities/ registry. Aliases resolve to the canonical record. Read-only; writes go through the o2b CLI.",
@@ -159,6 +160,7 @@ export const ENTITY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_switch_vault",
+    kind: "write",
     description:
       "Activate a named vault profile (from the profiles registry). Updates the active pointer; the change takes effect on the next server launch - the running server keeps its already-resolved vault.",
     inputSchema: {

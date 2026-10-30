@@ -50,7 +50,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { WIKILINK_TARGET_RE, isBrainArtifactId } from "./wikilink.ts";
+import { WIKILINK_TARGET_RE, isBrainArtifactId, isLiveWikilinkSpan } from "./wikilink.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import {
   PAGE_LIFECYCLE,
@@ -194,26 +194,33 @@ function scanFileForMergedLinks(
 ): { fixes: LintFix[]; unresolved: LintUnresolvedLink[]; rewritten: string } {
   const fixes: LintFix[] = [];
   const unresolved: LintUnresolvedLink[] = [];
-  const rewritten = raw.replace(WIKILINK_TARGET_RE, (match, target: string, suffix?: string) => {
-    const resolved = merge.resolve(target);
-    if (resolved.unresolvable !== null) {
-      unresolved.push({
+  const rewritten = raw.replace(
+    WIKILINK_TARGET_RE,
+    (match: string, target: string, suffix: string | undefined, offset: number, whole: string) => {
+      // A bracket behind an odd backslash run is escaped data and holds
+      // no link (the rule every link reader applies), so a merged-link
+      // convergence must not report, resolve or rewrite one.
+      if (!isLiveWikilinkSpan(whole, offset, offset + match.length)) return match;
+      const resolved = merge.resolve(target);
+      if (resolved.unresolvable !== null) {
+        unresolved.push({
+          kind: LINT_CONSOLIDATE_KIND.mergedLink,
+          path,
+          target,
+          reason: resolved.unresolvable,
+        });
+        return match;
+      }
+      if (resolved.canonical === null) return match;
+      fixes.push({
         kind: LINT_CONSOLIDATE_KIND.mergedLink,
         path,
-        target,
-        reason: resolved.unresolvable,
+        from: target,
+        to: resolved.canonical,
       });
-      return match;
-    }
-    if (resolved.canonical === null) return match;
-    fixes.push({
-      kind: LINT_CONSOLIDATE_KIND.mergedLink,
-      path,
-      from: target,
-      to: resolved.canonical,
-    });
-    return `[[${resolved.canonical}${suffix ?? ""}]]`;
-  });
+      return `[[${resolved.canonical}${suffix ?? ""}]]`;
+    },
+  );
   return { fixes, unresolved, rewritten };
 }
 

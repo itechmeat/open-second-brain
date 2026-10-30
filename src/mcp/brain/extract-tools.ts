@@ -166,6 +166,7 @@ async function toolBrainExtractSignals(
 export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Mine taste signals from an imported session's USER turns; runs no model. Omit `items` for the plan; with `items` commit, and a barren commit records a tombstone. Barren sessions skip as 'mining_tombstone'; `force` re-mines once. Refuses caps, floors, repeats.",
     inputSchema: {

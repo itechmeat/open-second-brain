@@ -682,6 +682,7 @@ async function widenNearDuplicates(
 export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_create_note",
+    kind: "write",
     description:
       "Create an actual vault note file (path + frontmatter + content), written atomically inside the vault. Distinct from brain_note, which only appends a log line. Refuses traversal, the Brain root, excluded paths, bad write bindings, default clobbering. An applied create claims a detached index refresh.",
     inputSchema: {
@@ -732,6 +733,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_update_note",
+    kind: "write",
     description:
       "Update an existing vault note: merge frontmatter keys and/or replace the body, atomically; a missing target is refused. Reuses the create-note safety envelope: traversal, the Brain root, excluded paths, bad write bindings. An applied update claims a detached index refresh.",
     inputSchema: {
@@ -764,6 +766,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_append_note",
+    kind: "write",
     description:
       "Append Markdown text to an existing vault note's body, written atomically. A missing target is refused. Reuses the create-note safety envelope: traversal, the Brain root, excluded paths, and writes outside the declared write binding are refused. An applied append claims a detached index refresh.",
     inputSchema: {

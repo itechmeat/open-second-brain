@@ -110,6 +110,12 @@ import {
   stageForReview,
 } from "../pending/pending-lanes.ts";
 import type { WriteSubject } from "../write-disposition.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE,
+  neutralizeMarkdown,
+  neutralizedMarkersFrontmatter,
+  resolveMarkdownNeutralizeModeForProcess,
+} from "../text/neutralize-markdown.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -341,6 +347,16 @@ export function ingestSource(
   // the one an absent page gets: its path is deterministic, so `created`
   // would otherwise tell the caller the page exists.
   const summaryPath = canonicalNotePath(relative(vault, absPath));
+  // Write-time marker neutralization gate (t_c2ac4fc8), resolved beside the
+  // disposition and BEFORE ANY FILESYSTEM EFFECT - the capture seam's
+  // contract. A misconfigured mode is a misconfiguration of the process,
+  // not a verdict about this source: refusing it after the intake has
+  // written entity pages or the trusted archive has persisted its bytes
+  // would half-apply an ingest, and it would do so on the TRUSTED lane
+  // too, which never uses the gate at all. Whether the gate has work to do
+  // is decided at the summary write below (untrusted summaries, enforce
+  // only); resolving it here only moves the refusal earlier.
+  const gate = resolveMarkdownNeutralizeModeForProcess();
   // Review disposition (write-side trust, Tasks 9 and 12), resolved BEFORE
   // the intake so a refusal lands before ANY write - no entity page, no
   // manifest row, no summary page. With no permissions document the ingest
@@ -398,6 +414,32 @@ export function ingestSource(
     ? readKeptFrontmatter(absPath, stamp)
     : { createdAt: stamp };
 
+  // Write-time marker neutralization (t_c2ac4fc8), keyed off PROVENANCE:
+  // the summary prose about an untrusted source is the one caller-authored
+  // half of this page, so under enforce mode it passes through the pure
+  // neutralizer ONCE here - before either consumer of the page bytes runs
+  // - so the Brain/pending staged copy and the published page carry the
+  // same escaped bytes. Every section appended below is vault-authored
+  // (the provenance and link sections, the derivation section) and never
+  // passes through the neutralizer. Off and shadow leave the summary
+  // byte-identical: shadow's preview is the doctor's planted-rows audit,
+  // which recomputes the would-be rows from the vault's bytes on its own,
+  // so a shadow-mode seam has nothing to run. The gate itself was resolved
+  // at the top of this function, before any write: only the DECISION lives
+  // here.
+  const summaryText = input.summary.trim();
+  let storedSummary = summaryText;
+  let neutralized: FrontmatterMap = {};
+  if (trust === INTAKE_TRUST.untrusted) {
+    if (gate === MARKDOWN_NEUTRALIZE_MODE.enforce) {
+      const neutralSummary = neutralizeMarkdown(summaryText);
+      if (neutralSummary.changed) {
+        storedSummary = neutralSummary.text;
+        neutralized = neutralizedMarkersFrontmatter(neutralSummary.kinds);
+      }
+    }
+  }
+
   const meta: FrontmatterMap = {
     kind: BRAIN_SOURCE_KIND,
     source_path: canonicalSource,
@@ -408,6 +450,10 @@ export function ingestSource(
     // reason rather than ranking it beside the operator's own notes. Trusted
     // sources add nothing, keeping their page byte-identical to before.
     ...untrustedSourceFrontmatter(trust),
+    // Names the structure families enforce-mode neutralization removed from
+    // the summary, ON CHANGE ONLY - the same conditional-spread shape as the
+    // marker above, so an unchanged page gains zero bytes.
+    ...neutralized,
     // Says how much of the source was captured when it is less than the
     // whole file; a full-local source adds nothing, for the same reason.
     ...captureScopeFrontmatter(captureScope),
@@ -447,7 +493,7 @@ export function ingestSource(
   };
 
   const body = [
-    input.summary.trim(),
+    storedSummary,
     renderProvenanceSection(provenance),
     renderLinkSection("Entities", allEntities),
     renderLinkSection("Connections to existing notes", connections),

@@ -63,6 +63,7 @@ import { dirname, join } from "node:path";
 
 import { DIAGNOSTIC_SIGNALS } from "../../../src/core/brain/diagnostics.ts";
 import { PRIVACY_MARKER_UNSTAMPED_CODE } from "../../../src/core/brain/doctor/privacy-marker-check.ts";
+import { PLANTED_STRUCTURE_ROWS_CODE } from "../../../src/core/brain/doctor/planted-rows-check.ts";
 import {
   DOCTOR_EXIT_EXCLUSIONS,
   doctorExitReason,
@@ -191,6 +192,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "entity-label-malformed",
   "entity-quote-variant-collision",
   "freshen-failing",
+  "git-tracked-derived-state",
   "inbox-archivable",
   "log-chain-broken",
   "low-evidence-confirmed",
@@ -355,6 +357,16 @@ describe("the classification is readable at runtime, not only by this test", () 
     expect(doctorExitReason("iso-invalid")).toBe(DOCTOR_EXIT_EXCLUSIONS.get("iso-invalid")!);
     expect(doctorExitReason("config-missing")).toBeNull();
     expect(doctorExitReason("not-a-doctor-code")).toBeNull();
+  });
+
+  test("the planted structure rows finding publishes its no-command reason", () => {
+    // The audit is read-only by contract, so the doctor names the reason
+    // rather than an unconditional exit. Pinned by NAME: the code is read
+    // from the check module, not retyped here.
+    const reason = doctorExitReason(PLANTED_STRUCTURE_ROWS_CODE);
+    expect(reason).toBe(DOCTOR_EXIT_EXCLUSIONS.get(PLANTED_STRUCTURE_ROWS_CODE)!);
+    expect(reason!.trim().length).toBeGreaterThanOrEqual(MIN_REASON_LENGTH);
+    expect(reason).not.toContain("o2b");
   });
 
   test("the informal privacy marker finding publishes its no-command reason", () => {

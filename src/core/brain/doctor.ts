@@ -52,6 +52,7 @@ import { activeBudgetPressureCheck } from "./doctor/active-budget-check.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./doctor/check.ts";
 import { inboxArchivableCheck } from "./doctor/inbox-archive-check.ts";
 import { privacyMarkerCheck } from "./doctor/privacy-marker-check.ts";
+import { plantedRowsCheck } from "./doctor/planted-rows-check.ts";
 import { capturePatternCheck, configCheck, vaultIgnoreCheck } from "./doctor/config-checks.ts";
 import { entityRegistryCheck } from "./doctor/entity-checks.ts";
 import { brokenBacklinkCheck } from "./doctor/link-checks.ts";
@@ -92,6 +93,7 @@ import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
 import { frozenVaultCheck } from "./doctor/frozen-check.ts";
+import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
@@ -213,8 +215,15 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   syncConflictLogCheck,
   frozenVaultCheck,
   secretsSyncExposureCheck,
+  // The git-side twin of the sync-exposure check above: derived state
+  // the vault scope ignores but git still carries (t_206562ae).
+  gitTrackedStateCheck,
   inboxArchivableCheck,
   privacyMarkerCheck,
+  // The write-time twin of the privacy-marker count: third-party text
+  // that planted live structure (t_c2ac4fc8), audited with the same
+  // grammar the neutralizer escapes with.
+  plantedRowsCheck,
   logChainCheck,
   symlinkEscapeCheck,
   frontmatterUncertaintyProbe,

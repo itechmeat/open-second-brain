@@ -472,6 +472,7 @@ async function toolBrainScaffoldStub(
 export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Note lifecycle: rename, move, archive, delete take a note file; move-folder/rename-folder run the folder lifecycle. Dry-run unless apply; delete needs confirm. Rewrites inbound [[wikilinks]] minimally so they still resolve; applied writes claim the detached refresh (claimed, not landed).",
     inputSchema: {
@@ -526,6 +527,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
   },
   {
     name: STUB_TOOL,
+    kind: "write",
     description:
       "Unresolved wikilink targets. action: list reads them from the search index and refuses with a state and a next_command when that index is missing or partly resolved, rather than reporting zero; write materialises a stub for one target, its body linking back to the sources. Dry-run unless apply.",
     inputSchema: {

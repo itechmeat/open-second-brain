@@ -567,6 +567,7 @@ async function toolBrainMaintenance(
 export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_labels",
+    kind: "write",
     description:
       "Controlled-vocabulary labels from the schema pack: assign (fail-closed, one value per dimension; labels frontmatter plus a label entity), remove, show. suggest: read-only advisory suggestions from the optional labels decision-model use (available: false when off); it never assigns.",
     inputSchema: {
@@ -595,6 +596,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_tiers",
+    kind: "write",
     description:
       "Frontmatter tier guard: check lists staged identity-field hand-edits the index post-pass detected, restore (apply=true required) writes the expected value back into the file, accept adopts the hand-edit as the new snapshot baseline. Nothing auto-resolves.",
     inputSchema: {
@@ -617,6 +619,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_secrets",
+    kind: "write",
     description:
       "Capability-gated secret custody, agent-facing subset: list stored secret metadata (never values) or run an allowlisted command with the secret injected as its declared env var - output comes back redacted. Storing and removing secrets stays on the operator's CLI (o2b brain secret).",
     inputSchema: {
@@ -639,6 +642,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_maintenance",
+    kind: "write",
     description:
       "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters, relink and declared custom:<name> tasks behind window, busy, pressure, capacity and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
     inputSchema: {

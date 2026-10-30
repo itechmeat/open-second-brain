@@ -56,6 +56,7 @@ async function toolBrainResearchReport(
 export const RESEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    kind: "write",
     description:
       "Write a dated, cited research report. Supply `title`, consulted `sources`, and `findings` (each citing its source). OSB rejects uncited findings, then writes one report page per date+title (idempotent). OSB runs no model.",
     inputSchema: {

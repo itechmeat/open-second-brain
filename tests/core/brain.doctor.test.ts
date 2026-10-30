@@ -29,6 +29,7 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { runDoctor } from "../../src/core/brain/doctor.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { writeCaptureNote } from "../../src/core/brain/capture/capture-note.ts";
 
 let tmp: string;
 
@@ -902,5 +903,46 @@ describe("corrupted principle frontmatter", () => {
     });
     const res = runDoctor(tmp);
     expect(res.warnings.filter((w) => w.code === "principle-corrupted")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry order for the planted-structure-rows audit (t_c2ac4fc8, lane A).
+// The order of DOCTOR_CHECKS is the order findings are reported in, which is
+// a report contract: the planted-rows check sits immediately after the
+// privacy-marker check, and a vault tripping both reports them in that order.
+// ---------------------------------------------------------------------------
+
+describe("doctor registry order: planted-structure-rows after privacy-marker-unstamped", () => {
+  test("a vault tripping both checks reports the privacy marker finding first", () => {
+    // Privacy marker: an informal reservation with no visibility declaration.
+    atomicWriteFileSync(
+      join(tmp, "Brain", "reserved.md"),
+      ["---", "kind: note", "access: private", "---", "", "a private note", ""].join("\n"),
+    );
+    // Planted rows: a capture page carrying live structure.
+    writeCaptureNote(tmp, {
+      body: "quotes [[planted-note]] inline",
+      provenance: { source: "telegram", sender: "1", capturedAt: "2026-09-01T08:00:00Z" },
+    });
+    const res = runDoctor(tmp);
+    const privacyIndex = res.warnings.findIndex((w) => w.code === "privacy-marker-unstamped");
+    const plantedIndex = res.warnings.findIndex((w) => w.code === "planted-structure-rows");
+    expect(privacyIndex).toBeGreaterThanOrEqual(0);
+    expect(plantedIndex).toBeGreaterThan(privacyIndex);
+  });
+
+  test("the planted-rows audit is silent on a clean vault", () => {
+    writePreference(tmp, {
+      slug: "clean-order",
+      topic: "clean-order",
+      principle: "Keep the registry order honest.",
+      created_at: "2026-09-01T08:00:00Z",
+      unconfirmed_until: "2026-09-15T08:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    const res = runDoctor(tmp);
+    expect(res.warnings.filter((w) => w.code === "planted-structure-rows")).toEqual([]);
   });
 });

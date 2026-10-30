@@ -1233,6 +1233,7 @@ function expandPayload(
 export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_benchmark",
+    kind: "read",
     description:
       "Recall-quality benchmark: score the vault's live hybrid recall against a fixed dataset ({queries: [{id, query, expected: [paths]}]}) - hit@k and MRR per query and aggregate - and record one recall_benchmark metric so quality is chartable over time.",
     inputSchema: {
@@ -1254,6 +1255,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_tune",
+    kind: "write",
     description:
       "Opt-in self-tuning recall: run grid-evaluates bounded parameters (pool multiplier, traversal depth, learned weights, expansion) against a benchmark dataset and persists the winner to Brain/search/tuning.json; status shows the validated state; reset deletes it. Search honors it only when enabled.",
     inputSchema: {
@@ -1275,6 +1277,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_recall_telemetry",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume against reads per period; dead_weight reports in-scope pages no recall ever surfaced, hidden pages dropped before totals, dead list capped (limit; default 50, max 500). Opt-in emit; read-only.",
@@ -1352,6 +1355,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_route_metrics",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Route-level MCP latency: list mcp_route_latency records or summarize per-tool latency (count, errors, min/avg/max, p50/p95/p99, per-stage count/avg/p95) slowest-first. Emitted only when mcp_route_metrics_enabled is on; payload-safe (tool, scope, status, duration, arg keys, stage names). Read-only.",
@@ -1393,6 +1397,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_retrieval_plan",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Shadow-only retrieval planner for a question: composes query intent/weights, summary-surface route, context-pack density allocation, token-impact ledger, and route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Read-only.",
@@ -1418,6 +1423,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_token_impact",
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Durable value-of-memory ledger. `record`: a pack's tokenizer-exact prompt-token delta (baseline−packed; method exact|fallback) + optional modeled inference-avoidance. `outcome` calibrates the model. `summary` keeps EXACT separate from MODELED; `list` reads samples. Gated write; payload-safe.",
@@ -1494,6 +1500,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context_pack_outcome",
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Context-pack outcome loop. `post` records an outcome row for a carried sample id — first-pass/repair/retry counters plus three SEPARATE token signals (exact, modeled, observed) — calibrates the token-impact ledger, and records the kernel's on-disk evidence. `list`/`summary` read rows. Gated.",
@@ -1603,6 +1610,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_knowledge_gaps",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Cross-query demand gaps: aggregate the persisted recall demand log into recurring queries the vault answers poorly, ranked by frequency × (1 − IDF-weighted coverage). Read-only; log written only by opt-in recall telemetry.",
@@ -1631,6 +1639,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_grep",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Search imported session recall raw turns and summary nodes, bounded by an optional time window (since/before). With operation=coverage, runs the coverage-first thread selection instead: facets fanned out under the topic budget, selected under char_budget, returned chronologically with diagnostics.",
@@ -1698,6 +1707,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_describe",
+    kind: "read",
     description:
       "Describe counts and summary depths for an imported session recall DAG. With topics, also render the adaptive topic-budget report the coverage operation fans out under.",
     inputSchema: {
@@ -1717,6 +1727,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_session_expand",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content. With payload instead of id, page the exact content behind an [payload: osb-payload://<sha256> chars=N] placeholder.",

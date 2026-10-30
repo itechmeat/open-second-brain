@@ -290,6 +290,7 @@ function toolBrainTrigger(
 export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_intention",
+    kind: "write",
     description:
       "Scoped current-intention chains under Brain/intentions/: set updates a workstream's now-document (prior text lands in its history trail), show/list read, move retires the chain into history/.",
     inputSchema: {
@@ -321,6 +322,7 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_trigger",
+    kind: "write",
     description:
       // Within the registry guard's tool-description ceiling (290 of the
       // 300 characters), which is why the wording is this tight: the

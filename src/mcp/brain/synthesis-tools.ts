@@ -369,6 +369,7 @@ function positiveIntArg(args: Record<string, unknown>, name: string): number | u
 export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: SUMMARY_TOOL,
+    kind: "write",
     description:
       "Session-scoped structured digest over request/decisions/learnings/next_steps. write stores agent-extracted categories; get returns a session's latest digest; list returns all (optionally one session). Append-only, deduped; an all-empty digest is rejected.",
     inputSchema: {
@@ -422,6 +423,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: CHECKPOINT_TOOL,
+    kind: "write",
     description:
       "Batch-save a whole session's signals + a decisions/learnings/next_steps summary + optional diary in one idempotent round-trip, keyed by session_id. A same-content retry dedupes; a different-content retry is payload_mismatch. Items needing review return in `partial` (status 'mixed'), never dropped.",
     inputSchema: {
@@ -474,6 +476,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: LINEAGE_TOOL,
+    kind: "read",
     description:
       "Read-only provenance tracer: how a derived artifact was reached, as an observation -> synthesis -> conclusion graph. A ctn_ id walks the sourceRefs graph; a pref-/ret- id adapts belief-evolution. Cycle-guarded, depth-bounded; an unknown id errors.",
     inputSchema: {
@@ -497,6 +500,7 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: HISTORY_TOOL,
+    kind: "read",
     description:
       "Decompose a note's git history into episodic phases, split when the gap between commits exceeds gap_hours (default 72) - deterministic and language-agnostic. Each phase carries subjects, dates, authors. Missing repo: available=false; no commits: zero phases. Read-only.",
     inputSchema: {

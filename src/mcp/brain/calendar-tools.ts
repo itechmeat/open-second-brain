@@ -222,6 +222,7 @@ function toolBrainAgenda(
 export const CALENDAR_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_obligation",
+    kind: "write",
     description:
       "Recurring obligations under Brain/obligations/ with a deterministic cadence-driven next-due date: add, done (advances next_due one interval), list (optionally overdue-only), show, remove. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days.",
     inputSchema: {
@@ -269,6 +270,7 @@ export const CALENDAR_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_agenda",
+    kind: "read",
     description:
       "Deterministic agenda synthesis over caller-provided calendar events (the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's email domain(s). Pure analysis, no vault writes.",
     inputSchema: {

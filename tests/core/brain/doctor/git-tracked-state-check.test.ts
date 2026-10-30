@@ -1,0 +1,313 @@
+/**
+ * The doctor's git tracked-state row (t_206562ae, task B3), against real
+ * temporary git repositories - the `sync-exposure.test.ts` shape, with
+ * `git init` instead of `.stfolder`.
+ *
+ * Tracking is measured ONLY by `git ls-files`, never inferred from
+ * status: the tracked-and-ignored fixture below is the pin. Ignoring is
+ * measured ONLY by `check-ignore` exit discipline. The check is silent
+ * when the store is absent, in a non-git folder, or when git cannot
+ * answer, and it never edits anything.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { runDoctor } from "../../../../src/core/brain/doctor.ts";
+import {
+  GITIGNORE_GUARD_IGNORE_LINE,
+  GIT_TRACKED_DERIVED_STATE_CODE,
+  gitTrackedStateCheck,
+  probeDerivedStoreGitState,
+} from "../../../../src/core/brain/doctor/git-tracked-state-check.ts";
+import { ensureVaultGitignoreEntries } from "../../../../src/core/brain/gitignore-guard.ts";
+import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
+
+let tmp: string;
+let vault: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-git-tracked-state-"));
+  vault = join(tmp, "vault");
+  // The Brain layer fixtures the doctor's pass expects, per the
+  // secrets-sync fixture shape.
+  for (const d of ["preferences", "retired", "inbox", "processed", "log"]) {
+    mkdirSync(join(vault, "Brain", d), { recursive: true });
+  }
+  writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+/** `git` in the vault; git is on PATH everywhere this suite runs. */
+function git(cwd: string, ...args: string[]): void {
+  const run = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  if (run.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${run.stderr.toString()}`);
+  }
+}
+
+/**
+ * A real repository around the vault, with its content committed.
+ * `commit.gpgsign=false` keeps a machine whose global config signs
+ * commits from failing these fixtures for unrelated reasons.
+ */
+function gitRepoWithCommit(): void {
+  git(vault, "init");
+  git(vault, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
+  git(
+    vault,
+    "-c",
+    "user.email=o2b@example.com",
+    "-c",
+    "user.name=o2b",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "vault",
+  );
+}
+
+function withStore(): void {
+  mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+  writeFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "sqlite-bytes", "utf8");
+}
+
+function findingsOf(severity: "error" | "warning"): ReadonlyArray<DoctorIssue> {
+  const report = runDoctor(vault);
+  return (severity === "error" ? report.errors : report.warnings).filter(
+    (i) => i.code === GIT_TRACKED_DERIVED_STATE_CODE,
+  );
+}
+
+describe("the git tracked-state doctor check", () => {
+  test("is silent when the vault is not a git worktree", () => {
+    withStore();
+    expect(findingsOf("error")).toHaveLength(0);
+    expect(findingsOf("warning")).toHaveLength(0);
+  });
+
+  test("is silent when the derived store directory is absent", () => {
+    gitRepoWithCommit();
+    expect(findingsOf("error")).toHaveLength(0);
+    expect(findingsOf("warning")).toHaveLength(0);
+  }, 20000);
+
+  test("errors when the store is committed, naming one vault-bounded untrack command and the ignore line", () => {
+    withStore();
+    gitRepoWithCommit();
+    const errors = findingsOf("error");
+    expect(errors).toHaveLength(1);
+    const message = errors[0]!.message;
+    // One complete command, vault-bounded with -C, targeting the whole
+    // directory: it untracks every tracked path no matter how many there
+    // are, and it runs from any directory - a parent repository's root
+    // included.
+    expect(message).toContain(`git -C '${vault}' rm -r --cached -- .open-second-brain`);
+    expect(message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
+    expect(message).toContain("never edits");
+  }, 20000);
+
+  test("names the complete untrack command once and keeps the path list as evidence, counting the rest", () => {
+    // The cap is honest about evidence, not about the remediation: the
+    // named command covers every tracked path via `-r` on the directory,
+    // and the five quoted paths below it are evidence only - a real
+    // store tracks brain.sqlite with -wal/-shm, audit shards, ledgers.
+    withStore();
+    for (let i = 0; i < 6; i += 1) {
+      writeFileSync(join(vault, ".open-second-brain", `shard-${i}.sqlite`), "bytes", "utf8");
+    }
+    writeFileSync(join(vault, ".open-second-brain", "my db.sqlite"), "bytes", "utf8");
+    gitRepoWithCommit();
+
+    const message = findingsOf("error")[0]!.message;
+    expect(message.match(/git -C /g)).toHaveLength(1);
+    expect(message).toContain('".open-second-brain/my db.sqlite"');
+    expect(message).toContain('".open-second-brain/shard-2.sqlite"');
+    expect(message).toContain("and 3 more");
+  }, 20000);
+
+  test("errors even when the tracked store is ALSO ignored - tracking is measured, not inferred", () => {
+    withStore();
+    gitRepoWithCommit();
+    // The ignore line arrives AFTER the commit: the path stays in the
+    // index (only untracking removes it from there) and `git status`
+    // would never show it again. ls-files must.
+    writeFileSync(join(vault, ".gitignore"), `${GITIGNORE_GUARD_IGNORE_LINE}\n`);
+    const errors = findingsOf("error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.severity).toBe("error");
+  }, 20000);
+
+  test("warns (not errors) for a present-but-unignored untracked store", () => {
+    // The repository is committed BEFORE the store exists, so the store
+    // is genuinely untracked: exactly the vault an init ran in without
+    // git knowing.
+    gitRepoWithCommit();
+    withStore();
+    const errors = findingsOf("error");
+    expect(errors).toHaveLength(0);
+    const warnings = findingsOf("warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.message).toContain(GITIGNORE_GUARD_IGNORE_LINE);
+  }, 20000);
+
+  test("is silent after the full remediation: untrack plus the seeded ignore line", () => {
+    withStore();
+    gitRepoWithCommit();
+    git(
+      vault,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "rm",
+      "-r",
+      "--cached",
+      ".open-second-brain/brain.sqlite",
+    );
+    expect(ensureVaultGitignoreEntries(vault).status).toBe("created");
+    git(vault, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
+    git(
+      vault,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "untrack derived state",
+    );
+    expect(findingsOf("error")).toHaveLength(0);
+    expect(findingsOf("warning")).toHaveLength(0);
+  }, 20000);
+
+  test("in a vault nested in a bigger repo, the named command untracks from the repo root", () => {
+    // The tracked paths are vault-relative (`git -C <vault> ls-files`),
+    // so per-path `git rm` commands fatal'd from the repository root -
+    // exactly where an operator of a nested vault runs git. The one
+    // command the message names is vault-bounded and runs anywhere.
+    const nested = join(tmp, "nested");
+    vault = join(nested, "vault");
+    for (const d of [
+      "Brain/preferences",
+      "Brain/retired",
+      "Brain/inbox",
+      "Brain/processed",
+      "Brain/log",
+    ]) {
+      mkdirSync(join(vault, d), { recursive: true });
+    }
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
+    withStore();
+    writeFileSync(join(vault, ".open-second-brain", "ledger.sqlite"), "bytes", "utf8");
+    // The repo root is `tmp`; only the nested vault's store is tracked.
+    git(tmp, "init");
+    git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "repo",
+    );
+    const errors = findingsOf("error");
+    expect(errors).toHaveLength(1);
+    const message = errors[0]!.message;
+    expect(message).toContain(`git -C '${vault}' rm -r --cached -- .open-second-brain`);
+    expect(message).toContain('".open-second-brain/ledger.sqlite"');
+    // Run exactly the command the message names, from the repository
+    // root, then seed the guard and recommit: the row goes silent.
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-C",
+      vault,
+      "rm",
+      "-r",
+      "--cached",
+      "--",
+      ".open-second-brain",
+    );
+    expect(ensureVaultGitignoreEntries(vault).status).toBe("created");
+    git(tmp, "-c", "user.email=o2b@example.com", "-c", "user.name=o2b", "add", "-A");
+    git(
+      tmp,
+      "-c",
+      "user.email=o2b@example.com",
+      "-c",
+      "user.name=o2b",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "untrack the nested vault's derived state",
+    );
+    expect(findingsOf("error")).toHaveLength(0);
+    expect(findingsOf("warning")).toHaveLength(0);
+  }, 20000);
+
+  test("never edits anything", () => {
+    withStore();
+    gitRepoWithCommit();
+    const storeBefore = readFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "utf8");
+    runDoctor(vault);
+    expect(readFileSync(join(vault, ".open-second-brain", "brain.sqlite"), "utf8")).toBe(
+      storeBefore,
+    );
+    expect(existsSync(join(vault, ".gitignore"))).toBe(false);
+  }, 20000);
+});
+
+describe("the probe underneath the check", () => {
+  test("a git that cannot answer is silence, not a finding", () => {
+    withStore();
+    gitRepoWithCommit();
+    const savedPath = process.env.PATH;
+    try {
+      // An empty PATH: execFileSync("git") cannot resolve, every git
+      // call in the probe fails, and the probe refuses to guess.
+      process.env.PATH = tmp;
+      const probe = probeDerivedStoreGitState(vault);
+      expect(probe).toBeNull();
+      const out = { issues: [] as DoctorIssue[], uncertain: [] };
+      expect(() => gitTrackedStateCheck.run(probeContext(), out)).not.toThrow();
+      expect(out.issues).toHaveLength(0);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
+  }, 20000);
+
+  test("the check is failSoft", () => {
+    expect(gitTrackedStateCheck.failSoft).toBe(true);
+  });
+});
+
+/** A minimal context: the check reads nothing but `vault`. */
+function probeContext(): Parameters<typeof gitTrackedStateCheck.run>[0] {
+  return {
+    vault,
+    now: new Date(0),
+    config: undefined,
+    dbPath: undefined,
+    configPath: undefined,
+    knownBasenames: new Set(),
+    idIndex: new Map(),
+    preferences: [],
+    logs: [],
+  };
+}

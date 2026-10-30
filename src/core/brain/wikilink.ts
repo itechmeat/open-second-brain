@@ -79,6 +79,48 @@ export const ANCHORED_WIKILINK_RE = /^\[\[([^\]]+)\]\]/;
 /** Whole-string wikilink form; body in one capture. */
 export const EXACT_WIKILINK_RE = /^\[\[([^\]]+)\]\]$/;
 
+/**
+ * Whether the character at `index` is preceded by an ODD run of
+ * backslashes - the CommonMark shape of "already escaped by the author":
+ * `\[` renders as a literal `[`, so a sigil behind an odd run is data the
+ * caller already escaped, never structure. The one rule both halves of the
+ * wikilink family read: the neutralizer's detector skips such sigils (and
+ * never re-escapes them), and every link reader treats the bracket behind
+ * one as inert text.
+ *
+ * Pure and linear in the run length. Shared from here rather than copied
+ * so the detector's skip and the readers' skip cannot drift into two
+ * grammars.
+ */
+export function precededByOddBackslashRun(s: string, index: number): boolean {
+  let n = 0;
+  let i = index - 1;
+  while (i >= 0 && s[i] === "\\") {
+    n++;
+    i--;
+  }
+  return n % 2 === 1;
+}
+
+/**
+ * Whether the `[[...]]` regex match spanning `[start, end)` in `text`
+ * opens AND closes on live brackets: an opening or closing bracket
+ * preceded by an odd backslash run is escaped data, and opens or closes
+ * no link. `end - 2` must be the first `]` of the match's closing `]]`,
+ * which every pattern in this module's family guarantees.
+ *
+ * The link readers apply this to each of their matches so they agree with
+ * the neutralizer's detector by construction: a span the detector leaves
+ * (an escaped `[[`) extracts as nothing, and a span it escapes can never
+ * leave extractable structure behind. `text` is whatever string the
+ * reader ran its regex over - code-masked or raw - so the run check reads
+ * the same bytes the match did.
+ */
+export function isLiveWikilinkSpan(text: string, start: number, end: number): boolean {
+  if (precededByOddBackslashRun(text, start)) return false;
+  return !precededByOddBackslashRun(text, end - 2);
+}
+
 /** The two characters a fence is built from. */
 const BACKTICK = "`";
 const TILDE = "~";

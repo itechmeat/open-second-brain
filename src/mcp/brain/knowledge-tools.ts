@@ -1196,6 +1196,7 @@ function itemPathHidden(item: unknown, view: ArtifactRefView): boolean {
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_claims",
+    kind: "write",
     description:
       "Claim-graph query (a projection over superseded_by / contradicts / valid_from / valid_until). operation: current (default) = truth now; at = truth at an instant; history = every claim incl. tombstoned; replaced = what replaced X; contests = what contests X; rebuild = rebuild the projection.",
     inputSchema: {
@@ -1220,6 +1221,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_codegraph_report",
+    kind: "read",
     description:
       "Read-only codegraph partner report: in-scope project, index state + counts, and Cargo.toml workspace members. When indexed, adds a non-blocking graph-health gate (index.health: dangling refs, self-loops, collapsed edges, cache-root mismatch) before labeling/import trust the graph. Never mutates.",
     inputSchema: {
@@ -1232,6 +1234,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_foresight",
+    kind: "read",
     description:
       "Forward-looking projection (Brain's only anticipatory surface): recurring routines coming due within the horizon via cadence arithmetic, recent open commitments, and open questions - deterministic, every item carries sources.",
     inputSchema: {
@@ -1250,6 +1253,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_bridges",
+    kind: "write",
     description:
       "Bridge discovery over the vec index: discover proposes links between embedding-near notes that share no edge (orphan-first, regenerates Brain/proposals/bridges.md, records a metric); accept writes one related wikilink into the source note; dismiss silences a pair; list reads the artifact back.",
     inputSchema: {
@@ -1278,6 +1282,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_clusters",
+    kind: "write",
     description:
       "Graph-wide community detection: run applies deterministic label propagation, materializes one note per community of size >= min_size under Brain/clusters/, removes stale notes, records a metric; list reads them back. Optional batch_size chunks work with isolated, reported per-batch failures.",
     inputSchema: {
@@ -1304,6 +1309,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_moc_audit",
+    kind: "read",
     description:
       "Per-MOC coverage audit. Given a hub note id, classifies its outbound cluster into well-covered / fragile / candidate-missing and surfaces a suggested-next candidate. MOC detection is purely structural (outbound link count + link density). Read-only.",
     inputSchema: {
@@ -1321,6 +1327,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_deep_synthesis",
+    kind: "write",
     description:
       "Topic-scoped deterministic dossier: matched notes, agreements, contradictions, stale claims, knowledge gaps (dangling wikilinks), plus per-finding causal context, decomposed confidence, and a visible evidence-loss ledger. Evidence assembly only. triggers=true enqueues findings.",
     inputSchema: {
@@ -1352,6 +1359,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_diarize",
+    kind: "read",
     description:
       "Subject profile for a registry entity: assembles its document set from the registry and sources, computes a deterministic stated-vs-evidenced gap (claims vs evidence frequency and recency), and emits a profile skeleton plus one needs-llm-step envelope. Read-only. Unknown entity errors.",
     inputSchema: {
@@ -1376,6 +1384,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_idea_discovery",
+    kind: "write",
     description:
       "Ranked next-direction candidates from the vault's open loops: unanswered open questions, orphan research notes (no inbound links), and aging unresolved inbox signals. Deterministic scoring; triggers=true enqueues the ranked ideas.",
     inputSchema: {
@@ -1399,6 +1408,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_truth",
+    kind: "write",
     description:
       "Entity claim ledger: ingest a claim, render current-truth slots, list conflicts, aggregate quantities, report collisions, window recall via the events operation, or commit grounded agent-stated claims via the state operation with per-claim anchoring verdicts.",
     inputSchema: {
@@ -1485,6 +1495,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_dead_ends",
+    kind: "write",
     description:
       "Negative-knowledge registry (Brain/dead-ends/): record one tried-and-failed approach with why it failed, or list the bounded active set so recall surfaces avoid-X alongside prefer-Y.",
     inputSchema: {

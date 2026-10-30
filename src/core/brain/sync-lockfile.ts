@@ -66,12 +66,15 @@ import {
   constants as fsConstants,
   fstatSync,
   lstatSync,
+  readFileSync,
   mkdirSync,
   openSync,
   readdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "./path-constants.ts";
@@ -91,23 +94,30 @@ const LOCK_SUFFIX = ".lock";
 
 /**
  * The file a holder created: device and inode as exact bigints. `null` when
- * the platform reports no inode (some network and FAT volumes answer 0),
- * where ownership cannot be told apart and release falls back to removing
- * the name.
+ * the platform reports no inode (some network and FAT volumes answer 0).
  */
 type LockIdentity = { readonly dev: bigint; readonly ino: bigint } | null;
 
+/**
+ * The body this holder wrote into its lock file: the unique token that
+ * decides ownership when a POSIX filesystem hands a freed inode straight
+ * back to the next create. Device and inode alone cannot tell a reused
+ * identity apart, so release reads the stamp back and compares prefixes.
+ * Empty on Windows, where ownership stays the device-and-inode check.
+ */
+type LockHolder = { readonly identity: LockIdentity; readonly token: string };
+
 // Held locks and the file each holder created, tracked at module scope so the
 // exit hook can clean up.
-const heldLocks = new Map<string, LockIdentity>();
+const heldLocks = new Map<string, LockHolder>();
 let exitHookInstalled = false;
 
 function ensureExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const [lockPath, identity] of heldLocks) {
-      if (ownsLockName(lockPath, identity)) {
+    for (const [lockPath, holder] of heldLocks) {
+      if (ownsLockName(lockPath, holder.identity, holder.token)) {
         try {
           unlinkSync(lockPath);
         } catch {
@@ -131,13 +141,39 @@ function identityOf(fd: number): LockIdentity {
 
 /**
  * Whether `lockPath` still names the file this holder created. A missing name
- * is not owned (nothing to remove); an unknown identity is presumed owned, the
- * behaviour before ownership was tracked.
+ * is not owned (nothing to remove). The device and inode must match, and the
+ * body must still open with this holder's token: a filesystem that reuses a
+ * freed inode for the next holder's create answers the same identity for a
+ * file this holder no longer owns, and only the stamp tells them apart. On a
+ * volume without inodes the token alone decides.
  */
-function ownsLockName(lockPath: string, identity: LockIdentity): boolean {
+function ownsLockName(lockPath: string, identity: LockIdentity, token: string): boolean {
+  let body: Buffer | null = null;
+  try {
+    body = readFileSync(lockPath);
+  } catch {
+    // A body that cannot be read (Windows holds a just-written file
+    // briefly against readers) cannot be told from another holder's:
+    // fall back to the device-and-inode check alone, the behaviour
+    // before ownership tokens.
+    body = null;
+  }
+  if (body !== null && token !== "") {
+    // The stamp answers for the whole file: a matching token is owned,
+    // a foreign one (a reused identity, a takeover survivor) is not. A
+    // waiter mark that raced the stamp's own write clobbers the token's
+    // first byte, so a body that still carries this holder's unique
+    // token line is owned all the same; a foreign body cannot carry it.
+    if (body.subarray(0, Buffer.byteLength(token, "utf8")).equals(Buffer.from(token, "utf8"))) {
+      return true;
+    }
+    const uuidLine = Buffer.from(`\n${token.split("\n")[1] ?? ""}\n`, "utf8");
+    return uuidLine.byteLength > 2 && body.includes(uuidLine);
+  }
   try {
     const st = lstatSync(lockPath, { bigint: true });
-    return identity === null || (st.dev === identity.dev && st.ino === identity.ino);
+    if (identity === null) return true;
+    return st.dev === identity.dev && st.ino === identity.ino;
   } catch {
     return false;
   }
@@ -230,16 +266,25 @@ export function acquireLockSync(target: string): LockHandle {
 
   const identity = identityOf(fd);
 
-  // Stamp pid + timestamp into the lock body. The contents are
-  // purely diagnostic - the doctor surface reads them when reporting
-  // stale locks. Failure to write is non-fatal: the lock semantics
-  // come from the exclusive create, not from the body.
+  // Stamp pid, a unique holder token and the timestamp into the lock
+  // body. On POSIX the token decides ownership at release: a filesystem
+  // there can hand a freed inode straight back to the next holder's
+  // create, and only the stamp tells the files apart (the doctor
+  // surface reads the rest when reporting stale locks). Windows keeps
+  // the device-and-inode check alone: its delete-pending windows make
+  // a just-written body unreliable to read back, and its volumes
+  // allocate fresh identities for recreated files, where the reuse
+  // race has never been observed. A failed write leaves no token and
+  // release falls back to the same check.
   let stampBytes = 0;
+  let token: string | null =
+    process.platform === "win32" ? null : `${process.pid}\n${randomUUID()}`;
   try {
-    const stamp = Buffer.from(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+    const stamp = Buffer.from(`${token}\n${new Date().toISOString()}\n`, "utf8");
     stampBytes = writeSync(fd, stamp, 0, stamp.byteLength);
   } catch {
-    // ignore; diagnostic-only payload
+    // ignore; the body cannot be trusted as an ownership marker
+    token = null;
   } finally {
     try {
       closeSync(fd);
@@ -248,7 +293,11 @@ export function acquireLockSync(target: string): LockHandle {
     }
   }
 
-  heldLocks.set(lockPath, identity);
+  const holder: LockHolder =
+    token !== null && stampBytes >= Buffer.byteLength(token, "utf8")
+      ? { identity, token }
+      : { identity, token: "" };
+  heldLocks.set(lockPath, holder);
   let released = false;
   return {
     path: lockPath,
@@ -257,10 +306,10 @@ export function acquireLockSync(target: string): LockHandle {
       released = true;
       // A newer handle in this process may have re-registered the path; its
       // registration is the one the exit sweep must still see.
-      if (heldLocks.get(lockPath) === identity) heldLocks.delete(lockPath);
+      if (heldLocks.get(lockPath) === holder) heldLocks.delete(lockPath);
       // The name no longer holds this holder's file: whoever holds it now
       // keeps it. Removing it would admit a second holder beside them.
-      if (!ownsLockName(lockPath, identity)) return;
+      if (!ownsLockName(lockPath, holder.identity, holder.token)) return;
       // Anything past our own stamp was appended by a waiter (see
       // `markWaiting`): someone is queued for this lock, so a re-acquire from
       // this process steps back first. Best-effort, like the stamp itself.
@@ -587,6 +636,12 @@ function waiterSleepMs(waitedMs: number): number {
 
 /** Upper bound on the bytes waiters append to one lock file. */
 const WAITER_MARK_LIMIT = 4_096;
+/**
+ * Below this size a lock body is still mid-stamp (pid, token line,
+ * timestamp and separators never fit in less), and a waiter mark at
+ * its end would land inside the token: leave such a file unmarked.
+ */
+const MIN_STAMP_BYTES = 48;
 const WAITER_MARK = Buffer.from("w", "utf8");
 /** Read-write, never create, and never follow a symlink where the platform can refuse one. */
 const MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
@@ -607,6 +662,10 @@ function markWaiting(lockPath: string): void {
     // one name. A symlink or hard link planted at the lock path (a synced
     // vault can carry one) must not turn the mark into a write elsewhere.
     if (!stat.isFile() || stat.nlink !== 1) return;
+    // A body still inside its own stamp write (a waiter can open the
+    // name in the microseconds before the holder's stamp lands) is left
+    // alone: an early mark would write over the holder token position.
+    if (stat.size < MIN_STAMP_BYTES) return;
     if (stat.size < WAITER_MARK_LIMIT) {
       writeSync(fd, WAITER_MARK, 0, WAITER_MARK.byteLength, stat.size);
     }

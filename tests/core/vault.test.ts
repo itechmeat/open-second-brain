@@ -449,6 +449,32 @@ describe("extractWikilinks", () => {
       "real-link",
     ]);
   });
+
+  test("an escaped opening bracket opens no link", () => {
+    // `\[[a]]` is CommonMark for the literal text `[[a]]`; the same
+    // odd-backslash-run rule the neutralizer's detector applies, so an
+    // enforce-mode write can never leave extractable structure behind.
+    expect(extractWikilinks("\\[[a]]")).toEqual([]);
+  });
+
+  test("an escaped opening bracket across a newline opens no link", () => {
+    expect(extractWikilinks("\\[[a\nb]]")).toEqual([]);
+  });
+
+  test("an escaped closing bracket closes no link", () => {
+    expect(extractWikilinks("[[a\\]]")).toEqual([]);
+    expect(extractWikilinks("[[a\nb\\]]")).toEqual([]);
+  });
+
+  test("a link after an even backslash run stays live", () => {
+    // `\\` is an escaped backslash, so the `[[` that follows it is not
+    // escaped data - the run before the brackets is even.
+    expect(extractWikilinks("\\\\[[a]]")).toEqual(["a"]);
+  });
+
+  test("an escaped link beside a live one leaves only the live one", () => {
+    expect(extractWikilinks("\\[[a]] and [[b]]")).toEqual(["b"]);
+  });
 });
 
 /**

@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,12 @@ import {
   type ExtractionIntake,
   type IntakeOptions,
 } from "../../../../src/core/brain/intake/extract-intake.ts";
+import { planPlantedRows } from "../../../../src/core/brain/planted-rows.ts";
+import { parseFrontmatter, extractWikilinks } from "../../../../src/core/vault.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeModeError,
+} from "../../../../src/core/brain/text/neutralize-markdown.ts";
 import type { Provenance } from "../../../../src/core/brain/provenance/provenance.ts";
 
 let vault: string;
@@ -163,6 +169,133 @@ describe("intakeExtraction - validation refuses malformed payloads with no parti
   test("rejects an invalid entity category", () => {
     const bad: ExtractionIntake = { entities: [{ category: "Has Space", name: "A" }] };
     expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
+    expect(listEntities(vault)).toHaveLength(0);
+  });
+});
+
+/**
+ * The untrusted intake's page bytes (review M4): the entity page H1 carries
+ * the third-party display name verbatim, so a planted `[[...]]` in a name
+ * stayed live there even under enforce - the summary was neutralized, the
+ * entity pages it quarantined were not.
+ */
+
+/** Provenance citing a URL: no vault bytes, so the intake classifies untrusted. */
+function untrustedOpts(agent: string): IntakeOptions {
+  return {
+    agent,
+    now: NOW,
+    provenance: { level: "stated", sources: ["[[https://example.test/w]]"], premises: [] },
+  };
+}
+
+/** Run `run` with the gate mode env twin set, restoring it afterwards. */
+function withGateMode(mode: string, run: () => void): void {
+  const saved = process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+  process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = mode;
+  try {
+    run();
+  } finally {
+    if (saved === undefined) delete process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+    else process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = saved;
+  }
+}
+
+const PLANTED_NAME = "Alice [[evil-target]] Example";
+
+function entityPage(id: string): { meta: Record<string, unknown>; body: string; raw: string } {
+  const path = join(vault, "Brain", "entities", "person", `${id}.md`);
+  const raw = readFileSync(path, "utf8");
+  const [meta, body] = parseFrontmatter(path);
+  return { meta, body, raw };
+}
+
+describe("intakeExtraction - markdown neutralization on the untrusted lane", () => {
+  test("enforce escapes a planted name in the entity page H1 and the audit stays silent", () => {
+    withGateMode("enforce", () => {
+      const res = intakeExtraction(
+        vault,
+        {
+          entities: [{ category: "person", name: PLANTED_NAME, aliases: ["Alice [[evil]]"] }],
+          relations: [],
+        },
+        untrustedOpts("claude"),
+      );
+      const id = res.entitiesCreated[0]!;
+      const page = entityPage(id);
+      // The writer's H1 line carries the escaped form: the planted name's
+      // sigils AND the writer's own heading sigil are escaped together, so
+      // the page's link readers extract nothing from the name.
+      expect(page.body).toContain("\\# Alice \\[\\[evil-target\\]\\] Example");
+      expect(extractWikilinks(page.body)).toEqual(["https://example.test/w"]);
+      // The alias is neutralized too: no live brackets in the stored value.
+      expect(page.meta["aliases"]).toEqual(["Alice \\[\\[evil\\]\\]"]);
+      // The quarantined page is silent for the planted-rows audit.
+      const rel = `Brain/entities/person/${id}.md`;
+      expect(planPlantedRows(vault).planted.filter((p) => p.path === rel)).toEqual([]);
+      // Identity is untouched: the frontmatter name stays the third-party
+      // record verbatim, and the id keys on it exactly as before (the
+      // escaped H1 is a rendering of the record, not a different record).
+      expect(page.meta["name"]).toBe(PLANTED_NAME);
+      expect(id).toBe("ent-person-alice-evil-target-example");
+    });
+  });
+
+  test("gate off leaves the untrusted name verbatim and the audit reports exactly the planted row", () => {
+    const res = intakeExtraction(
+      vault,
+      { entities: [{ category: "person", name: PLANTED_NAME }], relations: [] },
+      untrustedOpts("claude"),
+    );
+    const id = res.entitiesCreated[0]!;
+    const page = entityPage(id);
+    expect(page.body).toContain(`# ${PLANTED_NAME}`);
+    expect(page.meta["aliases"]).toBeUndefined();
+    const rel = `Brain/entities/person/${id}.md`;
+    const planted = planPlantedRows(vault).planted.find((p) => p.path === rel);
+    expect(planted).toBeDefined();
+    expect(planted!.kinds).toEqual(["wikilink"]);
+    expect(planted!.count).toBe(1);
+  });
+
+  test("shadow leaves the untrusted name verbatim", () => {
+    withGateMode("shadow", () => {
+      const res = intakeExtraction(
+        vault,
+        { entities: [{ category: "person", name: PLANTED_NAME }], relations: [] },
+        untrustedOpts("claude"),
+      );
+      const page = entityPage(res.entitiesCreated[0]!);
+      expect(page.body).toContain(`# ${PLANTED_NAME}`);
+    });
+  });
+
+  test("a trusted intake's name stays verbatim under enforce", () => {
+    withGateMode("enforce", () => {
+      const res = intakeExtraction(
+        vault,
+        { entities: [{ category: "person", name: PLANTED_NAME }], relations: [] },
+        opts("claude"),
+      );
+      const page = entityPage(res.entitiesCreated[0]!);
+      // Neutralization keys off provenance: a vault file the caller may
+      // read is the trusted lane, and the name is the caller's own writing
+      // about the operator's own material.
+      expect(page.body).toContain(`# ${PLANTED_NAME}`);
+      expect(page.meta["status"]).toBe("active");
+    });
+  });
+
+  test("an invalid gate mode refuses with no partial write", () => {
+    expect(() =>
+      withGateMode("yes", () =>
+        intakeExtraction(
+          vault,
+          { entities: [{ category: "person", name: "Alice" }], relations: [] },
+          untrustedOpts("claude"),
+        ),
+      ),
+    ).toThrow(MarkdownNeutralizeModeError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 });

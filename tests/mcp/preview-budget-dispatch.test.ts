@@ -16,6 +16,7 @@ function tool(overrides: Partial<ToolDefinition>): ToolDefinition {
     name: "synthetic_tool",
     description: "test",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    kind: "read",
     handler: () => ({}),
     ...overrides,
   };

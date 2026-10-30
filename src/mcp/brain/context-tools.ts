@@ -347,11 +347,16 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
 };
 
 /**
- * Read-only pull-bootstrap of `Brain/active.md` + the active-preference
- * counts. Built for runtimes that have no `SessionStart` hook (Cursor,
- * Aider, raw Claude API): one tool call gives the agent the same
- * shortcut card the SessionStart-aware runtimes get injected
- * automatically.
+ * Pull-bootstrap of `Brain/active.md` + the active-preference counts.
+ * Built for runtimes that have no `SessionStart` hook (Cursor, Aider,
+ * raw Claude API): one tool call gives the agent the same shortcut card
+ * the SessionStart-aware runtimes get injected automatically.
+ *
+ * Not a pure read: the bootstrap path calls `regenerateActive`, which
+ * writes `Brain/active.md` whenever the on-disk body is absent or
+ * stale, so the tool classifies `write` (write-mode-dominant,
+ * `tool-contract.ts`) and the stdio transport never runs two bootstrap
+ * calls beside each other on the concurrent read path.
  *
  * Behaviour matrix:
  *   - Brain/ absent           → present:false, zero counts, and content
@@ -361,9 +366,9 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
  *                               such file either).
  *   - Brain/ present, active.md absent → call regenerateActive (idempotent)
  *                                        and read the regenerated file.
- *   - Brain/ present, active.md fresh  → idempotent regenerate is a no-op
- *                                        rewrite; the on-disk body is
- *                                        returned verbatim.
+ *   - Brain/ present, active.md fresh  → idempotent regenerate leaves an
+ *                                        equal body on disk; the on-disk
+ *                                        body is returned verbatim.
  */
 async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unknown>> {
   const dirs = brainDirs(ctx.vault);
@@ -771,6 +776,7 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
 export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_write_session",
+    kind: "write",
     description:
       "Provider-agnostic Brain write sessions (artifact and decision-panel kinds): open returns a generation prompt, submit validates the text, only clean artifacts commit. Correction loop, retry cap, collision guard, optional operator review. The calling agent generates; the Brain never does.",
     inputSchema: {
@@ -837,6 +843,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_pinned_context",
+    kind: "write",
     description:
       "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences. Pass `operations` to apply an ordered batch atomically (all-or-nothing).",
     inputSchema: {
@@ -880,8 +887,14 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context",
+    // Write-mode-dominant (tool-contract.ts), not "read": the bootstrap
+    // path calls `regenerateActive`, which writes the shared
+    // `Brain/active.md` whenever the body is absent or stale. A read
+    // classification would let concurrent session starts regenerate that
+    // one shared file beside each other on the stdio read path.
+    kind: "write",
     description:
-      "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Read-only.",
+      "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Regenerates Brain/active.md when absent or stale.",
     inputSchema: {
       type: "object",
       properties: {},

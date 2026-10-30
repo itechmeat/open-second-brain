@@ -784,6 +784,54 @@ describe("MCPServer serverName override", () => {
 });
 
 describe("serveStdioFromString respects scope+name", () => {
+  test("tools/list serializes exactly the wire contract per tool", async () => {
+    // Wire identity (parallel-reads classification, task D1): the
+    // registry now carries a required `kind` (and already carried
+    // `hidden` and `previewBudget`), and none of it may reach the
+    // payload every client pays tokens for. The projection in
+    // `handleToolsList` picks its fields explicitly; this pins the exact
+    // serialized key set so an added advertised field fails here even
+    // if the projection is later rewritten to spread.
+    for (const scope of ["full", "writer", "catalog"] as const) {
+      const server = new MCPServer({ vault: tmp }, { scope });
+      const r = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 2,
+        method: "tools/list",
+        params: {},
+      }))! as any;
+      const tools = r.result.tools as Array<Record<string, unknown>>;
+      expect(tools.length).toBeGreaterThan(0);
+      for (const tool of tools) {
+        // Exactly the wire contract: the three mandatory members, plus
+        // outputSchema for the two tools that declare one - and nothing
+        // else, now that the definition also carries `kind`.
+        expect(Object.keys(tool).toSorted()).toEqual(
+          [
+            "description",
+            "inputSchema",
+            "name",
+            ...("outputSchema" in tool ? ["outputSchema"] : []),
+          ].toSorted(),
+        );
+      }
+      // The optional outputSchema half of the same contract: the wire
+      // payload mirrors the definition's declared shape exactly - a tool
+      // advertises outputSchema iff its definition declares one, and no
+      // registry member (kind, hidden, previewBudget) leaks instead.
+      const table = new Map(buildToolTable(scope).map((t) => [t.name, t]));
+      const withOutput = tools
+        .filter((t) => "outputSchema" in t)
+        .map((t) => t.name)
+        .toSorted();
+      const declared = [...table.values()]
+        .filter((t) => t.outputSchema !== undefined && t.hidden !== true)
+        .map((t) => t.name)
+        .toSorted();
+      expect(withOutput).toEqual(declared);
+    }
+  });
+
   test("writer scope filters tools/list response", async () => {
     const ctx = { vault: "/tmp/x", configPath: null, repoRoot: null };
     const initReq = JSON.stringify({

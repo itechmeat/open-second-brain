@@ -287,6 +287,32 @@ export class MCPServer {
   }
 
   /**
+   * Whether this request must run behind the stdio transport's write
+   * gate rather than on the concurrent read path.
+   *
+   * Everything that is not a `tools/call` is a read. A `tools/call` is a
+   * write when its tool's `kind` is `write` - and every failure to KNOW
+   * is a write too, because the gate only ever costs serialization while
+   * guessing "read" could run a mutator beside another dispatch: a
+   * malformed `params`, an unknown tool name (refused shortly, but never
+   * parallelized), and a definition that carries no `kind` (a hand-built
+   * one that cast the field away) all take the gate. No argument is ever
+   * inspected: classification is per tool, never per call. This consults
+   * the registry only - it performs none of the work `handleRequest`
+   * will redo, and transport code may call it before dispatching.
+   */
+  classifiesWrite(request: JsonRpcRequest): boolean {
+    if (request.method !== "tools/call") return false;
+    const name = (request.params as { readonly name?: unknown } | null | undefined)?.["name"];
+    if (typeof name !== "string") return true;
+    try {
+      return findTool(this.tools, name).kind !== "read";
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * Single seam through which every tool handler runs, for both the CLI
    * bridge (`callTool`) and the JSON-RPC `tools/call` path. With route
    * metrics off it is a transparent pass-through; with them on it times

@@ -123,7 +123,12 @@ import {
   containsProseIsoDate,
   findUndatedQuantities,
 } from "./undated-quantity.ts";
-import { WIKILINK_TARGET_RE, isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
+import {
+  WIKILINK_TARGET_RE,
+  isBrainArtifactId,
+  isLiveWikilinkSpan,
+  normaliseWikilinkTarget,
+} from "./wikilink.ts";
 import { ARTIFACT_MAX_BYTES, validateArtifact } from "./write-session/validate.ts";
 
 /** The additive JSON key every write surface carries the report in. */
@@ -407,11 +412,15 @@ function declaredSchemaType(meta: FrontmatterMap): string | null {
  * Every distinct wikilink target on the page, in first-appearance order.
  * Distinct rather than per-occurrence: a page that names one dead target
  * five times has one thing wrong with it, and five identical rows would
- * spend the finding cap saying so.
+ * spend the finding cap saying so. A bracket behind an odd backslash run
+ * is escaped data and opens or closes no link - the same rule
+ * `extractWikilinks` applies, so a `\[[literal]]` span raises no
+ * broken-link row.
  */
 function distinctLinkTargets(raw: string): ReadonlyArray<string> {
   const seen = new Set<string>();
   for (const match of raw.matchAll(WIKILINK_TARGET_RE)) {
+    if (!isLiveWikilinkSpan(raw, match.index!, match.index! + match[0].length)) continue;
     const target = normaliseWikilinkTarget(match[1] ?? "");
     if (target !== "") seen.add(target);
   }

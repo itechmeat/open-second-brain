@@ -11,6 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
+import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
+import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
 
 // A forwarding mock over the dedup scan (the claim-provenance precedent):
 // inert unless this file's failing-scan test turns it on, so the mocks
@@ -204,5 +208,369 @@ describe("brain_digest actions surface", () => {
     expect(payload.actions.length).toBeGreaterThanOrEqual(1);
     expect(payload.actions[0]!.category).toBe("dedup");
     expect(payload.actions[0]!.impact).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The actions list is collected vault-wide, so it can name a preference
+ * every section beside it withholds under
+ * `integrity.owner_scope_delivery: fail`. These rows pin the same
+ * isolation the other digest sections already honour: another owner's
+ * stale page is absent from `actions` on every format, while an action
+ * whose target the caller may see still appears (no over-filtering),
+ * and a scope requested without the gate changes nothing.
+ */
+function setGate(mode: string | null): void {
+  const body = mode === null ? "" : `integrity:\n  owner_scope_delivery: ${mode}\n`;
+  writeFileSync(brainConfigPath(vault), `schema_version: 1\n${body}`);
+}
+
+/** The digest JSON payload's ranked `actions` array. */
+function actionsOf(content: string): ReadonlyArray<{ target?: string }> {
+  return (JSON.parse(content) as { actions: ReadonlyArray<{ target?: string }> }).actions;
+}
+
+describe("digest actions honor the caller's agent scope", () => {
+  const OURS = "our-stale-page";
+  const THEIRS = "their-stale-page";
+  /** Old enough to be past the stale-stable cap on any run date. */
+  const OLD = "2024-01-01T00:00:00Z";
+
+  function seedTwoOwnerStalePages(): void {
+    for (const [slug, owner] of [
+      [OURS, undefined],
+      [THEIRS, "agent-a"],
+    ] as const) {
+      writePref(slug, {
+        topic: slug,
+        principle: `principle for ${slug}`,
+        status: "unconfirmed",
+        created_at: OLD,
+        unconfirmed_until: "2024-06-01T00:00:00Z",
+        ...(owner !== undefined ? { owner } : {}),
+      });
+    }
+  }
+
+  test("under fail, another owner's stale page is absent from actions and the caller's own still appear", () => {
+    seedTwoOwnerStalePages();
+    setGate(GATE_MODE.fail);
+
+    const json = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-b",
+    });
+    const payload = JSON.parse(json.content) as {
+      actions: Array<{ id: string; category: string; title: string; target?: string }>;
+    };
+    expect(payload.actions.some((a) => a.target === `pref-${THEIRS}`)).toBe(false);
+    expect(json.content).not.toContain(THEIRS);
+    // No over-filtering: the action whose target the caller may see is
+    // still ranked, category and target intact.
+    expect(
+      payload.actions.some((a) => a.category === "lifecycle" && a.target === `pref-${OURS}`),
+    ).toBe(true);
+
+    // The markdown renderer draws from the same filtered rows.
+    const md = renderDigest(vault, {
+      format: "markdown",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-b",
+    });
+    expect(md.content).toContain("## Actions");
+    expect(md.content).toContain(`pref-${OURS}`);
+    expect(md.content).not.toContain(THEIRS);
+
+    // Its own owner still sees the maintenance suggestion.
+    const asOwner = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+      agentScope: "agent-a",
+    });
+    expect(asOwner.content).toContain(THEIRS);
+  });
+
+  test("a scope requested under off or warn changes no action", () => {
+    seedTwoOwnerStalePages();
+    const unscoped = renderDigest(vault, {
+      format: "json",
+      since: new Date(OLD),
+      until: new Date("2024-01-02T00:00:00Z"),
+    });
+    const baseline = JSON.parse(unscoped.content).actions;
+    // The fixture really does rank both pages, so the comparison below
+    // is not an agreement over an empty list.
+    expect(baseline.some((a: { target?: string }) => a.target === `pref-${THEIRS}`)).toBe(true);
+    expect(baseline.some((a: { target?: string }) => a.target === `pref-${OURS}`)).toBe(true);
+
+    for (const mode of [GATE_MODE.off, GATE_MODE.warn]) {
+      setGate(mode);
+      const scoped = renderDigest(vault, {
+        format: "json",
+        since: new Date(OLD),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      });
+      expect(JSON.parse(scoped.content).actions).toEqual(baseline);
+    }
+  });
+});
+
+/**
+ * The digest passes its composed visibility view INTO the maintenance
+ * collector, so the predicate is applied to the candidate inputs before
+ * scoring and capping. Before, the collector capped at the default ten
+ * and the scope filtered afterwards: another owner's top-ranked rows
+ * took slots and were dropped, leaving a scoped caller with fewer than
+ * ten actions (or none) while visible lower-ranked ones existed - and a
+ * shortfall that itself hinted at withheld rows.
+ */
+describe("digest actions are visibility-filtered before they are capped", () => {
+  /** Old enough to make impact strictly larger than the OURS pages'. */
+  const ANCIENT = "2020-01-01T00:00:00Z";
+  const OLDER = "2024-01-01T00:00:00Z";
+
+  function seedRankedStalePages(): void {
+    for (let i = 0; i < 12; i += 1) {
+      writePref(`theirs-${i}`, {
+        topic: `theirs-${i}`,
+        principle: `principle theirs ${i}`,
+        created_at: ANCIENT,
+        owner: "agent-a",
+      });
+    }
+    for (let i = 0; i < 10; i += 1) {
+      writePref(`ours-${i}`, {
+        topic: `ours-${i}`,
+        principle: `principle ours ${i}`,
+        created_at: OLDER,
+      });
+    }
+  }
+
+  test("a scoped caller sees exactly topN rows, all visible, when hidden rows outrank them", () => {
+    seedRankedStalePages();
+    setGate(GATE_MODE.fail);
+
+    const scoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      }).content,
+    );
+    expect(scoped).toHaveLength(10);
+    for (const action of scoped) expect(action.target).not.toContain("theirs");
+
+    // Unscoped, the hidden rows still rank exactly as before the
+    // predicate existed: the cap is filled by the top-ranked hidden
+    // pages, so the caller who asked for nothing sees no change.
+    const unscoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+      }).content,
+    );
+    expect(unscoped).toHaveLength(10);
+    for (const action of unscoped) expect(action.target).toContain("pref-theirs-");
+
+    // And a scope requested without the gate still changes nothing.
+    setGate(GATE_MODE.off);
+    const off = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date(OLDER),
+        until: new Date("2024-01-02T00:00:00Z"),
+        agentScope: "agent-b",
+      }).content,
+    );
+    expect(JSON.stringify(off)).toBe(JSON.stringify(unscoped));
+  });
+
+  test("a dedup row's secondary count excludes secondaries the caller may not see", () => {
+    // The count is the leak: "Merge 2 duplicate(s)" tells a caller a
+    // second page they may not see exists. Owner scope cannot produce a
+    // mixed group (per-scope keying never groups pages across owners),
+    // but the reach half of the composed view can: one duplicate is
+    // unreadable at this caller's reach, its sibling canonical is not.
+    writePref("canonical", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-01-01T00:00:00Z",
+    });
+    writePref("dup-visible", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-02-01T00:00:00Z",
+    });
+    writePref("dup-hidden", {
+      topic: "shared-topic",
+      principle: "the shared principle",
+      created_at: "2025-03-01T00:00:00Z",
+    });
+
+    const scopedJson = renderDigest(vault, {
+      format: "json",
+      since: new Date("2025-04-01T00:00:00Z"),
+      until: new Date("2025-04-02T00:00:00Z"),
+      readable: (rel) => !rel.includes("dup-hidden"),
+    });
+    const scoped = actionsOf(scopedJson.content);
+    const dedup = scoped.find((a) => (a as { category?: string }).category === "dedup");
+    expect(dedup).toBeDefined();
+    expect((dedup as { title?: string }).title).toBe("Merge 1 duplicate(s) into pref-canonical");
+    expect(scopedJson.content).not.toContain("dup-hidden");
+
+    // A caller at full reach still counts both duplicates.
+    const unscoped = actionsOf(
+      renderDigest(vault, {
+        format: "json",
+        since: new Date("2025-04-01T00:00:00Z"),
+        until: new Date("2025-04-02T00:00:00Z"),
+      }).content,
+    );
+    const openDedup = unscoped.find((a) => (a as { category?: string }).category === "dedup");
+    expect((openDedup as { title?: string }).title).toBe(
+      "Merge 2 duplicate(s) into pref-canonical",
+    );
+  });
+});
+
+/**
+ * The confidence-shift and contradiction rows are parsed from dream log
+ * lines, so the log-level filter reads the whole line as one reference
+ * and cannot resolve the preference it names; the parsed id is what
+ * carries the row. Those ids resolve through the Brain id-directories,
+ * so the rows are judged by the same composed view the actions are kept
+ * through: under `integrity.owner_scope_delivery: fail` another owner's
+ * shift or contradiction is absent with its pref id, counts and
+ * description, while the caller's own rows still render, and a scope
+ * requested without the gate changes nothing.
+ */
+describe("digest confidence shifts and contradictions honor the caller's agent scope", () => {
+  const OURS = "shared";
+  const THEIRS = "owned-by-a";
+  const DREAM_AT = "2026-05-24T12:00:00.000Z";
+  const SINCE = new Date("2026-05-24T00:00:00Z");
+  const UNTIL = new Date("2026-05-25T00:00:00Z");
+
+  function seedShifts(): void {
+    writePref(OURS, {
+      topic: OURS,
+      principle: `principle for ${OURS}`,
+      status: "confirmed",
+      created_at: "2026-05-01T00:00:00Z",
+      confirmed_at: "2026-05-02T00:00:00Z",
+    });
+    writePref(THEIRS, {
+      topic: THEIRS,
+      principle: `principle for ${THEIRS}`,
+      status: "confirmed",
+      created_at: "2026-05-01T00:00:00Z",
+      confirmed_at: "2026-05-02T00:00:00Z",
+      owner: "agent-a",
+    });
+    appendLogEvent(
+      vault,
+      {
+        timestamp: DREAM_AT,
+        eventType: BRAIN_LOG_EVENT_KIND.dream,
+        body: {
+          run_id: "run-shifts",
+          confidence_shifts: [
+            `[[pref-${THEIRS}]] high -> medium (applied: 11, violated: 0)`,
+            `[[pref-${OURS}]] low -> high (applied: 3, violated: 1)`,
+          ],
+          contradictions: [
+            `[[pref-${THEIRS}]] contradicts the logged behaviour (topic: ${OURS})`,
+            `[[pref-${OURS}]] conflicts with the recorded evidence`,
+          ],
+        },
+      },
+      { deviceId: "" },
+    );
+  }
+
+  interface ShiftRow {
+    readonly id: string;
+    readonly applied_count: number | null;
+  }
+  interface ContradictionRow {
+    readonly id: string;
+    readonly description: string;
+  }
+
+  function rows(content: string): {
+    shifts: ReadonlyArray<ShiftRow>;
+    contradictions: ReadonlyArray<ContradictionRow>;
+  } {
+    const payload = JSON.parse(content) as {
+      confidence_shifts: ReadonlyArray<ShiftRow>;
+      contradictions: ReadonlyArray<ContradictionRow>;
+    };
+    return { shifts: payload.confidence_shifts, contradictions: payload.contradictions };
+  }
+
+  test("under fail, another owner's shift and contradiction rows are absent and the caller's own render", () => {
+    seedShifts();
+    setGate(GATE_MODE.fail);
+
+    const json = renderDigest(vault, {
+      format: "json",
+      since: SINCE,
+      until: UNTIL,
+      agentScope: "agent-b",
+    });
+    const scoped = rows(json.content);
+    expect(scoped.shifts.map((r) => r.id)).toEqual([`pref-${OURS}`]);
+    expect(scoped.contradictions.map((r) => r.id)).toEqual([`pref-${OURS}`]);
+    // The description of a withheld contradiction is raw log prose; none
+    // of it travels either.
+    expect(json.content).not.toContain(THEIRS);
+    expect(json.content).not.toContain("contradicts the logged behaviour");
+    // No over-filtering: the caller's own rows keep their counts and text.
+    expect(scoped.shifts[0]).toMatchObject({ applied_count: 3 });
+    expect(scoped.contradictions[0]!.description).toContain("conflicts with the recorded evidence");
+
+    // Its own owner still reads both rows.
+    const asOwner = renderDigest(vault, {
+      format: "json",
+      since: SINCE,
+      until: UNTIL,
+      agentScope: "agent-a",
+    });
+    const owned = rows(asOwner.content);
+    expect(owned.shifts.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+    expect(owned.contradictions.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+  });
+
+  test("a scope requested under off or warn changes no shift or contradiction row", () => {
+    seedShifts();
+    const unscoped = rows(
+      renderDigest(vault, { format: "json", since: SINCE, until: UNTIL }).content,
+    );
+    // The fixture really does carry both owners' rows on both lists.
+    expect(unscoped.shifts.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+    expect(unscoped.contradictions.map((r) => r.id)).toEqual([`pref-${THEIRS}`, `pref-${OURS}`]);
+
+    for (const mode of [GATE_MODE.off, GATE_MODE.warn]) {
+      setGate(mode);
+      const scoped = rows(
+        renderDigest(vault, {
+          format: "json",
+          since: SINCE,
+          until: UNTIL,
+          agentScope: "agent-b",
+        }).content,
+      );
+      expect(scoped.shifts).toEqual(unscoped.shifts);
+      expect(scoped.contradictions).toEqual(unscoped.contradictions);
+    }
   });
 });

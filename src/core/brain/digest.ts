@@ -38,7 +38,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import { readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
+import { everyArtifactRefView, readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { logEntriesAtReach, logEntryAtReach } from "./log-events-at-reach.ts";
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
@@ -61,6 +61,7 @@ import {
   resolveOwnerScopeDelivery,
 } from "./preferences-collect.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
+import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
@@ -554,12 +555,17 @@ function collectDigestData(
   const logEntries = logEntriesAtReach(refs, readLogsInWindow(vault, since, until));
   // A shift or contradiction line is one string naming its preference
   // inside other text, so the event-level filter above cannot resolve it;
-  // the parsed id is asked on its own.
+  // the parsed id is asked on its own. The id resolves through the Brain
+  // id-directories, so the enforced ownership rule joins the reach view
+  // for these rows - the same composed view the actions below are kept
+  // through, so every section that reads past the windowed records asks
+  // one question about what "hidden" means.
+  const scopedRefs = everyArtifactRefView(gatedOwnerScopeView(vault, agentScope), refs);
   const confidenceShifts = extractConfidenceShifts(logEntries, idToPrinciple).filter((row) =>
-    refs.visible(row.id),
+    scopedRefs.visible(row.id),
   );
   const contradictions = extractContradictions(logEntries, idToPrinciple).filter((row) =>
-    refs.visible(row.id),
+    scopedRefs.visible(row.id),
   );
 
   // Stable ordering — id ascending so two runs on the same fixture
@@ -642,6 +648,21 @@ function collectDigestData(
   // the digest can say why its actions list came back thin.
   const collectErrors: MaintenanceCollectError[] = [];
 
+  // The actions list is collected vault-wide (lint demotions, dedup
+  // candidates, merged-link rewrites), so a row can name a preference
+  // every section beside it already withholds. The enforced ownership
+  // rule therefore joins the reach view for these rows too - the
+  // `scopedRefs` composed above for the shift and contradiction lines.
+  // `gatedOwnerScopeView` is the same adapter `brain_doctor`'s
+  // `suggested_actions` and the operator summary's `top_actions` ask
+  // over the same collector output, so the sinks cannot disagree
+  // about what "hidden" means. The composed predicate is threaded INTO
+  // the collector, so it applies to the candidate inputs before the
+  // scorer caps: hidden top-ranked rows take no slot a visible one
+  // could fill, and a dedup count excludes hidden secondaries. It
+  // hides nothing until `integrity.owner_scope_delivery` is `fail`
+  // with a scope, so an unscoped digest stays byte-identical; under
+  // `warn` it withholds nothing too, matching every section above.
   return {
     new_unconfirmed,
     confirmed,
@@ -654,8 +675,11 @@ function collectDigestData(
     agent_summary,
     most_applied,
     connection_health: computeConnectionHealth(vault, inbound, preferences, refs),
-    actions: refs.keep(
-      collectMaintenanceActions(vault, { onError: (e) => collectErrors.push(e) }),
+    actions: scopedRefs.keep(
+      collectMaintenanceActions(vault, {
+        onError: (e) => collectErrors.push(e),
+        visible: scopedRefs.visible,
+      }),
       (action) => [action.target],
     ),
     collect_errors: collectErrors,

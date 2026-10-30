@@ -5,6 +5,7 @@ import type { ToolDefinition } from "./tool-contract.ts";
 export const WATCHDOG_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "brain_watchdog",
+    kind: "write",
     description:
       "Probe Brain health and return safe recovery recommendations. Read-only unless remediate=true, which only creates missing Brain directories.",
     inputSchema: {

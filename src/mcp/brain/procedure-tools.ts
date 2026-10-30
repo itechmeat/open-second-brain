@@ -331,6 +331,7 @@ async function toolBrainProceduralGraph(
 export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
+    kind: "write",
     description:
       "Skill proposals: learn, list, accept, reject; recover abandoned accepts; usage counts; evidence against the outcome ledger. page_candidates gates mature vault pages (tier, lifecycle, confidence, reuse; skips ones a skill covers), one envelope each; page_draft stages the returned draft.",
     inputSchema: {
@@ -426,6 +427,7 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_procedural_memory",
+    kind: "write",
     description:
       "Reconcile/list procedural memory and update the usage + outcome sidecar (reconcile, list, mark_used, mark_outcome). list accepts ranked:true to order by validated success rate.",
     inputSchema: {
@@ -462,6 +464,7 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_recurrence",
+    kind: "write",
     description:
       "Inspect and update recurrence/support diagnostics (list, show, learn, forget, purge_source).",
     inputSchema: {
@@ -492,6 +495,7 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_procedural_graph",
+    kind: "write",
     description:
       "Rebuild/show procedural graph projection and prospective hint projection (rebuild, show, hints).",
     inputSchema: {

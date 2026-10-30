@@ -130,6 +130,7 @@ const OPEN_SCHEMA_TOOL: ToolDefinition = Object.freeze({
   name: "open_schema_probe",
   description: "probe",
   inputSchema: { type: "object", properties: {} },
+  kind: "read",
   handler: () => ({}),
 });
 

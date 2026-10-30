@@ -12,6 +12,7 @@
  */
 
 import type { FrontmatterMap } from "../types.ts";
+import { isLiveWikilinkSpan } from "./wikilink.ts";
 
 /** Heading of the canonical provenance section (`provenance.ts`). */
 const SOURCES_HEADING_RE = /^##\s+Sources\s*$/;
@@ -51,8 +52,12 @@ function closesFence(line: string, opener: string): boolean {
  * opens a fence and never closes it cannot hide the structure that follows.
  * Two linear passes at most: the single pass that pairs fences, then the
  * unmarking of the one span that can be left open.
+ *
+ * Exported because the write-time neutralizer's heading family must answer
+ * "is this line fenced?" with the exact walk the section readers run - a
+ * fourth private copy of the shape is one tilde away from disagreeing.
  */
-function fencedLineMask(lines: ReadonlyArray<string>): boolean[] {
+export function fencedLineMask(lines: ReadonlyArray<string>): boolean[] {
   const mask = Array.from({ length: lines.length }, () => false);
   let fence: string | null = null;
   let openedAt = 0;
@@ -116,7 +121,13 @@ export function sourcesSectionTargets(body: string): ReadonlyArray<string> {
       inSection = false;
       continue;
     }
-    for (const match of line.matchAll(WIKILINK_RE)) targets.push(wikilinkTarget(match[0]));
+    for (const match of line.matchAll(WIKILINK_RE)) {
+      // A bracket behind an odd backslash run is escaped data and opens
+      // or closes no link - the same rule `extractWikilinks` and the
+      // neutralizer's detector apply - so an escaped span cites nothing.
+      if (!isLiveWikilinkSpan(line, match.index!, match.index! + match[0].length)) continue;
+      targets.push(wikilinkTarget(match[0]));
+    }
   }
   return targets;
 }

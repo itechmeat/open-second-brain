@@ -1536,8 +1536,14 @@ const DIRECT_WRITE_ROWS = 86;
  * and its manifest sidecar (`src/core/brain/host-memory-promotions.ts`)
  * commits `Brain/.imports/host-memory-promotions.json` through the same
  * helper - both under the apply arm only, the dry run writes nothing.
+ *
+ * 132 -> 133, from the trust-and-responsiveness-hardening wave: the
+ * gitignore guard (`src/core/brain/gitignore-guard.ts`) commits the seeded
+ * vault `.gitignore` through the shared atomic writer - git configuration at
+ * the vault root, created or merged at brain init, never a page under
+ * `Brain/`.
  */
-const SHARED_HELPER_ROWS = 132;
+const SHARED_HELPER_ROWS = 133;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1704,8 +1710,11 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * continuity promote verb and its promotion manifest both commit through
  * the shared atomic writer, and a ledger readback stamps no origin
  * channel - the pages it lands are vault pages, not channel records.
+ * 128 -> 129 is the gitignore guard (trust-and-responsiveness-hardening):
+ * the `.gitignore` it seeds is git configuration at the vault root,
+ * carrying no origin channel - no record family of Unit C names it.
  */
-const UNSTAMPED_SHARED_ROWS = 128;
+const UNSTAMPED_SHARED_ROWS = 129;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

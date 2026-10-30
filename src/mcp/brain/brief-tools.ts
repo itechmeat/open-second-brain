@@ -28,16 +28,13 @@ import {
 } from "../../core/brain/temporal/period-common.ts";
 import { selectEvents } from "../../core/brain/temporal/select-events.ts";
 import type { TimelineIndex } from "../../core/brain/temporal/types.ts";
-import {
-  readerRefView,
-  type ArtifactRef,
-  type ArtifactRefView,
-} from "../../core/brain/artifact-ref-view.ts";
+import { type ArtifactRef, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { PREF_ID_PREFIX } from "../../core/brain/dream-plan.ts";
 import { buildTodayDashboard } from "../../core/brain/today-dashboard.ts";
 import { buildDailyBrief } from "../../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../../core/brain/temporal/weekly-brief.ts";
 import { loadTemporalConfigSafe } from "../../core/brain/policy.ts";
+import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import { renderDigest, type DigestFormat } from "../../core/brain/digest.ts";
 import { dream } from "../../core/brain/dream.ts";
 import {
@@ -56,7 +53,7 @@ import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
-import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { eventAtReach, eventsAtReach, recordRefs, requestRefView } from "./reach-events.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -211,9 +208,20 @@ async function toolBrainDigest(
   // window even when the caller omitted `until`.
   const effectiveUntil = until ?? new Date();
   const agentScope = coerceAgentScope(ctx, args, true);
-  // Below local reach the digest is rendered for this reader: a record it
-  // cannot read is absent from every row and count.
+  // The digest is rendered for this reader whenever any rule is live: a
+  // record below the caller's reach, or withheld by the enforced ownership
+  // scope, is absent from every row and count. Passing the predicate
+  // whenever it would withhold anything - rather than only below local
+  // reach - is the view the `osb://digest/latest` resource renders the
+  // same caller with, so the agent summary, the backlink counts and the
+  // connection health cannot count the events and records those sections
+  // beside them already withhold. With no rule live the predicate is
+  // absent and the render stays byte-identical to the unfiltered one.
   const restricted = contextReach(ctx) !== TRANSPORT_REACH.local;
+  // The enforced ownership scope (null unless
+  // `integrity.owner_scope_delivery` is `fail` with a resolved identity)
+  // decides the snapshot boundary below, beside the reach.
+  const enforcedScope = resolveOwnerScopeDelivery(ctx.vault, agentScope).enforcedScope;
   const renderFor = (renderFormat: DigestFormat, readable?: (rel: string) => boolean) =>
     renderDigest(ctx.vault, {
       ...(since ? { since } : {}),
@@ -223,7 +231,7 @@ async function toolBrainDigest(
       ...(agentScope !== undefined ? { agentScope } : {}),
       ...(readable !== undefined ? { readable } : {}),
     });
-  const result = renderFor(format, restricted ? readableAtContextReach(ctx) : undefined);
+  const result = renderFor(format, readableAtContextReachOrUndefined(ctx));
 
   const envelope: Record<string, unknown> = {
     format,
@@ -232,8 +240,12 @@ async function toolBrainDigest(
   };
   // The snapshot is the vault's own run-over-run record, diffed over the
   // digest every record feeds, so a reader below local reach neither
-  // takes one nor is shown the delta.
-  if (restricted) return envelope;
+  // takes one nor is shown the delta. The same holds for a caller the
+  // enforced ownership scope narrows: its render is one owner's slice of
+  // the vault, and persisting that slice under the shared date key would
+  // hand the next caller a delta whose key paths were computed against
+  // it - key paths naming artifact ids that caller was never shown.
+  if (restricted || enforcedScope !== null) return envelope;
   // Snapshot the structured summary, not the rendered string: render
   // a JSON digest for the snapshot regardless of the caller's format
   // so the run-over-run diff keys on data.
@@ -261,10 +273,19 @@ async function toolBrainDigest(
 // ----- brain_query ---------------------------------------------------------
 
 /**
- * The rows of a daily or weekly envelope a reader at this request's
- * reach may see, or `null` at local reach, where the envelope is the
- * builder's own (the digest precedent: a reader below local reach is
- * shown only what it may read, and takes no report snapshot).
+ * The rows of a daily or weekly envelope this request may see, or
+ * `null` when no rule is live - local reach with the ownership gate off -
+ * and the envelope is the builder's own (the digest precedent: a reader
+ * below local reach is shown only what it may read, and takes no report
+ * snapshot).
+ *
+ * Two rules are asked, through the one adapter the digest's actions rows
+ * use: the enforced ownership rule (`gatedOwnerScopeView`, live only
+ * under `integrity.owner_scope_delivery: fail` with a resolved identity)
+ * and the request's reach-and-readability view. Local reach no longer
+ * short-circuits past the ownership rule - an enforced identity on the
+ * operator's own transport is exactly the caller that gate exists to
+ * scope, and its envelope was otherwise the builder's unfiltered own.
  *
  * Status transitions, retirements and contradictions are dropped when a
  * record they name is withheld. Source pointers are deduplicated
@@ -272,15 +293,21 @@ async function toolBrainDigest(
  * the window's events the reader may see: an artifact cited only by
  * evidence on a withheld preference is absent. The counts
  * (`events_by_kind`, `vault_delta`) are recomputed from the same
- * selection, so a withheld record moves no count either.
+ * selection, so a withheld record moves no count either. Because a live
+ * rule means the envelope is one caller's slice, no report snapshot is
+ * taken for it - the shared date key must not hold one caller's slice
+ * for the next caller's delta to diff against.
  */
 function periodRowsAtReach(
   ctx: ServerContext,
   index: TimelineIndex,
   window: { readonly since: string; readonly until: string },
 ): PeriodRowsView | null {
-  if (contextReach(ctx) === TRANSPORT_REACH.local) return null;
-  const refs = readerRefView(ctx.vault, readableAtContextReach(ctx));
+  const refs = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    requestRefView(ctx),
+  );
+  if (refs.filtersNothing) return null;
   const events = eventsAtReach(refs, selectEvents(index, window));
   return {
     refs,
@@ -350,7 +377,9 @@ async function toolBrainDailyBrief(
     source_pointers: atReach?.sourcePointers ?? brief.sourcePointers,
     generated_at: brief.generatedAt,
   };
-  // Below local reach no snapshot is taken and no delta reported.
+  // When any rule is live - below local reach, or an enforced owner
+  // scope - the envelope is this caller's slice: no snapshot is taken
+  // under the shared date key and no delta is reported.
   if (atReach !== null) return envelope;
   // Dual-output: persist a machine snapshot and report the run-over-run
   // delta when report snapshots are enabled.
@@ -402,7 +431,9 @@ async function toolBrainWeeklySynthesis(
     source_pointers: atReach?.sourcePointers ?? synth.sourcePointers,
     generated_at: synth.generatedAt,
   };
-  // Below local reach no snapshot is taken and no delta reported.
+  // When any rule is live - below local reach, or an enforced owner
+  // scope - the envelope is this caller's slice: no snapshot is taken
+  // under the shared date key and no delta is reported.
   if (atReach !== null) return envelope;
   const delta = captureReportDelta(
     ctx.vault,
@@ -546,6 +577,12 @@ async function toolBrainOperatorSummary(
       : {
           keepIssue: (issue: DoctorIssueNaming) => view.row(...doctorIssueRefs(ctx.vault, issue)),
           keepAction: (action: ActionItem) => view.row(action.target),
+          // Candidate-level visibility for the maintenance collector:
+          // applied before the scorer caps, so a hidden top-ranked
+          // action takes no slot a visible one could fill - the same
+          // question brain_doctor's suggested_actions and the digest's
+          // actions ask over the same collector output.
+          visibleRef: view.visible,
           keepVerification: (entry: VerificationDeltaEntry) =>
             view.row(...recordRefs(entry.id), entry.path),
         }),
@@ -638,20 +675,19 @@ const BRIEF_VIEW_HANDLERS: Readonly<
 });
 
 /**
- * The views whose builders thread `agent_scope` through to the ownership
- * predicate. `agent_scope` is declared once for the whole tool, so the
- * other five would ACCEPT the argument and discard it - handing a caller
- * who asked to be isolated another owner's preference ids
- * (`weekly.retired[].prefId`, `weekly.statusTransitions[].prefId`,
- * `operator`'s ranked actions) while believing it was scoped. Silently
- * ignoring an argument a tool accepts is this wave's anti-pattern, so the
- * views that cannot honour it REFUSE it instead
- * (context-integrity-gates, A6).
+ * The views that accept an explicit `agent_scope` argument.
  *
- * Threading it through the remaining five is the better end state; it
- * needs an ownership predicate inside `weekly-brief`, `monthly-review`,
- * `daily-brief`, `operator-summary` and `today-dashboard`, which is a
- * change to those builders rather than to this dispatcher.
+ * EVERY view in this dispatcher narrows to the caller's server-resolved
+ * identity under `integrity.owner_scope_delivery: fail`, whether or not
+ * it takes the argument: `morning` and `digest` thread the scope through
+ * their builders; `daily` and `weekly` ask the enforced rule per row
+ * through `periodRowsAtReach`; `monthly` and `today` through the
+ * request's reference view; `operator` through the doctor/action view it
+ * composes. The set below therefore answers a narrower question: where
+ * the argument itself is accepted. It is declared once for the whole
+ * tool, so a view that cannot honour it must not silently discard it -
+ * the other five REFUSE it (`context-integrity-gates`, A6) and stay
+ * scoped by the identity instead.
  */
 const AGENT_SCOPE_VIEWS: ReadonlySet<string> = new Set(["morning", "digest"]);
 
@@ -672,7 +708,8 @@ async function toolBrainBrief(
     throw new MCPError(
       INVALID_PARAMS,
       `brain_brief view=${view} cannot honour '${AGENT_SCOPE_ARG_NAME}'; ` +
-        `owner scoping is supported by view=${[...AGENT_SCOPE_VIEWS].join(", view=")}`,
+        `an explicit scope is accepted by view=${[...AGENT_SCOPE_VIEWS].join(", view=")}; ` +
+        `every view is already scoped by the server-resolved identity`,
     );
   }
   return localizeEnvelope(ctx, await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args, onProgress));
@@ -681,9 +718,16 @@ async function toolBrainBrief(
 export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_brief",
+    // Write-mode-dominant (tool-contract.ts), not "read": view=digest
+    // persists the window's structured snapshot under `Brain/reports/`
+    // through `captureReportDelta` when report snapshots are enabled, so
+    // the next digest run can diff against it. The write is opt-in and
+    // skipped for restricted or scope-narrowed callers, but an opt-in
+    // durable write still classifies the whole tool `write`.
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain summary, one tool for every window: view=morning, daily, weekly, monthly, operator (maintenance dashboard), digest (activity window), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
+      "Brain summary, one tool for every window: view=morning, daily, weekly, monthly, operator (maintenance dashboard), digest (activity window + report snapshot), or today (operator dashboard: due obligations, one-off pledges, open loops, recent activity, totals). Replaces the per-window brief tools.",
     inputSchema: {
       type: "object",
       properties: {

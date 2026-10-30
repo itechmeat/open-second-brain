@@ -179,6 +179,53 @@ describe("stdio carries a progress token", () => {
     expect(frames.every((f) => f["id"] !== undefined)).toBe(true);
   });
 
+  test("two concurrent calls keep per-request adjacency on a real stream", async () => {
+    // The production loop dispatches read-classified calls concurrently,
+    // so two progress-carrying calls can emit between each other's
+    // notifications: cross-request interleaving is legal (clients
+    // correlate by token). What must hold is adjacency - ALL of a
+    // request's notifications precede ITS response - and frame
+    // atomicity on the shared stream.
+    const stdin = new PassThrough();
+    const chunks: string[] = [];
+    const stdout = new PassThrough();
+    stdout.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
+
+    const briefCall = (id: number, token: string): JsonObject => ({
+      jsonrpc: JSONRPC_VERSION,
+      id,
+      method: "tools/call",
+      params: {
+        name: "brain_brief",
+        arguments: { view: "operator" },
+        _meta: { progressToken: token },
+      },
+    });
+
+    const done = serveStdio({ vault }, { stdin, stdout });
+    stdin.write(JSON.stringify(INITIALIZE) + "\n");
+    stdin.write(JSON.stringify(briefCall(2, "tok-a")) + "\n");
+    stdin.write(JSON.stringify(briefCall(3, "tok-b")) + "\n");
+    stdin.end();
+    await done;
+
+    // Frame atomicity: the shared stream still splits into clean frames.
+    const frames = lines(chunks.join(""));
+    const response2 = frames.findIndex((f) => f["id"] === 2);
+    const response3 = frames.findIndex((f) => f["id"] === 3);
+    expect(response2).toBeGreaterThan(-1);
+    expect(response3).toBeGreaterThan(-1);
+    const notifications = frames
+      .map((f, index) => ({ f, index }))
+      .filter(({ f }) => f["method"] === PROGRESS_NOTIFICATION_METHOD);
+    expect(notifications.length).toBeGreaterThan(0);
+    for (const { f, index } of notifications) {
+      const token = (f["params"] as JsonObject)["progressToken"];
+      expect(index).toBeLessThan(token === "tok-a" ? response2 : response3);
+    }
+    for (const chunk of chunks) expect(chunk.endsWith("\n")).toBe(true);
+  });
+
   test("a progress frame never interleaves inside a response frame on a real stream", async () => {
     const stdin = new PassThrough();
     const chunks: string[] = [];

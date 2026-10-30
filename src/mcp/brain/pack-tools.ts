@@ -1334,6 +1334,7 @@ function anticipatoryAnswer(result: ReadAnticipatoryContextResult): Record<strin
 export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_context_pack",
+    kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Return the highest-tier, most recent vault slice under `max_tokens` - derived from the model context window when omitted, refused when nothing resolves. Ordered core → supporting → peripheral, newest first; stops when the next page would exceed the budget. Read-only.",
@@ -1463,6 +1464,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context_receipts",
+    kind: "read",
     description:
       "List context receipt summaries, show one full receipt by id, or fold a window into a retrieval summary (distinct items, per-item injection frequency, token cost, observed use). Receipts are append-only continuity records emitted by opt-in injection callers. Read-only.",
     inputSchema: {
@@ -1522,6 +1524,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_event_trace",
+    kind: "read",
     description:
       "Join logged Brain events to their attached continuity records (recall telemetry, context receipts, generation reports) by shared correlation ids. Defaults to today. `total`/`trace_total` are exact once the walk exhausts; mid-walk they report the page's scan bound, never a silent cap. Read-only.",
     inputSchema: {
@@ -1563,6 +1566,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_context_presets",
+    kind: "read",
     description:
       "Show, suggest, or diff read-only context budget presets. Diagnostics only; never writes configuration.",
     inputSchema: {
@@ -1605,6 +1609,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // is bounded by its own per-entry / total character caps - now also
     // derived from the resolved context window when absent (t_a567cc12).
     name: "brain_pre_compress_pack",
+    kind: "read",
     description:
       "Return a compact system-prompt addendum (top-K confirmed preferences plus the head of active.md) for a host to inject right before context compression. Char-budgeted: absent caps derive from the resolved model context window, so the addendum is bounded whenever a window resolves. Read-only.",
     inputSchema: {
@@ -1666,6 +1671,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_pre_compact_extract",
+    kind: "write",
     description:
       "Extract typed Decision/Commitment/Outcome/Rule/Open question records from bounded text into continuity storage.",
     inputSchema: {
@@ -1711,6 +1717,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_anticipatory_context",
+    kind: "write",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
       "Turn-specific context bundle kept warm by lifecycle hooks: the active context pack plus session-recall hits, keyed by the session's lineage root. Returns the warm cache inside the TTL or a live fallback, reporting `cache_state`. `refresh: true` forces a refresh first.",

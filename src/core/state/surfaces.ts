@@ -1202,11 +1202,18 @@ export const STATE_SURFACE_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new M
       "nothing",
   ],
   [
-    "src/cli/brain/verbs/bench.ts",
-    "its `.open-second-brain/bench-runs` default is resolved against the WORKING DIRECTORY, not " +
-      "against a vault, so it is not an in-vault surface at all. It is already enumerated as the " +
-      "`bench_run_artifacts` row of `OUT_OF_VAULT_STATE`, which is the population that owns " +
-      "locations outside the vault",
+    "src/core/brain/gitignore-guard.ts",
+    "the git-side guard seeder (t_206562ae): it writes the vault-root `.gitignore`, which " +
+      "sits OUTSIDE the store directory, and only names the directory inside the ignore rule " +
+      "(`/.open-second-brain/`). A rule telling git to look away creates no state in the " +
+      "directory it covers, and the file it writes is the operator's own",
+  ],
+  [
+    "src/core/brain/doctor/git-tracked-state-check.ts",
+    "the doctor probe asks git ABOUT the store directory (`git ls-files` for tracking, " +
+      "`git check-ignore` for the guard) and writes nothing anywhere. A check that measures " +
+      "git's view of the directory creates no state in it - the finding it emits names git's " +
+      "own `rm --cached` as the remedy",
   ],
 ]);
 

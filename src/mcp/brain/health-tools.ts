@@ -224,10 +224,16 @@ async function toolBrainDoctor(
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
     // because nothing here downgrades the `ok` flag - actions are
-    // suggestions, not invariant violations.
+    // suggestions, not invariant violations. The view's predicate is
+    // threaded INTO the collector, so hidden candidates are dropped
+    // before the scorer caps: a hidden top-ranked action takes no slot
+    // a visible one could fill.
     suggested_actions: view
       .keep(
-        collectMaintenanceActions(ctx.vault, { onError: (e) => collectErrors.push(e) }),
+        collectMaintenanceActions(ctx.vault, {
+          onError: (e) => collectErrors.push(e),
+          visible: view.visible,
+        }),
         (a) => [a.target],
       )
       .map((a) => ({
@@ -440,6 +446,7 @@ async function toolBrainStatus(
 export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_doctor",
+    kind: "write",
     description:
       "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes (WAL gaps, orphaned references) with a per-file diff; `repair`+`apply` applies them as machine consent (`caller-apply` in each fix's event).",
     inputSchema: {
@@ -472,6 +479,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_health",
+    kind: "read",
     description:
       "Semantic-health report: contradictory confirmed preferences (opposite sign, same subject), recurring concepts with no dedicated preference, stale evidence, and preference-confirmation bursts (batch inflation). Per-domain findings plus a clean/watch/investigate verdict. Read-only.",
     inputSchema: {
@@ -490,6 +498,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_status",
+    kind: "read",
     description:
       "Unified operator status snapshot: composes doctor, semantic health, hygiene, stale scan, review candidates, active profile, and state-file health. Every problem carries the exact next command to run; a healthy vault reports all-clear. Read-only.",
     inputSchema: {

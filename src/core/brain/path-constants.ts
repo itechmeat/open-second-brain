@@ -203,6 +203,21 @@ export const BRAIN_SNAPSHOT_EXCLUDED_ENTRIES: ReadonlyArray<string> = Object.fre
  */
 export const DERIVED_STORE_DIR = ".open-second-brain";
 export const DERIVED_STORE_FILE = "brain.sqlite";
+
+/**
+ * The bench-harness runs directory, vault-relative:
+ * `<vault>/.open-second-brain/bench-runs/`.
+ *
+ * Named beside the derived store it sits in (t_206562ae) because the
+ * `.gitignore` guard seeded at brain init covers the store with ONE
+ * vault-root-anchored entry, and a consumer spelling the runs dir
+ * independently of that store is exactly how a writer ends up outside
+ * the covered directory. `tests/core/brain/gitignore-guard.test.ts`
+ * reads both this constant and the bench verb's source to keep the two
+ * from drifting; the CLI still resolves the value against the working
+ * directory, so `--runs-dir` behaves exactly as before.
+ */
+export const BENCH_RUNS_REL = posix.join(DERIVED_STORE_DIR, "bench-runs");
 /**
  * Where the runtime hooks append their one-line-per-decision audit trail,
  * one shard per ISO week.

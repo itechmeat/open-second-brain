@@ -131,3 +131,24 @@ describe("extractWikilinkRichBodies - code masking", () => {
     }
   });
 });
+
+describe("extractWikilinkRichBodies - escaped brackets", () => {
+  // The same odd-backslash-run rule the neutralizer's detector applies:
+  // a backslash-escaped bracket opens or closes no link, so an escaped
+  // `[[target]]` in a body contributes no backlink edge.
+  test("an escaped opening bracket opens no link", () => {
+    expect(extractWikilinkRichBodies("\\[[a]]")).toEqual([]);
+  });
+
+  test("an escaped closing bracket closes no link", () => {
+    expect(extractWikilinkRichBodies("[[a\\]]")).toEqual([]);
+  });
+
+  test("a link after an even backslash run stays live", () => {
+    expect(extractWikilinkRichBodies("\\\\[[a]]")).toEqual(["a"]);
+  });
+
+  test("an escaped link beside a live one leaves only the live one", () => {
+    expect(extractWikilinkRichBodies("\\[[a]] and [[b]]")).toEqual(["b"]);
+  });
+});

@@ -234,4 +234,25 @@ describe("buildBacklinkIndex - alias resolution", () => {
     expect(sourceKind).toBe("preference");
     expect(field).toBe("body");
   });
+
+  test("an escaped bracket in a body plants no backlink", () => {
+    // `\[[pref-target]]` is literal text by the odd-backslash-run rule
+    // every link reader applies, so it joins no link graph.
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-esc.md"),
+      [
+        "---",
+        "kind: preference",
+        "topic: e",
+        "_status: confirmed",
+        "principle: x",
+        "---",
+        "",
+        "Quotes \\[[pref-target]] and [[pref-target\\]] verbatim.",
+      ].join("\n"),
+    );
+    const idx = buildBacklinkIndex(vault);
+    expect(idx.has("pref-target")).toBe(false);
+    expect(idx.has("pref-target\\")).toBe(false);
+  });
 });

@@ -40,6 +40,31 @@
  * of scope: a check that silently reads through a link would audit a file
  * the agent instruction surface does not contain.
  *
+ * Shadowing (t_00b617b6): the candidates are audited in isolation, but a
+ * host reads exactly ONE of them - its entry in
+ * {@link HOST_INSTRUCTION_PRECEDENCE}. A workspace where the file a host
+ * reads carries no managed block while another candidate carries it is
+ * shadowed: the operative host never sees the contract no matter how
+ * conforming the other file is. {@link resolveShadowedInstructionContracts}
+ * resolves that from the audit rows alone - pure, no I/O, no writes - and
+ * the doctor-readiness probe grades each triple as a `fail`.
+ *
+ * One exception keeps the resolution honest about what a host actually
+ * sees: a file whose `@` import line names the contract file renders
+ * it - managed block included - into the surface the host reads. Claude
+ * Code's memory-import syntax is an `@` at a word boundary followed by a
+ * path - mid-line and list-item included - Gemini CLI documents the
+ * `@./file.md` spelling, and a CLAUDE.md that only says `@AGENTS.md`
+ * beside a conforming AGENTS.md is the common real setup; claiming a
+ * shadow there fails `o2b doctor --readiness` for a workspace whose
+ * operative host sees the gate. {@link auditWritebackContractFile}
+ * therefore records the workspace-relative paths such lines reference
+ * ({@link referencedImportPaths}, matched over a code-masked view -
+ * imports inside code spans or fences are not imports - with `~/`,
+ * absolute and workspace-escaping paths refused), and the resolver skips
+ * the shadow triple when the preferred file imports a path that resolves
+ * to the contract file.
+ *
  * Findings are the closed {@link WRITEBACK_CONTRACT_FINDING} vocabulary:
  * `conforming`, `malformed-block`, `missing-clauses` (a block is present
  * and was measured - pass/fail material), `missing-block` (the file
@@ -50,7 +75,7 @@
  */
 
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import {
   DEFAULT_BEGIN_MARKER,
@@ -59,6 +84,7 @@ import {
   hasManagedBlock,
 } from "../install/managed-block.ts";
 import { MARKER_WRITEBACK_GUARDRAIL } from "./marker-writeback.ts";
+import { maskCodeRegions } from "./wikilink.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -74,6 +100,50 @@ export const AGENT_INSTRUCTION_FILES: ReadonlyArray<string> = Object.freeze([
   "CLAUDE.md",
   "GEMINI.md",
 ]);
+
+/**
+ * Host family to the ordered agent-instruction files the host reads at a
+ * workspace root, first existing entry wins per host (t_00b617b6). This is
+ * the PRECEDENCE table - which file an operative host actually reads - and
+ * is deliberately a different shape from {@link AGENT_INSTRUCTION_FILES},
+ * which is the existence-loop list this audit walks. The installer lane
+ * (sibling card t_af5e252f) is expected to share this definition, which is
+ * why each value is an ordered list even where the repo today names only
+ * one file per host.
+ *
+ * Evidence, entry by entry:
+ *
+ *   - `claude-code` reads `CLAUDE.md` - REPO-CITED,
+ *     `docs/cross-project-pointer.md:15`.
+ *   - `codex`, `cursor`, `aider` read `AGENTS.md` - REPO-CITED,
+ *     `docs/cross-project-pointer.md:16-17` ("Codex, Cursor, Aider, and
+ *     other tools that follow the `agents.md` convention").
+ *   - `opencode` reads `AGENTS.md` - REPO-CITED,
+ *     `docs/brainstorm/opencode-native-integration/variants.md` ("opencode
+ *     reads AGENTS.md natively").
+ *   - `gemini-cli` reads `GEMINI.md` - NAME-IMPLIED ONLY. No repo document
+ *     states it (the cross-project pointer predates the Gemini entry), and
+ *     upstream `context.fileName` can rename the surface. Recorded as the
+ *     open question the instruction-file-ceiling and removed-tool-sweep
+ *     docblocks carry; the finding vocabulary stays honest because a
+ *     shadow is claimed only from files this tree actually audited.
+ *
+ * There is no claude-code INSTALL target (the adapters write MCP configs
+ * only), so "which host is operative here" cannot be derived from an
+ * install manifest - detection keys on which candidate files co-exist plus
+ * this table, never on manifests.
+ */
+export const HOST_INSTRUCTION_PRECEDENCE = Object.freeze({
+  "claude-code": Object.freeze(["CLAUDE.md"]),
+  codex: Object.freeze(["AGENTS.md"]),
+  cursor: Object.freeze(["AGENTS.md"]),
+  opencode: Object.freeze(["AGENTS.md"]),
+  aider: Object.freeze(["AGENTS.md"]),
+  "gemini-cli": Object.freeze(["GEMINI.md"]),
+} as const);
+
+/** Closed union over {@link HOST_INSTRUCTION_PRECEDENCE} keys. */
+export type HostInstructionName = keyof typeof HOST_INSTRUCTION_PRECEDENCE;
 
 /**
  * Recovery clause an audit carries when the block is missing or broken.
@@ -149,6 +219,15 @@ export interface WritebackContractFileAudit {
   readonly detail: string;
   /** Labels of the unmet contract clauses; empty unless `missing-clauses`. */
   readonly missing: ReadonlyArray<string>;
+  /**
+   * Workspace-relative import paths the file's `@`-style import lines
+   * reference, in first-appearance order, deduplicated (see
+   * {@link referencedImportPaths} for exactly what is matched and what
+   * is refused). Empty unless the file was actually read: the refused
+   * findings (`absent`, `symlink`, `unreadable`) measured no content, so
+   * they claim no imports.
+   */
+  readonly imports: ReadonlyArray<string>;
 }
 
 // ----- Pure contract --------------------------------------------------------
@@ -188,6 +267,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         finding: WRITEBACK_CONTRACT_FINDING.absent,
         detail: `${path} does not exist - nothing installed is not a contract violation`,
         missing: [],
+        imports: [],
       };
     }
     return {
@@ -195,6 +275,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       finding: WRITEBACK_CONTRACT_FINDING.unreadable,
       detail: `${path} could not be stat'ed: ${reason(err)}`,
       missing: [],
+      imports: [],
     };
   }
   if (stat.isSymbolicLink()) {
@@ -205,6 +286,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} is a symbolic link - the audit refuses to read through symlinks, ` +
         "so the contract is unmeasured",
       missing: [],
+      imports: [],
     };
   }
   let content: string;
@@ -216,8 +298,10 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       finding: WRITEBACK_CONTRACT_FINDING.unreadable,
       detail: `${path} could not be read: ${reason(err)}`,
       missing: [],
+      imports: [],
     };
   }
+  const imports = referencedImportPaths(content);
   const body = hasManagedBlock(content) ? extractManagedBlock(content) : null;
   if (body === null) {
     if (!carriesMarkerLine(content)) {
@@ -229,6 +313,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
           `managed block is not installed, so the write gate is not graded; ` +
           WRITEBACK_CONTRACT_RECOVERY,
         missing: [],
+        imports,
       };
     }
     // A marker is there but not as one ordered pair (a lone, repeated or
@@ -241,6 +326,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} carries an Open Second Brain managed-block marker but no well-formed ` +
         `block - broken same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
       missing: [],
+      imports,
     };
   }
   const missing = missingWritebackGateClauses(body);
@@ -252,6 +338,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
         `${path} managed block is missing ${missing.join(", ")} - incomplete ` +
         `same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
       missing,
+      imports,
     };
   }
   return {
@@ -261,6 +348,7 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       `${path} carries the managed block and the same-turn atomic-fact write gate ` +
       `(${WRITEBACK_CONTRACT_REQUIREMENTS.length} clauses verified)`,
     missing: [],
+    imports,
   };
 }
 
@@ -270,6 +358,80 @@ function carriesMarkerLine(content: string): boolean {
     .replace(/\r\n/g, "\n")
     .split("\n")
     .some((line) => line === DEFAULT_BEGIN_MARKER || line === DEFAULT_END_MARKER);
+}
+
+/**
+ * The workspace-relative import paths `content`'s `@`-style import lines
+ * reference - the host memory-import shapes this tree implements, matched
+ * over a code-masked view of the text:
+ *
+ *   - code regions (inline spans and fenced blocks, `maskCodeRegions`)
+ *     are masked with a length-preserving fill BEFORE matching: no host
+ *     evaluates an import inside code, so a fenced `@AGENTS.md` renders
+ *     as literal text and must record nothing;
+ *   - the `@` must sit at a word boundary but ANYWHERE on the line -
+ *     Claude Code accepts mid-line and list-item imports and Gemini CLI
+ *     documents `@./file.md`, so a line-start-only basename match would
+ *     false-fail the documented spellings; an `@` preceded by a word
+ *     character (email) or another `@` is not an import;
+ *   - what follows is one path-shaped token (`A-Za-z0-9._~/-`, greedy)
+ *     ending at whitespace or end of line - `@AGENTS.md.bak` records
+ *     `AGENTS.md.bak` (never equal to a candidate path), and
+ *     `@docs/AGENTS.md` records `docs/AGENTS.md` (a different workspace
+ *     file than a root candidate);
+ *   - a leading `./` is stripped (`@./AGENTS.md` names the same file as
+ *     `@AGENTS.md`), while `~/...`, absolute paths and any token whose
+ *     normalized form escapes the workspace (`..` past the root) are
+ *     REFUSED outright and record nothing: such an import does not
+ *     render a workspace file, so it excuses nothing - a deliberate,
+ *     documented refusal kept conservative, because a lookalike that
+ *     suppressed a shadow would hide a live gate.
+ *
+ * CRLF line endings are normalized before the per-line match. Pure; used
+ * by {@link auditWritebackContractFile} so the shadow resolver can tell a
+ * host that renders the contract file through an import from one that
+ * never sees it (the resolver resolves each recorded token against the
+ * workspace directory and compares to the contract path).
+ */
+
+/** The path-shaped token grammar one `@` import may carry. */
+const IMPORT_TOKEN_RE = /(?<![A-Za-z0-9@])@([A-Za-z0-9._~/-]+)(?=\s|$)/g;
+
+export function referencedImportPaths(content: string): ReadonlyArray<string> {
+  // Length-preserving fill: line structure (and CRLFs) survive intact.
+  const masked = maskCodeRegions(content, (region) => " ".repeat(region.length));
+  const found: string[] = [];
+  for (const line of masked.replace(/\r\n/g, "\n").split("\n")) {
+    for (const match of line.matchAll(IMPORT_TOKEN_RE)) {
+      const token = normalizeImportToken(match[1]!);
+      if (token === null) continue;
+      if (!found.includes(token)) found.push(token);
+    }
+  }
+  return Object.freeze(found);
+}
+
+/**
+ * Normalize one matched import token, or `null` when the reference is
+ * refused: leading `./` prefixes are stripped, then any path that leaves
+ * the workspace - `~`, an absolute path, or more `..` than the token has
+ * directory depth - is refused (documented; see
+ * {@link referencedImportPaths}). Pure string math, no I/O.
+ */
+function normalizeImportToken(token: string): string | null {
+  const stripped = token.replace(/^(?:\.\/)+/, "");
+  if (stripped.length === 0) return null;
+  if (stripped.startsWith("~") || stripped.startsWith("/")) return null;
+  let depth = 0;
+  for (const segment of stripped.split("/")) {
+    if (segment === "..") {
+      depth -= 1;
+      if (depth < 0) return null; // escapes the workspace
+    } else if (segment !== "." && segment !== "") {
+      depth += 1;
+    }
+  }
+  return stripped;
 }
 
 // ----- Workspace audit ------------------------------------------------------
@@ -301,4 +463,107 @@ export function auditWorkspaceWritebackContract(
 function reason(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   return message.replace(/\s+/g, " ").trim();
+}
+
+// ----- Shadow resolution (t_00b617b6) ---------------------------------------
+
+/**
+ * One host reading a contract-free instruction file while another
+ * workspace candidate carries the write-back contract: the operative host
+ * never sees the gate. Pure data - resolved from audit rows, never from
+ * the filesystem.
+ */
+export interface WritebackContractShadow {
+  /** The host family whose preferred file misses the contract. */
+  readonly host: HostInstructionName;
+  /** Absolute path of the file the host reads, without the managed block. */
+  readonly readsPath: string;
+  /** Absolute path of another candidate that carries the contract. */
+  readonly contractPath: string;
+  /**
+   * The {@link WRITEBACK_CONTRACT_FINDING} of the contract side - what the
+   * advice on such a row depends on: a `conforming` contract file is a
+   * contract worth copying, while `malformed-block` or `missing-clauses`
+   * means the block the row points at is itself broken.
+   */
+  readonly contractFinding: WritebackContractFinding;
+}
+
+/**
+ * The findings that prove a file CARRIES the managed block, in any state:
+ * conforming, or installed-then-broken (`malformed-block`,
+ * `missing-clauses`). A block that is present is evidence a host is being
+ * shadowed away from, whatever its condition; `missing-block` is the one
+ * present-file finding that does not carry it, and `absent`, `symlink`,
+ * `unreadable` never measured a block at all.
+ */
+const BLOCK_BEARING_FINDINGS: ReadonlySet<WritebackContractFinding> = new Set([
+  WRITEBACK_CONTRACT_FINDING.conforming,
+  WRITEBACK_CONTRACT_FINDING.malformedBlock,
+  WRITEBACK_CONTRACT_FINDING.missingClauses,
+]);
+
+/**
+ * Resolve which hosts the workspace's contract placement shadows, PURELY
+ * over the per-candidate audits (as {@link auditWorkspaceWritebackContract}
+ * produces them): no reads, no lstats, no writes - synthetic audits of
+ * paths that exist nowhere resolve exactly like audited ones.
+ *
+ * A host is shadowed when its preferred candidate - the first entry of its
+ * {@link HOST_INSTRUCTION_PRECEDENCE} list that exists - is a file WITHOUT
+ * the managed block while another candidate carries the block in any state.
+ * A host whose preferred file is absent reads nothing and is not shadowed;
+ * a host whose preferred file carries the block is not shadowed even when
+ * a peer carries a better-formed one; a symlink or unreadable preferred
+ * file is refused evidence, so no shadow is claimed from it (whether a
+ * link between candidates should be admitted as evidence is a recorded
+ * open question, not decided here). Nor is a host shadowed when its
+ * preferred file - however block-free itself - imports the contract file
+ * through a `@` line: the host renders that import into the surface it
+ * reads, managed block included, so the gate is seen (the audits'
+ * `imports` rows, {@link referencedImportPaths}; each recorded token is
+ * resolved against the workspace directory and compared to the contract
+ * file's path - the documented spellings (`@./AGENTS.md`, mid-line,
+ * list item) match, while refused tokens (`~/`, absolute,
+ * workspace-escaping) and tokens resolving to some OTHER workspace file
+ * excuse nothing). The contract side is
+ * the first block-bearing candidate in the audits' given order - the
+ * candidate list's priority order for a workspace audit.
+ */
+export function resolveShadowedInstructionContracts(
+  audits: ReadonlyArray<WritebackContractFileAudit>,
+): ReadonlyArray<WritebackContractShadow> {
+  const contract = audits.find((audit) => BLOCK_BEARING_FINDINGS.has(audit.finding));
+  if (contract === undefined) return Object.freeze([]);
+  const byName = new Map<string, WritebackContractFileAudit>();
+  for (const audit of audits) byName.set(basename(audit.path), audit);
+  const shadows: WritebackContractShadow[] = [];
+  for (const [host, files] of Object.entries(HOST_INSTRUCTION_PRECEDENCE)) {
+    const preferred = files
+      .map((name) => byName.get(name))
+      .find((audit) => audit !== undefined && audit.finding !== WRITEBACK_CONTRACT_FINDING.absent);
+    if (preferred === undefined) continue;
+    if (preferred.finding !== WRITEBACK_CONTRACT_FINDING.missingBlock) continue;
+    // The host renders its preferred file's `@` imports into the surface
+    // it reads: an import RESOLVING to the contract file carries the
+    // block through, so there is no shadow to claim. Tokens are resolved
+    // against the workspace - the directory the candidates sit in - so
+    // `@./AGENTS.md`, a mid-line `@AGENTS.md` and a list-item
+    // `- @AGENTS.md` all match, while a refused token (`~/`, absolute,
+    // workspace-escaping) or one resolving to another workspace file
+    // (`docs/AGENTS.md`) excuses nothing.
+    const workspace = dirname(preferred.path);
+    if (preferred.imports.some((token) => resolve(workspace, token) === resolve(contract.path))) {
+      continue;
+    }
+    shadows.push(
+      Object.freeze({
+        host: host as HostInstructionName,
+        readsPath: preferred.path,
+        contractPath: contract.path,
+        contractFinding: contract.finding,
+      }),
+    );
+  }
+  return Object.freeze(shadows);
 }

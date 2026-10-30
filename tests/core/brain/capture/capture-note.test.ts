@@ -356,3 +356,245 @@ describe("writeCaptureNote — declared page_types vocabulary (t_151a564c)", () 
     expect(read.provenance.capturedAt).toBe("2026-07-19T12:00:00Z");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Write-time marker neutralization (t_c2ac4fc8, lane A3). The capture seam
+// neutralizes caller text under the gate's enforce mode and records the
+// neutralized kinds in a conditional frontmatter key; off and shadow write
+// byte-identical output.
+// ---------------------------------------------------------------------------
+
+import { createHash } from "node:crypto";
+import { discoverMarkers } from "../../../../src/core/brain/inline.ts";
+import {
+  MARKDOWN_NEUTRALIZE_MODE_ENV,
+  MarkdownNeutralizeModeError,
+  detectMarkdownStructure,
+} from "../../../../src/core/brain/text/neutralize-markdown.ts";
+import { BRAIN_CAPTURES_REL } from "../../../../src/core/brain/paths.ts";
+
+/** Set the gate mode env twin for one test, restoring it afterwards. */
+function withGateMode(mode: string, run: () => void): void {
+  const saved = process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+  process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = mode;
+  try {
+    run();
+  } finally {
+    if (saved === undefined) delete process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
+    else process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] = saved;
+  }
+}
+
+/**
+ * The id a fresh-vault capture of this text derives (captureBaseId's
+ * contract: sha256 over source, sender, the TRIMMED body and the optional
+ * guidance, first 8 hex; prefix `cap-<date>` keeps the date's dashes).
+ */
+function expectedId(body: string, guidance: string | null): string {
+  const hash = createHash("sha256")
+    .update(
+      `telegram\u0000` +
+        `12345\u0000` +
+        `${body.trim()}` +
+        (guidance === null ? "" : `\u0000${guidance}`),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 8);
+  return `cap-2026-07-19-120000-${hash}`;
+}
+
+const MARKER_BODY = [
+  "## Quoted",
+  "",
+  "see [[pref-target]] and [[pref-other|The Other]]",
+  "",
+  "@osb set note=[[x]] field=a value=b",
+].join("\n");
+
+test("gate off: a body full of live markers persists byte-identical to the legacy shape", () => {
+  const note = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+  const id = expectedId(MARKER_BODY, null);
+  expect(note.id).toBe(id);
+  expect(readFileSync(join(vault, note.path), "utf8")).toBe(
+    [
+      "---",
+      "kind: brain-capture",
+      `id: ${id}`,
+      "capture_source: telegram",
+      "capture_sender: 12345",
+      'captured_at: "2026-07-19T12:00:00Z"',
+      "tags: [brain, brain/capture]",
+      "---",
+      "",
+      MARKER_BODY,
+    ].join("\n") + "\n",
+  );
+});
+
+test("gate shadow: bytes are unchanged and no provenance key is written", () => {
+  withGateMode("shadow", () => {
+    const note = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+    const id = expectedId(MARKER_BODY, null);
+    expect(readFileSync(join(vault, note.path), "utf8")).toBe(
+      [
+        "---",
+        "kind: brain-capture",
+        `id: ${id}`,
+        "capture_source: telegram",
+        "capture_sender: 12345",
+        'captured_at: "2026-07-19T12:00:00Z"',
+        "tags: [brain, brain/capture]",
+        "---",
+        "",
+        MARKER_BODY,
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
+test("gate enforce: planted markers are inert on disk and the kinds are recorded", () => {
+  withGateMode("enforce", () => {
+    const note = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    // The stored body is the post-neutralize text: no live structure per a
+    // fence-masked scan of the persisted bytes.
+    expect(detectMarkdownStructure(raw)).toEqual([]);
+    expect(raw).toContain("\\[\\[pref-target\\]\\]");
+    expect(raw).toContain("\\[\\[pref-other|The Other\\]\\]");
+    expect(raw).toContain("\\#\\# Quoted");
+    expect(raw).toContain("\\@osb set note=");
+    // The conditional provenance key names the neutralized kinds, sorted.
+    expect(raw).toContain("neutralized_markers: [atx-heading, osb-inline, wikilink]");
+    // The reader hands back what was persisted, rendered as literal text.
+    const read = readCaptureNote(vault, note.id)!;
+    expect(read.body).toContain("\\[\\[pref-target\\]\\]");
+    // Identity follows the persisted bytes.
+    expect(note.id).toBe(expectedId(read.body, read.guidance));
+  });
+});
+
+test("gate enforce: the guidance tail is neutralized and the writer's own split still works", () => {
+  withGateMode("enforce", () => {
+    const note = writeCaptureNote(vault, {
+      body: "quotes a document\n\n## Guidance\n\nthe quoted fake section",
+      guidance: "route to [[pref-sink]]",
+      provenance: prov(),
+    });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    // The caller-authored halves are inert; the page's ONE live heading
+    // is the writer's own renderer-authored section heading.
+    expect(raw).toContain("\\#\\# Guidance");
+    expect(raw).toContain("\n\n## Guidance\n\n");
+    expect(raw).toContain("route to \\[\\[pref-sink\\]\\]");
+    expect(raw).toContain("neutralized_markers: [atx-heading, wikilink]");
+    const read = readCaptureNote(vault, note.id)!;
+    expect(detectMarkdownStructure(read.body)).toEqual([]);
+    expect(detectMarkdownStructure(read.guidance!)).toEqual([]);
+    // The split fires on the writer-set marker and never on the escaped one.
+    expect(read.body).toBe("quotes a document\n\n\\#\\# Guidance\n\nthe quoted fake section");
+    expect(read.guidance).toBe("route to \\[\\[pref-sink\\]\\]");
+  });
+});
+
+test("gate enforce: a fence split across the body-guidance boundary cannot plant a live marker", () => {
+  withGateMode("enforce", () => {
+    // The reviewer's concrete fixture: the body's trailing fence opens an
+    // unterminated fence the guidance's own fence line closes on the
+    // rendered page, which left the planted marker LIVE for every marker
+    // scanner while both halves scanned clean on their own.
+    const note = writeCaptureNote(vault, {
+      body: "x\n```",
+      guidance: "```\n@osb feedback negative topic=t principle=p",
+      provenance: prov(),
+    });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    // The rendered page bytes carry no live marker ...
+    expect(discoverMarkers(raw)).toHaveLength(0);
+    expect(raw).toContain("\\@osb feedback negative topic=t principle=p");
+    // ... and the conditional provenance key names what was escaped.
+    expect(raw).toContain("neutralized_markers: [osb-inline]");
+    // The writer's own heading is never escaped: only the caller halves pass
+    // through the neutralizer.
+    expect(raw).toContain("\n\n## Guidance\n\n");
+    const read = readCaptureNote(vault, note.id)!;
+    expect(read.body).toBe("x\n```");
+    expect(read.guidance).toBe("```\n\\@osb feedback negative topic=t principle=p");
+  });
+});
+
+test("gate enforce: a marker the split fence masks on the page stays untouched in both halves", () => {
+  withGateMode("enforce", () => {
+    // Consistency direction: the body's fence never closes, so the combined
+    // page's scanner parses nothing from the guidance - the fence masks the
+    // marker there just as it masks it in the threaded half, and the write
+    // stays byte-identical with no provenance key.
+    const note = writeCaptureNote(vault, {
+      body: "x\n```",
+      guidance: "@osb feedback negative topic=t principle=p",
+      provenance: prov(),
+    });
+    const raw = readFileSync(join(vault, note.path), "utf8");
+    expect(discoverMarkers(raw)).toHaveLength(0);
+    expect(raw).toContain("\n@osb feedback negative topic=t principle=p");
+    expect(rawHasNeutralizedKey(join(vault, note.path))).toBe(false);
+  });
+});
+
+test("gate enforce: a clean body gains zero bytes", () => {
+  withGateMode("enforce", () => {
+    const note = writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    const id = expectedId("capture a thought", null);
+    expect(readFileSync(join(vault, note.path), "utf8")).toBe(
+      [
+        "---",
+        "kind: brain-capture",
+        `id: ${id}`,
+        "capture_source: telegram",
+        "capture_sender: 12345",
+        'captured_at: "2026-07-19T12:00:00Z"',
+        "tags: [brain, brain/capture]",
+        "---",
+        "",
+        "capture a thought",
+        "",
+      ].join("\n"),
+    );
+    expect(rawHasNeutralizedKey(join(vault, note.path))).toBe(false);
+  });
+});
+
+function rawHasNeutralizedKey(path: string): boolean {
+  return readFileSync(path, "utf8").includes("neutralized_markers:");
+}
+
+test("gate enforce: re-capture of the same text under a stable gate is idempotent", () => {
+  withGateMode("enforce", () => {
+    const first = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+    const second = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+    // Same text, same provenance, same gate: the same derived stem - the
+    // allocator's exclusive-create suffix is the only difference.
+    expect(second.id.startsWith(`${first.id}-`)).toBe(true);
+    const firstRaw = readFileSync(join(vault, first.path), "utf8");
+    const secondRaw = readFileSync(join(vault, second.path), "utf8");
+    expect(secondRaw).toBe(firstRaw.replace(`id: ${first.id}`, `id: ${second.id}`));
+  });
+});
+
+test("a misconfigured gate mode is refused before any filesystem effect", () => {
+  withGateMode("sometimes", () => {
+    expect(() =>
+      writeCaptureNote(vault, { body: "capture a thought", provenance: prov() }),
+    ).toThrow(MarkdownNeutralizeModeError);
+    expect(existsSync(join(vault, "Brain", "captures"))).toBe(false);
+  });
+});
+
+test("the staging area is where neutralized captures land", () => {
+  withGateMode("enforce", () => {
+    const note = writeCaptureNote(vault, { body: MARKER_BODY, provenance: prov() });
+    expect(note.path.startsWith(`${BRAIN_CAPTURES_REL}/`)).toBe(true);
+    expect(note.staged).toBe(true);
+  });
+});

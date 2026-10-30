@@ -11,6 +11,13 @@
  *   - `Brain/_brain.yaml` and `Brain/_BRAIN.md` are written on first
  *     run; subsequent runs without `force` skip them. `force: true`
  *     overwrites both.
+ *   - `<vault>/.gitignore` gains the derived-state guard block
+ *     (`/.open-second-brain/`) on first run, merged with any existing
+ *     content; later runs skip it when the entries are already present.
+ *     The guard is hygiene, not load-bearing: a conflict (malformed
+ *     managed-block markers, a later negating line) or a guard file that
+ *     cannot be read or written is warned about on stderr and carried in
+ *     the result's `guard` field while the bootstrap continues.
  *   - Bootstrap refuses to run if the machine-level plugin config (the
  *     one `o2b init` writes) is missing, since callers must register
  *     the vault before any Brain operation. The error message names
@@ -26,6 +33,11 @@ import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
+import {
+  ensureVaultGitignoreEntries,
+  GITIGNORE_GUARD_FILE,
+  type GitignoreGuardStatus,
+} from "./gitignore-guard.ts";
 import {
   BRAIN_BASES_REL,
   BRAIN_ROOT_REL,
@@ -299,6 +311,15 @@ export interface BootstrapBrainOptions {
   readonly starterPath?: string;
 }
 
+/**
+ * How the step 1c `.gitignore` guard seeding concluded. The four seeder
+ * statuses, plus `failed` for the case the seeder cannot report itself:
+ * the guard file could not be read or written at all (a chmod-denied or
+ * mandatory-locked `.gitignore`, a `.gitignore` that is a directory, a
+ * rename the platform refused).
+ */
+export type BrainInitGuardStatus = GitignoreGuardStatus | "failed";
+
 export interface BootstrapBrainResult {
   /** Vault-relative paths newly written. */
   readonly created: ReadonlyArray<string>;
@@ -306,6 +327,24 @@ export interface BootstrapBrainResult {
   readonly overwritten: ReadonlyArray<string>;
   /** Vault-relative paths left untouched because they already existed. */
   readonly skipped: ReadonlyArray<string>;
+  /**
+   * How step 1c — the `<vault>/.gitignore` derived-state guard — ended.
+   * Always set on a returned result. `created`, `updated` and `skipped`
+   * are the clean outcomes; `conflict` (malformed managed-block markers,
+   * or a line negating the guard entry, whether the entry was already
+   * present or would have landed in a merged block) and `failed` (the
+   * file could not be read or written) mark a guard the operator must
+   * look at, carry a `detail`, and come with a named warning on stderr.
+   * Bootstrap CONTINUES in both cases — the guard is hygiene the
+   * doctor's git-tracked-state row reports independently — and machine
+   * readers use this field instead of parsing stderr to tell a clean
+   * skip from an unresolved guard: the `o2b brain init` verb carries it
+   * through to its `--json` payload and names it in the human output.
+   */
+  readonly guard: {
+    readonly status: BrainInitGuardStatus;
+    readonly detail?: string;
+  };
 }
 
 /**
@@ -363,6 +402,25 @@ export function bootstrapBrain(
   writeVaultIdentity(vault);
   if (!identityExisted) created.push(vaultRelative(identityPath, vault));
 
+  // 1c. `<vault>/.gitignore` — the derived-state guard (t_206562ae).
+  //     Every derived runtime state lives under `.open-second-brain/`, so
+  //     one vault-root-anchored entry covers it; without the seed, a
+  //     fresh init in a git repository left brain.sqlite visible to `git
+  //     status`. The seeder merges a managed block and never clobbers
+  //     user content; a git repository is NOT required (a plain folder
+  //     gets the same seed, and git is never consulted here). A created
+  //     file reports as created; an existing file that gained the block
+  //     reports as overwritten (its bytes changed on disk); a clean skip
+  //     or a named conflict leaves the file untouched and reports as
+  //     skipped, with `result.guard` distinguishing the two. The step is
+  //     guarded, not load-bearing: a `.gitignore` that cannot be read or
+  //     written (chmod-denied, mandatory-locked, or a directory) warns on
+  //     stderr and degrades to `guard: { status: "failed" }` instead of
+  //     aborting — bailing here would leave the half-built tree below
+  //     unwritten for a hygiene guard the doctor's git-tracked-state row
+  //     reports independently (and in more detail).
+  const guard = seedGitignoreGuard(vault, created, overwritten, skipped);
+
   // 2. `_brain.yaml` — default config (with optional primary_agent).
   const brainYamlPath = brainConfigPath(vault);
   const brainYamlRel = vaultRelative(brainYamlPath, vault);
@@ -412,7 +470,45 @@ export function bootstrapBrain(
     created.push(...starterResult.copied);
   }
 
-  return { created, overwritten, skipped };
+  return { created, overwritten, skipped, guard };
+}
+
+/**
+ * Step 1c: seed the `<vault>/.gitignore` derived-state guard, record the
+ * file in the created/overwritten/skipped lists, and answer the guard
+ * outcome the result carries. The guard is always answered — the seeder
+ * deliberately propagates I/O errors, and here they stop being fatal:
+ * report on stderr, degrade to `guard: { status: "failed" }`, continue.
+ */
+function seedGitignoreGuard(
+  vault: string,
+  created: string[],
+  overwritten: string[],
+  skipped: string[],
+): BootstrapBrainResult["guard"] {
+  try {
+    const gitignore = ensureVaultGitignoreEntries(vault);
+    if (gitignore.status === "created") {
+      created.push(gitignore.file);
+    } else if (gitignore.status === "updated") {
+      overwritten.push(gitignore.file);
+    } else {
+      skipped.push(gitignore.file);
+    }
+    return {
+      status: gitignore.status,
+      ...(gitignore.detail !== undefined ? { detail: gitignore.detail } : {}),
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `warning: brain init could not seed the ${GITIGNORE_GUARD_FILE} derived-state guard ` +
+        `(derived brain state stays visible to git; \`o2b brain doctor\` reports the row): ` +
+        `${detail}\n`,
+    );
+    skipped.push(GITIGNORE_GUARD_FILE);
+    return { status: "failed", detail };
+  }
 }
 
 /**

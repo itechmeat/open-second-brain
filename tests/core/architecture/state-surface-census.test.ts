@@ -86,7 +86,14 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // state beside it as census surfaces, and writes nothing.
 // 26 -> 27: the pending mining surveys join the population with their row
 // (v1.86.1 review fixes), the same join the session mining ledger made.
-const SWEPT_POPULATION_SIZE = 27;
+// 27 -> 28, net, from the trust-and-responsiveness-hardening wave: the
+// gitignore guard and its doctor tracked-state probe join the population,
+// excused (one seeds the vault `.gitignore` that covers the directory, one
+// probes git's view of it; neither creates state inside it), while the bench
+// verb LEFT the population - its runs dir was hoisted to `BENCH_RUNS_REL` in
+// `path-constants.ts`, so it no longer spells the directory - taking its now
+// stale exclusion with it.
+const SWEPT_POPULATION_SIZE = 28;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,

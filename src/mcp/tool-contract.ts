@@ -204,11 +204,56 @@ export interface ServerContext {
   readonly ruleScope?: RuleScopeSources;
 }
 
+/**
+ * The dispatch class of one tool: does any operation it can run mutate
+ * durable vault state?
+ *
+ * Distinct from `ToolCeilingKind` (`src/core/runtime/host-facts.ts`),
+ * which classifies a HOST's published tool ceiling - same member name,
+ * unrelated fact.
+ *
+ * The rule is write-mode-dominant: a tool that CAN write is `write`,
+ * decided per operation family at registration, never per arguments at
+ * dispatch - no args parsing ever re-classifies a call. A dual-capability
+ * tool (`brain_watchdog` remediate, `brain_lifecycle` apply,
+ * `brain_dream`, `brain_receipts` fold) is `write` because of its write
+ * half. Fail-soft observability appends (metrics ledger samples, opt-in
+ * context receipts, route-latency records) do NOT make a tool `write`:
+ * the stdio transport runs reads concurrently and accepts losing a
+ * fail-open telemetry append under `ELOCKED` rather than serializing the
+ * read path (see `src/mcp/stdio.ts`).
+ *
+ * The field never reaches the wire: the `tools/list` projection
+ * (`MCPServer.handleToolsList`) picks its advertised fields explicitly,
+ * and `tests/mcp/mcp.test.ts` pins that exact key set.
+ */
+export const TOOL_KIND = Object.freeze({
+  /** Every operation the tool runs is a read or fail-soft telemetry. */
+  read: "read",
+  /** At least one operation the tool can run mutates durable state. */
+  write: "write",
+} as const);
+
+/** Closed union over {@link TOOL_KIND}. */
+export type ToolKind = (typeof TOOL_KIND)[keyof typeof TOOL_KIND];
+
 export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly outputSchema?: OutputSchema;
+  /**
+   * The dispatch class of this tool ({@link TOOL_KIND}): `read` when
+   * every operation it can run is a read or fail-soft telemetry,
+   * `write` when any operation can mutate durable vault state -
+   * write-mode-dominant, decided here at registration and never from
+   * arguments at dispatch. Required so the partition is stated where the
+   * tool is defined; the stdio transport treats an absent value as
+   * `write` (fail-closed) so a hand-built definition that casts the
+   * field away can only ever lose serialization, never safety. Metadata
+   * only: it never reaches the `tools/list` wire payload.
+   */
+  readonly kind: ToolKind;
   /**
    * Optional MCP preview budget in characters (v0.18.0). When set and
    * the serialized result exceeds it, the JSON-RPC `tools/call` path

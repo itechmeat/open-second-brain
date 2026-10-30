@@ -453,10 +453,13 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
 export { REMOVED_TOOLS };
 
 // The set is named after the original payload (mutating writers). As
-// of v0.10.10 it also hosts `brain_context`, a *reader* tool that has
-// to be always-loaded to be useful at session start. Renaming the
-// MCP server itself is deferred — see
-// `docs/plans/2026-05-20-v0.10.10-design.md` §12.
+// of v0.10.10 it also hosts `brain_context`, which has to be
+// always-loaded to be useful at session start. It was admitted here as
+// "a reader tool" back then, but its handler regenerates the shared
+// `Brain/active.md`, so under the write-mode-dominant concurrency kind
+// (`tool-contract.ts`) it is a writer too and the set name now
+// describes it exactly. Renaming the MCP server itself is deferred —
+// see `docs/plans/2026-05-20-v0.10.10-design.md` §12.
 const WRITER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "brain_apply_evidence",
   "brain_context",
@@ -478,6 +481,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
   const all: ToolDefinition[] = [
     {
       name: CAPABILITY_DIAGNOSTIC_TOOL,
+      kind: "read",
       description:
         "Report runtime MCP tool availability and withheld-tool reasons for this server process.",
       inputSchema: {
@@ -490,6 +494,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "second_brain_status",
+      kind: "read",
       description: "Report Open Second Brain configuration and vault status.",
       inputSchema: {
         type: "object",
@@ -507,6 +512,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "second_brain_query",
+      kind: "read",
       description: "List vault pages with optional title substring filter.",
       inputSchema: {
         type: "object",
@@ -536,6 +542,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     ...SEARCH_TOOLS,
     {
       name: "vault_health",
+      kind: "read",
       description:
         "Run vault, config, and plugin manifest health checks, and report every state surface in the vault with its path, reachability, and the override that placed it.",
       inputSchema: {
@@ -552,6 +559,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     },
     {
       name: "brain_artifact_get",
+      kind: "read",
       description:
         "Fetch the full payload of a previously preview-truncated tool result by its artifact_id. Read-only.",
       inputSchema: {

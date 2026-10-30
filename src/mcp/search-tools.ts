@@ -1,11 +1,12 @@
 /**
  * MCP tool registry slice for Brain Search.
  *
- * Exposes `brain_search` (read-only, agent-facing) and the
- * `search.*` enrichment used by `second_brain_status`. Index management
- * verbs (`index`, `reindex`, `check`) are intentionally NOT exposed
- * over MCP — they are operator business, never agent business
- * (design doc §3, principle 5).
+ * Exposes `brain_search` (agent-facing; write-classified - it persists
+ * ranking-state ledgers under `Brain/search/`, see the kind comment at
+ * the definition) and the `search.*` enrichment used by
+ * `second_brain_status`. Index management verbs (`index`, `reindex`,
+ * `check`) are intentionally NOT exposed over MCP — they are operator
+ * business, never agent business (design doc §3, principle 5).
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §9.
  */
@@ -1913,6 +1914,7 @@ async function toolBrainSearchExpand(
 export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_feedback",
+    kind: "write",
     description:
       "Record explicit recall feedback (up/down) for one search result. Feeds the deterministic learned-weight fold; events land under Brain/search/feedback/.",
     inputSchema: RECALL_FEEDBACK_INPUT_SCHEMA,
@@ -1921,6 +1923,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_recall_gate",
+    kind: "read",
     description:
       "Classify whether recall should run. Diagnostics only; does not search. Pass `scores` AND `match_quality` together for an adequacy verdict; either alone is INVALID_PARAMS (see `dependentRequired`). A measurement decides the verdict: below-floor quality answers retrieve false. `admit` echoes it.",
     inputSchema: RECALL_GATE_INPUT_SCHEMA,
@@ -1929,8 +1932,18 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_search",
+    // Write-mode-dominant (tool-contract.ts), not "read". The handler's
+    // writes are ranking STATE, not accepted-loss telemetry appends:
+    // `reinforce` persists boost events the fold reads back
+    // (`recordReinforce` -> Brain/search/reinforce/), access recording is
+    // default-on and writes activation events plus the derived state
+    // (`recordAccessEvent` -> Brain/search/activation/), and under the
+    // telemetry opt-in the recall-telemetry and query-demand ledgers
+    // append. All of these feed later searches' behaviour, so they fail
+    // the fail-soft-appends carve-out and gate the write path.
+    kind: "write",
     description:
-      "Full-text search across the vault. Optional semantic layer when configured. Read-only. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
+      "Full-text search across the vault. Optional semantic layer when configured. Persists access events and opt-in reinforce/telemetry ledgers under Brain/search/. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,
@@ -1938,6 +1951,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_search_expand",
+    kind: "read",
     description:
       "Progressive disclosure layers 2 + 3: drill a brain_search card (by chunk_id) into the fuller note and the paginated raw chunk transcript. Read-only; reuses the existing index.",
     inputSchema: SEARCH_EXPAND_INPUT_SCHEMA,
@@ -1947,6 +1961,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_eval",
+    kind: "read",
     description:
       "Score retrieval quality over a dataset against the active vault: hit@k, MRR, answer-containment@k, source-utilization, citation-depth, source warnings. Read-only.",
     inputSchema: EVAL_INPUT_SCHEMA,
@@ -1956,6 +1971,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   },
   {
     name: "brain_file_context",
+    kind: "read",
     description:
       "Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with terms derived from the path. A size gate skips trivial files. Read-only; no LLM.",
     inputSchema: FILE_CONTEXT_INPUT_SCHEMA,

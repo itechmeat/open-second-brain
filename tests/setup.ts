@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { clearOriginChannel } from "../src/core/origin-channel.ts";
+import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../src/core/brain/text/neutralize-markdown.ts";
 
 // The origin channel (`src/core/origin-channel.ts`) is process-scoped by
 // design: an entry point claims it once and every record written under
@@ -138,6 +139,20 @@ if (process.env["O2B_TEST_KEEP_EMBEDDING_ENV"] !== "1") {
   for (const name of Object.keys(process.env)) {
     if (name.startsWith("OPEN_SECOND_BRAIN_EMBEDDING_")) delete process.env[name];
   }
+}
+
+// The markdown neutralization gate resolves from an env twin of its
+// config key (`neutralize-markdown.ts`), and the default posture of a
+// dozen seam and doctor tests depends on it staying `off`. A developer
+// who exports it for daily use would flip what those tests mean, so the
+// suite starts without it - the same sweep the embedding twins get. A
+// run that wants it kept sets `O2B_TEST_KEEP_NEUTRALIZE_MODE_ENV=1`; a
+// test that needs a mode sets it itself.
+if (
+  process.env["O2B_TEST_KEEP_NEUTRALIZE_MODE_ENV"] !== "1" &&
+  process.env[MARKDOWN_NEUTRALIZE_MODE_ENV] !== undefined
+) {
+  delete process.env[MARKDOWN_NEUTRALIZE_MODE_ENV];
 }
 
 // Every temp entry a test mints lands under ONE per-run root, and the run
