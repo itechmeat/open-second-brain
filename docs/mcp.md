@@ -373,7 +373,7 @@ unchanged.
 
 ## Tool Highlights
 
-The full server currently advertises 117 tools; the 18 deprecated predecessor
+The full server currently advertises 121 tools; the 18 deprecated predecessor
 names were removed in 1.0.0 and now answer a precise INVALID_PARAMS tombstone
 (see "Consolidated views and deprecated aliases" below). The table highlights
 the operator-facing core,
