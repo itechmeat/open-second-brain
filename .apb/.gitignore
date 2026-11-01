@@ -8,3 +8,5 @@ backup-*/
 workdir.lock
 locks/
 decisions.jsonl
+memory/
+problems/
