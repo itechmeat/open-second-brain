@@ -64,8 +64,34 @@ import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { BRAIN_DECISIONS_REL } from "../../core/brain/path-constants.ts";
+import { deliveryView } from "./reach-events.ts";
 
 const TOOL = "brain_decision";
+
+/**
+ * The vault-relative page one decision or open-decision record was parsed
+ * from - the probe target whose provenance governs the delivery of the
+ * record's page-derived text (delivery-trust, lane A).
+ */
+function decisionDeliveryRel(id: string): string {
+  return `${BRAIN_DECISIONS_REL}/${id}.md`;
+}
+
+/**
+ * Shape one page-derived field through the request's delivery binding
+ * (delivery-trust, lane A). Empty text has nothing to fence and stays
+ * byte-identical to an absent value; at local reach the binding's shape
+ * is the identity, so the pre-wave bytes pass through untouched.
+ */
+function shapeField(
+  delivery: ReturnType<typeof deliveryView>,
+  rel: string,
+  value: unknown,
+): unknown {
+  if (typeof value !== "string" || value.length === 0) return value;
+  return delivery.shape(value, rel);
+}
 
 async function toolBrainDecision(
   ctx: ServerContext,
@@ -79,6 +105,13 @@ async function toolBrainDecision(
     // single-slug reads and writes with the absent slug's error.
     const readable = readableAtContextReachOrUndefined(ctx);
     const reads = readable !== undefined ? { readable } : {};
+    // The delivery binding (delivery-trust, lane A): one reach resolution
+    // and one frontmatter cache for every page-derived field this response
+    // carries. Local reach shapes nothing; remote reach fences the stored
+    // free text through the K1 shaper, naming the record page's derived
+    // provenance. Write echoes of caller-authored values and the
+    // change-history ledger's prefixed state grammar stay untouched.
+    const delivery = deliveryView(ctx);
 
     switch (action) {
       case "record": {
@@ -145,15 +178,18 @@ async function toolBrainDecision(
         const rows = compareDecisions(ctx.vault, slugs, reads);
         return {
           action,
-          decisions: rows.map((d) => ({
-            id: d.id,
-            slug: d.slug,
-            title: d.title,
-            chosen: d.chosen,
-            rating: d.rating,
-            rationale: d.rationale,
-            outcome: d.outcome,
-          })),
+          decisions: rows.map((d) => {
+            const rel = decisionDeliveryRel(d.id);
+            return {
+              id: d.id,
+              slug: d.slug,
+              title: d.title,
+              chosen: d.chosen,
+              rating: d.rating,
+              rationale: shapeField(delivery, rel, d.rationale),
+              outcome: shapeField(delivery, rel, d.outcome),
+            };
+          }),
         };
       }
       case "outcome": {
@@ -171,16 +207,17 @@ async function toolBrainDecision(
         const slug = coerceStr(args, "slug", true)!;
         const res = showDecision(ctx.vault, slug, reads);
         if (res === null) throw new DecisionError(`no decision: ${slug}`);
+        const rel = decisionDeliveryRel(res.id);
         return {
           action,
           id: res.id,
           slug: res.slug,
           title: res.title,
           chosen: res.chosen,
-          assumption: res.assumption,
+          assumption: shapeField(delivery, rel, res.assumption),
           review_date: res.reviewDate,
-          outcome: res.outcome,
-          premortem: res.premortem,
+          outcome: shapeField(delivery, rel, res.outcome),
+          premortem: shapeField(delivery, rel, res.premortem),
           // Commitment tier (B3): emitted only when set so an unset
           // decision stays byte-identical to a pre-B3 response.
           ...(res.commitment !== null ? { commitment: res.commitment } : {}),
@@ -200,7 +237,7 @@ async function toolBrainDecision(
             chosen: d.chosen,
             rating: d.rating,
             review_date: d.reviewDate,
-            outcome: d.outcome,
+            outcome: shapeField(delivery, decisionDeliveryRel(d.id), d.outcome),
             ...(d.commitment !== null ? { commitment: d.commitment } : {}),
           })),
         };
@@ -231,7 +268,13 @@ async function toolBrainDecision(
           surfaced: res.surfaced
             ? { id: res.surfaced.id, slug: res.surfaced.slug, rating: res.surfaced.rating }
             : null,
-          text: res.text,
+          // The verbatim recall block renders the surfaced decision page's
+          // text, so it fences whole through the surfaced record's page.
+          text: shapeField(
+            delivery,
+            res.surfaced !== null ? decisionDeliveryRel(res.surfaced.id) : "",
+            res.text,
+          ),
           state: {
             surfaced_ids: res.state.surfacedIds,
             last_turn: res.state.lastTurn,
@@ -292,7 +335,7 @@ async function toolBrainDecision(
             id: h.id,
             slug: h.slug,
             title: h.title,
-            outcome: h.outcome,
+            outcome: shapeField(delivery, decisionDeliveryRel(h.id), h.outcome),
             jaccard: h.jaccard,
           })),
         };
@@ -334,7 +377,7 @@ async function toolBrainDecision(
             id: r.id,
             slug: r.slug,
             title: r.title,
-            question: r.question,
+            question: shapeField(delivery, decisionDeliveryRel(r.id), r.question),
             status: r.status,
             options: [...r.options],
             created_at: r.createdAt,
@@ -346,21 +389,22 @@ async function toolBrainDecision(
         const id = coerceStr(args, "id", true)!;
         const res = showOpenDecision(ctx.vault, id, reads);
         if (res === null) throw new OpenDecisionError(`no open decision: ${id}`);
+        const rel = decisionDeliveryRel(res.id);
         return {
           action,
           id: res.id,
           slug: res.slug,
           title: res.title,
-          question: res.question,
+          question: shapeField(delivery, rel, res.question),
           options: [...res.options],
-          context: res.context,
+          context: shapeField(delivery, rel, res.context),
           status: res.status,
           created_at: res.createdAt,
           resolved_at: res.resolvedAt,
           discarded_at: res.discardedAt,
           choice: res.choice,
           decision: res.decision,
-          discard_reason: res.discardReason,
+          discard_reason: shapeField(delivery, rel, res.discardReason),
         };
       }
       case "resolve": {

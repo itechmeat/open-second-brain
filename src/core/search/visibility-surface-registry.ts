@@ -1012,8 +1012,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "record over an occupied withheld slug refuses 'decision already exists', the inherent " +
       "create-collision residual; the review obligation record opens names the decision's title " +
       "at default visibility unless the operator reserves it too. Delivery shaping " +
-      "(delivery-trust, lane A): the decision page text is fenced at remote reach through the " +
-      "shared delivery binding, byte-identical at local reach.",
+      "(delivery-trust, lane A): the decision page's stored free-text payload fields - show's " +
+      "assumption, premortem and outcome, the compare rows' rationale and outcome, the list and " +
+      "similar rows' outcome - plus the recall render and the open-decision question, context " +
+      "and discard-reason prose are fenced at remote reach through the shared delivery binding, " +
+      "byte-identical at local reach. The identifiers (title, chosen, slug), the enumerated " +
+      "options, the structured fields, the write echoes of caller-authored values, and the " +
+      "change-history receipts (prefixed state grammar, the ledger boundary) stay untouched.",
   },
   {
     surface: "brain_scaffold_stub",

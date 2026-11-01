@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { QUERY_TOOLS } from "../../src/mcp/brain/query-tools.ts";
+import { DECISIONS_TOOLS } from "../../src/mcp/brain/decisions-tools.ts";
+import { recordDecision } from "../../src/core/brain/decisions/record.ts";
 import { deliveryView } from "../../src/mcp/brain/reach-events.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
@@ -56,6 +58,15 @@ async function call(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const tool = QUERY_TOOLS.find((t) => t.name === name)!;
+  return (await tool.handler(ctxFor(reach), args)) as Record<string, unknown>;
+}
+
+/** The brain_decision tool answers through the same handler shape. */
+async function callDecision(
+  reach: TransportReach,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const tool = DECISIONS_TOOLS.find((t) => t.name === "brain_decision")!;
   return (await tool.handler(ctxFor(reach), args)) as Record<string, unknown>;
 }
 
@@ -314,5 +325,192 @@ describe("the delivery binding probes through the shared cache", () => {
     expect(delivery.shape(SIGNAL_PRINCIPLE, "Brain/preferences/pref-legacy.md")).toBe(
       fenceFor(LEGACY_LABEL, SIGNAL_PRINCIPLE),
     );
+  });
+});
+
+describe("brain_decision page text at remote reach", () => {
+  const TITLE = "Adopt the staged rollout";
+  const SLUG = "adopt-the-staged-rollout";
+  const LEGACY_SLUG = "adopt-the-staged-rollout-legacy";
+  const CHOSEN = "roll out behind a flag";
+  const ASSUMPTION = "zzassumptionzz the flag drains in a day";
+  const PREMORTEM = "zzpremortemzz the drain stalls at half";
+  const RATIONALE = "zzrationalezzy the pilot held";
+  const OUTCOME = "zzoutcomezz held up under load";
+  const RECALL_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION";
+
+  /** Record one rated decision; stamp the page when it must read agent-authored. */
+  function record(slug: "agented" | "legacy"): void {
+    const title = slug === "agented" ? TITLE : `${TITLE} legacy`;
+    recordDecision(vault, {
+      title,
+      chosen: CHOSEN,
+      assumption: ASSUMPTION,
+      reviewDate: "2026-07-01",
+      premortem: PREMORTEM,
+      rating: 4,
+      rationale: RATIONALE,
+      agent: "agent-a",
+    });
+    if (slug === "agented")
+      stamp(`Brain/decisions/decision-${SLUG}.md`, "origin_channel: mcp-tool\n");
+  }
+
+  test("show fences the page-derived fields; local is byte-identical", async () => {
+    record("agented");
+    const local = await callDecision(TRANSPORT_REACH.local, { action: "show", slug: SLUG });
+    const remote = await callDecision(TRANSPORT_REACH.remote, { action: "show", slug: SLUG });
+    expect(local["assumption"]).toBe(ASSUMPTION);
+    expect(local["premortem"]).toBe(PREMORTEM);
+    // The free-text payload fields fence; the identifiers and structured
+    // fields stay as-is, the same line the preference payloads draw.
+    expect(remote["assumption"]).toBe(fenceFor(AGENT_LABEL, ASSUMPTION));
+    expect(remote["premortem"]).toBe(fenceFor(AGENT_LABEL, PREMORTEM));
+    expect(remote["chosen"]).toBe(CHOSEN);
+    expect(remote["rating"]).toBe(local["rating"]);
+
+    // An outcome backfilled through the write path lands on the page and
+    // reads back fenced, exactly like a field recorded at capture time.
+    await callDecision(TRANSPORT_REACH.remote, {
+      action: "outcome",
+      slug: SLUG,
+      outcome: OUTCOME,
+    });
+    // The decision writer re-renders the page frontmatter on a backfill
+    // (render() owns the field set), so the test-injected stamp does not
+    // survive it; re-stamp so the label still names the mcp-tool stamp.
+    stamp(`Brain/decisions/decision-${SLUG}.md`, "origin_channel: mcp-tool\n");
+    const backfilled = await callDecision(TRANSPORT_REACH.remote, { action: "show", slug: SLUG });
+    expect(backfilled["outcome"]).toBe(fenceFor(AGENT_LABEL, OUTCOME));
+  });
+
+  test("a legacy decision page is fenced fail-closed", async () => {
+    record("legacy");
+    const remote = await callDecision(TRANSPORT_REACH.remote, {
+      action: "show",
+      slug: LEGACY_SLUG,
+    });
+    expect(remote["assumption"]).toBe(fenceFor(LEGACY_LABEL, ASSUMPTION));
+    expect(remote["premortem"]).toBe(fenceFor(LEGACY_LABEL, PREMORTEM));
+  });
+
+  test("compare, list and similar rows fence their page-derived fields", async () => {
+    record("agented");
+    record("legacy");
+    const localCompare = (await callDecision(TRANSPORT_REACH.local, {
+      action: "compare",
+      slugs: [SLUG, LEGACY_SLUG],
+    })) as { decisions: Array<Record<string, unknown>> };
+    const remoteCompare = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "compare",
+      slugs: [SLUG, LEGACY_SLUG],
+    })) as { decisions: Array<Record<string, unknown>> };
+    // A compare row carries no rationale until one was authored; the
+    // outcome field is the row's page-derived free text.
+    await callDecision(TRANSPORT_REACH.remote, {
+      action: "outcome",
+      slug: SLUG,
+      outcome: OUTCOME,
+    });
+    // Same writer round-trip as the show test: the backfill re-renders
+    // the frontmatter, so re-stamp before the label-bearing assertions.
+    stamp(`Brain/decisions/decision-${SLUG}.md`, "origin_channel: mcp-tool\n");
+    const afterBackfill = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "compare",
+      slugs: [SLUG],
+    })) as { decisions: Array<Record<string, unknown>> };
+    expect(localCompare.decisions).toHaveLength(2);
+    expect(remoteCompare.decisions).toHaveLength(localCompare.decisions.length);
+    expect(afterBackfill.decisions[0]!["outcome"]).toBe(fenceFor(AGENT_LABEL, OUTCOME));
+
+    const localList = (await callDecision(TRANSPORT_REACH.local, {
+      action: "list",
+    })) as { decisions: Array<Record<string, unknown>> };
+    expect(localList.decisions).toHaveLength(2);
+    const remoteList = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "list",
+    })) as { decisions: Array<Record<string, unknown>> };
+    const listed = remoteList.decisions.find((d) => d["slug"] === SLUG)!;
+    expect(listed["outcome"]).toBe(fenceFor(AGENT_LABEL, OUTCOME));
+
+    const remoteSimilar = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "similar",
+      title: TITLE,
+    })) as { similar: Array<Record<string, unknown>> };
+    const similar = remoteSimilar.similar.find((d) => d["slug"] === SLUG)!;
+    expect(similar).toBeDefined();
+    expect(similar["outcome"]).toBe(fenceFor(AGENT_LABEL, OUTCOME));
+  });
+
+  test("the recall render fences whole, and the write echo of an authored outcome does not", async () => {
+    record("agented");
+    const saved = process.env[RECALL_ENV_KEY];
+    process.env[RECALL_ENV_KEY] = "3";
+    try {
+      const local = await callDecision(TRANSPORT_REACH.local, {
+        action: "recall",
+        prompt: "adopt the staged rollout",
+      });
+      const remote = await callDecision(TRANSPORT_REACH.remote, {
+        action: "recall",
+        prompt: "adopt the staged rollout",
+      });
+      const localText = local["text"] as string;
+      expect(localText).toContain("Recalled decision");
+      // The rendered block is page text: it fences whole, one closed span.
+      expect(remote["text"]).toBe(fenceFor(AGENT_LABEL, localText));
+    } finally {
+      if (saved === undefined) delete process.env[RECALL_ENV_KEY];
+      else process.env[RECALL_ENV_KEY] = saved;
+    }
+  });
+
+  test("open-decision question prose fences at remote reach", async () => {
+    const QUESTION = "zzopenquestionzz which vendor survives the audit";
+    const CONTEXT = "zzopencontextzz the audit lands next quarter";
+    const REASON = "zzdiscardreasonzz superseded by the procurement review";
+    await callDecision(TRANSPORT_REACH.remote, {
+      action: "open",
+      title: "Vendor choice",
+      question: QUESTION,
+      options: ["keep", "swap"],
+      context: CONTEXT,
+    });
+    const localList = (await callDecision(TRANSPORT_REACH.local, {
+      action: "list_open",
+    })) as { open_decisions: Array<Record<string, unknown>> };
+    expect(localList.open_decisions).toHaveLength(1);
+    expect(localList.open_decisions[0]!["question"]).toBe(QUESTION);
+    const openId = localList.open_decisions[0]!["id"] as string;
+
+    const remoteList = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "list_open",
+    })) as { open_decisions: Array<Record<string, unknown>> };
+    expect(remoteList.open_decisions[0]!["question"]).toBe(fenceFor(LEGACY_LABEL, QUESTION));
+
+    const localShow = (await callDecision(TRANSPORT_REACH.local, {
+      action: "show_open",
+      id: openId,
+    })) as Record<string, unknown>;
+    const remoteShow = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "show_open",
+      id: openId,
+    })) as Record<string, unknown>;
+    expect(localShow["context"]).toBe(CONTEXT);
+    expect(remoteShow["question"]).toBe(fenceFor(LEGACY_LABEL, QUESTION));
+    expect(remoteShow["context"]).toBe(fenceFor(LEGACY_LABEL, CONTEXT));
+
+    await callDecision(TRANSPORT_REACH.remote, {
+      action: "discard",
+      id: openId,
+      reason: REASON,
+    });
+    // list_open takes every status, so the closed record still reads back:
+    // the discard reason is stored free text and fences like the rest.
+    const after = (await callDecision(TRANSPORT_REACH.remote, {
+      action: "show_open",
+      id: openId,
+    })) as Record<string, unknown>;
+    expect(after["discard_reason"]).toBe(fenceFor(LEGACY_LABEL, REASON));
   });
 });

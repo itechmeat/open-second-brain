@@ -7,6 +7,19 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
+import { UNTRUSTED_SOURCE_TAG } from "../../src/core/brain/untrusted-source.ts";
+
+/**
+ * The fence a remote read of an unstamped decision page carries
+ * (delivery-trust, lane A): the server below mints no reach, so every
+ * call in this file is a remote one.
+ */
+function fenced(body: string): string {
+  return (
+    `<${UNTRUSTED_SOURCE_TAG} origin="stored text: unverified provenance (no derivable stamps)">\n` +
+    `${body}\n</${UNTRUSTED_SOURCE_TAG}>`
+  );
+}
 
 let vault: string;
 
@@ -75,10 +88,11 @@ describe("brain_decision tool", () => {
     const outcome = payload(
       await call(server, { action: "outcome", slug: "adopt-bun-runtime", outcome: "held up" }),
     );
+    // The write echo stays the authored bytes; the read-back fences.
     expect(outcome["outcome"]).toBe("held up");
 
     const shown = payload(await call(server, { action: "show", slug: "adopt-bun-runtime" }));
-    expect(shown["outcome"]).toBe("held up");
+    expect(shown["outcome"]).toBe(fenced("held up"));
   });
 
   test("similar surfaces a prior decision", async () => {
@@ -291,7 +305,7 @@ describe("brain_decision open-decision actions", () => {
     expect(listed["unreadable"]).toEqual([]);
 
     const shown = payload(await call(server, { action: "show_open", id: opened["id"] }));
-    expect(shown["question"]).toBe("Which HTTP client should the ingest lane adopt?");
+    expect(shown["question"]).toBe(fenced("Which HTTP client should the ingest lane adopt?"));
     expect(shown["options"]).toEqual(["bun fetch", "undici"]);
 
     const resolved = payload(
