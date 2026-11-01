@@ -252,8 +252,22 @@ describe("brain_query preference payload at remote reach", () => {
   });
 
   test("the evidence trail (log-entry serializer) is untouched", async () => {
+    // A log event citing the preference, so the evidence trail is a real
+    // row and the equality below is not two empty arrays agreeing: a
+    // serializer that ran stored text through the fence would fail it.
+    appendLogEvent(
+      vault,
+      {
+        timestamp: "2026-05-05T00:00:00Z",
+        eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+        agent: "agent-a",
+        body: { preference: "[[pref-legacy]]", result: "applied" },
+      },
+      { deviceId: "" },
+    );
     const local = await call("brain_query", TRANSPORT_REACH.local, { preference: "pref-legacy" });
     const remote = await call("brain_query", TRANSPORT_REACH.remote, { preference: "pref-legacy" });
+    expect((local["evidence"] as unknown[]).length).toBeGreaterThan(0);
     expect(remote["evidence"]).toEqual(local["evidence"]);
   });
 

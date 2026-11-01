@@ -251,14 +251,23 @@ describe("signAttestationRecord", () => {
 
   test("no code path prints key material", () => {
     const chunks: string[] = [];
-    const original = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: unknown) => {
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    const capture = (chunk: unknown): boolean => {
       chunks.push(typeof chunk === "string" ? chunk : String(chunk));
       return true;
-    }) as typeof process.stdout.write;
+    };
+    process.stdout.write = capture as typeof process.stdout.write;
+    // stderr too: the kernel's loose-mode mode warning is its one
+    // writable stream beside stdout, and a leak there would go unseen.
+    process.stderr.write = capture as typeof process.stderr.write;
     try {
       const { privatePath, publicPath } = generateAttestationKeypair(vault);
-      const seed = readFileSync(privatePath).toString("hex");
+      // The keyfile stores the seed as 64 hex TEXT characters; reading
+      // it as bytes and hex-encoding again would produce a string
+      // nothing could ever print, and the assertion below would be
+      // vacuous.
+      const seed = readFileSync(privatePath, "utf8").trim();
       const pem = readFileSync(publicPath, "utf8");
       const signed = signAttestationRecord(unsignedRecord(), vault);
       const valid = verifyAttestationSignature(signed, vault);
@@ -268,7 +277,8 @@ describe("signAttestationRecord", () => {
       expect(printed).not.toContain(pem);
       expect(printed).not.toContain(signed.signature ?? "");
     } finally {
-      process.stdout.write = original;
+      process.stdout.write = originalStdout;
+      process.stderr.write = originalStderr;
     }
   });
 

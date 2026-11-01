@@ -358,6 +358,14 @@ async function toolArtifactGet(
   if (!ctx.artifactStore) {
     throw new Error("artifact store unavailable in this context");
   }
+  // Replay carries no reach or caller binding of its own - it is
+  // content-hash addressed and answers any caller - so the fence
+  // guarantee rests entirely on the parking side: every tool that parks
+  // shapes its stored text through the delivery binding BEFORE the
+  // serialized bytes are stored, and what replays here is the fenced
+  // copy. Binding artifacts to the minting session or re-shaping at
+  // replay is the recorded follow-up if a parking surface ever ships
+  // unshaped.
   let content: string | null;
   try {
     content = ctx.artifactStore.get(artifactId);

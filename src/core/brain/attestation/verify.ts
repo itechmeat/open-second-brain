@@ -29,11 +29,14 @@
  * it that the walk cannot chain (unparseable, stripped links) reads as
  * `diverged`, never as silence between chained rows.
  *
- * Head reads at verify time are lock-free, also like `verifyLogChain`:
- * the COLLECTOR takes the appender's lock because a wrong head gets
- * signed and a signature is permanent, while a verifier's misread is a
- * report the operator re-runs - and the log directory lock is the
- * appender's bounded-retry lock, which a report must not queue behind.
+ * The per-shard classification reads lock-free, like `verifyLogChain`:
+ * a verifier's misread is a report the operator re-runs, where a wrong
+ * head gets SIGNED and a signature is permanent. The manifest recompute
+ * for the store digest is the one place a verify waits - it rides the
+ * collector's bounded-retry log lock, so an append in progress delays a
+ * report by at most that retry window, and a lock that is still held
+ * when the retries end is a store this run could not measure, reported
+ * as `storeDigestMatches: false` beside the intact shard verdicts.
  *
  * ## What a legitimately advanced store reads as
  *

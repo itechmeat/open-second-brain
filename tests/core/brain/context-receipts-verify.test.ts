@@ -225,7 +225,7 @@ describe("verifyContextReceipt", () => {
 
     // The same page edited BEYOND the cut: the re-derived text differs.
     const edited = `${"Rewritten filler. ".repeat(40)}A different closing rule.\n`;
-    writePage("Brain/preferences/pref-trimmed.md", `---\nid: pref-trimmed\n---\n\n${edited}`);
+    writePage("Brain/preferences/pref-trimmed.md", edited);
     const changed = verifyContextReceipt(vault, receipt);
     expect(changed.items[0]!.verdict).toBe(RECEIPT_VERIFY_VERDICT.changed);
   });
