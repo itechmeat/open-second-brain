@@ -509,6 +509,11 @@ import {
   isAnswerQuoteVerdict,
 } from "../../../src/core/brain/answer-quotes/check.ts";
 import {
+  DELIVERY_TREATMENT,
+  DELIVERY_TREATMENTS,
+  isDeliveryTreatment,
+} from "../../../src/core/brain/delivery-shaping.ts";
+import {
   ARCHIVE_VERIFICATION,
   ARCHIVE_VERIFICATIONS,
   isArchiveVerification,
@@ -1625,6 +1630,19 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isAnswerQuoteVerdict,
   },
   {
+    // What a delivery does with one stored record's text on its way out
+    // (delivery-trust wave, Lane A). The pair is closed because there are
+    // exactly two things a read face can do: hand the stored bytes over
+    // (`plain`, earned only by a page stamped origin_channel: cli with no
+    // other marker) or fence them (`fenced`, the fail-closed answer every
+    // absence resolves to). A third member would be a new delivery
+    // contract and has to register here.
+    name: "DELIVERY_TREATMENT",
+    values: DELIVERY_TREATMENT,
+    members: DELIVERY_TREATMENTS,
+    guard: isDeliveryTreatment,
+  },
+  {
     // What comparing a stamped archive digest against the entry it names
     // concluded (answer-trust wave, Lane C). It rides the capture-scope
     // detector's finding evidence and the archive read op, and the pair it
@@ -2000,7 +2018,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // the content-class stamp's one-member vocabulary, complete with its
 // membership list and `unknown` guard from the start, enrolled here when
 // the egress census that reads it landed (task E4).
-const VOCABULARY_POPULATION = 105;
+const VOCABULARY_POPULATION = 106;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

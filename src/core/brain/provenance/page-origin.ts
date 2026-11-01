@@ -37,6 +37,7 @@ import type { FrontmatterMap } from "../../types.ts";
 import {
   ORIGIN_CHANNEL,
   ORIGIN_CHANNEL_FIELD,
+  ORIGIN_CHANNEL_UNSET,
   isOriginChannelStamp,
   type OriginChannelStamp,
 } from "../../origin-channel.ts";
@@ -85,7 +86,10 @@ export function pageOriginForDelivery(
 
 /**
  * The derivation's pure half over an already-read map, so the cache is
- * the only I/O the probe ever touches.
+ * the only I/O the probe ever touches. Exported for the one reader that
+ * already HOLDS parsed frontmatter (the doctor's page walker) so the
+ * check and the delivery face derive from the same function and cannot
+ * drift about what counts as a stamp.
  *
  * An out-of-vocabulary channel is no evidence of authorship: the
  * closed-vocabulary posture the content class states (a hand edit is
@@ -94,13 +98,30 @@ export function pageOriginForDelivery(
  * uses, accepting both the writer's boolean and the string form a YAML
  * round-trip leaves behind.
  */
-function pageOriginFromMeta(meta: FrontmatterMap): PageOriginForDelivery {
+export function pageOriginFromMeta(meta: FrontmatterMap): PageOriginForDelivery {
   const channelValue = meta[ORIGIN_CHANNEL_FIELD];
   return {
     originChannel: isOriginChannelStamp(channelValue) ? channelValue : null,
     contentClass: readContentClass(meta),
     untrustedSource: hasUntrustedSourceMarker(meta),
   };
+}
+
+/**
+ * Whether the derivation could name a page's authorship from EVIDENCE
+ * rather than from absence. This is exactly the complement of the
+ * `delivery-provenance-unknown` doctor check's population: a marker, a
+ * content class, or a real channel (`mcp-tool`, `cli`, `import`) is a
+ * derivable answer even when the treatment it resolves is `fenced` -
+ * the check reports pages the delivery side had to fence because it
+ * knew NOTHING, not pages fenced on what a stamp proves. The `unset`
+ * literal is the absorbed absence, not evidence, and reads as unknown
+ * like a missing line.
+ */
+export function provenanceDerivable(origin: PageOriginForDelivery): boolean {
+  if (origin.untrustedSource) return true;
+  if (origin.contentClass !== null) return true;
+  return origin.originChannel !== null && origin.originChannel !== ORIGIN_CHANNEL_UNSET;
 }
 
 /**
