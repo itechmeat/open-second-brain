@@ -25,6 +25,7 @@ import {
   RECEIPT_ITEM_ACTIVE_BODY,
   RECEIPT_ITEM_STANDING_RULES,
 } from "../../../src/core/brain/context-receipts.ts";
+import { dedupReplacementText } from "../../../src/core/brain/context-transforms.ts";
 import {
   isReceiptVerifyUnavailableReason,
   isReceiptVerifyVerdict,
@@ -36,6 +37,7 @@ import {
   verifyContextReceipt,
 } from "../../../src/core/brain/context-receipts-verify.ts";
 import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
+import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { applyCharBudget } from "../../../src/core/brain/recall-budget.ts";
 import { guardBrainContextSnippet } from "../../../src/core/brain/safety/context-guard.ts";
@@ -535,5 +537,53 @@ describe("verifyContextReceipt", () => {
 
     const item = verifyContextReceipt(vault, receipt).items[0]!;
     expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+  });
+});
+
+describe("deduplicated repeated items", () => {
+  test("a deduped item re-derives the omission sentence the writer delivered, not the page", () => {
+    const abs = writePage("Brain/preferences/dup.md", PAGE_BODY);
+    const replacement = dedupReplacementText("item-one");
+    const record = emitContextReceipt(vault, {
+      options: { host: "unit-test", trigger: "context_pack", createdAt: "2026-05-31T12:00:00Z" },
+      items: [
+        { id: "item-one", path: abs, text: PAGE_BODY.trim() },
+        { id: "item-two", path: abs, text: replacement, dedupedFrom: "item-one" },
+      ],
+      finalText: `${PAGE_BODY.trim()}\n\n${replacement}`,
+    });
+    const verification = verifyContextReceipt(vault, record);
+    const deduped = verification.items.find((item) => item.id === "item-two")!;
+    // The delivered bytes were the synthetic sentence, so the
+    // re-derivation is that sentence - and the verdict stays a match
+    // even though the page is gone, because the page behind the FIRST
+    // copy is what that item's own verification covers.
+    rmSync(abs);
+    expect(deduped.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+    expect(deduped.observedHash).toBe(sha256Hex(replacement));
+    expect(deduped.note).toBeNull();
+  });
+
+  test("a deduped item whose recorded hash does not answer to the sentence reads changed", () => {
+    const abs = writePage("Brain/preferences/dup.md", PAGE_BODY);
+    // The recorded hash is the writer's own sha256 over the delivered
+    // text, so a receipt whose recorded text differs from what the
+    // sentence re-derivation produces reads as changed.
+    const tampered = emitContextReceipt(vault, {
+      options: { host: "unit-test", trigger: "context_pack", createdAt: "2026-05-31T12:00:01Z" },
+      items: [
+        {
+          id: "item-two",
+          path: abs,
+          text: dedupReplacementText("item-one") + "x",
+          dedupedFrom: "item-one",
+        },
+      ],
+      finalText: dedupReplacementText("item-one"),
+    });
+    const verification = verifyContextReceipt(vault, tampered);
+    const deduped = verification.items.find((item) => item.id === "item-two")!;
+    expect(deduped.verdict).toBe(RECEIPT_VERIFY_VERDICT.changed);
+    expect(sha256Hex(dedupReplacementText("item-one"))).not.toBe(deduped.expectedHash);
   });
 });

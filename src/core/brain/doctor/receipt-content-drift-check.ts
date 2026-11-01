@@ -31,9 +31,16 @@
  * {@link RECEIPT_CONTENT_DRIFT_UNMEASURED_CODE}.
  */
 
+import { isAbsolute, join, relative } from "node:path";
+
 import { continuityLogDir, listContinuityRecords } from "../continuity/store.ts";
 import type { ContinuityRecord } from "../continuity/types.ts";
-import { verifyContextReceipt } from "../context-receipts-verify.ts";
+import {
+  RECEIPT_VERIFY_VERDICT,
+  verifyContextReceipt,
+  type ReceiptItemVerification,
+} from "../context-receipts-verify.ts";
+import { ensureInsideVault } from "../../path-safety.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 import { pushUncertain } from "./uncertain-stream.ts";
@@ -68,10 +75,18 @@ export const receiptContentDriftCheck: DoctorCheck = {
       const since = new Date(
         ctx.now.getTime() - RECEIPT_CONTENT_DRIFT_SINCE_DAYS * 24 * 60 * 60 * 1000,
       ).toISOString();
-      // Newest first, bounded to the window: the listing is append order
-      // (oldest first), so the reversal puts the freshest receipts - the
-      // ones an operator can still act on - inside the fold bound.
+      // Newest first, bounded to the window - AFTER the receipts that
+      // can never verify are set aside, so the window counts receipts
+      // that can actually be verified: a burst of session_inject or
+      // withheld receipts must not push every verifiable one out of the
+      // fold and read as a clean bill. The listing is append order
+      // (oldest first), so the reversal puts the freshest inside the
+      // bound.
       receipts = listContinuityRecords(ctx.vault, { kind: "context_receipt", since })
+        .filter(
+          (record) =>
+            !record.private && !record.redacted && record.payload["trigger"] !== "session_inject",
+        )
         .toReversed()
         .slice(0, RECEIPT_CONTENT_DRIFT_WINDOW);
     } catch {
@@ -85,6 +100,29 @@ export const receiptContentDriftCheck: DoctorCheck = {
       return;
     }
 
+    // The counting contract every counting check follows: a page the
+    // caller may not read neither moves the counts nor is named. Item
+    // paths are absolute or vault-relative, so each resolves to a
+    // vault-relative page rel before the view is asked; a path that
+    // resolves outside the vault is not readable by anyone.
+    const countableItems = (
+      items: ReadonlyArray<ReceiptItemVerification>,
+    ): ReadonlyArray<ReceiptItemVerification> => {
+      if (ctx.readable === undefined) return items;
+      return items.filter((item) => {
+        if (item.path === null) return true;
+        try {
+          const absolute = ensureInsideVault(
+            isAbsolute(item.path) ? item.path : join(ctx.vault, item.path),
+            ctx.vault,
+          );
+          return ctx.readable!(relative(ctx.vault, absolute).split(/\\/).join("/"));
+        } catch {
+          return false;
+        }
+      });
+    };
+
     let receiptsChecked = 0;
     let matched = 0;
     let changed = 0;
@@ -92,13 +130,6 @@ export const receiptContentDriftCheck: DoctorCheck = {
     let withDrift = 0;
     let newestDriftedId: string | null = null;
     for (const receipt of receipts) {
-      // Withheld symmetrically with the session fold, which never
-      // unfolds a private or redacted receipt; the doctor does not
-      // either, even at local reach.
-      if (receipt.private || receipt.redacted) continue;
-      // Nothing verifiable by construction: no delivered text recorded,
-      // so a warning could only nag over receipts that never carried one.
-      if (receipt.payload["trigger"] === "session_inject") continue;
       let verification;
       try {
         verification = verifyContextReceipt(ctx.vault, receipt);
@@ -113,13 +144,20 @@ export const receiptContentDriftCheck: DoctorCheck = {
         });
         continue;
       }
-      // Legacy hashless receipts: nothing verifiable, nothing to report.
-      if (verification.counts.match + verification.counts.changed === 0) continue;
+      const items = countableItems(verification.items);
+      // Legacy hashless receipts, and receipts whose every item sits on
+      // a page this caller may not read: nothing this caller may count,
+      // nothing to report.
+      const matches = items.filter((item) => item.verdict === RECEIPT_VERIFY_VERDICT.match).length;
+      const changedItems = items.filter((item) => item.verdict === RECEIPT_VERIFY_VERDICT.changed);
+      if (matches + changedItems.length === 0) continue;
       receiptsChecked += 1;
-      matched += verification.counts.match;
-      changed += verification.counts.changed;
-      unavailable += verification.counts.unavailable;
-      if (verification.counts.changed > 0) {
+      matched += matches;
+      changed += changedItems.length;
+      unavailable += items.filter(
+        (item) => item.verdict === RECEIPT_VERIFY_VERDICT.unavailable,
+      ).length;
+      if (changedItems.length > 0) {
         withDrift += 1;
         if (newestDriftedId === null) newestDriftedId = receipt.id;
       }

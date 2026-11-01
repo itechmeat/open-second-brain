@@ -64,6 +64,7 @@ import { parseFrontmatterWithNotices } from "../vault.ts";
 import { isContextReceiptTrigger, type ContextReceiptTrigger } from "./context-receipt-trigger.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
 import { loadBrainConfig, loadGuardrailsConfigSafe } from "./policy.ts";
+import { dedupReplacementText } from "./context-transforms.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { guardBrainContextSnippet } from "./safety/context-guard.ts";
 
@@ -181,6 +182,8 @@ interface ReceiptItemData {
   readonly path: string | null;
   readonly expectedHash: string | null;
   readonly trimmed: boolean;
+  /** The first copy's id when the writer replaced this item's body (additive). */
+  readonly dedupedFrom: string | null;
 }
 
 /**
@@ -255,11 +258,13 @@ function readReceiptItems(
     if (typeof id !== "string" || id.length === 0) continue;
     const path = item["path"];
     const hash = item["text_hash"];
+    const dedupedFrom = item["deduped_from"];
     items.push({
       id,
       path: typeof path === "string" && path.length > 0 ? path : null,
       expectedHash: typeof hash === "string" && hash.length > 0 ? hash : null,
       trimmed: item["trimmed"] === true,
+      dedupedFrom: typeof dedupedFrom === "string" && dedupedFrom.length > 0 ? dedupedFrom : null,
     });
   }
   return items;
@@ -306,6 +311,27 @@ function verifyItem(
       RECEIPT_VERIFY_UNAVAILABLE_REASON.no_hash,
       "the item records no text hash, so there is nothing to re-check",
     );
+  }
+  if (item.dedupedFrom !== null && env.trigger === "context_pack") {
+    // The dedup transform replaced this item's delivered body with the
+    // shared omission sentence naming the first copy: the delivered
+    // bytes are synthetic, deterministic from the recorded id, and NOT
+    // a projection of the page - so the re-derivation is the sentence
+    // itself, and the page behind the FIRST copy is what that item's
+    // own verification covers.
+    const observedHash = sha256Hex(dedupReplacementText(item.dedupedFrom));
+    return Object.freeze({
+      id: item.id,
+      path: item.path,
+      verdict:
+        observedHash === item.expectedHash
+          ? RECEIPT_VERIFY_VERDICT.match
+          : RECEIPT_VERIFY_VERDICT.changed,
+      expectedHash: item.expectedHash,
+      observedHash,
+      unavailableReason: null,
+      note: null,
+    });
   }
   if (item.path === null) {
     if (env.trigger === "pre_compress") {

@@ -62,6 +62,7 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
 import { ATTESTATION_CHECK_CODE } from "./doctor/attestation-check.ts";
+import { RECEIPT_CONTENT_DRIFT_CODE } from "./doctor/receipt-content-drift-check.ts";
 import { GIT_TRACKED_DERIVED_STATE_CODE } from "./doctor/git-tracked-state-check.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
@@ -751,7 +752,7 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // against the vault report changed items. The act this finding asks for is
         // INSPECTION - which items drifted and whether the edit was legitimate - so
         // the row points at the per-receipt verify verb.
-        code: "receipt-content-drift",
+        code: RECEIPT_CONTENT_DRIFT_CODE,
         issueClass: "recent context receipts re-verifying with changed item content",
         nextCommand: "o2b brain context-receipts verify <receipt-id>",
         autoRepairable: false,

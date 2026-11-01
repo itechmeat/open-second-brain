@@ -94,6 +94,16 @@ function run(): RunResult {
   return { issues, uncertain };
 }
 
+function runWithReadable(readable: (rel: string) => boolean): RunResult {
+  const issues: DoctorIssue[] = [];
+  const uncertain: DoctorUncertainEntry[] = [];
+  receiptContentDriftCheck.run({ vault, now: NOW, readable } as unknown as DoctorCheckContext, {
+    issues,
+    uncertain,
+  });
+  return { issues, uncertain };
+}
+
 function driftIssues(result: RunResult): ReadonlyArray<DoctorIssue> {
   return result.issues.filter((issue) => issue.code === RECEIPT_CONTENT_DRIFT_CODE);
 }
@@ -222,5 +232,40 @@ describe("receipt content drift check", () => {
     run();
 
     expect(listContinuityRecords(vault, { kind: "context_receipt" }).length).toBe(before);
+  });
+});
+
+describe("the window counts verifiable receipts", () => {
+  test("a burst of session-inject receipts does not push the drifted one out of the window", () => {
+    const abs = writePage("pref-drift.md", "The original drifted text.\n");
+    // One drifted context_pack receipt, ten days old - inside the read
+    // window, but OLDER than a burst of newer session_inject receipts.
+    emitPageReceipt(abs, "The original drifted text.\n", { createdAt: recent(10) });
+    writePage("pref-drift.md", "The rule was silently rewritten.\n");
+    for (let i = 0; i < RECEIPT_CONTENT_DRIFT_WINDOW + 5; i++) {
+      emitPageReceipt(abs, "unused", {
+        trigger: "session_inject",
+        createdAt: recent(Math.max(1, 9 - Math.floor(i / 2))),
+      });
+    }
+    const { issues } = run();
+    // The verifiable receipt is inside the fold no matter how many
+    // never-verifiable ones sit newer: "not looked at" is not "healthy".
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.code).toBe(RECEIPT_CONTENT_DRIFT_CODE);
+  });
+
+  test("items on pages the caller may not read move no count and name no receipt", () => {
+    const abs = writePage("pref-drift.md", "The original drifted text.\n");
+    emitPageReceipt(abs, "The original drifted text.\n");
+    writePage("pref-drift.md", "The rule was silently rewritten.\n");
+    // Every page withheld from this caller: the drifted receipt counts
+    // nothing and the warning stays silent - the counting contract every
+    // counting check follows.
+    const { issues } = runWithReadable(() => false);
+    expect(issues).toEqual([]);
+    // The caller that may read the page sees the drift.
+    const { issues: open } = runWithReadable(() => true);
+    expect(open).toHaveLength(1);
   });
 });

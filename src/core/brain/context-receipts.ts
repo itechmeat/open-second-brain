@@ -48,6 +48,14 @@ export interface ContextReceiptItemInput {
   readonly epistemic?: string;
   /** `evidenced_by` wikilinks grounding the item. */
   readonly evidenceRefs?: ReadonlyArray<string>;
+  /**
+   * The id of the first copy when the dedup transform replaced this
+   * item's delivered body with the shared omission sentence (additive,
+   * forward-compatible): the one fact the verify kernel needs to
+   * re-derive the delivered bytes, which are synthetic and not a
+   * projection of the page at all.
+   */
+  readonly dedupedFrom?: string;
 }
 
 export interface EmitContextReceiptInput {
@@ -149,6 +157,7 @@ export function emitContextReceipt(
       ? { evidence_refs: [...item.evidenceRefs] }
       : {}),
     ...(item.text ? { text_hash: sha256Hex(item.text) } : {}),
+    ...(item.dedupedFrom !== undefined ? { deduped_from: item.dedupedFrom } : {}),
   }));
   const payload: Record<string, unknown> = {
     host: input.options.host,
