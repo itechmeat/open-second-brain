@@ -20,6 +20,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import { readQueryDemand } from "../../src/core/brain/query-demand.ts";
 import { feedbackDir } from "../../src/core/search/feedback.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 let tmp: string;
 let vault: string;
@@ -77,8 +78,12 @@ function call(
   }) as Promise<unknown>;
 }
 
+// The delivery fence shapes remote deliveries, and an absent reach
+// resolves remote, fail closed. These pins name the reach they always
+// meant - the operator's own local reads - where the window mechanics
+// under test live; the remote fence has its own suites.
 function makeServer(): MCPServer {
-  return new MCPServer({ vault, configPath });
+  return new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
 }
 
 function writeMd(rel: string, content: string): void {

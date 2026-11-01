@@ -23,6 +23,7 @@ import { writeSignal, type WriteSignalInput } from "../../src/core/brain/signal.
 import { PROPERTY_DESCRIPTION_MAX } from "../../src/mcp/registry-guard.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 const TOPIC = "deploy";
 const LAPSED_EXPIRY = "2026-07-15";
@@ -47,8 +48,12 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+// The delivery fence shapes remote deliveries, and an absent reach
+// resolves remote, fail closed. These pins name the reach they always
+// meant - the operator's own local reads - where the window mechanics
+// under test live; the remote fence has its own suites.
 function ctx(): ServerContext {
-  return { vault, configPath, repoRoot: null };
+  return { vault, configPath, repoRoot: null, reach: TRANSPORT_REACH.local };
 }
 
 function tool(name: string): ToolDefinition {
