@@ -1,0 +1,362 @@
+/**
+ * Re-hash verification of context receipts (t_4300e5fd) - the kernel.
+ *
+ * Fixtures are receipts emitted with {@link emitContextReceipt} against
+ * temp-vault pages, per the context-receipts suite shape, so the tests
+ * verify against exactly the records the write path produces - including
+ * the absolute host paths today's context_pack emitter records.
+ *
+ * The doctrine under test: verdicts are about delivered BYTES, never
+ * about liveness and never inferred; the one hashing path is
+ * `sha256Hex`; delivery-time transforms (frontmatter strip, context
+ * guard, the recorded char-budget cut) are re-applied so a trimmed item
+ * does not false-CHANGED; and everything that cannot be re-derived reads
+ * as an honest `unavailable` with a named reason.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
+import {
+  emitContextReceipt,
+  RECEIPT_ITEM_ACTIVE_BODY,
+  RECEIPT_ITEM_STANDING_RULES,
+} from "../../../src/core/brain/context-receipts.ts";
+import {
+  RECEIPT_VERIFY_UNAVAILABLE_REASON,
+  RECEIPT_VERIFY_VERDICT,
+  verifyContextReceipt,
+} from "../../../src/core/brain/context-receipts-verify.ts";
+import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
+import { brainActivePath } from "../../../src/core/brain/paths.ts";
+import { applyCharBudget } from "../../../src/core/brain/recall-budget.ts";
+
+let vault: string;
+
+beforeEach(() => {
+  vault = mkdtempSync(join(tmpdir(), "o2b-context-receipts-verify-"));
+  mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+  mkdirSync(join(vault, "Brain", "retired"), { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(vault, { recursive: true, force: true });
+});
+
+const PAGE_BODY = "Keep answers short and cite the note.\n";
+
+/**
+ * The text the receipt write path hashes: the body AFTER frontmatter
+ * strip, exactly as `parseFrontmatter` hands it to the pack builders
+ * (trimmed), not the raw file bytes.
+ */
+function deliveredText(body: string): string {
+  return body.trim();
+}
+
+/** A plain preference page with frontmatter, at a vault-relative path. */
+function writePage(rel: string, body: string): string {
+  const abs = join(vault, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, `---\nid: ${basenameId(rel)}\nkind: brain-preference\n---\n\n${body}`, "utf8");
+  return abs;
+}
+
+function basenameId(rel: string): string {
+  return rel.split("/").pop()!.replace(/\.md$/, "");
+}
+
+/** Emit a context_pack receipt whose single item names `abs` and hashes the stripped `text`. */
+function emitPageReceipt(
+  abs: string,
+  text: string,
+  opts?: { trimmed?: boolean; budget?: Record<string, unknown> },
+): ContinuityRecord {
+  const delivered = deliveredText(text);
+  return emitContextReceipt(vault, {
+    options: {
+      host: "unit-test",
+      trigger: "context_pack",
+      createdAt: "2026-05-31T12:00:00Z",
+    },
+    items: [
+      {
+        id: basenameId(abs),
+        path: abs,
+        text: delivered,
+        ...(opts?.trimmed !== undefined ? { trimmed: opts.trimmed } : {}),
+      },
+    ],
+    finalText: delivered,
+    ...(opts?.budget ? { budget: opts.budget } : {}),
+  });
+}
+
+describe("receipt verify vocabulary", () => {
+  test("verdicts and unavailable reasons are frozen closed sets", () => {
+    expect(Object.isFrozen(RECEIPT_VERIFY_VERDICT)).toBe(true);
+    expect(Object.isFrozen(RECEIPT_VERIFY_UNAVAILABLE_REASON)).toBe(true);
+    expect(Object.values(RECEIPT_VERIFY_VERDICT)).toEqual(["match", "changed", "unavailable"]);
+    expect(Object.values(RECEIPT_VERIFY_UNAVAILABLE_REASON)).toEqual([
+      "no_path",
+      "no_hash",
+      "file_missing",
+      "unreadable",
+    ]);
+  });
+});
+
+describe("verifyContextReceipt", () => {
+  test("an unmodified page re-hashes to match with equal digests", () => {
+    const abs = writePage("Brain/preferences/pref-alpha.md", PAGE_BODY);
+    const receipt = emitPageReceipt(abs, PAGE_BODY);
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.receiptId).toBe(receipt.id);
+    expect(verification.createdAt).toBe(receipt.createdAt);
+    expect(verification.trigger).toBe("context_pack");
+    expect(verification.sessionInjected).toBe(false);
+    expect(verification.items).toHaveLength(1);
+    const item = verification.items[0]!;
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+    expect(item.expectedHash).toBe(item.observedHash);
+    expect(item.unavailableReason).toBeNull();
+    expect(verification.counts).toEqual({ match: 1, changed: 0, unavailable: 0 });
+  });
+
+  test("an edited page body yields changed", () => {
+    const abs = writePage("Brain/preferences/pref-bravo.md", PAGE_BODY);
+    const receipt = emitPageReceipt(abs, PAGE_BODY);
+    writePage("Brain/preferences/pref-bravo.md", "The body was silently replaced.\n");
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    const item = verification.items[0]!;
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.changed);
+    expect(item.expectedHash).not.toBe(item.observedHash);
+    expect(item.observedHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(verification.counts).toEqual({ match: 0, changed: 1, unavailable: 0 });
+  });
+
+  test("a deleted page yields unavailable(file_missing)", () => {
+    const abs = writePage("Brain/preferences/pref-charlie.md", PAGE_BODY);
+    const receipt = emitPageReceipt(abs, PAGE_BODY);
+    rmSync(abs);
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    const item = verification.items[0]!;
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+    expect(item.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.file_missing);
+    expect(item.observedHash).toBeNull();
+    expect(item.note).not.toBeNull();
+  });
+
+  test("an unreadable page yields unavailable(unreadable)", () => {
+    const abs = writePage("Brain/preferences/pref-delta.md", PAGE_BODY);
+    const receipt = emitPageReceipt(abs, PAGE_BODY);
+    rmSync(abs);
+    mkdirSync(abs);
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    const item = verification.items[0]!;
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+    expect(item.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.unreadable);
+    expect(item.observedHash).toBeNull();
+  });
+
+  test("a trimmed item re-hashes through the re-applied budget cut and does not false-CHANGED", () => {
+    const longBody = `${"Filler sentence. ".repeat(40)}The closing rule still stands.\n`;
+    const abs = writePage("Brain/preferences/pref-trimmed.md", longBody);
+    const maxChars = 120;
+    // The delivered text the pack hashed: the parsed body, then the same
+    // applyCharBudget cut the context_pack lane applies when
+    // max_chars_per_memory is set.
+    const delivered = applyCharBudget([{ item: "pref-trimmed", text: deliveredText(longBody) }], {
+      maxCharsPerEntry: maxChars,
+    }).kept[0]!.text;
+    expect(delivered.length).toBeLessThan(longBody.length);
+    const receipt = emitPageReceipt(abs, delivered, {
+      trimmed: true,
+      budget: { max_tokens: 999, max_chars_per_memory: maxChars },
+    });
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.items[0]!.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+
+    // The same page edited BEYOND the cut: the re-derived text differs.
+    const edited = `${"Rewritten filler. ".repeat(40)}A different closing rule.\n`;
+    writePage("Brain/preferences/pref-trimmed.md", `---\nid: pref-trimmed\n---\n\n${edited}`);
+    const changed = verifyContextReceipt(vault, receipt);
+    expect(changed.items[0]!.verdict).toBe(RECEIPT_VERIFY_VERDICT.changed);
+  });
+
+  test("a pre_compress principle item without path reports unavailable(no_hash) and the active-body item with path plus hash verifies", () => {
+    const activeBody = "# Active\n\nUse project conventions.\n";
+    writeFileSync(brainActivePath(vault), activeBody, "utf8");
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "pre_compress",
+        createdAt: "2026-05-31T12:05:00Z",
+      },
+      items: [
+        {
+          id: RECEIPT_ITEM_ACTIVE_BODY,
+          path: brainActivePath(vault),
+          text: deliveredText(activeBody),
+        },
+        { id: "pref-principle", text: "Prefer concrete release notes" },
+      ],
+      finalText: activeBody,
+      budget: { top_k: 10 },
+    });
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.trigger).toBe("pre_compress");
+    const active = verification.items.find((item) => item.id === RECEIPT_ITEM_ACTIVE_BODY)!;
+    expect(active.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+    const principle = verification.items.find((item) => item.id === "pref-principle")!;
+    expect(principle.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+    expect(principle.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.no_hash);
+    expect(principle.expectedHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(principle.observedHash).toBeNull();
+    expect(verification.counts).toEqual({ match: 1, changed: 0, unavailable: 1 });
+  });
+
+  test("a session_inject receipt returns every item unavailable(no_hash) with the by-construction note", () => {
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "hook",
+        trigger: "session_inject",
+        createdAt: "2026-05-31T12:10:00Z",
+      },
+      items: [
+        { id: RECEIPT_ITEM_STANDING_RULES, bytes: 120, tokens: 30 },
+        { id: "active-body", bytes: 40, tokens: 10 },
+      ],
+      finalText: "eager layer",
+    });
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.sessionInjected).toBe(true);
+    expect(verification.trigger).toBe("session_inject");
+    expect(verification.items).toHaveLength(2);
+    for (const item of verification.items) {
+      expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+      expect(item.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.no_hash);
+      expect(item.expectedHash).toBeNull();
+      expect(item.observedHash).toBeNull();
+      expect(item.note).toContain("session_inject");
+    }
+    expect(verification.counts).toEqual({ match: 0, changed: 0, unavailable: 2 });
+  });
+
+  test("structural ids report unavailable without any inferred verdict", () => {
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "context_pack",
+        createdAt: "2026-05-31T12:15:00Z",
+      },
+      items: [{ id: RECEIPT_ITEM_STANDING_RULES }],
+      finalText: "",
+    });
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    const item = verification.items[0]!;
+    expect(item.id).toBe(RECEIPT_ITEM_STANDING_RULES);
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+    expect(item.expectedHash).toBeNull();
+    expect(item.observedHash).toBeNull();
+    expect(item.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.no_hash);
+  });
+
+  test("an absolute host path and a vault-relative spelling both resolve", () => {
+    const abs = writePage("Brain/preferences/pref-echo.md", PAGE_BODY);
+    const absoluteReceipt = emitPageReceipt(abs, PAGE_BODY);
+    const relativeReceipt = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "context_pack",
+        createdAt: "2026-05-31T12:20:00Z",
+      },
+      items: [
+        { id: "pref-echo", path: "Brain/preferences/pref-echo.md", text: deliveredText(PAGE_BODY) },
+      ],
+      finalText: deliveredText(PAGE_BODY),
+    });
+
+    expect(verifyContextReceipt(vault, absoluteReceipt).items[0]!.verdict).toBe(
+      RECEIPT_VERIFY_VERDICT.match,
+    );
+    expect(verifyContextReceipt(vault, relativeReceipt).items[0]!.verdict).toBe(
+      RECEIPT_VERIFY_VERDICT.match,
+    );
+  });
+
+  test("a path escaping the vault maps to unavailable(file_missing) and never throws", () => {
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "context_pack",
+        createdAt: "2026-05-31T12:25:00Z",
+      },
+      items: [{ id: "pref-escape", path: join(vault, "..", "outside.md"), text: PAGE_BODY }],
+      finalText: PAGE_BODY,
+    });
+
+    expect(() => verifyContextReceipt(vault, receipt)).not.toThrow();
+    const verification = verifyContextReceipt(vault, receipt);
+    const item = verification.items[0]!;
+    expect(item.verdict).toBe(RECEIPT_VERIFY_VERDICT.unavailable);
+    expect(item.unavailableReason).toBe(RECEIPT_VERIFY_UNAVAILABLE_REASON.file_missing);
+    expect(item.note).not.toBeNull();
+  });
+
+  test("a retired note verifies against its retired body - match is a claim about bytes", () => {
+    const retiredBody = "Superseded but still exactly what was delivered.\n";
+    const abs = writePage("Brain/retired/pref-retired.md", retiredBody);
+    const receipt = emitPageReceipt(abs, retiredBody);
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.items[0]!.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
+  });
+
+  test("counts aggregate across a mixed receipt and verify performs no writes", () => {
+    const keptAbs = writePage("Brain/preferences/pref-kept.md", PAGE_BODY);
+    const editedAbs = writePage("Brain/preferences/pref-edited.md", PAGE_BODY);
+    const goneAbs = writePage("Brain/preferences/pref-gone.md", PAGE_BODY);
+    const receipt = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "context_pack",
+        createdAt: "2026-05-31T12:30:00Z",
+      },
+      items: [
+        { id: "pref-kept", path: keptAbs, text: deliveredText(PAGE_BODY) },
+        { id: "pref-edited", path: editedAbs, text: deliveredText(PAGE_BODY) },
+        { id: "pref-gone", path: goneAbs, text: deliveredText(PAGE_BODY) },
+      ],
+      finalText: PAGE_BODY,
+    });
+    writePage("Brain/preferences/pref-edited.md", "Edited after the session.\n");
+    rmSync(goneAbs);
+    const recordsBefore = listContinuityRecords(vault, {}).length;
+
+    const verification = verifyContextReceipt(vault, receipt);
+
+    expect(verification.counts).toEqual({ match: 1, changed: 1, unavailable: 1 });
+    expect(listContinuityRecords(vault, {}).length).toBe(recordsBefore);
+  });
+});
