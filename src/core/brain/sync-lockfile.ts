@@ -637,11 +637,21 @@ function waiterSleepMs(waitedMs: number): number {
 /** Upper bound on the bytes waiters append to one lock file. */
 const WAITER_MARK_LIMIT = 4_096;
 /**
- * Below this size a lock body is still mid-stamp (pid, token line,
- * timestamp and separators never fit in less), and a waiter mark at
- * its end would land inside the token: leave such a file unmarked.
+ * The smallest body a COMPLETED stamp has, per platform. A mark at or below
+ * it would land inside a stamp still being written (the exclusive create
+ * exists a few microseconds before the stamp's bytes do), so such a file is
+ * left unmarked. POSIX stamps `pid\nuuid\n<iso>\n` - never under 48 bytes.
+ * Windows writes no token line, so its completed stamp is the literal
+ * `null` token, the 24-character ISO timestamp and two separators: exactly
+ * 30 bytes. Sizing one floor for the POSIX stamp kept every completed
+ * Windows body under it forever: no waiter could ever announce itself, the
+ * holder learned nothing at release, and the hand-over - the whole reason
+ * the mark exists - was dead on win32.
  */
-const MIN_STAMP_BYTES = 48;
+const POSIX_MIN_STAMP_BYTES = 48;
+const WIN32_MIN_STAMP_BYTES = 30;
+const MIN_STAMP_BYTES =
+  process.platform === "win32" ? WIN32_MIN_STAMP_BYTES : POSIX_MIN_STAMP_BYTES;
 const WAITER_MARK = Buffer.from("w", "utf8");
 /** Read-write, never create, and never follow a symlink where the platform can refuse one. */
 const MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
