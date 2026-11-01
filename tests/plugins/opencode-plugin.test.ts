@@ -88,6 +88,14 @@ function stubHookBin(context: string | null): string {
 }
 
 /**
+ * The test runner for every dispatch-dependent test: `stubHookDispatch`
+ * (and the prompt lane built on it) writes a POSIX shell shim, so those
+ * tests skip on Windows exactly as the stub's own comment states, the
+ * way `stubHookBin`'s `.cmd` branch keeps the rest of the file green.
+ */
+const dispatchTest = test.skipIf(process.platform === "win32");
+
+/**
  * Stub o2b-hook that answers per shim name and records every invocation:
  * the shim name is appended to `calls.log` and its stdin payload is kept
  * at `stdin-<shim>` so tests can assert the synthetic payload shape.
@@ -1015,10 +1023,34 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     for (const spec of specs) expect(spec!.startsWith("node:")).toBe(true);
   });
 
-  test("a pretool-orient deny verdict blocks the tool call with the shim's reason", async () => {
+  dispatchTest(
+    "a pretool-orient deny verdict blocks the tool call with the shim's reason",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+        "pretool-orient": DENY_VERDICT,
+        "pretool-host-backup": null,
+      });
+      process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+      process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
+      const hooks = await makeHooks(fakeClient(MESSAGES));
+      const output = { args: { filePath: "/vault/Brain/active.md" } };
+      expect(() =>
+        hooks["tool.execute.before"]!(
+          { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+          output as never,
+        ),
+      ).toThrow("Read vault notes through brain_search instead.");
+      // A deny is the only outcome that must ever throw out of the gate.
+    },
+  );
+
+  dispatchTest("a pretool-host-backup deny verdict blocks the tool call too", async () => {
+    // The gate relays BOTH pretool shims, and a deny from either one
+    // blocks: the backup shim's permissionDecision is read the same way
+    // orient's is, so a gate that ignored the backup verdict fails here.
     process.env["OSB_HOOK_BIN"] = stubHookDispatch({
-      "pretool-orient": DENY_VERDICT,
-      "pretool-host-backup": null,
+      "pretool-orient": ALLOW_VERDICT,
+      "pretool-host-backup": DENY_VERDICT,
     });
     process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
     process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
@@ -1026,14 +1058,13 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     const output = { args: { filePath: "/vault/Brain/active.md" } };
     expect(() =>
       hooks["tool.execute.before"]!(
-        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        { tool: "edit", sessionID: "sess-gate", callID: "c1" } as never,
         output as never,
       ),
     ).toThrow("Read vault notes through brain_search instead.");
-    // A deny is the only outcome that must ever throw out of the gate.
   });
 
-  test("an allow verdict passes the tool call through untouched", async () => {
+  dispatchTest("an allow verdict passes the tool call through untouched", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookDispatch({
       "pretool-orient": ALLOW_VERDICT,
       "pretool-host-backup": null,
@@ -1063,7 +1094,7 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     ).not.toThrow();
   });
 
-  test("malformed shim stdout passes the tool call through", async () => {
+  dispatchTest("malformed shim stdout passes the tool call through", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookDispatch({
       // printf renders the raw bytes; JSON.parse will reject them.
       "pretool-orient": "not-json{{",
@@ -1090,7 +1121,7 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     ).not.toThrow();
   }, 30_000);
 
-  test("the opt-in flags off mean zero spawns", async () => {
+  dispatchTest("the opt-in flags off mean zero spawns", async () => {
     stubHookDispatch({});
     const hooks = await makeHooks(fakeClient(MESSAGES));
     hooks["tool.execute.before"]!(
@@ -1104,7 +1135,7 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     expect(recordedCalls()).toEqual([]);
   });
 
-  test("the host backup shim only rides file-mutating tools", async () => {
+  dispatchTest("the host backup shim only rides file-mutating tools", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookDispatch({
       "pretool-orient": ALLOW_VERDICT,
       "pretool-host-backup": null,
@@ -1124,28 +1155,31 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     expect(recordedCalls()).toEqual(["pretool-orient", "pretool-orient", "pretool-host-backup"]);
   });
 
-  test("spawned payloads carry the synthetic PreToolUse shape with the opencode session id", async () => {
-    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
-      "pretool-orient": ALLOW_VERDICT,
-      "pretool-host-backup": null,
-    });
-    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
-    const hooks = await makeHooks(fakeClient(MESSAGES));
-    hooks["tool.execute.before"]!(
-      { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
-      { args: { filePath: "/vault/Brain/active.md" } } as never,
-    );
-    const payload = recordedStdin("pretool-orient");
-    expect(payload).toEqual({
-      hook_event_name: "PreToolUse",
-      session_id: "sess-gate",
-      tool_name: "read",
-      tool_input: { filePath: "/vault/Brain/active.md" },
-      cwd: "/work/dir",
-    });
-  });
+  dispatchTest(
+    "spawned payloads carry the synthetic PreToolUse shape with the opencode session id",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+        "pretool-orient": ALLOW_VERDICT,
+        "pretool-host-backup": null,
+      });
+      process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+      const hooks = await makeHooks(fakeClient(MESSAGES));
+      hooks["tool.execute.before"]!(
+        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        { args: { filePath: "/vault/Brain/active.md" } } as never,
+      );
+      const payload = recordedStdin("pretool-orient");
+      expect(payload).toEqual({
+        hook_event_name: "PreToolUse",
+        session_id: "sess-gate",
+        tool_name: "read",
+        tool_input: { filePath: "/vault/Brain/active.md" },
+        cwd: "/work/dir",
+      });
+    },
+  );
 
-  test("a config-file flag arms the gate without an env var", async () => {
+  dispatchTest("a config-file flag arms the gate without an env var", async () => {
     // The flag twin reads the same machine config the hook wrappers do:
     // OPEN_SECOND_BRAIN_CONFIG override, then the XDG config.yaml.
     const configPath = join(binDir, "config.yaml");
@@ -1160,31 +1194,34 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     expect(recordedCalls()).toEqual(["pretool-orient"]);
   });
 
-  test("V2 registers execute.before beside execute.after and a deny throws there too", async () => {
-    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
-      "pretool-orient": DENY_VERDICT,
-      "pretool-host-backup": null,
-    });
-    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
-    const plugin = await makeV2Plugin([]);
-    try {
-      const before = plugin.toolHooks.get("execute.before");
-      expect(typeof before).toBe("function");
-      expect(typeof plugin.toolHooks.get("execute.after")).toBe("function");
-      expect(() =>
-        before!(
-          { tool: "read", sessionID: "sess-v2-gate" } as never,
-          {
-            args: { filePath: "/v.md" },
-          } as never,
-        ),
-      ).toThrow("Read vault notes through brain_search instead.");
-    } finally {
-      plugin.cleanup();
-    }
-  });
+  dispatchTest(
+    "V2 registers execute.before beside execute.after and a deny throws there too",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+        "pretool-orient": DENY_VERDICT,
+        "pretool-host-backup": null,
+      });
+      process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+      const plugin = await makeV2Plugin([]);
+      try {
+        const before = plugin.toolHooks.get("execute.before");
+        expect(typeof before).toBe("function");
+        expect(typeof plugin.toolHooks.get("execute.after")).toBe("function");
+        expect(() =>
+          before!(
+            { tool: "read", sessionID: "sess-v2-gate" } as never,
+            {
+              args: { filePath: "/v.md" },
+            } as never,
+          ),
+        ).toThrow("Read vault notes through brain_search instead.");
+      } finally {
+        plugin.cleanup();
+      }
+    },
+  );
 
-  test("V2 stays fail-soft: allow verdict and missing binary pass untouched", async () => {
+  dispatchTest("V2 stays fail-soft: allow verdict and missing binary pass untouched", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookDispatch({
       "pretool-orient": ALLOW_VERDICT,
       "pretool-host-backup": null,
@@ -1218,39 +1255,42 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     for (const key of PROMPT_FLAGS) process.env[key] = "true";
   }
 
-  test("one prompt enqueues one payload and two context fires deliver it exactly once", async () => {
-    process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", "NAV BLOCK");
-    armPromptFlags();
-    const plugin = await makeV2Plugin([]);
-    try {
-      const prompt = plugin.sessionHooks.get("prompt");
-      expect(typeof prompt).toBe("function");
-      prompt!(undefined as never);
-      prompt!({ sessionID: "sess-turn", prompt: "find my notes on delivery trust" } as never);
-      const first = { system: [{ type: "text" as const, text: "base" }] };
-      plugin.contextHook(first);
-      const second = { system: [{ type: "text" as const, text: "base" }] };
-      plugin.contextHook(second);
+  dispatchTest(
+    "one prompt enqueues one payload and two context fires deliver it exactly once",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", "NAV BLOCK");
+      armPromptFlags();
+      const plugin = await makeV2Plugin([]);
+      try {
+        const prompt = plugin.sessionHooks.get("prompt");
+        expect(typeof prompt).toBe("function");
+        prompt!(undefined as never);
+        prompt!({ sessionID: "sess-turn", prompt: "find my notes on delivery trust" } as never);
+        const first = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook(first);
+        const second = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook(second);
 
-      // Queued context arrives on the first model request of the turn only.
-      expect(systemTexts(first)).toContain("RECALL BLOCK");
-      expect(systemTexts(first)).toContain("NAV BLOCK");
-      expect(systemTexts(second)).not.toContain("RECALL BLOCK");
-      expect(systemTexts(second)).not.toContain("NAV BLOCK");
-      // The active inject's TTL cache is untouched: one spawn, delivered on both fires.
-      expect(systemTexts(first)).toContain("ACTIVE BLOCK");
-      expect(systemTexts(second)).toContain("ACTIVE BLOCK");
-      expect(recordedCalls().filter((shim) => shim === "active-inject")).toHaveLength(1);
-      // Multi-shim context rides one queued text part, not one part per shim.
-      const queuedParts = first.system.filter((part) => part.text.includes("RECALL BLOCK"));
-      expect(queuedParts).toHaveLength(1);
-      expect(queuedParts[0]!.text).toContain("NAV BLOCK");
-    } finally {
-      plugin.cleanup();
-    }
-  });
+        // Queued context arrives on the first model request of the turn only.
+        expect(systemTexts(first)).toContain("RECALL BLOCK");
+        expect(systemTexts(first)).toContain("NAV BLOCK");
+        expect(systemTexts(second)).not.toContain("RECALL BLOCK");
+        expect(systemTexts(second)).not.toContain("NAV BLOCK");
+        // The active inject's TTL cache is untouched: one spawn, delivered on both fires.
+        expect(systemTexts(first)).toContain("ACTIVE BLOCK");
+        expect(systemTexts(second)).toContain("ACTIVE BLOCK");
+        expect(recordedCalls().filter((shim) => shim === "active-inject")).toHaveLength(1);
+        // Multi-shim context rides one queued text part, not one part per shim.
+        const queuedParts = first.system.filter((part) => part.text.includes("RECALL BLOCK"));
+        expect(queuedParts).toHaveLength(1);
+        expect(queuedParts[0]!.text).toContain("NAV BLOCK");
+      } finally {
+        plugin.cleanup();
+      }
+    },
+  );
 
-  test("a second prompt replaces an undelivered payload (single-slot queue)", async () => {
+  dispatchTest("a second prompt replaces an undelivered payload (single-slot queue)", async () => {
     process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "FIRST BLOCK", null);
     armPromptFlags();
     const plugin = await makeV2Plugin([]);
@@ -1284,31 +1324,34 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     }
   });
 
-  test("prompt shims spawn with UserPromptSubmit payloads carrying the opencode session id", async () => {
-    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
-    armPromptFlags();
-    const plugin = await makeV2Plugin([]);
-    try {
-      const prompt = plugin.sessionHooks.get("prompt")!;
-      prompt({ sessionID: "sess-turn", prompt: "find my notes" } as never);
-      expect(recordedCalls()).toEqual([
-        "recall-inject",
-        "nav-inject",
-        "counterparty-brief",
-        "reground-deliver",
-      ]);
-      expect(recordedStdin("reground-deliver")).toEqual({
-        hook_event_name: "UserPromptSubmit",
-        session_id: "sess-turn",
-        prompt: "find my notes",
-        cwd: "/work/dir",
-      });
-    } finally {
-      plugin.cleanup();
-    }
-  });
+  dispatchTest(
+    "prompt shims spawn with UserPromptSubmit payloads carrying the opencode session id",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+      armPromptFlags();
+      const plugin = await makeV2Plugin([]);
+      try {
+        const prompt = plugin.sessionHooks.get("prompt")!;
+        prompt({ sessionID: "sess-turn", prompt: "find my notes" } as never);
+        expect(recordedCalls()).toEqual([
+          "recall-inject",
+          "nav-inject",
+          "counterparty-brief",
+          "reground-deliver",
+        ]);
+        expect(recordedStdin("reground-deliver")).toEqual({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "sess-turn",
+          prompt: "find my notes",
+          cwd: "/work/dir",
+        });
+      } finally {
+        plugin.cleanup();
+      }
+    },
+  );
 
-  test("the prompt flags off mean zero spawns and no queued delivery", async () => {
+  dispatchTest("the prompt flags off mean zero spawns and no queued delivery", async () => {
     process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", null);
     const plugin = await makeV2Plugin([]);
     try {
@@ -1323,7 +1366,7 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     }
   });
 
-  test("an event without observable prompt text spawns nothing", async () => {
+  dispatchTest("an event without observable prompt text spawns nothing", async () => {
     process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
     armPromptFlags();
     const plugin = await makeV2Plugin([]);
@@ -1337,18 +1380,21 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     }
   });
 
-  test("V1 chat.message observes the prompt and the system transform drains the queue once", async () => {
-    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
-    armPromptFlags();
-    const hooks = await makeHooks(fakeClient(MESSAGES));
-    const message = hooks["chat.message"]!;
-    await message({ sessionID: "sess-v1", prompt: "find my notes" } as never, {} as never);
-    const first = { system: ["base"] };
-    await hooks["experimental.chat.system.transform"]!({} as never, first as never);
-    const second = { system: ["base"] };
-    await hooks["experimental.chat.system.transform"]!({} as never, second as never);
-    expect(first.system).toEqual(["base", "RECALL BLOCK"]);
-    expect(second.system).toEqual(["base"]);
-    expect(recordedCalls().filter((shim) => shim === "recall-inject")).toHaveLength(1);
-  });
+  dispatchTest(
+    "V1 chat.message observes the prompt and the system transform drains the queue once",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+      armPromptFlags();
+      const hooks = await makeHooks(fakeClient(MESSAGES));
+      const message = hooks["chat.message"]!;
+      await message({ sessionID: "sess-v1", prompt: "find my notes" } as never, {} as never);
+      const first = { system: ["base"] };
+      await hooks["experimental.chat.system.transform"]!({} as never, first as never);
+      const second = { system: ["base"] };
+      await hooks["experimental.chat.system.transform"]!({} as never, second as never);
+      expect(first.system).toEqual(["base", "RECALL BLOCK"]);
+      expect(second.system).toEqual(["base"]);
+      expect(recordedCalls().filter((shim) => shim === "recall-inject")).toHaveLength(1);
+    },
+  );
 });
