@@ -326,6 +326,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "fully embedded index, which is precisely the failed-read-as-healthy the check refuses",
   },
   {
+    code: "attestation-state-unmeasured",
+    reason:
+      "the attestation family is there and the read over it was refused - the records would " +
+      "not list, the newest one would not parse, or the verification walk threw - so whether " +
+      "the signed point still holds is unknown rather than fine. What restores it depends on " +
+      "which read failed and why, and the records themselves must never be rewritten to make " +
+      "a check succeed, since they are the signed evidence the family exists to keep",
+  },
+  {
     code: "embeddings-health-unmeasured",
     reason:
       "the check ran and could observe too little to say anything: the search configuration " +
@@ -380,6 +389,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "which, and on why: a permission an operator has to decide to grant, a config file to fix, " +
       "or a path that belongs to another user entirely. Guessing one would act on a state this " +
       "pass never managed to observe",
+  },
+  {
+    code: "receipt-content-drift-unmeasured",
+    reason:
+      "the receipt ledgers are there and the re-hash over them was refused, so whether recent " +
+      "receipts still match the vault is unknown rather than fine. What restores it depends on " +
+      "why - a permission an operator has to decide to grant, or a ledger replaced by a file " +
+      "that will not open - and the ledgers must never be edited to make a scan succeed, " +
+      "since they are the record the verify verdicts are issued from",
   },
   {
     code: "receipt-ledger-unmeasured",

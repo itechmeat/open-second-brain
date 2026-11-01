@@ -33,6 +33,7 @@ import {
   cmdBrainPin,
   cmdBrainUnfreeze,
   handleBrainLogSubcommand,
+  cmdBrainAttest,
   cmdBrainUnpin,
   cmdBrainState,
   cmdBrainSetPrimary,
@@ -170,7 +171,6 @@ import {
   cmdBrainWeekly,
   cmdBrainPermissions,
 } from "./brain/verbs/index.ts";
-import { cmdBrainAttest } from "./brain/verbs/attest.ts";
 
 /**
  * Brain verbs whose whole purpose is replaying records authored

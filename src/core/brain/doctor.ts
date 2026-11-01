@@ -98,6 +98,7 @@ import { frozenVaultCheck } from "./doctor/frozen-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
+import { attestationCheck } from "./doctor/attestation-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
   danglingWorkrunCheck,
@@ -230,6 +231,9 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   // grammar the neutralizer escapes with.
   plantedRowsCheck,
   logChainCheck,
+  // The attestation liveness check (delivery trust, t_3bdb82b0): a stale,
+  // unkeyed or diverged newest attestation, one warning under one code.
+  attestationCheck,
   symlinkEscapeCheck,
   frontmatterUncertaintyProbe,
   lineageLedgerProbe,

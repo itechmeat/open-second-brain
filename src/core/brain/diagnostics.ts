@@ -61,6 +61,7 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_CODE,
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
+import { ATTESTATION_CHECK_CODE } from "./doctor/attestation-check.ts";
 import { GIT_TRACKED_DERIVED_STATE_CODE } from "./doctor/git-tracked-state-check.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
@@ -560,6 +561,27 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "log-chain-broken",
         issueClass: "Brain log shard whose hash chain does not hold",
         nextCommand: "o2b brain log verify",
+        autoRepairable: false,
+      },
+      {
+        // The attestation liveness check's one code (delivery trust,
+        // t_3bdb82b0): the newest attestation is past its window, the
+        // signing key is gone while signed evidence exists, or a shard
+        // diverged or went missing since it was signed. The exit is the
+        // verifier, the check's damage-first answer, which re-measures the
+        // store against the newest signed point and prints the per-shard
+        // verdicts an operator needs before re-signing - and
+        // `autoRepairable` stays false for the same reason
+        // `log-chain-broken` above does: the verifier reports, nothing
+        // repairs, and the follow-up (keygen, then sign) is the
+        // operator's act. Imported from the check module rather than
+        // spelled as a literal, keeping one definition; the direction of
+        // the import is the safe one (the check never imports this
+        // module), so the exit census reading the check's imports back
+        // sees nothing new.
+        code: ATTESTATION_CHECK_CODE,
+        issueClass: "newest store attestation stale, unkeyed, or diverged from the store",
+        nextCommand: "o2b brain attest verify",
         autoRepairable: false,
       },
       {

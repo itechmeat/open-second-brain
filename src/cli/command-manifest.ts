@@ -347,6 +347,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
+        command(
+          "attest",
+          "Ed25519-signed store attestations: keygen, sign, list, verify",
+          [flag("vault", "string"), flag("json", "boolean"), flag("passphrase-from-env", "string")],
+          [
+            command("keygen", "Generate the operator's Ed25519 attestation keypair", []),
+            command("sign", "Seal, sign and write one store attestation", []),
+            command("list", "Every attestation, newest first", []),
+            command("verify", "Re-measure the store against the newest attestation", []),
+          ],
+        ),
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),

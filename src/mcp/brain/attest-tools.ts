@@ -62,11 +62,11 @@ async function toolBrainAttestations(
     if (newest === undefined) return { verified: null };
     // The K4 AttestationVerification shape, returned as-is: the CLI's
     // `--json` emits the same object, and the two faces must not disagree
-    // about what a verification result contains.
-    return verifyAttestation(ctx.vault, readAttestationRecordFile(newest.path)) as Record<
-      string,
-      unknown
-    >;
+    // about what a verification result contains. Spread rather than cast:
+    // the kernel's readonly interface has no index signature, and a fresh
+    // object literal is what Record<string, unknown> admits without one -
+    // same fields, same order, nothing invented.
+    return { ...verifyAttestation(ctx.vault, readAttestationRecordFile(newest.path)) };
   } catch (exc) {
     if (exc instanceof MCPError) throw exc;
     // A record file that exists but cannot be read is damage to name,

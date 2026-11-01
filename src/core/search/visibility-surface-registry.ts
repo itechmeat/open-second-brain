@@ -276,6 +276,22 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "narrower than the other entries here: no page content crosses this surface at all.",
   },
   {
+    // Delivery trust (lane D). The attestation store sits under
+    // `.open-second-brain/`, so the sweep has no frontmatter to read at
+    // this file; the row is the fact written down rather than a behavior
+    // change.
+    surface: "brain_attestations",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "list and verify (src/mcp/brain/attest-tools.ts) read the signed attestation records " +
+      "under .open-second-brain/attestations/ and re-measure the Brain log against the newest " +
+      "one - the rows carry attestation ids, timestamps, device ids, shard names, hashes and " +
+      "verdicts, never a note path, title or body, so the withheld-row refusals of the content " +
+      "tools have nothing to refuse here and the answer is identical at every reach. Included " +
+      "for completeness of the file-level sweep only.",
+  },
+  {
     surface: "brain_bridges",
     kind: K.mcpTool,
     category: C.covered,
@@ -1266,6 +1282,16 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "src/cli/brain/verbs/audit.ts calls readPrefAudit, the same preference-mutation ledger " +
       "read brain_audit uses; no note body or title crosses either surface.",
+  },
+  {
+    surface: "brain attest",
+    kind: K.cliVerb,
+    category: C.excluded,
+    reason:
+      "src/cli/brain/verbs/attest.ts drives the same attestation kernel as brain_attestations " +
+      "in the operator's own shell, plus keygen and sign, which mint keys and signed records " +
+      "under .open-second-brain/ and read no vault page at all; no note path, title or body " +
+      "crosses any of the four subverbs.",
   },
   {
     surface: "brain claims",

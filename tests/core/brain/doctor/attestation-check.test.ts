@@ -83,7 +83,7 @@ function fixtureContext(now: Date): DoctorCheckContext {
     now,
     config: undefined,
     dbPath: undefined,
-    configPath: null,
+    configPath: undefined,
     knownBasenames: new Set(),
     idIndex: new Map(),
     preferences: [],

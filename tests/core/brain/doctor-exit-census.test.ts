@@ -177,6 +177,7 @@ const NON_LITERAL_CODE_SITES: Readonly<Record<string, string>> = Object.freeze({
  * in the same commit - which is the review this census exists to force.
  */
 const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
+  "attestation-stale-or-diverged",
   "brain-root-absent",
   "broken-backlinks",
   "broken-wikilink",
@@ -203,6 +204,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "permissions-unreadable",
   "principle-corrupted",
   "recall-channel-silent",
+  "receipt-content-drift",
   "receipt-ledger-growth",
   "recovery-point-stale",
   "rerank-endpoint-unconfigured",
