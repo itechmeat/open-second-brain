@@ -55,6 +55,7 @@ describe("buildAttestationRecord", () => {
   test("seals the body: the digest field verifies over the record without it", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     expect(record.schemaVersion).toBe(ATTESTATION_FILE_SCHEMA_VERSION);
@@ -67,6 +68,7 @@ describe("buildAttestationRecord", () => {
   test("a tampered body fails the seal", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const tampered = { ...record, deviceId: "someone-else" };
@@ -77,6 +79,7 @@ describe("buildAttestationRecord", () => {
   test("the id and file name derive from the created-at instant, compact UTC", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00.500Z"),
     });
     expect(record.id).toBe("attest-20260603T100000500Z");
@@ -87,6 +90,7 @@ describe("writeAttestationRecord", () => {
   test("lands one JSON file under the attestations directory that re-reads sealed", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const { path } = writeAttestationRecord(vault, record);
@@ -103,6 +107,7 @@ describe("writeAttestationRecord", () => {
   test("an unknown schema_version is refused by name", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const { path } = writeAttestationRecord(vault, record);
@@ -115,6 +120,7 @@ describe("writeAttestationRecord", () => {
   test("a manifest naming shards outside the log grammar is refused by name", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const { path } = writeAttestationRecord(vault, record);
@@ -128,6 +134,7 @@ describe("writeAttestationRecord", () => {
   test("a record without a readable manifest is refused, not verified into a crash", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const { path } = writeAttestationRecord(vault, record);
@@ -140,6 +147,7 @@ describe("writeAttestationRecord", () => {
   test("the write refuses an id that does not answer to its own naming", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     const { digest: _digest, ...body } = record;
@@ -152,6 +160,7 @@ describe("writeAttestationRecord", () => {
   test("a concurrent second write of the same instant is refused, not overwritten", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     writeAttestationRecord(vault, record);
@@ -161,6 +170,7 @@ describe("writeAttestationRecord", () => {
   test("the write asserts the vault identity: a swapped marker refuses the write", () => {
     const manifest = collectAttestationManifest(vault);
     const record = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
       now: new Date("2026-06-03T10:00:00Z"),
     });
     writeAttestationRecord(vault, record);
@@ -176,7 +186,10 @@ describe("writeAttestationRecord", () => {
       }),
       "utf8",
     );
-    const next = buildAttestationRecord(vault, manifest, { now: new Date("2026-06-03T10:00:01Z") });
+    const next = buildAttestationRecord(vault, manifest, {
+      deviceId: "test-device",
+      now: new Date("2026-06-03T10:00:01Z"),
+    });
     expect(() => writeAttestationRecord(vault, next)).toThrow(/not the one this process opened/);
   });
 
@@ -184,11 +197,17 @@ describe("writeAttestationRecord", () => {
     const manifest = collectAttestationManifest(vault);
     writeAttestationRecord(
       vault,
-      buildAttestationRecord(vault, manifest, { now: new Date("2026-06-03T10:00:00Z") }),
+      buildAttestationRecord(vault, manifest, {
+        deviceId: "test-device",
+        now: new Date("2026-06-03T10:00:00Z"),
+      }),
     );
     writeAttestationRecord(
       vault,
-      buildAttestationRecord(vault, manifest, { now: new Date("2026-06-03T10:00:01Z") }),
+      buildAttestationRecord(vault, manifest, {
+        deviceId: "test-device",
+        now: new Date("2026-06-03T10:00:01Z"),
+      }),
     );
     const files = listAttestationRecordFiles(vault);
     expect(files.length).toBe(2);

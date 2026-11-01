@@ -49,6 +49,10 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // The loop above deleted the hermetic default setup.ts installed, so
+  // the flag twin would fall back to the real ~/.config on a configured
+  // machine. A path that does not exist reads every flag off.
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = join(binDir, "no-config.yaml");
   process.env["OSB_OPENCODE_SPOOL_DIR"] = spoolDir;
 });
 
@@ -1127,7 +1131,9 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
   }, 30_000);
 
   dispatchTest("the opt-in flags off mean zero spawns", async () => {
-    stubHookDispatch({});
+    // The stub is SET, so a gate that ignored the flags and spawned
+    // anyway would land in calls.log and fail the zero-spawn pin.
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({});
     const hooks = await makeHooks(fakeClient(MESSAGES));
     hooks["tool.execute.before"]!(
       { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,

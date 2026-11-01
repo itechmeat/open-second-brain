@@ -69,7 +69,10 @@ function append(count: number, deviceId = ""): void {
 function signedRecord() {
   generateAttestationKeypair(vault);
   const manifest = collectAttestationManifest(vault);
-  const record = buildAttestationRecord(vault, manifest, { now: new Date("2026-06-03T10:05:00Z") });
+  const record = buildAttestationRecord(vault, manifest, {
+    deviceId: "test-device",
+    now: new Date("2026-06-03T10:05:00Z"),
+  });
   return signAttestationRecord(record, vault);
 }
 

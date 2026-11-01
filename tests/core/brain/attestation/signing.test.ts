@@ -63,7 +63,15 @@ beforeEach(() => {
   mkdirSync(join(vault, "Brain", "log"), { recursive: true });
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n", "utf8");
   writeVaultIdentity(vault);
-  for (const k of ["O2B_TEST_ATTEST_PASS", "O2B_TEST_ATTEST_REF", "O2B_TEST_ATTEST_MATERIAL"]) {
+  for (const k of [
+    "O2B_TEST_ATTEST_PASS",
+    "O2B_TEST_ATTEST_REF",
+    "O2B_TEST_ATTEST_MATERIAL",
+    // The envelope's host passphrase bridge: set on a developer machine
+    // or in CI, it would unwrap a wrapped fixture key the test meant to
+    // see refused, so the suite scrubs and restores it like the rest.
+    "OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE",
+  ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -79,6 +87,7 @@ afterEach(() => {
 
 function unsignedRecord(): ReturnType<typeof buildAttestationRecord> {
   return buildAttestationRecord(vault, collectAttestationManifest(vault), {
+    deviceId: "test-device",
     now: new Date("2026-06-03T10:00:00Z"),
   });
 }
