@@ -687,6 +687,16 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Receipt content drift (t_4300e5fd): receipts the verify kernel re-hashes
+        // against the vault report changed items. The act this finding asks for is
+        // INSPECTION - which items drifted and whether the edit was legitimate - so
+        // the row points at the per-receipt verify verb.
+        code: "receipt-content-drift",
+        issueClass: "recent context receipts re-verifying with changed item content",
+        nextCommand: "o2b brain context-receipts verify <receipt-id>",
+        autoRepairable: false,
+      },
+      {
         // An announced decommission of the configured embedding model,
         // inside the warning window. The exit is the curated catalog for
         // the same reason `search-chunk-window-undeclared` points there:

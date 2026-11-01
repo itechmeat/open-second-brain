@@ -796,7 +796,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("page-dedup", "Detect, and optionally merge, near-duplicate vault pages"),
         command("token-footprint", "Report per-category vault token size against a warn threshold"),
         command("context-pack", "Return a tier-then-recency vault slice under a token budget"),
-        command("context-receipts", "List or show prompt context receipt records"),
+        command("context-receipts", "List, show, or re-hash-verify prompt context receipt records"),
         command(
           "event-trace",
           "Join logged events to the continuity records sharing their correlation ids",

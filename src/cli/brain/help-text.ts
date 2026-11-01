@@ -135,7 +135,7 @@ Brain verbs (observing memory):
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
   context-pack        Return a tier-then-recency vault slice under a token budget
-  context-receipts    List/show prompt context receipt records
+  context-receipts    List/show/verify prompt context receipt records
   event-trace         Show context traces attached to logged events by correlation id
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
@@ -1120,6 +1120,7 @@ export const VERB_HELP: Record<string, string> = {
   "context-receipts":
     "usage: o2b brain context-receipts list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain context-receipts show <receipt-id> [--vault <path>] [--json]\n" +
+    "       o2b brain context-receipts verify <receipt-id> [--vault <path>] [--json]\n" +
     "Read prompt context receipt continuity records emitted by opt-in callers.\n",
   "event-trace":
     "usage: o2b brain event-trace [--date <YYYY-MM-DD>] [--at <HH:MM:SS>] [--kind <event-kind>] [--session-id <id>] [--limit <n>] [--keep-private] [--vault <path>] [--json]\n" +

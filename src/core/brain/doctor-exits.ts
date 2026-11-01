@@ -158,6 +158,17 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "reviewed",
   },
   {
+    // The delivery-trust wave's unknown-provenance count (t_1af24938). The fence already
+    // does the safe thing at every read; the warning exists so the widening stays
+    // observable, and resolving it is a per-page editorial decision.
+    code: "delivery-provenance-unknown",
+    reason:
+      "the fence already does the safe thing at every read; the warning exists so the " +
+      "widening is observable, and resolving it means deciding, page by page, which entry " +
+      "point authored each record - a judgment the stamps deliberately leave to the " +
+      "operator's next write, since both stamp modules forbid a bulk backfill",
+  },
+  {
     // The planted-structure-rows audit (t_c2ac4fc8). The rows are
     // third-party text already in the vault; un-planting them means
     // rewriting content nobody here authored, which the audit refuses to

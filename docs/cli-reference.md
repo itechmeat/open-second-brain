@@ -470,7 +470,7 @@ o2b brain today               Read-only today dashboard: due and overdue obligat
 o2b brain apply-markers       Turn `@osb set note=<target> field=<field> value=<value>` markers into schema-validated frontmatter writes. Report mode by default (writes nothing); --apply needs `guardrails.marker_writeback` in _brain.yaml, consumes applied markers so a re-run is idempotent, and leaves unresolvable or refused targets unconsumed; --path <subdir> (repeatable) or notes.read_paths
 o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it, and --propose-backlog batches the already-imported undistilled backlog into one ask-once distill envelope (see "Session logs this machine already has" below)
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
-o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0). Since v1.95.0 `show` joins the receipt to its session's `reply_presence` continuity record - the per-note verdicts the answer-quote-check Stop hook folded for the session's latest checked turn (`verified` / strongest miss / `absent` per injected note, plus the reply-span count and the answer-text hash) - keyed by exact `session_id`, never a time-window guess: a receipt whose session wrote no presence record, or that names no session at all, reports `unjoined` and names which of the two it was, so a missing join is never read as a silent all-clear. `list` stays a summary and carries no join
+o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0). Since v1.95.0 `show` joins the receipt to its session's `reply_presence` continuity record - the per-note verdicts the answer-quote-check Stop hook folded for the session's latest checked turn (`verified` / strongest miss / `absent` per injected note, plus the reply-span count and the answer-text hash) - keyed by exact `session_id`, never a time-window guess: a receipt whose session wrote no presence record, or that names no session at all, reports `unjoined` and names which of the two it was, so a missing join is never read as a silent all-clear. `list` stays a summary and carries no join. Since this wave `verify <receipt-id> [--json]` re-hashes one receipt's items against the vault it was drawn from (per-item `match`/`changed`/`unavailable` with the recorded budget re-applied so trimmed items do not false-CHANGED; exit 1 naming the changed items; private or redacted receipts refused)
 o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
 o2b brain generation-reports  Record/list/summarise opt-in inbound LLM generation traces (prompt hash + token counts only; kernel never calls an LLM)
 o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
@@ -531,7 +531,7 @@ created - the journal records whether each target pre-existed.
 
 ```text
 o2b brain context-pack        Existing budgeted context pack; add --receipt to emit a context receipt, --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
-o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
+o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]; verify <receipt-id> [--json]
 o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress|query] [--status ok|empty|error|timeout] [--channel mcp|cli|hook] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - --channel is a read filter on list and summary only; gate-list, gate-summary and cost refuse it by name rather than ignoring it
 o2b brain generation-reports  record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--json]; list|summary [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]; show <report-id> [--json] - record is gated (default off) by --enable or generation_trace_enabled; stores prompt_hash + counts only
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
@@ -1495,6 +1495,18 @@ per family once its foldable population crosses 1,000 records, naming
 `o2b brain receipts scan` as the next command, and reports a ledger it
 could not read in the uncertain stream - growth unknown, never flattened
 to growth fine.
+
+Delivery trust (remote reads): every MCP face that hands back stored-record
+text - the search family, the report-shaped reads,
+`brain_context`/`brain_pinned_context`, and the `osb://` preference, topic,
+active, lessons and backlinks readers - fences that text at remote reach in
+the same `<untrusted_source origin="...">` wrapper the intake path uses,
+with the origin naming the page's derived provenance (`origin_channel`,
+`content_class`, `untrusted_source`); any absence fences fail closed. Local
+reach is byte-identical to the pre-wave bytes. The
+`delivery-provenance-unknown` doctor check names how many delivered pages
+carry no derivable provenance so the widening is observable; the remediation
+is stamping, which every write path already does going forward.
 
 Receipt compaction gives the two append-only receipt ledgers - the
 continuity ledger and the metrics ledger - a drain. `scan` inventories
