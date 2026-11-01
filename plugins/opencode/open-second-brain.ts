@@ -7,7 +7,7 @@
  * Bun globals opencode already provides) so the copy works standalone
  * inside opencode's plugin sandbox.
  *
- * Supports OpenCode V1 (server) and V2 (setup). Three behaviors mirror
+ * Supports OpenCode V1 (server) and V2 (setup). Five behaviors mirror
  * the Claude Code / Codex hook layer:
  *
  * 1. Active-context inject: V1 `experimental.chat.system.transform` /
@@ -34,6 +34,20 @@
  *    V2 `tool.hook("execute.after")` appends the standard
  *    logging nudge to the output of file-mutating tools so the model
  *    sees it, matching the Claude Code post-write-reminder contract.
+ *
+ * 4. Tool gating: V1 `tool.execute.before` /
+ *    V2 `tool.hook("execute.before")` relays the opt-in PreToolUse
+ *    shims (`pretool-orient`, `pretool-host-backup`) with synthetic
+ *    PreToolUse payloads carrying the opencode session id. Only an
+ *    explicit structured `permissionDecision: "deny"` throws (with the
+ *    shim's `permissionDecisionReason` as the error text) - the one
+ *    blocking channel opencode offers. Every other outcome (flag off,
+ *    missing binary, spawn failure, timeout, malformed stdout) passes
+ *    the tool call untouched, because a plugin bug must never break
+ *    operator tool calls on a lane without the Claude Code wrapper's
+ *    forced exit-0 safety net. The Claude Code "nudge on allow"
+ *    downgrade has no channel on a tool call here and is declared as a
+ *    divergence in the opencode hook parity census.
  *
  * Every hook body is fail-soft: a missing vault, missing binary, or
  * session API error must never break the operator's opencode session.
@@ -66,6 +80,34 @@ const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 /** A failed render retries sooner than a successful one expires. */
 const ACTIVE_CONTEXT_NEGATIVE_TTL_MS = 30 * 1000;
 const HOOK_TIMEOUT_MS = 10_000;
+
+/**
+ * The PreToolUse relay: the shims the execute.before gate spawns and the
+ * default-OFF flag each one answers to. The env/config key pairs restate
+ * the canonical resolvers in src/core/config.ts exactly as the hook
+ * wrappers' stdlib twins do, so a flag the shim would honor is one this
+ * gate spawns for (and flags off mean zero spawns). `mutatingOnly`
+ * mirrors the Claude Code host-backup row matcher
+ * (Write|Edit|MultiEdit|apply_patch).
+ */
+const PRETOOL_SHIMS: ReadonlyArray<{
+  readonly name: string;
+  readonly envKey: string;
+  readonly configKey: string;
+  readonly mutatingOnly?: boolean;
+}> = [
+  {
+    name: "pretool-orient",
+    envKey: "OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED",
+    configKey: "hook_strict_enabled",
+  },
+  {
+    name: "pretool-host-backup",
+    envKey: "OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP",
+    configKey: "host_settings_backup",
+    mutatingOnly: true,
+  },
+];
 
 /** Disambiguates concurrent spool writes within one process. */
 let spoolWriteSeq = 0;
@@ -273,18 +315,84 @@ function messageList(response: unknown): unknown[] | null {
 }
 
 /**
- * Renders the active-context block by spawning the same
- * `o2b-hook active-inject` shim the Claude Code and Codex hook layers
- * use. Returns null on every failure mode (binary missing, timeout,
- * empty or malformed output) — the caller treats null as "no inject".
+ * The machine config path, matching the core default (XDG layout); the
+ * env override wins. A missing file means every flag is off.
  */
-function renderActiveContext(cwd: string): string | null {
+function osbConfigPath(): string {
+  const override = process.env["OPEN_SECOND_BRAIN_CONFIG"]?.trim();
+  if (override) return override;
+  const xdg = process.env["XDG_CONFIG_HOME"]?.trim();
+  return join(
+    xdg && xdg.length > 0 ? xdg : join(homedir(), ".config"),
+    "open-second-brain",
+    "config.yaml",
+  );
+}
+
+/**
+ * Cut an unquoted trailing `#...` comment: one scan tracking quote
+ * state, so a `#` INSIDE a quoted value (a vault path like
+ * `/data/brain#main`) stays whole. The stdlib twin of the canonical
+ * resolver's quote-aware YAML parsing, as shipped in the hook wrappers.
+ */
+function stripUnquotedComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
+      return value.slice(0, i);
+    }
+  }
+  return value;
+}
+
+/**
+ * Default-OFF flag read: env (trimmed) wins, then a top-level `key:` in
+ * the machine config; only literal `true`/`1` is truthy. The stdlib twin
+ * of `resolveConfigFlag` in src/core/config.ts (this file is copied
+ * alone into opencode's plugin directory and cannot import it), agreeing
+ * with the hook wrappers so a flag the shims honor is one the relay
+ * spawns for; anything else reads off, which keeps the default path at
+ * zero spawns.
+ */
+function configFlagOn(envKey: string, configKey: string): boolean {
+  const env = process.env[envKey]?.trim();
+  if (env) return env === "true" || env === "1";
+  let text: string;
+  try {
+    text = readFileSync(osbConfigPath(), "utf8");
+  } catch {
+    return false;
+  }
+  const match = new RegExp(`^\\s*${configKey}\\s*:\\s*(.+?)\\s*$`, "m").exec(text);
+  if (match === null) return false;
+  const value = stripUnquotedComment(match[1]!)
+    .trim()
+    .replace(/^["']|["']$/g, "");
+  return value === "true" || value === "1";
+}
+
+/**
+ * One shim spawn, through `hookCommand` - the only `Bun.spawnSync` site
+ * in this file, so every relay ride keeps the Windows current-directory
+ * planting guard. Never throws and never decides: every failure mode
+ * (binary missing, spawn error, timeout, non-zero exit) collapses to
+ * `ok: false` so callers fail soft.
+ */
+function spawnHookShim(
+  shim: string,
+  payload: Record<string, unknown>,
+): { ok: boolean; stdout: string } {
   try {
     const bin = process.env["OSB_HOOK_BIN"] ?? "o2b-hook";
-    const command = hookCommand(bin);
-    if (command === null) return null;
+    const command = hookCommand(bin, shim);
+    if (command === null) return { ok: false, stdout: "" };
     const proc = Bun.spawnSync(command.argv, {
-      stdin: Buffer.from(JSON.stringify({ hook_event_name: "SessionStart", cwd })),
+      stdin: Buffer.from(JSON.stringify(payload)),
       stdout: "pipe",
       stderr: "ignore",
       timeout: HOOK_TIMEOUT_MS,
@@ -292,15 +400,98 @@ function renderActiveContext(cwd: string): string | null {
       windowsVerbatimArguments: command.verbatim,
       env: command.env,
     });
-    if (!proc.success) return null;
-    const raw = proc.stdout.toString("utf8").trim();
-    if (raw.length === 0) return null;
-    const parsed = asRecord(JSON.parse(raw));
-    const hookOutput = parsed ? asRecord(parsed["hookSpecificOutput"]) : null;
-    const context = hookOutput ? hookOutput["additionalContext"] : null;
-    return typeof context === "string" && context.length > 0 ? context : null;
+    if (!proc.success) return { ok: false, stdout: "" };
+    return { ok: true, stdout: proc.stdout.toString("utf8").trim() };
   } catch {
-    return null;
+    return { ok: false, stdout: "" };
+  }
+}
+
+/**
+ * The relay's verdict: exactly the three fields it reads from shim
+ * stdout. Malformed or empty output parses as a pass with no context,
+ * so a shim that answers garbage can never block a tool call and never
+ * injects.
+ */
+function readHookVerdict(stdout: string): {
+  deny: boolean;
+  reason: string | null;
+  context: string | null;
+} {
+  const pass = { deny: false, reason: null, context: null };
+  let parsed: Record<string, unknown> | null;
+  try {
+    parsed = asRecord(JSON.parse(stdout));
+  } catch {
+    return pass;
+  }
+  const hookOutput = parsed !== null ? asRecord(parsed["hookSpecificOutput"]) : null;
+  if (hookOutput === null) return pass;
+  const reason = hookOutput["permissionDecisionReason"];
+  const context = hookOutput["additionalContext"];
+  return {
+    deny: hookOutput["permissionDecision"] === "deny",
+    reason: typeof reason === "string" && reason.length > 0 ? reason : null,
+    context: typeof context === "string" && context.length > 0 ? context : null,
+  };
+}
+
+/** Spawn one shim and read its verdict; a failed spawn passes. */
+function spawnHookVerdict(
+  shim: string,
+  payload: Record<string, unknown>,
+): { deny: boolean; reason: string | null; context: string | null } {
+  const spawned = spawnHookShim(shim, payload);
+  if (!spawned.ok) return { deny: false, reason: null, context: null };
+  return readHookVerdict(spawned.stdout);
+}
+
+/**
+ * Renders the active-context block by spawning the same
+ * `o2b-hook active-inject` shim the Claude Code and Codex hook layers
+ * use. Returns null on every failure mode (binary missing, timeout,
+ * empty or malformed output) — the caller treats null as "no inject".
+ */
+function renderActiveContext(cwd: string): string | null {
+  const spawned = spawnHookShim("active-inject", { hook_event_name: "SessionStart", cwd });
+  if (!spawned.ok) return null;
+  return readHookVerdict(spawned.stdout).context;
+}
+
+/**
+ * The execute.before gate: relay each opt-in PreToolUse shim with a
+ * synthetic Claude-Code-shaped payload, so the pure decision cores and
+ * the vault hook-state ledger see the same view the Claude Code lane
+ * sees. Fail-soft by construction: only an explicit structured
+ * `permissionDecision: "deny"` throws, carrying the shim's
+ * `permissionDecisionReason` - the one blocking channel opencode
+ * offers. A flag that is off (which also means zero spawns), a missing
+ * binary, a spawn failure, a timeout, or malformed stdout all pass the
+ * tool call untouched.
+ */
+function runPretoolGate(call: {
+  tool: string;
+  sessionId: string | null;
+  toolInput: unknown;
+  cwd: string;
+}): void {
+  const tool = call.tool.toLowerCase();
+  const payload: Record<string, unknown> = {
+    hook_event_name: "PreToolUse",
+    ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
+    tool_name: tool,
+    tool_input: call.toolInput ?? {},
+    cwd: call.cwd,
+  };
+  for (const shim of PRETOOL_SHIMS) {
+    if (!configFlagOn(shim.envKey, shim.configKey)) continue;
+    if (shim.mutatingOnly === true && !MUTATING_TOOLS.has(tool)) continue;
+    const verdict = spawnHookVerdict(shim.name, payload);
+    if (verdict.deny) {
+      throw new Error(
+        verdict.reason ?? `Open Second Brain: the ${shim.name} gate denied this tool call.`,
+      );
+    }
   }
 }
 
@@ -318,8 +509,11 @@ function activeContextFor(cwd: string): () => string | null {
 }
 
 /**
- * How to start the `o2b-hook` shim `bin` (a bare name or a path), or null
- * when it cannot be found.
+ * How to start the `o2b-hook` shim `bin` (a bare name or a path) with the
+ * subcommand `shim` (the hook entry point, e.g. `active-inject`), or null
+ * when it cannot be found. The single argv builder for every spawn in
+ * this file - no second builder may appear, or the Windows guard below
+ * stops covering the new site.
  *
  * POSIX: `bin` itself - `execvp` searches PATH only.
  *
@@ -335,13 +529,15 @@ function activeContextFor(cwd: string): () => string | null {
  * own `bun` lookup as well. `OSB_HOOK_BIN` is operator-controlled; the
  * resolved path is the only non-literal in the command line.
  */
-function hookCommand(bin: string): {
+function hookCommand(
+  bin: string,
+  shim: string,
+): {
   readonly argv: string[];
   readonly verbatim: boolean;
   readonly env: Record<string, string | undefined> | undefined;
 } | null {
-  if (process.platform !== "win32")
-    return { argv: [bin, "active-inject"], verbatim: false, env: undefined };
+  if (process.platform !== "win32") return { argv: [bin, shim], verbatim: false, env: undefined };
   const resolved = Bun.which(bin, { PATH: process.env["PATH"] ?? "" });
   if (resolved === null) return null;
   const comspec = process.env["ComSpec"];
@@ -352,7 +548,7 @@ function hookCommand(bin: string): {
       "/d",
       "/s",
       "/c",
-      `""${resolved}" active-inject"`,
+      `""${resolved}" ${shim}"`,
     ],
     verbatim: true,
     env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
@@ -423,6 +619,18 @@ const openSecondBrainV1 = async (pluginInput: {
         // Reminder is a nicety; tool output stays untouched on failure.
       }
     },
+
+    "tool.execute.before": (
+      input: { tool?: string; sessionID?: string },
+      output: { args?: unknown },
+    ) => {
+      runPretoolGate({
+        tool: typeof input?.tool === "string" ? input.tool : "",
+        sessionId: typeof input?.sessionID === "string" ? input.sessionID : null,
+        toolInput: output?.args,
+        cwd: injectCwd,
+      });
+    },
   };
 };
 
@@ -445,6 +653,10 @@ interface V2Context {
         result?: { content: unknown[]; [key: string]: unknown };
       }) => void,
     ): Promise<unknown>;
+    hook(
+      name: "execute.before",
+      callback: (input: { tool?: string; sessionID?: string }, output: { args?: unknown }) => void,
+    ): Promise<unknown>;
   };
   event: {
     subscribe(input: { signal: AbortSignal }): AsyncIterable<{
@@ -454,6 +666,21 @@ interface V2Context {
       location?: { directory?: string };
     }>;
   };
+}
+
+/**
+ * One best-effort registration: a V2 host that rejects a hook name
+ * (the newer names are feature-detected upstream, so an older build
+ * may refuse them) must degrade that one hook to a no-op instead of
+ * killing setup - capture and every later hook would otherwise never
+ * start.
+ */
+async function registerV2Hook(register: () => Promise<unknown>): Promise<void> {
+  try {
+    await register();
+  } catch {
+    // The hook stays unregistered; everything else keeps working.
+  }
 }
 
 /** V2 reads this default definition; V1 calls server() on the same object. */
@@ -476,27 +703,42 @@ export default {
     const directory = ctx.location.directory;
     const getActiveContext = activeContextFor(directory);
 
-    await ctx.session.hook("context", (event) => {
-      try {
-        const context = getActiveContext();
-        if (context !== null) event.system.push({ type: "text", text: context });
-      } catch {
-        // Context injection is best-effort.
-      }
-    });
+    await registerV2Hook(() =>
+      ctx.session.hook("context", (event) => {
+        try {
+          const context = getActiveContext();
+          if (context !== null) event.system.push({ type: "text", text: context });
+        } catch {
+          // Context injection is best-effort.
+        }
+      }),
+    );
 
-    await ctx.tool.hook("execute.after", (event) => {
-      try {
-        if (event.status !== "completed" || !MUTATING_TOOLS.has(event.tool.toLowerCase())) return;
-        if (!event.result || !Array.isArray(event.result.content)) return;
-        event.result = {
-          ...event.result,
-          content: [...event.result.content, { type: "text", text: POST_WRITE_NUDGE }],
-        };
-      } catch {
-        // Reminder is best-effort; tool results remain untouched on failure.
-      }
-    });
+    await registerV2Hook(() =>
+      ctx.tool.hook("execute.after", (event) => {
+        try {
+          if (event.status !== "completed" || !MUTATING_TOOLS.has(event.tool.toLowerCase())) return;
+          if (!event.result || !Array.isArray(event.result.content)) return;
+          event.result = {
+            ...event.result,
+            content: [...event.result.content, { type: "text", text: POST_WRITE_NUDGE }],
+          };
+        } catch {
+          // Reminder is best-effort; tool results remain untouched on failure.
+        }
+      }),
+    );
+
+    await registerV2Hook(() =>
+      ctx.tool.hook("execute.before", (input, output) => {
+        runPretoolGate({
+          tool: typeof input?.tool === "string" ? input.tool : "",
+          sessionId: typeof input?.sessionID === "string" ? input.sessionID : null,
+          toolInput: output?.args,
+          cwd: directory,
+        });
+      }),
+    );
 
     const controller = new AbortController();
     void (async () => {

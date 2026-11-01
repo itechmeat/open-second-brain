@@ -21,11 +21,30 @@ let spoolDir: string;
 let binDir: string;
 const savedEnv: Record<string, string | undefined> = {};
 
+/**
+ * Every flag the plugin's relay gates on, plus the config-file override.
+ * The suite runs with a temp HOME, so the real operator config is never
+ * read; clearing these keeps each test's flag state exact.
+ */
+const FLAG_ENV_KEYS = [
+  "OSB_HOOK_BIN",
+  "OSB_OPENCODE_SPOOL_DIR",
+  "OPEN_SECOND_BRAIN_CONFIG",
+  "XDG_CONFIG_HOME",
+  "OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED",
+  "OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP",
+  "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
+  "OPEN_SECOND_BRAIN_NAV_TIER_ENABLED",
+  "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
+  "OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED",
+] as const;
+
 beforeEach(() => {
   spoolDir = mkdtempSync(join(tmpdir(), "osb-oc-spool-"));
   binDir = mkdtempSync(join(tmpdir(), "osb-oc-bin-"));
-  for (const k of ["OSB_HOOK_BIN", "OSB_OPENCODE_SPOOL_DIR"]) {
+  for (const k of FLAG_ENV_KEYS) {
     savedEnv[k] = process.env[k];
+    delete process.env[k];
   }
   process.env["OSB_OPENCODE_SPOOL_DIR"] = spoolDir;
 });
@@ -66,6 +85,59 @@ function stubHookBin(context: string | null): string {
   writeFileSync(path, body);
   chmodSync(path, 0o755);
   return path;
+}
+
+/**
+ * Stub o2b-hook that answers per shim name and records every invocation:
+ * the shim name is appended to `calls.log` and its stdin payload is kept
+ * at `stdin-<shim>` so tests can assert the synthetic payload shape.
+ * POSIX only; dispatch-dependent tests skip on Windows.
+ */
+function stubHookDispatch(handlers: Record<string, string | null>): string {
+  if (process.platform === "win32") {
+    throw new Error("stubHookDispatch is POSIX-only");
+  }
+  const cases = Object.entries(handlers)
+    .map(([shim, payload]) =>
+      payload === null ? `  ${shim}) exit 0 ;;` : `  ${shim}) printf '%s' '${payload}' ;;`,
+    )
+    .join("\n");
+  const path = join(binDir, "o2b-hook");
+  const script = [
+    "#!/bin/sh",
+    `cat > '${binDir}/stdin-'"$1" || true`,
+    `echo "$1" >> '${binDir}/calls.log'`,
+    'case "$1" in',
+    cases,
+    "esac",
+    "",
+  ].join("\n");
+  writeFileSync(path, script);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** Stub o2b-hook that hangs, forcing the plugin's spawn timeout. */
+function stubHookHung(): string {
+  const path = join(binDir, "o2b-hook");
+  writeFileSync(path, "#!/bin/sh\ncat > /dev/null\nsleep 30\n");
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** Shim names the dispatch stub saw, in call order. */
+function recordedCalls(): string[] {
+  const log = join(binDir, "calls.log");
+  if (!existsSync(log)) return [];
+  return readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0);
+}
+
+/** The stdin payload the dispatch stub recorded for one shim name. */
+function recordedStdin(shim: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(binDir, `stdin-${shim}`), "utf8")) as Record<string, unknown>;
 }
 
 interface FakeMessage {
@@ -145,6 +217,8 @@ async function makeV2Plugin(
 ) {
   let contextHook: ((event: { system: Array<{ type: "text"; text: string }> }) => void) | undefined;
   let toolHook: ((event: V2ToolEvent) => void) | undefined;
+  const sessionHooks = new Map<string, (event: never) => void>();
+  const toolHooks = new Map<string, (...args: never[]) => void>();
   let signal: AbortSignal | undefined;
   let drained!: () => void;
   const processed = new Promise<void>((resolve) => {
@@ -155,8 +229,9 @@ async function makeV2Plugin(
   const ctx = {
     location: { directory: "/work/dir" },
     session: {
-      async hook(_name: string, callback: typeof contextHook) {
-        contextHook = callback;
+      async hook(name: string, callback: (event: never) => void) {
+        sessionHooks.set(name, callback);
+        if (name === "context") contextHook = callback as typeof contextHook;
       },
       async get({ sessionID }: { sessionID: string }) {
         return { location: { directory: sessionDirectories[sessionID] ?? "/work/dir" } };
@@ -167,8 +242,9 @@ async function makeV2Plugin(
       },
     },
     tool: {
-      async hook(_name: string, callback: typeof toolHook) {
-        toolHook = callback;
+      async hook(name: string, callback: (...args: never[]) => void) {
+        toolHooks.set(name, callback);
+        if (name === "execute.after") toolHook = callback as typeof toolHook;
       },
     },
     event: {
@@ -206,6 +282,8 @@ async function makeV2Plugin(
   return {
     contextHook: contextHook!,
     toolHook: toolHook!,
+    sessionHooks,
+    toolHooks,
     contextCalls,
     subscriptions,
     signal: signal!,
@@ -876,5 +954,223 @@ describe("opencode plugin - V2", () => {
     plugin.toolHook(unchanged);
     expect(unchanged.result?.content).toEqual([{ type: "text", text: "file contents" }]);
     plugin.cleanup();
+  });
+});
+
+describe("opencode plugin - execute.before gate (pretool relay)", () => {
+  const PLUGIN_SOURCE = readFileSync(
+    join(import.meta.dir, "..", "..", "plugins", "opencode", "open-second-brain.ts"),
+    "utf8",
+  );
+
+  const DENY_VERDICT = JSON.stringify({
+    hookSpecificOutput: {
+      permissionDecision: "deny",
+      permissionDecisionReason: "Read vault notes through brain_search instead.",
+    },
+  });
+  const ALLOW_VERDICT = JSON.stringify({
+    hookSpecificOutput: {
+      permissionDecision: "allow",
+      permissionDecisionReason: "consider brain_search first",
+    },
+  });
+
+  test("the plugin file stays self-contained: static imports are node builtins only", () => {
+    const specs = [...PLUGIN_SOURCE.matchAll(/import\s+(?:\{[^}]*\}|\w+)\s+from\s+"([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(specs.length).toBeGreaterThan(0);
+    for (const spec of specs) expect(spec!.startsWith("node:")).toBe(true);
+  });
+
+  test("a pretool-orient deny verdict blocks the tool call with the shim's reason", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": DENY_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    const output = { args: { filePath: "/vault/Brain/active.md" } };
+    expect(() =>
+      hooks["tool.execute.before"]!(
+        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        output as never,
+      ),
+    ).toThrow("Read vault notes through brain_search instead.");
+    // A deny is the only outcome that must ever throw out of the gate.
+  });
+
+  test("an allow verdict passes the tool call through untouched", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": ALLOW_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    const output = { args: { filePath: "/vault/Brain/active.md" } };
+    expect(() =>
+      hooks["tool.execute.before"]!(
+        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        output as never,
+      ),
+    ).not.toThrow();
+    expect(output.args).toEqual({ filePath: "/vault/Brain/active.md" });
+  });
+
+  test("a missing shim binary passes the tool call through", async () => {
+    process.env["OSB_HOOK_BIN"] = join(binDir, "does-not-exist");
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    expect(() =>
+      hooks["tool.execute.before"]!(
+        { tool: "edit", sessionID: "sess-gate", callID: "c1" } as never,
+        { args: {} } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  test("malformed shim stdout passes the tool call through", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      // printf renders the raw bytes; JSON.parse will reject them.
+      "pretool-orient": "not-json{{",
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    expect(() =>
+      hooks["tool.execute.before"]!(
+        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        { args: {} } as never,
+      ),
+    ).not.toThrow();
+  });
+
+  test("a shim hung past the hook timeout passes the tool call through", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookHung();
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    expect(() =>
+      hooks["tool.execute.before"]!(
+        { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+        { args: {} } as never,
+      ),
+    ).not.toThrow();
+  }, 30_000);
+
+  test("the opt-in flags off mean zero spawns", async () => {
+    stubHookDispatch({});
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    hooks["tool.execute.before"]!(
+      { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+      { args: {} } as never,
+    );
+    hooks["tool.execute.before"]!(
+      { tool: "edit", sessionID: "sess-gate", callID: "c2" } as never,
+      { args: {} } as never,
+    );
+    expect(recordedCalls()).toEqual([]);
+  });
+
+  test("the host backup shim only rides file-mutating tools", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": ALLOW_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    hooks["tool.execute.before"]!(
+      { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+      { args: {} } as never,
+    );
+    expect(recordedCalls()).toEqual(["pretool-orient"]);
+    hooks["tool.execute.before"]!(
+      { tool: "edit", sessionID: "sess-gate", callID: "c2" } as never,
+      { args: { filePath: "/a.ts" } } as never,
+    );
+    expect(recordedCalls()).toEqual(["pretool-orient", "pretool-orient", "pretool-host-backup"]);
+  });
+
+  test("spawned payloads carry the synthetic PreToolUse shape with the opencode session id", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": ALLOW_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    hooks["tool.execute.before"]!(
+      { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+      { args: { filePath: "/vault/Brain/active.md" } } as never,
+    );
+    const payload = recordedStdin("pretool-orient");
+    expect(payload).toEqual({
+      hook_event_name: "PreToolUse",
+      session_id: "sess-gate",
+      tool_name: "read",
+      tool_input: { filePath: "/vault/Brain/active.md" },
+      cwd: "/work/dir",
+    });
+  });
+
+  test("a config-file flag arms the gate without an env var", async () => {
+    // The flag twin reads the same machine config the hook wrappers do:
+    // OPEN_SECOND_BRAIN_CONFIG override, then the XDG config.yaml.
+    const configPath = join(binDir, "config.yaml");
+    writeFileSync(configPath, "vault: /tmp/vault\nhook_strict_enabled: true # opt-in\n");
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({ "pretool-orient": ALLOW_VERDICT });
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    hooks["tool.execute.before"]!(
+      { tool: "read", sessionID: "sess-gate", callID: "c1" } as never,
+      { args: {} } as never,
+    );
+    expect(recordedCalls()).toEqual(["pretool-orient"]);
+  });
+
+  test("V2 registers execute.before beside execute.after and a deny throws there too", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": DENY_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const plugin = await makeV2Plugin([]);
+    try {
+      const before = plugin.toolHooks.get("execute.before");
+      expect(typeof before).toBe("function");
+      expect(typeof plugin.toolHooks.get("execute.after")).toBe("function");
+      expect(() =>
+        before!(
+          { tool: "read", sessionID: "sess-v2-gate" } as never,
+          {
+            args: { filePath: "/v.md" },
+          } as never,
+        ),
+      ).toThrow("Read vault notes through brain_search instead.");
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("V2 stays fail-soft: allow verdict and missing binary pass untouched", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": ALLOW_VERDICT,
+      "pretool-host-backup": null,
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const plugin = await makeV2Plugin([]);
+    try {
+      const before = plugin.toolHooks.get("execute.before")!;
+      expect(() =>
+        before({ tool: "read", sessionID: "sess-v2-gate" } as never, { args: {} } as never),
+      ).not.toThrow();
+      process.env["OSB_HOOK_BIN"] = join(binDir, "does-not-exist");
+      expect(() =>
+        before({ tool: "read", sessionID: "sess-v2-gate" } as never, { args: {} } as never),
+      ).not.toThrow();
+    } finally {
+      plugin.cleanup();
+    }
   });
 });
