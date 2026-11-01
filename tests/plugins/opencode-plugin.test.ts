@@ -140,6 +140,37 @@ function recordedStdin(shim: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(binDir, `stdin-${shim}`), "utf8")) as Record<string, unknown>;
 }
 
+/** Dispatch stub wired for the prompt lane: active inject plus the four prompt shims. */
+function stubPromptLane(active: string | null, recall: string | null, nav: string | null): string {
+  return stubHookDispatch({
+    "active-inject":
+      active === null
+        ? null
+        : JSON.stringify({
+            hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: active },
+          }),
+    "recall-inject":
+      recall === null
+        ? null
+        : JSON.stringify({
+            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: recall },
+          }),
+    "nav-inject":
+      nav === null
+        ? null
+        : JSON.stringify({
+            hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: nav },
+          }),
+    "counterparty-brief": null,
+    "reground-deliver": null,
+  });
+}
+
+/** The pushed text parts of a context-delivery event, joined. */
+function systemTexts(event: { system: Array<{ text: string }> }): string {
+  return event.system.map((part) => part.text).join("\n");
+}
+
 interface FakeMessage {
   info: { id: string; role: string; time?: { created?: number } };
   parts: Array<Record<string, unknown>>;
@@ -1172,5 +1203,152 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
     } finally {
       plugin.cleanup();
     }
+  });
+});
+
+describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () => {
+  const PROMPT_FLAGS = [
+    "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
+    "OPEN_SECOND_BRAIN_NAV_TIER_ENABLED",
+    "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
+    "OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED",
+  ] as const;
+
+  function armPromptFlags(): void {
+    for (const key of PROMPT_FLAGS) process.env[key] = "true";
+  }
+
+  test("one prompt enqueues one payload and two context fires deliver it exactly once", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", "NAV BLOCK");
+    armPromptFlags();
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt");
+      expect(typeof prompt).toBe("function");
+      prompt!(undefined as never);
+      prompt!({ sessionID: "sess-turn", prompt: "find my notes on delivery trust" } as never);
+      const first = { system: [{ type: "text" as const, text: "base" }] };
+      plugin.contextHook(first);
+      const second = { system: [{ type: "text" as const, text: "base" }] };
+      plugin.contextHook(second);
+
+      // Queued context arrives on the first model request of the turn only.
+      expect(systemTexts(first)).toContain("RECALL BLOCK");
+      expect(systemTexts(first)).toContain("NAV BLOCK");
+      expect(systemTexts(second)).not.toContain("RECALL BLOCK");
+      expect(systemTexts(second)).not.toContain("NAV BLOCK");
+      // The active inject's TTL cache is untouched: one spawn, delivered on both fires.
+      expect(systemTexts(first)).toContain("ACTIVE BLOCK");
+      expect(systemTexts(second)).toContain("ACTIVE BLOCK");
+      expect(recordedCalls().filter((shim) => shim === "active-inject")).toHaveLength(1);
+      // Multi-shim context rides one queued text part, not one part per shim.
+      const queuedParts = first.system.filter((part) => part.text.includes("RECALL BLOCK"));
+      expect(queuedParts).toHaveLength(1);
+      expect(queuedParts[0]!.text).toContain("NAV BLOCK");
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("a second prompt replaces an undelivered payload (single-slot queue)", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "FIRST BLOCK", null);
+    armPromptFlags();
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt")!;
+      prompt({ sessionID: "sess-turn", prompt: "first" } as never);
+      // The shim's answer changes before the second prompt, the way a
+      // recall ledger answers a different prompt with different notes.
+      stubHookDispatch({
+        "active-inject": null,
+        "recall-inject": JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit",
+            additionalContext: "SECOND BLOCK",
+          },
+        }),
+        "nav-inject": null,
+        "counterparty-brief": null,
+        "reground-deliver": null,
+      });
+      prompt({ sessionID: "sess-turn", prompt: "second" } as never);
+      const request = { system: [{ type: "text" as const, text: "base" }] };
+      plugin.contextHook(request);
+      // The second prompt's payload is the one delivered, exactly once;
+      // the first prompt's undelivered slot was replaced, not stacked.
+      expect(systemTexts(request)).toContain("SECOND BLOCK");
+      expect(systemTexts(request)).not.toContain("FIRST BLOCK");
+      expect(recordedCalls().filter((shim) => shim === "recall-inject")).toHaveLength(2);
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("prompt shims spawn with UserPromptSubmit payloads carrying the opencode session id", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+    armPromptFlags();
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt")!;
+      prompt({ sessionID: "sess-turn", prompt: "find my notes" } as never);
+      expect(recordedCalls()).toEqual([
+        "recall-inject",
+        "nav-inject",
+        "counterparty-brief",
+        "reground-deliver",
+      ]);
+      expect(recordedStdin("reground-deliver")).toEqual({
+        hook_event_name: "UserPromptSubmit",
+        session_id: "sess-turn",
+        prompt: "find my notes",
+        cwd: "/work/dir",
+      });
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("the prompt flags off mean zero spawns and no queued delivery", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", null);
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt")!;
+      prompt({ sessionID: "sess-turn", prompt: "find my notes" } as never);
+      expect(recordedCalls()).toEqual([]);
+      const request = { system: [] as Array<{ type: "text"; text: string }> };
+      plugin.contextHook(request);
+      expect(systemTexts(request)).toEqual("ACTIVE BLOCK");
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("an event without observable prompt text spawns nothing", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+    armPromptFlags();
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt")!;
+      prompt({ sessionID: "sess-turn" } as never);
+      prompt(undefined as never);
+      expect(recordedCalls()).toEqual([]);
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  test("V1 chat.message observes the prompt and the system transform drains the queue once", async () => {
+    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+    armPromptFlags();
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    const message = hooks["chat.message"]!;
+    await message({ sessionID: "sess-v1", prompt: "find my notes" } as never, {} as never);
+    const first = { system: ["base"] };
+    await hooks["experimental.chat.system.transform"]!({} as never, first as never);
+    const second = { system: ["base"] };
+    await hooks["experimental.chat.system.transform"]!({} as never, second as never);
+    expect(first.system).toEqual(["base", "RECALL BLOCK"]);
+    expect(second.system).toEqual(["base"]);
+    expect(recordedCalls().filter((shim) => shim === "recall-inject")).toHaveLength(1);
   });
 });

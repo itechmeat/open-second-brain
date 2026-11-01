@@ -49,6 +49,17 @@
  *    downgrade has no channel on a tool call here and is declared as a
  *    divergence in the opencode hook parity census.
  *
+ * 5. Prompt-time injection: V1 `chat.message` /
+ *    V2 `session.hook("prompt")` observes the user prompt and relays
+ *    the opt-in UserPromptSubmit shims (`recall-inject`, `nav-inject`,
+ *    `counterparty-brief`, `reground-deliver`) with synthetic payloads
+ *    carrying the opencode session id, so the vault hook-state ledger
+ *    dedupes exactly as on the Claude Code lane. The shims'
+ *    `hookSpecificOutput.additionalContext` enters a single-slot
+ *    per-turn queue that the context delivery points drain on the first
+ *    model request of the turn - the prompt hook itself runs before
+ *    durable prompt admission and is not a delivery channel.
+ *
  * Every hook body is fail-soft: a missing vault, missing binary, or
  * session API error must never break the operator's opencode session.
  */
@@ -106,6 +117,40 @@ const PRETOOL_SHIMS: ReadonlyArray<{
     envKey: "OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP",
     configKey: "host_settings_backup",
     mutatingOnly: true,
+  },
+];
+
+/**
+ * The UserPromptSubmit relay: the prompt-time shims and the default-OFF
+ * flag each answers to, restated from src/core/config.ts exactly as the
+ * PreToolUse pairs above. The opencode prompt hook observes the prompt
+ * before durable admission and is not a delivery channel, so the shims'
+ * additionalContext rides the per-turn queue below instead.
+ */
+const PROMPT_SHIMS: ReadonlyArray<{
+  readonly name: string;
+  readonly envKey: string;
+  readonly configKey: string;
+}> = [
+  {
+    name: "recall-inject",
+    envKey: "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
+    configKey: "recall_inject_enabled",
+  },
+  {
+    name: "nav-inject",
+    envKey: "OPEN_SECOND_BRAIN_NAV_TIER_ENABLED",
+    configKey: "nav_tier_enabled",
+  },
+  {
+    name: "counterparty-brief",
+    envKey: "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
+    configKey: "counterparty_brief_enabled",
+  },
+  {
+    name: "reground-deliver",
+    envKey: "OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED",
+    configKey: "reground_parts_enabled",
   },
 ];
 
@@ -495,6 +540,96 @@ function runPretoolGate(call: {
   }
 }
 
+/**
+ * The per-turn queue for prompt-time context. Single slot: each prompt
+ * starts a new turn (replacing any payload a previous prompt left
+ * undelivered), every answering shim appends into the slot, and the
+ * first model request of the turn drains it exactly once - the context
+ * hooks fire per model request, so a turn with several requests would
+ * otherwise inject the shim payload repeatedly. The take-once cursor of
+ * the reground carrier is the pattern; the active inject's TTL cache is
+ * deliberately untouched.
+ */
+function promptContextQueue(): {
+  beginTurn(): void;
+  offer(text: string): void;
+  take(): string | null;
+} {
+  let slot: string | null = null;
+  return {
+    beginTurn() {
+      slot = null;
+    },
+    offer(text) {
+      slot = slot === null ? text : `${slot}\n\n${text}`;
+    },
+    take() {
+      const value = slot;
+      slot = null;
+      return value;
+    },
+  };
+}
+
+/**
+ * Best-effort read of a V1 `chat.message` / V2 `prompt` event: the
+ * prompt text plus the opencode session id (the ledger inside the vault
+ * hook-state dedupes on it). The exact event shape has drifted across
+ * upstream releases, so every field is defensive.
+ */
+function observePrompt(event: unknown): { prompt: string | null; sessionId: string | null } {
+  const record = asRecord(event);
+  if (record === null) return { prompt: null, sessionId: null };
+  let prompt: string | null = null;
+  for (const candidate of [record, asRecord(record["message"])]) {
+    if (candidate === null) continue;
+    const value = candidate["prompt"] ?? candidate["text"];
+    if (typeof value === "string" && value.length > 0) {
+      prompt = value;
+      break;
+    }
+  }
+  let sessionId: string | null = null;
+  for (const candidate of [record, asRecord(record["message"]), asRecord(record["session"])]) {
+    if (candidate === null) continue;
+    const value = candidate["sessionID"] ?? candidate["id"];
+    if (typeof value === "string" && value.length > 0) {
+      sessionId = value;
+      break;
+    }
+  }
+  return { prompt, sessionId };
+}
+
+/**
+ * The prompt lane: relay each opt-in UserPromptSubmit shim with a
+ * synthetic Claude-Code-shaped payload carrying the opencode session id,
+ * so the vault hook-state ledger (recall once per session, brief on the
+ * first qualifying turn, reground's take-once cursor) dedupes exactly as
+ * on the Claude Code lane. Returned additionalContext enters the
+ * per-turn queue; nothing here throws - a broken shim or a flag that is
+ * off (zero spawns) just means no context this turn.
+ */
+function runPromptShims(call: {
+  prompt: string;
+  sessionId: string | null;
+  cwd: string;
+  queue: ReturnType<typeof promptContextQueue>;
+}): void {
+  call.queue.beginTurn();
+  const payload: Record<string, unknown> = {
+    hook_event_name: "UserPromptSubmit",
+    ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
+    prompt: call.prompt,
+    cwd: call.cwd,
+  };
+  for (const shim of PROMPT_SHIMS) {
+    if (!configFlagOn(shim.envKey, shim.configKey)) continue;
+    const verdict = spawnHookVerdict(shim.name, payload);
+    if (verdict.context !== null) call.queue.offer(verdict.context);
+  }
+}
+
 /** Each loaded plugin instance has its own short-lived active-context cache. */
 function activeContextFor(cwd: string): () => string | null {
   let cache: { value: string | null; at: number } | null = null;
@@ -570,6 +705,7 @@ const openSecondBrainV1 = async (pluginInput: {
   const injectCwd = worktree || directory || process.cwd();
   const client = asRecord(pluginInput.client);
   const getActiveContext = activeContextFor(injectCwd);
+  const promptQueue = promptContextQueue();
 
   async function captureSession(sessionId: string): Promise<void> {
     const session = client ? asRecord(client["session"]) : null;
@@ -599,12 +735,35 @@ const openSecondBrainV1 = async (pluginInput: {
 
     "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
       try {
+        if (!Array.isArray(output?.system)) return;
         const context = getActiveContext();
-        if (context !== null && Array.isArray(output?.system)) {
+        if (context !== null) {
           output.system.push(context);
+        }
+        // Drain the prompt lane's per-turn queue beside the cached active
+        // inject: the first model request of the turn delivers it, the
+        // take() clearing makes later requests in the turn no-ops.
+        const queued = promptQueue.take();
+        if (queued !== null) {
+          output.system.push(queued);
         }
       } catch {
         // Inject is a nicety; the session works without it.
+      }
+    },
+
+    "chat.message": async (input: unknown, _output: unknown) => {
+      try {
+        const observed = observePrompt(input);
+        if (observed.prompt === null) return;
+        runPromptShims({
+          prompt: observed.prompt,
+          sessionId: observed.sessionId,
+          cwd: injectCwd,
+          queue: promptQueue,
+        });
+      } catch {
+        // Prompt-time injection is best-effort; the turn proceeds without it.
       }
     },
 
@@ -641,6 +800,7 @@ interface V2Context {
       name: "context",
       callback: (event: { system: Array<{ type: "text"; text: string }> }) => void,
     ): Promise<unknown>;
+    hook(name: "prompt", callback: (event: unknown) => void): Promise<unknown>;
     get(input: { sessionID: string }): Promise<unknown>;
     context(input: { sessionID: string }): Promise<unknown>;
   };
@@ -702,14 +862,38 @@ export default {
 
     const directory = ctx.location.directory;
     const getActiveContext = activeContextFor(directory);
+    const promptQueue = promptContextQueue();
 
     await registerV2Hook(() =>
       ctx.session.hook("context", (event) => {
         try {
           const context = getActiveContext();
           if (context !== null) event.system.push({ type: "text", text: context });
+          // Drain the prompt lane's per-turn queue beside the cached
+          // active inject; the take() clearing delivers the queued
+          // context exactly once per turn even when this hook fires for
+          // several model requests.
+          const queued = promptQueue.take();
+          if (queued !== null) event.system.push({ type: "text", text: queued });
         } catch {
           // Context injection is best-effort.
+        }
+      }),
+    );
+
+    await registerV2Hook(() =>
+      ctx.session.hook("prompt", (event: unknown) => {
+        try {
+          const observed = observePrompt(event);
+          if (observed.prompt === null) return;
+          runPromptShims({
+            prompt: observed.prompt,
+            sessionId: observed.sessionId,
+            cwd: directory,
+            queue: promptQueue,
+          });
+        } catch {
+          // Prompt-time injection is best-effort; the turn proceeds without it.
         }
       }),
     );
