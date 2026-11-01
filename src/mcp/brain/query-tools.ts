@@ -986,11 +986,10 @@ async function toolBrainUnlinkedMentions(
   // (delivery-trust, lane A): shaped through the request's delivery
   // binding at the page the source id was parsed from - asked in the
   // scanner's own walk order (preferences, then retired), so the probe
-  // reads the exact page the line came from. The scanner also accepts
-  // basenames outside the two record-id prefixes, which answer with the
-  // guaranteed-absent page: fail closed, never a guessed root page
-  // whose stamps could vouch for prose it does not carry. Local reach
-  // keeps the bytes.
+  // reads the exact page the line came from. An id whose file sits in
+  // neither folder probes the guaranteed-absent page: fail closed,
+  // never a guessed root page whose stamps could vouch for prose it
+  // does not carry. Local reach keeps the bytes.
   const delivery = deliveryView(ctx);
   return {
     vault_path: vaultPathField(ctx),
@@ -1009,8 +1008,8 @@ async function toolBrainUnlinkedMentions(
 /**
  * The page a mention's source id was parsed from: the scanner walks the
  * preferences folder then the retired one, so the same walk order
- * answers which of the two holds the file, and a basename from neither
- * vocabulary probes the guaranteed-absent page.
+ * answers which of the two holds the file, and an id whose file is in
+ * neither probes the guaranteed-absent page.
  */
 function mentionSourceRel(vault: string, id: string): string {
   for (const dir of [BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]) {
