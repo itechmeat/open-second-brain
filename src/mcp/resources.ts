@@ -78,6 +78,10 @@ import {
   retiredPath,
   validateIsoDate,
   validateSlug,
+  BRAIN_ACTIVE_FILE,
+  BRAIN_LESSONS_FILE,
+  BRAIN_PREFERENCES_REL,
+  BRAIN_ROOT_REL,
 } from "../core/brain/paths.ts";
 import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
 import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
@@ -92,6 +96,7 @@ import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
 import { parseLogDayFile, renderLogEntryBlock, type ParseLogDayResult } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
+import { deliveryRelForBrainArtifact, deliveryView } from "./brain/reach-events.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 export interface ResourceContext {
@@ -144,6 +149,15 @@ export interface ResourceContent {
 }
 
 const MIME_MARKDOWN = "text/markdown";
+
+/**
+ * Vault-relative paths of the two generated digest files, the probes the
+ * delivery binding names when one of them is what a reader delivers
+ * (delivery-trust, lane A). The files are the system's own render, so
+ * the derivation reads THEIR absence of stamps rather than guessing.
+ */
+const ACTIVE_REL = `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`;
+const LESSONS_REL = `${BRAIN_ROOT_REL}/${BRAIN_LESSONS_FILE}`;
 
 const CONCRETE: ReadonlyArray<ResourceDescriptor> = [
   {
@@ -288,6 +302,21 @@ function notFound(id: string): MCPError {
   return new MCPError(INTERNAL_ERROR, new BrainNotFoundError(id).message);
 }
 
+/**
+ * The delivery binding for one resource read (delivery-trust, lane A):
+ * the same binding every report-shaped tool shares, bound to the request
+ * the resource view already resolved. At local reach `shape` is the
+ * identity and no probe runs - the operator's own readers keep the
+ * pre-wave bytes; at remote reach the markdown of the readers that
+ * deliver stored-record text is fenced through the K1 shaper, the
+ * fence's origin naming the governing page's derived provenance. One
+ * binding per read: `readResource` dispatches to exactly one reader, so
+ * one frontmatter cache serves the whole request.
+ */
+function deliveryFor(ctx: ResourceContext, view: RequestView): ReturnType<typeof deliveryView> {
+  return deliveryView({ vault: ctx.vault, configPath: null, repoRoot: null, reach: view.reach });
+}
+
 // ----- URI parsing ---------------------------------------------------------
 
 type Parsed =
@@ -364,7 +393,15 @@ function readActive(ctx: ResourceContext, uri: string, view: RequestView): Resou
     ...(view.ownerScope !== null ? { agentScope: view.ownerScope } : {}),
     restricted: view.reach !== TRANSPORT_REACH.local,
   });
-  return { uri, mimeType: MIME_MARKDOWN, text };
+  return {
+    uri,
+    mimeType: MIME_MARKDOWN,
+    // The digest quotes stored principles (delivery-trust, lane A): the
+    // delivery is fenced at remote reach, named for the generated file's
+    // own absence of stamps - the system's render is not operator prose,
+    // and the derivation says so rather than guessing authorship.
+    text: deliveryFor(ctx, view).shape(text, ACTIVE_REL),
+  };
 }
 
 function readLessons(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
@@ -384,10 +421,15 @@ function readLessons(ctx: ResourceContext, uri: string, view: RequestView): Reso
   }
   // A local reader with no owner scope is served the shared file as it
   // is; any other reader gets the digest rendered without the records it
-  // cannot see, scored and stamped at the generation on disk.
-  if (view.refs.filtersNothing) return readMarkdown(uri, path);
-  const text = renderLessonsForReader(ctx.vault, { readable: view.refs.visible }).document;
-  return { uri, mimeType: MIME_MARKDOWN, text };
+  // cannot see, scored and stamped at the generation on disk. Either way
+  // the delivered markdown is the lessons corpus quoting stored
+  // principles (delivery-trust, lane A): fenced at remote reach, named
+  // for the generated file's own absence of stamps.
+  const delivery = deliveryFor(ctx, view);
+  const text = view.refs.filtersNothing
+    ? readMarkdown(uri, path).text
+    : renderLessonsForReader(ctx.vault, { readable: view.refs.visible }).document;
+  return { uri, mimeType: MIME_MARKDOWN, text: delivery.shape(text, LESSONS_REL) };
 }
 
 function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
@@ -480,7 +522,19 @@ function readPreference(
   // not - the presence of the prefix a one-bit existence oracle over the
   // whole reserved population.
   if (!view.refs.visible(resolvedId)) throw notFound(normalized);
-  return readMarkdown(uri, filePath);
+  const file = readMarkdown(uri, filePath);
+  return {
+    ...file,
+    // The whole file - frontmatter and body - is the delivery
+    // (delivery-trust, lane A): fenced at remote reach through the
+    // binding, named for the page's own derived provenance; local keeps
+    // the bytes. The probe asks the RESOLVED page - the id the
+    // active-to-retired fallback answered - never the caller's spelling.
+    text: deliveryFor(ctx, view).shape(
+      file.text,
+      deliveryRelForBrainArtifact(ctx.vault, resolvedId),
+    ),
+  };
 }
 
 function readTopic(
@@ -523,7 +577,16 @@ function readTopic(
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: renderTopicMarkdown(rawSlug, scoped),
+    // The synthesis quotes the governing rule's principle (delivery-trust,
+    // lane A): the fence names that page's derived provenance. A topic
+    // with no current rule probes the page that would hold it - the
+    // absent-page probe, which is the fail-closed answer.
+    text: deliveryFor(ctx, view).shape(
+      renderTopicMarkdown(rawSlug, scoped),
+      result.preference
+        ? deliveryRelForBrainArtifact(ctx.vault, result.preference.id)
+        : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`,
+    ),
   };
 }
 
@@ -619,7 +682,13 @@ function readBacklinks(
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: renderBacklinksMarkdown(target, refs),
+    // The rendered document is derived from stored pages (delivery-trust,
+    // lane A): fenced at remote reach, named for the TARGET page's own
+    // derived provenance; local keeps the bytes.
+    text: deliveryFor(ctx, view).shape(
+      renderBacklinksMarkdown(target, refs),
+      deliveryRelForBrainArtifact(ctx.vault, target),
+    ),
   };
 }
 

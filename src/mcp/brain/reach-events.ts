@@ -11,8 +11,18 @@
  * reference view by hand.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { readerRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { eventAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
+import {
+  BRAIN_ARCHIVED_SIGNALS_REL,
+  BRAIN_INBOX_REL,
+  BRAIN_PREFERENCES_REL,
+  BRAIN_PROCESSED_REL,
+  BRAIN_RETIRED_REL,
+} from "../../core/brain/path-constants.ts";
 import type { FrontmatterCache } from "../../core/search/result-filters.ts";
 import {
   deliveryOriginLabel,
@@ -79,6 +89,44 @@ export function deliveryView(
       }).text;
     },
   };
+}
+
+/**
+ * The vault-relative page whose provenance governs a delivery naming a
+ * Brain artifact by id, or any vault page by relative path.
+ *
+ * The Brain record types carry ids, not paths, and the delivery side
+ * must probe the page the id was parsed from: `pref-`/`ret-` ids map
+ * onto their single folders, `sig-` ids onto whichever of the three
+ * signal lanes holds the page (asked in walk order; none existing is
+ * the fail-closed absent-page probe), a string with a separator is
+ * already a vault-relative path, and anything else is treated as a
+ * vault-root page name. An id that resolves to no file probes as
+ * absent - the fenced answer - never as an error.
+ */
+export function deliveryRelForBrainArtifact(vault: string, id: string): string {
+  if (id.includes("/")) return id;
+  if (id.startsWith("ret-")) return `${BRAIN_RETIRED_REL}/${id}.md`;
+  if (id.startsWith("pref-")) return `${BRAIN_PREFERENCES_REL}/${id}.md`;
+  if (id.startsWith("sig-")) return signalDeliveryRel(vault, id);
+  return `${id}.md`;
+}
+
+/**
+ * The page a signal was parsed from. The record carries only the
+ * basename (`sig-<date>-<slug>`); the lane is whichever of the three
+ * signal folders holds it, so the candidates are asked in walk order and
+ * the first existing one wins. None existing is not an error: the probe
+ * then reads an absent page, which is the fail-closed answer. Exported
+ * so the report-shaped serializers and the artifact-id mapping above
+ * answer the walk the same way - one derivation, not two that can drift.
+ */
+export function signalDeliveryRel(vault: string, id: string): string {
+  for (const dir of [BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL]) {
+    const rel = `${dir}/${id}.md`;
+    if (existsSync(join(vault, rel))) return rel;
+  }
+  return `${BRAIN_INBOX_REL}/${id}.md`;
 }
 
 /** The events this caller may see, each in the form it may see it, in order. */

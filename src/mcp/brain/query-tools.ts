@@ -74,17 +74,9 @@ import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import {
-  BRAIN_ARCHIVED_SIGNALS_REL,
-  BRAIN_INBOX_REL,
-  BRAIN_PREFERENCES_REL,
-  BRAIN_PROCESSED_REL,
-  BRAIN_RETIRED_REL,
-} from "../../core/brain/path-constants.ts";
+import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../../core/brain/path-constants.ts";
 import type { AgentSourceContribution } from "../../core/brain/agent-source/types.ts";
-import { deliveryView } from "./reach-events.ts";
+import { deliveryView, signalDeliveryRel } from "./reach-events.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
@@ -105,24 +97,11 @@ function preferenceDeliveryRel(p: BrainPreference | BrainRetired): string {
 }
 
 /**
- * The page a signal was parsed from. The record carries only the
- * basename (`sig-<date>-<slug>`); the lane is whichever of the three
- * signal folders holds it, so the candidates are asked in walk order and
- * the first existing one wins. None existing is not an error: the probe
- * then reads an absent page, which is the fail-closed answer.
- */
-function signalDeliveryRel(vault: string, id: string): string {
-  for (const dir of [BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL]) {
-    const rel = `${dir}/${id}.md`;
-    if (existsSync(join(vault, rel))) return rel;
-  }
-  return `${BRAIN_INBOX_REL}/${id}.md`;
-}
-
-/**
  * The page an agent contribution's provenance is probed from, or null
  * when there is none to ask: a `log` row is a log event's own text,
  * which the delivery-shaping boundary deliberately leaves untouched.
+ * The signal walk is {@link signalDeliveryRel}, shared with the
+ * artifact-id mapping in reach-events.ts so the two faces cannot drift.
  */
 function contributionDeliveryRel(vault: string, c: AgentSourceContribution): string | null {
   switch (c.kind) {
