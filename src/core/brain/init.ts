@@ -277,22 +277,33 @@ export function copyStarterBundle(
             DAY_MS,
         );
   const placed = ageStarterCopy(vault, copied, days);
-  stampStarterCopy(vault, placed);
+  // Only the SHIPPED bundle is operator-seed content this run vouches
+  // for. A custom --starter-path copy is third-party text the operator
+  // pointed at, so it stays unstamped and fails closed at delivery -
+  // the delivery-provenance doctor check names it like every other page
+  // whose provenance nothing derives - instead of arriving marked
+  // operator-authored.
+  if (src === DEFAULT_STARTER_DIR) stampStarterCopy(vault, placed);
   return Object.freeze({ copied: placed });
 }
 
 /**
- * Stamp every dropped page with the channel that dropped it.
+ * Stamp every dropped page of the SHIPPED bundle with the channel that
+ * dropped it.
  *
- * The bootstrap is an `o2b` CLI run, so `origin_channel: cli` is the
- * true authorship statement for the bundle: operator-seed content the
- * run itself vouches for, delivered plain at every reach. Without the
- * stamp the delivery-provenance doctor check would name all eighteen
- * pages on every fresh vault's first pass - the warn-on-every-vault-
- * forever outcome the check's system-rendered exclusions exist to
- * prevent, recreated through the seed path. A page that already carries
- * a channel (a custom bundle stamped by its author) keeps it, and a
- * bundle page without frontmatter at all is left byte-identical.
+ * The bootstrap of the bundled starter is an `o2b` CLI run shipping the
+ * tree's own seed, so `origin_channel: cli` is the true authorship
+ * statement for it: operator-seed content the run itself vouches for,
+ * delivered plain at every reach. Without the stamp the delivery-
+ * provenance doctor check would name all eighteen pages on every fresh
+ * vault's first pass - the warn-on-every-vault-forever outcome the
+ * check's system-rendered exclusions exist to prevent, recreated
+ * through the seed path. A page that already carries a channel (a
+ * bundle page stamped by its author) keeps it, and a bundle page
+ * without frontmatter at all is left byte-identical. A custom
+ * `--starter-path` copy is deliberately NOT stamped: the run did not
+ * author third-party text, and an operator-authored channel on it would
+ * deliver it plain at every reach.
  */
 function stampStarterCopy(vault: string, placed: ReadonlyArray<string>): void {
   for (const rel of placed) {
