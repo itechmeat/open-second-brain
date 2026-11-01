@@ -409,6 +409,14 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   ["cli/brain/verbs/bench.ts", "bench runs default dir, composed from BENCH_RUNS_REL"],
   ["cli/brain/verbs/dead-letters.ts", "dead-letter listing prose naming the store"],
   [
+    "core/brain/attestation/record.ts",
+    "signed attestation shards under the store, spelled as the ATTESTATIONS_REL join",
+  ],
+  [
+    "core/brain/attestation/signing.ts",
+    "the operator attestation key directory under the store, spelled as a segment join",
+  ],
+  [
     "core/brain/checkpoint-store.ts",
     "the shared checkpoint substrate under the store (ingest and session-import lanes)",
   ],
