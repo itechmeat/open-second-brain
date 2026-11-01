@@ -17,8 +17,9 @@
  *
  * Exit codes (the `brain log verify` contract): 0 on success and on a
  * verification where every shard is intact or merely appended, 1 on an
- * operational failure, a diverged or missing shard, or an invalid
- * signature, 2 on usage errors.
+ * operational failure, a diverged or missing shard, a store-digest
+ * drift no appended shard explains, or an invalid signature, 2 on
+ * usage errors.
  */
 
 import {
@@ -71,9 +72,13 @@ const ATTEST_USAGE =
   "                  stamp), seal and sign one attestation record, and write it as\n" +
   "                  one JSON file. Signing never creates a key.\n" +
   "  list [--json]   Every attestation, newest first: id, created-at, device.\n" +
-  "  verify [--json] Re-measure the store against the newest attestation: per-shard\n" +
+  "                  A record that cannot be read is named on its own row.\n" +
+  "  verify [--json] [--public-key PATH]\n" +
+  "                  Re-measure the store against the newest attestation: per-shard\n" +
   "                  intact / appended / diverged / missing, the signature, and the\n" +
-  "                  store digest. Reports only - nothing here repairs a store.\n";
+  "                  store digest. --public-key verifies against exactly that exported\n" +
+  "                  half (a copy kept outside the vault). Reports only - nothing here\n" +
+  "                  repairs a store.\n";
 
 /**
  * The CLI-internal env bridge for a passphrase that arrived on stdin: the
@@ -258,14 +263,18 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
   const { vault } = brainVerbContext(flags);
 
   // Name order is time order (the id is the compact UTC instant), so
-  // newest-first is a reverse of the oldest-first listing.
-  let records: ReadonlyArray<{ path: string; record: AttestationRecord }>;
-  try {
-    records = listAttestationRecordFiles(vault)
-      .toReversed()
-      .map((entry) => ({ path: entry.path, record: readAttestationRecordFile(entry.path) }));
-  } catch (exc) {
-    return failAttestation("list", exc);
+  // newest-first is a reverse of the oldest-first listing. A record that
+  // cannot be read is damage to name, never an empty answer: it gets
+  // its own row with the reader's reason while the readable records
+  // still list - one corrupted file hides nothing but itself.
+  const records: { path: string; record: AttestationRecord }[] = [];
+  const unreadable: { path: string; reason: string }[] = [];
+  for (const entry of listAttestationRecordFiles(vault).toReversed()) {
+    try {
+      records.push({ path: entry.path, record: readAttestationRecordFile(entry.path) });
+    } catch (exc) {
+      unreadable.push({ path: entry.path, reason: (exc as Error).message ?? String(exc) });
+    }
   }
 
   if (flags["json"]) {
@@ -277,10 +286,11 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
         store_digest: record.storeDigest,
         path,
       })),
+      ...(unreadable.length > 0 ? { unreadable } : {}),
     });
     return 0;
   }
-  if (records.length === 0) {
+  if (records.length === 0 && unreadable.length === 0) {
     info("no attestation on record");
     // The forward pointer rides the advisory rail (no-dead-ends phase 3):
     // the empty-list state is a registered signal, not a hand-written
@@ -297,6 +307,10 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
     info(`  ${record.id}  created: ${record.createdAt}  device: ${record.deviceId}`);
     info(`    ${path}`);
   }
+  for (const { path, reason } of unreadable) {
+    info(`  UNREADABLE  ${path}`);
+    info(`    ${reason}`);
+  }
   return 0;
 }
 
@@ -304,20 +318,28 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
  * Re-measure the store against the newest attestation and print the
  * per-shard verdict.
  *
- * Exit 1 when anything reports damage - a diverged or missing shard, or a
- * signature that does not verify. `appended` shards and a false
- * store-digest match beside nothing but appends are a store that MOVED,
- * not a store that broke, and they exit 0: a cron entry keyed on this
- * verb reports breakage, not progress.
+ * Exit 1 when anything reports damage - a diverged or missing shard, a
+ * store-digest drift no appended shard explains (an inventoried ledger,
+ * the vault identity, the index), or a signature that does not verify.
+ * `appended` shards and the digest drift they explain are a store that
+ * MOVED, not a store that broke, and they exit 0: a cron entry keyed on
+ * this verb reports breakage, not progress.
+ *
+ * `--public-key <path>` verifies against exactly that exported half -
+ * a copy kept outside the vault defeats a key that was replaced in
+ * place - and a missing or unreadable file reads as an invalid
+ * signature, never as a fall back to the private seed.
  */
 async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     json: { type: "boolean" },
+    "public-key": { type: "string" },
   });
   // Captured before any narrowing, same as the list verb above.
   const asJson = flags["json"] === true;
   const { vault } = brainVerbContext(flags);
+  const publicKeyPath = flags["public-key"] as string | undefined;
 
   let record: AttestationRecord;
   try {
@@ -336,11 +358,18 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
     return failAttestation("verify", exc);
   }
 
-  const result = verifyAttestation(vault, record);
+  const result = verifyAttestation(vault, record, {
+    ...(publicKeyPath !== undefined ? { publicPath: publicKeyPath } : {}),
+  });
   const damaged = result.shards.some(
     (shard) => shard.state === "diverged" || shard.state === "missing",
   );
-  const healthy = !damaged && result.signatureValid;
+  const anyAppended = result.shards.some((shard) => shard.state === "appended");
+  // A digest drift the appended shards do not explain is damage the
+  // shard report cannot name - an inventoried ledger, the vault
+  // identity, the search index - and it is not a store that "moved".
+  const unexplainedDrift = !result.storeDigestMatches && !anyAppended;
+  const healthy = !damaged && !unexplainedDrift && result.signatureValid;
 
   if (flags["json"]) {
     // The K4 AttestationVerification shape, field for field.
@@ -358,14 +387,28 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
     result.storeDigestMatches
       ? "store digest matches the attested one"
       : "store digest differs from the attested one" +
-          (healthy ? " (the appended shards above name why)" : ""),
+          (anyAppended ? " (the appended shards above name why)" : ""),
   );
   if (healthy) return 0;
-  info(
-    "the store diverged from the point this attestation vouches for: the shards named " +
-      "above were edited, removed, or rewritten after it was signed. Nothing here repairs " +
-      "a store; whether the log chain itself still links up is the adjacent question.",
-  );
+  if (damaged) {
+    info(
+      "the store diverged from the point this attestation vouches for: the shards named " +
+        "above were edited, removed, or rewritten after it was signed. Nothing here repairs " +
+        "a store; whether the log chain itself still links up is the adjacent question.",
+    );
+  } else if (unexplainedDrift) {
+    info(
+      "the store no longer matches the attested manifest beyond the log shards: an " +
+        "inventoried ledger directory, the vault identity or the search index changed since " +
+        "signing, and no shard above explains it. Nothing here repairs a store.",
+    );
+  } else {
+    info(
+      "the attestation's signature does not verify against the key this run checked: the " +
+        "record may not be the one this vault's operator signed, or the exported public " +
+        "half is missing or was replaced. Nothing here repairs a store.",
+    );
+  }
   // The forward pointer rides the advisory rail (no-dead-ends phase 3):
   // the diverged-store state is a registered signal whose exit is the
   // log chain's verifier, not a hand-written invocation literal inside

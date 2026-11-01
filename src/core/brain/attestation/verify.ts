@@ -82,6 +82,17 @@ export interface AttestationVerification {
 }
 
 export interface VerifyAttestationOptions {
+  /**
+   * The public half to verify the signature against. When offered, the
+   * explicit-path contract applies: a missing or unreadable file is an
+   * invalid signature, never a fall back to deriving the key from the
+   * private seed - agent-facing callers name the vault's exported half
+   * so a verification they trigger never reads operator key material.
+   * The operator CLI omits it, because deriving the public half from
+   * the operator's own seed on the operator's own machine is what makes
+   * a missing export file survivable there.
+   */
+  readonly publicPath?: string;
   /** Cooperative deadline guard, consulted per shard and per manifest surface. */
   readonly safeguard?: Safeguard;
   /**
@@ -208,7 +219,9 @@ export function verifyAttestation(
   opts: VerifyAttestationOptions = {},
 ): AttestationVerification {
   const checkpoint = (): void => opts.safeguard?.checkpoint();
-  const signatureValid = verifyAttestationSignature(record, vault);
+  const signatureValid = verifyAttestationSignature(record, vault, {
+    ...(opts.publicPath !== undefined ? { publicPath: opts.publicPath } : {}),
+  });
   checkpoint();
 
   const shards = Object.entries(record.manifest.logHeads)

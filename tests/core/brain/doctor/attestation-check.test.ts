@@ -122,6 +122,12 @@ test("a missing key is reported only when attestations exist", () => {
   expect(issues[0]!.code).toBe("attestation-stale-or-diverged");
   expect(issues[0]!.severity).toBe("warning");
   expect(issues[0]!.message).toContain("attest keygen");
+  // The fact states what is actually lost - the ability to sign. While
+  // the exported public half survives, every past attestation still
+  // verifies against it, and keygen itself refuses while either half
+  // exists, so the advice never destroys evidence.
+  expect(issues[0]!.message).toContain("the surviving public half");
+  expect(issues[0]!.message).not.toContain("unverifiable");
 });
 
 test("a fresh attestation with its key and an untouched store is silent", () => {

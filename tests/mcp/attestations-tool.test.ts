@@ -36,7 +36,6 @@ import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { ATTEST_TOOLS } from "../../src/mcp/brain/attest-tools.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
-import { INTERNAL_ERROR } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 const DATE = "2026-06-03";
@@ -170,13 +169,14 @@ test("list returns the fixture attestation newest-first with id, created_at, dev
   expect(rows[0]!["path"]).toBe(path.slice(vault.length + 1));
 });
 
-test("list against a malformed record refuses by name instead of skipping the row", async () => {
+test("list reports an unreadable record on its own row and still lists the readable ones", async () => {
   append(2);
   writeFixtureAttestation();
   // A record file that exists but cannot be read is damage to name:
   // silently dropping the evidence is the one failure this family exists
-  // to prevent, so list refuses with the corruption named, never an
-  // empty answer and never a silently-skipped row.
+  // to prevent, so the unreadable file is named on its own row - with
+  // the vault root redacted - while the readable records still list,
+  // instead of one corrupted file silencing the whole inventory.
   writeFileSync(
     join(vault, ".open-second-brain", "attestations", "attest-20990101T000000000Z.json"),
     "{not json at all",
@@ -185,11 +185,29 @@ test("list against a malformed record refuses by name instead of skipping the ro
 
   const { result, error } = await callAttestations({ operation: "list" });
 
-  expect(result).toBeNull();
-  expect(error).not.toBeNull();
-  expect(error!.code).toBe(INTERNAL_ERROR);
-  expect(error!.message).toContain("corrupted JSON");
-  expect(error!.message).toContain("attest-20990101T000000000Z");
+  expect(error).toBeNull();
+  const rows = result!["attestations"] as ReadonlyArray<Record<string, unknown>>;
+  expect(rows).toHaveLength(1);
+  const unreadable = result!["unreadable"] as ReadonlyArray<Record<string, string>>;
+  expect(unreadable).toHaveLength(1);
+  expect(unreadable[0]!["path"]).toContain("attest-20990101T000000000Z.json");
+  expect(unreadable[0]!["reason"]).toContain("corrupted JSON");
+  expect(unreadable[0]!["reason"]).not.toContain(vault);
+});
+
+test("verify answers against the exported public half and never derives from the private seed", async () => {
+  append(2);
+  writeFixtureAttestation();
+  // The fixture record is signed with the vault's own key, so removing
+  // the export must turn the agent-facing verification negative - the
+  // derive-from-seed fallback is the operator CLI's local convenience,
+  // never something an agent-triggered read performs.
+  rmSync(join(vault, ".open-second-brain", "keys", "attestation", "attestation.pub"));
+
+  const { result, error } = await callAttestations({ operation: "verify" });
+
+  expect(error).toBeNull();
+  expect((result as Record<string, unknown>)["signatureValid"]).toBe(false);
 });
 
 test("verify returns the K4 shape over the harness", async () => {

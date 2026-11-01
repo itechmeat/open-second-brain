@@ -21,6 +21,7 @@ import {
   listAttestationRecordFiles,
   readAttestationRecordFile,
 } from "../../core/brain/attestation/record.ts";
+import { attestationKeyPaths } from "../../core/brain/attestation/signing.ts";
 import { verifyAttestation } from "../../core/brain/attestation/verify.ts";
 import { unknownOperationError } from "../coerce.ts";
 import { INTERNAL_ERROR, MCPError } from "../protocol.ts";
@@ -45,19 +46,33 @@ async function toolBrainAttestations(
     if (operation === "list") {
       // Name order is time order (the id is the compact UTC instant);
       // newest first, the way an operator scans for "the latest word".
-      const attestations = listAttestationRecordFiles(ctx.vault)
-        .toReversed()
-        .map((entry) => {
+      // A record that cannot be read is damage to name, never an empty
+      // answer: it gets its own row - vault-relative, the vault root
+      // redacted out of the reason - while the readable records still
+      // list, so one corrupted file hides nothing but itself.
+      const attestations: Record<string, unknown>[] = [];
+      const unreadable: Record<string, string>[] = [];
+      for (const entry of listAttestationRecordFiles(ctx.vault).toReversed()) {
+        try {
           const record = readAttestationRecordFile(entry.path);
-          return {
+          attestations.push({
             id: record.id,
             created_at: record.createdAt,
             device_id: record.deviceId,
             store_digest: record.storeDigest,
             path: vaultRelativeSafe(ctx.vault, entry.path),
-          };
-        });
-      return { attestations };
+          });
+        } catch (exc) {
+          unreadable.push({
+            path: vaultRelativeSafe(ctx.vault, entry.path),
+            reason: ((exc as Error).message ?? String(exc)).replaceAll(ctx.vault, "<vault>"),
+          });
+        }
+      }
+      return {
+        attestations,
+        ...(unreadable.length > 0 ? { unreadable } : {}),
+      };
     }
 
     const newest = listAttestationRecordFiles(ctx.vault).at(-1);
@@ -67,8 +82,14 @@ async function toolBrainAttestations(
     // about what a verification result contains. Spread rather than cast:
     // the kernel's readonly interface has no index signature, and a fresh
     // object literal is what Record<string, unknown> admits without one -
-    // same fields, same order, nothing invented.
-    return { ...verifyAttestation(ctx.vault, readAttestationRecordFile(newest.path)) };
+    // same fields, same order, nothing invented. The exported public half
+    // is named explicitly, so a verification an agent triggers never
+    // falls back to reading the operator's private key material.
+    return {
+      ...verifyAttestation(ctx.vault, readAttestationRecordFile(newest.path), {
+        publicPath: attestationKeyPaths(ctx.vault).publicPath,
+      }),
+    };
   } catch (exc) {
     if (exc instanceof MCPError) throw exc;
     // A record file that exists but cannot be read is damage to name,

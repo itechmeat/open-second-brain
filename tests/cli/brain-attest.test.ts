@@ -202,6 +202,90 @@ test("verify after a forged edit exits one naming the diverged shard", async () 
   expect(res.stdout).toContain("2026-06-03.jsonl");
 });
 
+test("a store-digest drift no appended shard explains exits one", async () => {
+  append(3);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  // An inventoried ledger directory gains a file the log shards know
+  // nothing about: every shard stays intact, the signature stays valid,
+  // and only the store digest moves - damage the shard report cannot
+  // name, which is exactly what this exit code exists to report.
+  mkdirSync(join(vault, "Brain", "metrics"), { recursive: true });
+  writeFileSync(join(vault, "Brain", "metrics", "surface-a.tester.jsonl"), "{}\n", "utf8");
+  const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(res.returncode).toBe(1);
+  expect(res.stdout).toContain("store digest differs");
+  expect(res.stdout).toContain("no shard above explains it");
+});
+
+test("verify --public-key verifies against exactly the named exported half", async () => {
+  append(3);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  const exported = join(vault, ".open-second-brain", "keys", "attestation", "attestation.pub");
+  const outside = join(tmp, "operator-copy.pub");
+  writeFileSync(outside, readFileSync(exported, "utf8"), "utf8");
+  rmSync(exported);
+
+  // The named half verifies the record even though the vault no longer
+  // carries an export.
+  const named = await runCli([
+    "brain",
+    "attest",
+    "verify",
+    "--vault",
+    vault,
+    "--public-key",
+    outside,
+  ]);
+  expect(named.returncode).toBe(0);
+
+  // A named half that does not exist is an invalid signature, never a
+  // silent fall back.
+  const missing = await runCli([
+    "brain",
+    "attest",
+    "verify",
+    "--vault",
+    vault,
+    "--public-key",
+    join(tmp, "never-was.pub"),
+  ]);
+  expect(missing.returncode).toBe(1);
+
+  // The operator CLI's own run may still derive the public half from the
+  // local seed when the export is lost - the operator's machine, the
+  // operator's key.
+  const local = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(local.returncode).toBe(0);
+});
+
+test("list reports a record that cannot be read on its own row and still lists the rest", async () => {
+  append(2);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  writeFileSync(
+    join(vault, ".open-second-brain", "attestations", "attest-20990101T000000000Z.json"),
+    "{not json at all",
+    "utf8",
+  );
+  const list = await runCli(["brain", "attest", "list", "--vault", vault]);
+  expect(list.returncode).toBe(0);
+  expect(list.stdout).toContain("UNREADABLE");
+  expect(list.stdout).toContain("attest-20990101T000000000Z.json");
+  expect(list.stdout).toContain("corrupted JSON");
+
+  const asJson = await runCli(["brain", "attest", "list", "--vault", vault, "--json"]);
+  expect(asJson.returncode).toBe(0);
+  const parsed = JSON.parse(asJson.stdout) as {
+    attestations: unknown[];
+    unreadable: Array<Record<string, string>>;
+  };
+  expect(parsed.attestations).toHaveLength(1);
+  expect(parsed.unreadable).toHaveLength(1);
+  expect(parsed.unreadable[0]!["reason"]).toContain("corrupted JSON");
+});
+
 test("verify with nothing signed says so and exits zero", async () => {
   append(1);
   const res = await runCli(["brain", "attest", "verify", "--vault", vault]);

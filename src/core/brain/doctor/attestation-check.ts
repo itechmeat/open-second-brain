@@ -103,29 +103,47 @@ export const attestationCheck: DoctorCheck = {
     const facts: string[] = [];
 
     // A missing key matters only here, where signed evidence exists that
-    // the operator can no longer extend.
+    // the operator can no longer extend. The fact states exactly what is
+    // lost - the ability to SIGN: while the exported public half
+    // survives, every past attestation still verifies against it, and
+    // keygen itself refuses while either half exists, so the remedy
+    // never destroys evidence.
     const { privatePath } = attestationKeyPaths(ctx.vault);
     const keyMissing = !existsSync(privatePath);
     if (keyMissing) {
       facts.push(
         "the private half of the attestation signing key is missing, so no new " +
-          "attestation can be signed (a lost key leaves every past one unverifiable)",
+          "attestation can be signed (the surviving public half, if present, still " +
+          "verifies the past ones; keygen refuses while either half exists)",
       );
     }
 
     const ageMs = ctx.now.getTime() - Date.parse(record.createdAt);
-    const ageDays = msToWholeDays(ageMs);
-    const stale = Number.isFinite(ageDays) && ageDays > ATTESTATION_STALE_DAYS;
-    if (stale) {
-      facts.push(
-        `the newest attestation (${record.id}) is ${ageDays} days old, past the ` +
-          `${ATTESTATION_STALE_DAYS}-day window - the store point it vouches for recedes`,
-      );
+    if (!Number.isFinite(ageMs)) {
+      // An unparseable created-at cannot count as fresh: failed reads
+      // are named, never flattened into a clean bill.
+      pushUncertain(out.uncertain, {
+        code: ATTESTATION_STATE_UNMEASURED_CODE,
+        path: newest.path,
+        message:
+          `the newest attestation (${record.id}) carries a created_at this pass cannot ` +
+          "parse, so whether it is past its window is unknown",
+      });
+    } else {
+      const ageDays = msToWholeDays(ageMs);
+      if (ageDays > ATTESTATION_STALE_DAYS) {
+        facts.push(
+          `the newest attestation (${record.id}) is ${ageDays} days old, past the ` +
+            `${ATTESTATION_STALE_DAYS}-day window - the store point it vouches for recedes`,
+        );
+      }
     }
 
     let verification;
     try {
-      verification = verifyAttestation(ctx.vault, record);
+      verification = verifyAttestation(ctx.vault, record, {
+        publicPath: attestationKeyPaths(ctx.vault).publicPath,
+      });
     } catch {
       pushUncertain(out.uncertain, {
         code: ATTESTATION_STATE_UNMEASURED_CODE,
@@ -157,12 +175,14 @@ export const attestationCheck: DoctorCheck = {
     if (facts.length === 0) return;
     // The next command answers the worst fact: damage first (verify),
     // then the missing key (keygen), then age alone (sign).
-    const nextCommand =
-      diverged.length > 0 || !verification.signatureValid
-        ? "o2b brain attest verify"
-        : keyMissing
-          ? "o2b brain attest keygen"
-          : "o2b brain attest sign";
+    let nextCommand = "o2b brain attest sign";
+    if (diverged.length > 0) {
+      nextCommand = "o2b brain attest verify";
+    } else if (keyMissing) {
+      nextCommand = "o2b brain attest keygen";
+    } else if (!verification.signatureValid) {
+      nextCommand = "o2b brain attest verify";
+    }
     out.issues.push({
       severity: "warning",
       code: ATTESTATION_CHECK_CODE,
