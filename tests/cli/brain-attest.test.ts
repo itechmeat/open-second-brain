@@ -350,7 +350,7 @@ test("a store that cannot be measured reads as its own fact, not as damage", asy
     // No digest reading exists for a run that measured nothing: neither
     // the match line nor a growth explanation may print beside the
     // unknown.
-    expect(res.stdout).not.toContain("differs from the attested one");
+    expect(res.stdout).not.toContain("store digest");
     expect(res.stdout).not.toContain("log growth");
   } finally {
     release();
