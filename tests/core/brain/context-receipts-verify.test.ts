@@ -552,13 +552,14 @@ describe("deduplicated repeated items", () => {
       ],
       finalText: `${PAGE_BODY.trim()}\n\n${replacement}`,
     });
+    // The page is deleted BEFORE the verification runs, so the match
+    // can only come from the synthetic sentence - the delivered bytes
+    // of a deduplicated item are never a projection of the page; the
+    // page behind the FIRST copy is what that item's own verification
+    // covers.
+    rmSync(abs);
     const verification = verifyContextReceipt(vault, record);
     const deduped = verification.items.find((item) => item.id === "item-two")!;
-    // The delivered bytes were the synthetic sentence, so the
-    // re-derivation is that sentence - and the verdict stays a match
-    // even though the page is gone, because the page behind the FIRST
-    // copy is what that item's own verification covers.
-    rmSync(abs);
     expect(deduped.verdict).toBe(RECEIPT_VERIFY_VERDICT.match);
     expect(deduped.observedHash).toBe(sha256Hex(replacement));
     expect(deduped.note).toBeNull();
