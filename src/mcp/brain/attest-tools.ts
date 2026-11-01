@@ -94,10 +94,14 @@ async function toolBrainAttestations(
     if (exc instanceof MCPError) throw exc;
     // A record file that exists but cannot be read is damage to name,
     // never an empty answer: silently dropping evidence is the one
-    // failure this family exists to prevent.
+    // failure this family exists to prevent. The detail is redacted the
+    // way the list branch redacts its unreadable-row reasons - the
+    // reader's error carries the absolute record path, and this tool
+    // answers at every reach, so a remote client never sees the vault
+    // root the server runs under.
     throw new MCPError(
       INTERNAL_ERROR,
-      `brain_attestations: ${(exc as Error).message ?? String(exc)}`,
+      `brain_attestations: ${((exc as Error).message ?? String(exc)).replaceAll(ctx.vault, "<vault>")}`,
     );
   }
 }

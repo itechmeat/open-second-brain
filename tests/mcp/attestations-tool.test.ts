@@ -210,6 +210,28 @@ test("verify answers against the exported public half and never derives from the
   expect((result as Record<string, unknown>)["signatureValid"]).toBe(false);
 });
 
+test("verify refuses a corrupted newest record without naming the absolute vault path", async () => {
+  append(2);
+  writeFixtureAttestation();
+  // The verify branch's outer catch faces the same reader the list
+  // branch already redacts for: readAttestationRecordFile throws with
+  // the absolute file path, and this tool answers at every reach, so
+  // the raw message would hand the operator's filesystem layout to a
+  // remote client.
+  writeFileSync(
+    join(vault, ".open-second-brain", "attestations", "attest-20990101T000000000Z.json"),
+    "{not json at all",
+    "utf8",
+  );
+
+  const { result, error } = await callAttestations({ operation: "verify" });
+
+  expect(result).toBeNull();
+  expect(error).not.toBeNull();
+  expect(error!.message).toContain("corrupted JSON");
+  expect(error!.message).not.toContain(vault);
+});
+
 test("verify returns the K4 shape over the harness", async () => {
   append(2);
   writeFixtureAttestation();
