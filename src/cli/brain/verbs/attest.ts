@@ -374,12 +374,13 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
   const damaged = result.shards.some(
     (shard) => shard.state === "diverged" || shard.state === "missing",
   );
-  // The kernel classifies the manifest diff surface by surface: log
-  // growth - appended attested shards and shards created after signing -
-  // is explained, everything else (an inventoried ledger, the vault
-  // identity, the search index) is drift no shard names, and a manifest
-  // that could not be recomputed at all is its own fact. One rule here
-  // and in the doctor, computed once in the kernel.
+  // The kernel classifies the manifest diff surface by surface: normal
+  // growth - appended attested shards, shards created after signing, and
+  // the append-only ledgers' own grammar-valid new shards - is
+  // explained, everything else (ledger damage, a strict directory, the
+  // vault identity, the search index) is drift no shard names, and a
+  // manifest that could not be recomputed at all is its own fact. One
+  // rule here and in the doctor, computed once in the kernel.
   const unexplainedDrift = result.unexplainedDrift;
   const healthy = !damaged && !unexplainedDrift && result.storeMeasured && result.signatureValid;
 
@@ -404,7 +405,7 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
       result.storeDigestMatches
         ? "store digest matches the attested one"
         : "store digest differs from the attested one" +
-            (unexplainedDrift ? "" : " (log growth since signing explains it)"),
+            (unexplainedDrift ? "" : " (growth since signing explains it)"),
     );
   }
   if (healthy) return 0;

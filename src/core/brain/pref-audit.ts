@@ -251,7 +251,7 @@ export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResul
  * The base is the fixed stem, so the directory alone decides which
  * preference a file belongs to and no id can be mistaken for a shard.
  */
-const PREF_AUDIT_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const PREF_AUDIT_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: literalBase(PREF_AUDIT_STEM),
   extensions: Object.freeze([PREF_AUDIT_EXT]),
 });

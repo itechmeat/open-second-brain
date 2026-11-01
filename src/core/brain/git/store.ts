@@ -98,7 +98,7 @@ export interface AppendGitRecordsResult {
 const COMMITS_STEM = "commits";
 
 /** The commits ledger's file-name layout, handed to the shared shard grammar. */
-const COMMITS_GRAMMAR = jsonlLedgerGrammar(COMMITS_STEM);
+export const COMMITS_GRAMMAR = jsonlLedgerGrammar(COMMITS_STEM);
 
 /** `Brain/projects/git/`: the root that holds one store directory per repository. */
 export function gitStoreRootDir(vault: string): string {

@@ -109,7 +109,7 @@ function surfaceGrammar(surface: string): LedgerShardGrammar {
 }
 
 /** The layout of the whole directory, for discovering surfaces. */
-const ANY_SURFACE_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const ANY_SURFACE_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: "[a-z][a-z0-9_]{0,63}",
   extensions: Object.freeze([METRICS_EXT]),
 });

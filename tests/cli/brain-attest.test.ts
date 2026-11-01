@@ -225,7 +225,7 @@ test("a shard created after signing is growth, not unexplained drift", async () 
   // The digest differs and the report reads it as growth, not damage -
   // the new shard is not an attested row, so the prose names the growth
   // itself instead of pointing at shard verdicts that do not exist.
-  expect(res.stdout).toContain("(log growth since signing explains it)");
+  expect(res.stdout).toContain("(growth since signing explains it)");
   expect(res.stdout).not.toContain("no shard above explains it");
 });
 

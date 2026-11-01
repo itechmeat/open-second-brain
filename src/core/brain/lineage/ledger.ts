@@ -76,11 +76,13 @@ import {
 import { canonicalizeGitRemote, type GitWorkspaceIdentity } from "../git/reader.ts";
 import { computePayloadHash } from "../idempotency-ledger.ts";
 import {
+  jsonlLedgerGrammar,
   listShardedFiles,
   literalBase,
   mergeShardedRows,
   resolveAppendShardId,
   shardedFileName,
+  type LedgerShardGrammar,
   type ShardedRow,
 } from "../ledger-shards.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
@@ -136,6 +138,17 @@ const STATE_DIR_REL = posix.join(BRAIN_ROOT_REL, ".state");
 const LEDGER_BASE = "session-lineage";
 const GAPS_BASE = "session-lineage-gaps";
 const LINEAGE_EXT = "jsonl";
+
+/**
+ * The file-name layouts of the Brain state directory, exported for the
+ * attestation sweep: normal growth here is exactly a new shard of one of
+ * these two stems (the ledger, its gap sidecar), so a verifier can tell
+ * an append from a planted name without restating the stems.
+ */
+export const LINEAGE_STATE_GRAMMARS: ReadonlyArray<LedgerShardGrammar> = Object.freeze([
+  jsonlLedgerGrammar(LEDGER_BASE),
+  jsonlLedgerGrammar(GAPS_BASE),
+]);
 
 /** Site recorded on every notice this module emits. */
 const LEDGER_SITE = "brain.lineage.ledger";

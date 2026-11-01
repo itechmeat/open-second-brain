@@ -31,7 +31,9 @@ import {
 import { verifyAttestation } from "../../../../src/core/brain/attestation/verify.ts";
 import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
-import { brainDirs, logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
+import { brainDirs, hookAuditDir, logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
+import { appendAuditRecord } from "../../../../src/core/reliability/audit.ts";
+import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
 import { noopSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
 
 const DATE = "2026-06-03";
@@ -257,6 +259,91 @@ describe("verifyAttestation", () => {
       ),
     );
     expect([...after].toSorted()).toEqual([...before].toSorted());
+  });
+
+  test("a new hook-audit week shard after signing is growth, not unexplained drift", () => {
+    // The audit writer names its files `<ISO-week>[.<device>].jsonl`, so
+    // the next week boundary creates a file no attestation listed - the
+    // same normal growth a new log day is, and never damage.
+    appendAuditRecord(hookAuditDir(vault), {
+      timestamp: "2026-05-28T10:00:00Z",
+      actor: "@tester",
+      action: "capture",
+      target: "session-1",
+      ok: true,
+    });
+    const record = signedRecord();
+    appendAuditRecord(hookAuditDir(vault), {
+      timestamp: `${DATE}T10:00:00Z`,
+      actor: "@tester",
+      action: "capture",
+      target: "session-2",
+      ok: true,
+    });
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("an invalid name in an attested ledger directory is still drift", () => {
+    appendAuditRecord(hookAuditDir(vault), {
+      timestamp: "2026-05-28T10:00:00Z",
+      actor: "@tester",
+      action: "capture",
+      target: "session-1",
+      ok: true,
+    });
+    const record = signedRecord();
+    writeFileSync(join(hookAuditDir(vault), "not-a-week.jsonl"), "{}\n", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
+  });
+
+  test("a removed attested ledger file is still drift", () => {
+    const file = appendAuditRecord(hookAuditDir(vault), {
+      timestamp: "2026-05-28T10:00:00Z",
+      actor: "@tester",
+      action: "capture",
+      target: "session-1",
+      ok: true,
+    });
+    const record = signedRecord();
+    rmSync(file);
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
+  });
+
+  test("a first continuity month created after signing is growth, not unexplained drift", () => {
+    // The continuity store lives beside the log under Brain/log and may
+    // not exist at all when the store is signed; its first month shard
+    // is exactly the ledger subdirectory growth the rule allows, as long
+    // as every name it brings parses under the month grammar.
+    const record = signedRecord();
+    appendContinuityRecord(vault, {
+      kind: "context_receipt",
+      createdAt: `${DATE}T10:30:00Z`,
+      payload: { text: "the first continuity record" },
+    });
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("an addition to Brain/preferences stays drift: those files are authored state", () => {
+    mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-one.md"),
+      "---\ntitle: one\n---\n\nx\n",
+    );
+    const record = signedRecord();
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-two.md"),
+      "---\ntitle: two\n---\n\nx\n",
+    );
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
   });
 
   test("a Safeguard is accepted and consulted; a progress sink is accepted", () => {

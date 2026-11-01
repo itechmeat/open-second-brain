@@ -58,7 +58,7 @@ const CONTINUITY_EXT = "jsonl";
  * The base is the month, so a sharded name still yields the month the
  * `since`/`until` range-skip below tests without re-parsing the name.
  */
-const CONTINUITY_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const CONTINUITY_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: "\\d{4}-\\d{2}",
   extensions: Object.freeze([CONTINUITY_EXT]),
 });

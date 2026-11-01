@@ -54,9 +54,12 @@ import { join } from "node:path";
 import {
   attestationStoreDigest,
   collectAttestationManifest,
+  isGrammarValidName,
+  ledgerGrowthGrammars,
   type AttestationManifest,
   type CollectAttestationManifestOptions,
 } from "./digest.ts";
+import type { LedgerShardGrammar } from "../ledger-shards.ts";
 import { verifyAttestationSignature } from "./signing.ts";
 import type { AttestationRecord } from "./record.ts";
 import { LOG_CHAIN_FIELDS, logChainHash } from "../log.ts";
@@ -86,10 +89,11 @@ export interface AttestationVerification {
   readonly storeDigestMatches: boolean;
   /**
    * Whether the recomputed manifest differs from the attested one in a
-   * way the shard verdicts cannot explain: a vault-identity, index or
-   * ledger change, or log growth the new-shard rule does not cover. The
-   * one boolean both faces exit and warn on, so the CLI and the doctor
-   * cannot drift about what counts as damage.
+   * way normal growth cannot explain: a vault-identity or index change,
+   * ledger damage (an attested file gone, an invalid name, an addition
+   * to a strict directory), or growth neither the new-shard rule nor the
+   * ledger grammars cover. The one boolean both faces exit and warn on,
+   * so the CLI and the doctor cannot drift about what counts as damage.
    */
   readonly unexplainedDrift: boolean;
   /**
@@ -264,7 +268,7 @@ export function verifyAttestation(
     const recomputeOptions: CollectAttestationManifestOptions = { safeguard: opts.safeguard };
     const recomputed = collectAttestationManifest(vault, recomputeOptions);
     storeDigestMatches = attestationStoreDigest(recomputed) === record.storeDigest;
-    unexplainedDrift = unexplainedManifestDrift(record.manifest, recomputed);
+    unexplainedDrift = unexplainedManifestDrift(vault, record.manifest, recomputed);
     storeMeasured = true;
   } catch (err) {
     // The caller's own deadline is not a store fact: a run the safeguard
@@ -294,22 +298,59 @@ function sameFiles(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean 
 }
 
 /**
+ * Whether one inventoried directory's entry list is explained: every
+ * attested entry must still be there, and every name that was not
+ * attested must be normal growth for that directory - a file parsing
+ * under the directory's ledger grammar (a new ISO-week audit shard, a
+ * new continuity month, a new metric surface) or the entry of a known
+ * ledger subdirectory created beneath it (a first continuity month
+ * inside `Brain/log`, a first per-preference trail inside the
+ * preference-audit root). A directory with no grammar entry is strict -
+ * additions there are not something this build's writers produce.
+ */
+function ledgerGrowthExplained(
+  grammars: ReadonlyMap<string, ReadonlyArray<LedgerShardGrammar>>,
+  dir: string,
+  attestedFiles: ReadonlyArray<string>,
+  now: ReadonlyArray<string>,
+): boolean {
+  const layout = grammars.get(dir);
+  if (layout === undefined) return sameFiles(attestedFiles, now);
+  const attestedSet = new Set(attestedFiles);
+  return (
+    attestedFiles.every((name) => now.includes(name)) &&
+    now.every(
+      (name) =>
+        attestedSet.has(name) || isGrammarValidName(name, layout) || grammars.has(`${dir}/${name}`),
+    )
+  );
+}
+
+/**
  * Whether the recomputed manifest differs from the attested one beyond
- * what the shard verdicts explain. Log growth is the NORMAL case: a
- * shard appended after signing is classified `appended`, and a shard
- * created after signing is new growth - its file joins the log
- * directory's inventory and its head joins `logHeads`. Everything else
- * (the vault identity, the index stamp, any other ledger inventory, a
- * file removed from or added to an inventoried directory without being
- * a new log shard) is drift no verdict names.
+ * what normal growth explains. Growth is the NORMAL case, and every
+ * append-only producer has it: a log shard appended after signing is
+ * classified `appended`, a shard created after signing joins the log
+ * directory's inventory and `logHeads`, and the append-only ledger
+ * directories gain their time-window shards (a new hook-audit week, a
+ * new continuity month, a new metric surface) - allowed exactly when the
+ * new names parse under the producer's own grammar, with every attested
+ * entry still present. Known ledger subdirectories of `Brain/log` that
+ * were created entirely after signing follow the same rule against an
+ * empty attested list. Everything else is drift no verdict names: the
+ * vault identity, the index stamp, an attested entry gone, an invalid
+ * name, or ANY addition to `Brain/preferences`, whose files are
+ * authored state.
  */
 function unexplainedManifestDrift(
+  vault: string,
   attested: AttestationManifest,
   recomputed: AttestationManifest,
 ): boolean {
   if (attested.vaultIdentityId !== recomputed.vaultIdentityId) return true;
   if (attested.indexStamp !== recomputed.indexStamp) return true;
   const logDirKey = BRAIN_LOG_REL;
+  const grammars = ledgerGrowthGrammars(vault);
   const newShards = Object.keys(recomputed.logHeads)
     .filter((shard) => !(shard in attested.logHeads))
     .toSorted();
@@ -321,23 +362,47 @@ function unexplainedManifestDrift(
       shard.endsWith(".jsonl") ? [shard, `${shard.slice(0, -".jsonl".length)}.md`] : [shard],
     )
     .toSorted();
+  // The log directory's inventory also names the ledger subdirectories
+  // under it (a first continuity month, a first audit family), so its
+  // allowed set grows by exactly those known names.
+  const logLedgerSubdirs = [...grammars.keys()].flatMap((key) =>
+    key.startsWith(`${BRAIN_LOG_REL}/`) && !key.slice(BRAIN_LOG_REL.length + 1).includes("/")
+      ? [key.slice(BRAIN_LOG_REL.length + 1)]
+      : [],
+  );
   for (const [dir, attestedFiles] of Object.entries(attested.ledgerInventories)) {
     const now = recomputed.ledgerInventories[dir];
     if (now === undefined) return true; // an inventoried directory vanished
     if (dir === logDirKey) {
-      if (!explainedLogGrowth(attestedFiles, newShards, newLogFiles, now)) return true;
+      if (!explainedLogGrowth(attestedFiles, newShards, newLogFiles, logLedgerSubdirs, now)) {
+        return true;
+      }
       continue;
     }
-    if (!sameFiles(attestedFiles, now)) return true;
+    if (!ledgerGrowthExplained(grammars, dir, attestedFiles, now)) return true;
   }
   for (const dir of Object.keys(recomputed.ledgerInventories)) {
     if (dir in attested.ledgerInventories) continue;
     // A directory that gained ledger status since signing is only
     // explained when it is the log directory filling with the new
-    // shards - the same growth rule, against an empty attested list.
+    // shards and known ledger subdirectories, or one of those known
+    // subdirectories itself (a first continuity month, a first audit
+    // week) whose every file parses under its producer's grammar.
     if (
       dir === logDirKey &&
-      explainedLogGrowth([], newShards, newLogFiles, recomputed.ledgerInventories[dir] ?? [])
+      explainedLogGrowth(
+        [],
+        newShards,
+        newLogFiles,
+        logLedgerSubdirs,
+        recomputed.ledgerInventories[dir] ?? [],
+      )
+    ) {
+      continue;
+    }
+    if (
+      dir.startsWith(`${BRAIN_LOG_REL}/`) &&
+      ledgerGrowthExplained(grammars, dir, [], recomputed.ledgerInventories[dir] ?? [])
     ) {
       continue;
     }
@@ -347,20 +412,22 @@ function unexplainedManifestDrift(
 }
 
 /**
- * Whether the log directory's file list is explained by growth, in set
+ * Whether the log directory's entry list is explained by growth, in set
  * semantics: every attested file and every new shard's JSONL must still
  * be there, the new shards' markdown twins MAY be there (a twin can
  * predate its JSONL on a legacy md-only day, and the appender's own
- * partial-failure path can leave a JSONL without one), and nothing else
- * may appear or vanish.
+ * partial-failure path can leave a JSONL without one), the known ledger
+ * subdirectories under the log MAY appear (their own inventories are
+ * judged by the ledger rule), and nothing else may appear or vanish.
  */
 function explainedLogGrowth(
   attestedFiles: ReadonlyArray<string>,
   newShards: ReadonlyArray<string>,
   newLogFiles: ReadonlyArray<string>,
+  ledgerSubdirs: ReadonlyArray<string>,
   now: ReadonlyArray<string>,
 ): boolean {
-  const allowed = new Set([...attestedFiles, ...newLogFiles]);
+  const allowed = new Set([...attestedFiles, ...newLogFiles, ...ledgerSubdirs]);
   const required = [...attestedFiles, ...newShards];
   return required.every((name) => now.includes(name)) && now.every((name) => allowed.has(name));
 }

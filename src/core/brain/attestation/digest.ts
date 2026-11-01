@@ -32,14 +32,17 @@ import { join, relative, sep } from "node:path";
 import { peekEmbeddingAbiSync } from "../../search/store/embedding-abi.ts";
 import { resolveConfiguredIndexPath } from "../../search/paths.ts";
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
+import { AUDIT_WEEK_SHARD_GRAMMAR } from "../../reliability/audit.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
-import { continuityLogDir } from "../continuity/store.ts";
-import { gitStoreRootDir } from "../git/store.ts";
-import { idempotencyLogDir } from "../idempotency-ledger.ts";
-import { brainStateDirPath } from "../lineage/ledger.ts";
-import { metricsDir } from "../metrics.ts";
+import { parseShardedName, type LedgerShardGrammar } from "../ledger-shards.ts";
+import { CONTINUITY_GRAMMAR, continuityLogDir } from "../continuity/store.ts";
+import { COMMITS_GRAMMAR, gitStoreRootDir } from "../git/store.ts";
+import { IDEMPOTENCY_GRAMMAR, idempotencyLogDir } from "../idempotency-ledger.ts";
+import { LINEAGE_STATE_GRAMMARS, brainStateDirPath } from "../lineage/ledger.ts";
+import { ANY_SURFACE_GRAMMAR, metricsDir } from "../metrics.ts";
 import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
 import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
+import { PREF_AUDIT_GRAMMAR } from "../pref-audit.ts";
 import { schemaMutationAuditDir } from "../schema-integrity.ts";
 import { watchdogFallbackAuditDir } from "../watchdog.ts";
 import type { Safeguard } from "../safeguard.ts";
@@ -150,6 +153,77 @@ function ledgerSweepDirs(vault: string): string[] {
     }
   }
   return dirs;
+}
+
+/**
+ * For every swept directory that is an APPEND-ONLY ledger, the file-name
+ * grammar its producer appends under, keyed the way the inventories are
+ * keyed. This is the growth half of the same authority
+ * {@link ledgerSweepDirs} is the inventory half of: a verifier may treat
+ * a name that parses under the directory's grammar as legitimate
+ * post-signing growth, while every other directory stays strict, because
+ * an addition there is not something this build's writers produce.
+ *
+ * The grammars are imported from the producer modules - never restated -
+ * so a writer and this map cannot disagree on what one of its shards is
+ * called. Directories left out of the map on purpose:
+ *
+ *   - `Brain/preferences` holds operator-authored state, so ANY addition
+ *     is drift;
+ *   - the skill-proposals root and the preference-audit ROOT hold no
+ *     appendable ledger (proposals live in their phase subdirectories;
+ *     the flat per-preference trail is legacy, still read, never
+ *     written);
+ *   - `Brain/log` itself is the log-shard rule the verifier applies
+ *     (a new shard's JSONL beside its markdown twin), which a name
+ *     grammar cannot express.
+ *
+ * A ledger directory added to the sweep without joining this map simply
+ * verifies strict - the failure is an honest one, and the digest tests
+ * are where the drift is caught.
+ */
+export function ledgerGrowthGrammars(
+  vault: string,
+): ReadonlyMap<string, ReadonlyArray<LedgerShardGrammar>> {
+  const logDir = brainDirs(vault).log;
+  const grammars = new Map<string, ReadonlyArray<LedgerShardGrammar>>();
+  const put = (dir: string, layout: ReadonlyArray<LedgerShardGrammar>): void => {
+    grammars.set(inventoryKey(vault, dir), layout);
+  };
+  // The per-device ISO-week audit directories: the four Brain/log audit
+  // families, the schema-mutation audit beside them, the hook audit and
+  // the watchdog fallback under the derived store - one writer
+  // (`appendAuditRecord`) names them all.
+  for (const name of BRAIN_LOG_AUDIT_DIRS) put(join(logDir, name), [AUDIT_WEEK_SHARD_GRAMMAR]);
+  put(schemaMutationAuditDir(vault), [AUDIT_WEEK_SHARD_GRAMMAR]);
+  put(watchdogFallbackAuditDir(vault), [AUDIT_WEEK_SHARD_GRAMMAR]);
+  put(hookAuditDir(vault), [AUDIT_WEEK_SHARD_GRAMMAR]);
+  put(continuityLogDir(vault), [CONTINUITY_GRAMMAR]);
+  put(idempotencyLogDir(vault), [IDEMPOTENCY_GRAMMAR]);
+  put(metricsDir(vault), [ANY_SURFACE_GRAMMAR]);
+  put(brainStateDirPath(vault), LINEAGE_STATE_GRAMMARS);
+  // One shard directory per preference and per repository, the same
+  // one-level descent the sweep performs.
+  const prefRoot = prefAuditDir(vault);
+  const gitRoot = gitStoreRootDir(vault);
+  for (const [parent, layout] of [
+    [prefRoot, [PREF_AUDIT_GRAMMAR]],
+    [gitRoot, [COMMITS_GRAMMAR]],
+  ] as const) {
+    if (!existsSync(parent)) continue;
+    for (const entry of readdirSync(parent, { withFileTypes: true })) {
+      if (entry.isDirectory()) put(join(parent, entry.name), layout);
+    }
+  }
+  return grammars;
+}
+
+/** Whether one file name is a lawful shard of one of `layout`'s grammars. */
+export function isGrammarValidName(
+  name: string,
+  layout: ReadonlyArray<LedgerShardGrammar>,
+): boolean {
+  return layout.some((grammar) => parseShardedName(name, grammar) !== null);
 }
 
 /** A directory's file inventory as the manifest records it, or null when absent. */
