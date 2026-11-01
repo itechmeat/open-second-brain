@@ -202,6 +202,44 @@ test("verify after a forged edit exits one naming the diverged shard", async () 
   expect(res.stdout).toContain("2026-06-03.jsonl");
 });
 
+test("a shard created after signing is growth, not unexplained drift", async () => {
+  append(2);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  // The next write lands in a NEW day shard: it is not an attested
+  // shard, so no verdict says appended - but its file joining the log
+  // directory and its head joining the manifest is exactly the growth
+  // the cron contract reads as progress.
+  appendLogEvent(
+    vault,
+    {
+      timestamp: "2026-06-04T10:00:00Z",
+      eventType: "note",
+      body: { text: "the next day's first event", agent: "@tester" },
+    },
+    { deviceId: "" },
+  );
+  const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(res.returncode).toBe(0);
+  // The digest differs and the report says the delivered shards name
+  // why - the growth reading, not the damage one.
+  expect(res.stdout).toContain("name why");
+  expect(res.stdout).not.toContain("no shard above explains it");
+});
+
+test("an appended shard does not hide ledger drift elsewhere", async () => {
+  append(2);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  append(1);
+  // Real drift in another inventoried directory, beside the append.
+  mkdirSync(join(vault, "Brain", "metrics"), { recursive: true });
+  writeFileSync(join(vault, "Brain", "metrics", "surface-a.tester.jsonl"), "{}\n", "utf8");
+  const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(res.returncode).toBe(1);
+  expect(res.stdout).toContain("store digest differs");
+});
+
 test("a store-digest drift no appended shard explains exits one", async () => {
   append(3);
   await runCli(["brain", "attest", "keygen", "--vault", vault]);

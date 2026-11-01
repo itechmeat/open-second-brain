@@ -121,13 +121,21 @@ test("a missing key is reported only when attestations exist", () => {
   expect(issues).toHaveLength(1);
   expect(issues[0]!.code).toBe("attestation-stale-or-diverged");
   expect(issues[0]!.severity).toBe("warning");
-  expect(issues[0]!.message).toContain("attest keygen");
   // The fact states what is actually lost - the ability to sign. While
   // the exported public half survives, every past attestation still
   // verifies against it, and keygen itself refuses while either half
-  // exists, so the advice never destroys evidence.
+  // exists, so the advice never destroys evidence and never points at a
+  // refusal: the surviving half makes verify the answer.
   expect(issues[0]!.message).toContain("the surviving public half");
   expect(issues[0]!.message).not.toContain("unverifiable");
+  expect(issues[0]!.message).toContain("attest verify");
+
+  // With BOTH halves gone there is nothing to inspect against: keygen is
+  // the remedy again.
+  unlinkSync(join(vault, ".open-second-brain", "keys", "attestation", "attestation.pub"));
+  const bothGone = runCheck(new Date("2026-06-04T00:00:00Z")).issues;
+  expect(bothGone).toHaveLength(1);
+  expect(bothGone[0]!.message).toContain("attest keygen");
 });
 
 test("a fresh attestation with its key and an untouched store is silent", () => {

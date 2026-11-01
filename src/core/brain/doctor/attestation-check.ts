@@ -160,6 +160,15 @@ export const attestationCheck: DoctorCheck = {
     if (!verification.signatureValid) {
       facts.push("the newest attestation's signature does not verify against this vault's key");
     }
+    if (verification.unexplainedDrift) {
+      // The same rule `o2b brain attest verify` exits on, computed once
+      // in the kernel: a manifest change no shard verdict explains.
+      facts.push(
+        "the store no longer matches the attested manifest beyond the log shards - an " +
+          "inventoried ledger directory, the vault identity or the search index changed since " +
+          "signing",
+      );
+    }
     if (diverged.length > 0) {
       const named = diverged
         .slice(0, MAX_NAMED_SHARDS)
@@ -174,13 +183,25 @@ export const attestationCheck: DoctorCheck = {
 
     if (facts.length === 0) return;
     // The next command answers the worst fact: damage first (verify),
-    // then the missing key (keygen), then age alone (sign).
+    // then the missing key - but keygen REFUSES while either half
+    // exists, so it is the remedy only when both halves are gone;
+    // otherwise the answer is inspecting the verdict (verify), then age
+    // alone (sign).
     let nextCommand = "o2b brain attest sign";
-    if (diverged.length > 0) {
+    const publicMissing = !existsSync(attestationKeyPaths(ctx.vault).publicPath);
+    if (keyMissing && publicMissing) {
+      // Nothing to verify against and nothing to sign with: keygen is
+      // the remedy, and it no longer refuses.
+      nextCommand = "o2b brain attest keygen";
+    } else if (
+      diverged.length > 0 ||
+      !verification.signatureValid ||
+      verification.unexplainedDrift
+    ) {
       nextCommand = "o2b brain attest verify";
     } else if (keyMissing) {
-      nextCommand = "o2b brain attest keygen";
-    } else if (!verification.signatureValid) {
+      // Keygen refuses while the public half survives, so the answer
+      // with a surviving half is the verdict it still verifies.
       nextCommand = "o2b brain attest verify";
     }
     out.issues.push({

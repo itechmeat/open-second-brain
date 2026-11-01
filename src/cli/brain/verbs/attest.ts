@@ -267,9 +267,18 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
   // cannot be read is damage to name, never an empty answer: it gets
   // its own row with the reader's reason while the readable records
   // still list - one corrupted file hides nothing but itself.
+  let entries: ReadonlyArray<{ path: string; name: string }>;
+  try {
+    entries = listAttestationRecordFiles(vault).toReversed();
+  } catch (exc) {
+    // A directory that cannot be listed (permissions, a file where the
+    // directory should be) is an operational failure with a name, never
+    // a crash and never an empty inventory.
+    return failAttestation("list", exc);
+  }
   const records: { path: string; record: AttestationRecord }[] = [];
   const unreadable: { path: string; reason: string }[] = [];
-  for (const entry of listAttestationRecordFiles(vault).toReversed()) {
+  for (const entry of entries) {
     try {
       records.push({ path: entry.path, record: readAttestationRecordFile(entry.path) });
     } catch (exc) {
@@ -364,11 +373,12 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
   const damaged = result.shards.some(
     (shard) => shard.state === "diverged" || shard.state === "missing",
   );
-  const anyAppended = result.shards.some((shard) => shard.state === "appended");
-  // A digest drift the appended shards do not explain is damage the
-  // shard report cannot name - an inventoried ledger, the vault
-  // identity, the search index - and it is not a store that "moved".
-  const unexplainedDrift = !result.storeDigestMatches && !anyAppended;
+  // The kernel classifies the manifest diff surface by surface: log
+  // growth - appended attested shards and shards created after signing -
+  // is explained, everything else (an inventoried ledger, the vault
+  // identity, the search index) is drift no shard names. One rule here
+  // and in the doctor, computed once in the kernel.
+  const unexplainedDrift = result.unexplainedDrift;
   const healthy = !damaged && !unexplainedDrift && result.signatureValid;
 
   if (flags["json"]) {
@@ -387,7 +397,7 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
     result.storeDigestMatches
       ? "store digest matches the attested one"
       : "store digest differs from the attested one" +
-          (anyAppended ? " (the appended shards above name why)" : ""),
+          (unexplainedDrift ? "" : " (the appended and new shards above name why)"),
   );
   if (healthy) return 0;
   if (damaged) {
