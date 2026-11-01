@@ -593,9 +593,12 @@ function lastChainHash(jsonl: string): string | null {
  * The JSONL-only half of the log's shard grammar, for the head collector
  * below. The recogniser itself lives in `ledger-shards.ts` like every
  * other ledger's; the markdown twin is deliberately absent here because
- * it is not chained and carries no head to collect.
+ * it is not chained and carries no head to collect. Exported so the
+ * attestation record reader validates manifest shard names against the
+ * ONE grammar the collector names them with - a second spelling would
+ * let the two drift apart.
  */
-const LOG_HEAD_GRAMMAR = Object.freeze({
+export const LOG_HEAD_GRAMMAR = Object.freeze({
   base: "\\d{4}-\\d{2}-\\d{2}",
   extensions: Object.freeze(["jsonl"]),
 });
@@ -631,21 +634,16 @@ const LOG_HEAD_GRAMMAR = Object.freeze({
  * attest, which is a fact about the store, not a failure.
  */
 export function collectLogShardHeads(vault: string): Readonly<Record<string, string>> {
-  let logDir: string;
-  try {
-    logDir = brainDirs(vault).log;
-  } catch {
-    return {};
-  }
-  if (!existsSync(logDir)) {
-    process.stderr.write("T1 nodir\n");
-    return {};
-  }
-  const files = listShardedFiles(logDir, LOG_HEAD_GRAMMAR);
-  if (files.length === 0) return {};
+  const logDir = brainDirs(vault).log;
+  if (!existsSync(logDir)) return {};
   const heads: Record<string, string> = {};
   const release = acquireLogLock(logDir);
   try {
+    // The listing runs INSIDE the lock, beside the head reads it feeds:
+    // a shard created between an outside listing and the lock (a day
+    // rollover, a new device's first append) would escape the map and a
+    // signed manifest would vouch for a log that omits it.
+    const files = listShardedFiles(logDir, LOG_HEAD_GRAMMAR);
     for (const file of files) {
       const head = lastChainHash(readFileSync(file.path, "utf8"));
       if (head !== null) heads[file.name] = head;

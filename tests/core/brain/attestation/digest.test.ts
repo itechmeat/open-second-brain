@@ -152,9 +152,20 @@ describe("collectLogShardHeads", () => {
     expect(heads[`${DATE}.jsonl`]).toBe(chainHeadOf(`${DATE}.jsonl`));
   });
 
-  test("a vault with no log yields an empty map", () => {
+  test("a vault with no log yields an empty map and writes nothing to stderr", () => {
     rmSync(join(vault, "Brain", "log"), { recursive: true, force: true });
-    expect(collectLogShardHeads(vault)).toEqual({});
+    const writes: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(collectLogShardHeads(vault)).toEqual({});
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(writes).toEqual([]);
   });
 });
 
