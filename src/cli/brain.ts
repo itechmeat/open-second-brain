@@ -170,6 +170,7 @@ import {
   cmdBrainWeekly,
   cmdBrainPermissions,
 } from "./brain/verbs/index.ts";
+import { cmdBrainAttest } from "./brain/verbs/attest.ts";
 
 /**
  * Brain verbs whose whole purpose is replaying records authored
@@ -276,6 +277,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainUnfreeze(rest);
       case "log":
         return await handleBrainLogSubcommand(rest);
+      case "attest":
+        return await cmdBrainAttest(rest);
       case "pin":
         return await cmdBrainPin(rest);
       case "unpin":
