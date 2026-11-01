@@ -15,11 +15,13 @@
  *      name is used only as an exact read-vs-mutate discriminator (an exact
  *      allowlist, never a loose/substring match), so a Write/Edit inside the
  *      vault is never blocked and a Read outside the vault is never blocked.
- *   2. Every failure path fails OPEN. A non-Claude-Code harness never receives
- *      a hard block (`deny`); the hook wrapper additionally maps unreadable
- *      state, malformed stamps, and a missing vault to `allow`. Fail-open here
- *      means "allow the action and record the reason", an explicit decision -
- *      never a swallowed error.
+ *   2. Every failure path fails OPEN. A harness the plugin layer does not
+ *      relay (anything that is not Claude Code or the opencode lane, whose
+ *      plugin marks its synthetic payloads with the host marker) never
+ *      receives a hard block (`deny`); the hook wrapper additionally maps
+ *      unreadable state, malformed stamps, and a missing vault to `allow`.
+ *      Fail-open here means "allow the action and record the reason", an
+ *      explicit decision - never a swallowed error.
  *
  * The core is I/O-free: the caller resolves the runtime, the stamps, and the
  * vault root, so this stays deterministic and unit-testable.
@@ -54,8 +56,14 @@ const FILE_PATH_KEYS: ReadonlyArray<string> = ["file_path", "path"];
 const BRAIN_SEARCH_NAME_SUFFIX =
   /(?:^|__)(brain_search|brain_query|second_brain_query|brain_search_expand|brain_search_by_source|brain_context_pack)$/;
 
-/** The one harness that receives a hard block; every other harness fails open. */
-const CLAUDE_CODE_RUNTIME = "claudecode";
+/**
+ * The harnesses that receive the hard block: Claude Code, and opencode -
+ * whose plugin relays this same decision core through synthetic payloads
+ * marked `hook_host: opencode` (the lane's declared deny parity). Every
+ * other harness, and every payload that names no known harness, fails
+ * open.
+ */
+const HARD_BLOCK_RUNTIMES: ReadonlySet<string> = new Set(["claudecode", "opencode"]);
 
 /**
  * True when `name` is one of the brain search/query tools (or a
@@ -69,7 +77,8 @@ export function isBrainSearchToolName(name: string): boolean {
 export interface OrientInput {
   /**
    * Detected hook runtime label (e.g. from the hook layer's runtime detector).
-   * Only `"claudecode"` receives a hard block; any other value fails open.
+   * Only the relayed harnesses - `"claudecode"` and `"opencode"` - receive a
+   * hard block; any other value fails open.
    */
   readonly runtime: string;
   readonly toolName: string;
@@ -119,8 +128,8 @@ function isRawVaultRead(input: OrientInput): boolean {
 /**
  * Decide what to do for one PreToolUse call. Orientation refresh takes
  * priority; then non-raw-read calls and oriented sessions allow; then the
- * one-time deny / soft-nudge ladder applies only to a Claude Code harness -
- * every other harness fails open.
+ * one-time deny / soft-nudge ladder applies only to a relayed harness
+ * (Claude Code, or the opencode lane) - every other harness fails open.
  */
 export function decideOrient(input: OrientInput): OrientDecision {
   if (isBrainSearchToolName(input.toolName)) {
@@ -128,8 +137,9 @@ export function decideOrient(input: OrientInput): OrientDecision {
   }
   if (!isRawVaultRead(input)) return Object.freeze({ kind: "allow" });
   if (input.isOriented) return Object.freeze({ kind: "allow" });
-  // Other harnesses stay nudge-only / fail-open: never a hard block.
-  if (input.runtime !== CLAUDE_CODE_RUNTIME) return Object.freeze({ kind: "allow" });
+  // Harnesses the plugin layer does not relay stay nudge-only / fail-open:
+  // never a hard block.
+  if (!HARD_BLOCK_RUNTIMES.has(input.runtime)) return Object.freeze({ kind: "allow" });
   if (!input.alreadyBlocked) {
     return Object.freeze({ kind: "deny", reason: ORIENT_DENY_MESSAGE });
   }

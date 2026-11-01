@@ -171,7 +171,7 @@ export function summarizeTurn(
  * renders byte-identical reminder text to the v0.10.4 baseline, so
  * a future runtime that breaks both signals never crashes the hook.
  */
-export type HookRuntime = "claudecode" | "codex" | "grok" | "unknown";
+export type HookRuntime = "claudecode" | "codex" | "grok" | "opencode" | "unknown";
 
 const CLAUDE_TRANSCRIPT_NEEDLES = ["/.claude/projects/", "/.claude/sessions/"] as const;
 const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
@@ -192,7 +192,13 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  *      install whose transcripts live outside `~/.claude` (`CLAUDE_CONFIG_DIR`).
  *   6. Codex apply_patch shape (`tool_name === "apply_patch"` with
  *      a patch body in `tool_input.input`).
- *   7. `"unknown"`.
+ *   7. `hook_host: "opencode"` - the explicit marker the opencode
+ *      plugin's synthetic payloads carry (plugins/opencode/
+ *      open-second-brain.ts states the same literal; the plugin is
+ *      copied alone and cannot import this module). An honest marker,
+ *      where a fabricated Claude Code `tool_use_id` would mislabel
+ *      every audit row the lane writes.
+ *   8. `"unknown"`.
  *
  * `normalizeHookPayload` preserves grok's original camelCase keys, so this
  * works whether it runs before or after normalization. Malformed payloads
@@ -250,6 +256,8 @@ export function detectHookRuntime(
       }
     }
   }
+
+  if (p["hook_host"] === "opencode") return "opencode";
 
   return "unknown";
 }

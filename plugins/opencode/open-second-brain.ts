@@ -87,6 +87,33 @@ const V2_CAPTURE_EVENTS = new Set([
   "session.deleted",
 ]);
 const MUTATING_TOOLS = new Set(["write", "edit", "multiedit", "patch", "apply_patch"]);
+
+/**
+ * The host marker the synthetic hook payloads carry, and `hooks/lib/
+ * detect.ts` answers with the `opencode` runtime - the honest answer to
+ * "which harness is calling", where a fabricated Claude Code
+ * `tool_use_id` would mislabel every audit row this lane writes. The
+ * two literals are one contract stated in both files (this file is
+ * copied alone into opencode's plugin directory and cannot import it).
+ */
+const PAYLOAD_HOST_MARKER = "opencode";
+
+/**
+ * opencode's tool names, translated onto the Claude Code spellings the
+ * shim decision cores parse. The relay's design is a synthetic
+ * Claude-Code-shaped payload, so the translation lives here rather than
+ * in the shims: opencode names its file tools in lowercase, and the
+ * cores' tool sets are exact-match. Any name outside the table passes
+ * verbatim.
+ */
+const PRETOOL_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  read: "Read",
+  edit: "Edit",
+  write: "Write",
+  multiedit: "MultiEdit",
+  patch: "apply_patch",
+  apply_patch: "apply_patch",
+});
 const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 /** A failed render retries sooner than a successful one expires. */
 const ACTIVE_CONTEXT_NEGATIVE_TTL_MS = 30 * 1000;
@@ -360,18 +387,26 @@ function messageList(response: unknown): unknown[] | null {
 }
 
 /**
- * The machine config path, matching the core default (XDG layout); the
- * env override wins. A missing file means every flag is off.
+ * The machine config path, matching the core default: the XDG layout on
+ * POSIX, `%LOCALAPPDATA%\open-second-brain\config.yaml` on native
+ * Windows (the same resolution `src/core/platform-dirs.ts` and the
+ * spool-dir resolver below make, so a flag the shims honor is one this
+ * relay reads); the env override wins. A missing file means every flag
+ * is off.
  */
 function osbConfigPath(): string {
   const override = process.env["OPEN_SECOND_BRAIN_CONFIG"]?.trim();
   if (override) return override;
   const xdg = process.env["XDG_CONFIG_HOME"]?.trim();
-  return join(
-    xdg && xdg.length > 0 ? xdg : join(homedir(), ".config"),
-    "open-second-brain",
-    "config.yaml",
-  );
+  let base: string;
+  if (xdg && xdg.length > 0) {
+    base = xdg;
+  } else if (process.platform === "win32") {
+    base = process.env["LOCALAPPDATA"]?.trim() || join(homedir(), "AppData", "Local");
+  } else {
+    base = join(homedir(), ".config");
+  }
+  return join(base, "open-second-brain", "config.yaml");
 }
 
 /**
@@ -413,7 +448,10 @@ function configFlagOn(envKey: string, configKey: string): boolean {
   } catch {
     return false;
   }
-  const match = new RegExp(`^\\s*${configKey}\\s*:\\s*(.+?)\\s*$`, "m").exec(text);
+  // Anchored at column 0: a top-level YAML key has no indentation, and
+  // an indented match would arm the gate off a key nested under some
+  // other mapping - the canonical resolver reads top-level keys only.
+  const match = new RegExp(`^${configKey}\\s*:\\s*(.+?)\\s*$`, "m").exec(text);
   if (match === null) return false;
   const value = stripUnquotedComment(match[1]!)
     .trim()
@@ -504,15 +542,38 @@ function renderActiveContext(cwd: string): string | null {
 }
 
 /**
+ * opencode's tool input onto the snake_case keys the shim decision
+ * cores read: the camelCase `filePath` the host passes is copied to
+ * `file_path`, everything else rides verbatim. A non-object input
+ * becomes the empty payload the shims answer allow to.
+ */
+function translateToolInput(toolInput: unknown): Record<string, unknown> {
+  if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) return {};
+  const source = toolInput as Record<string, unknown>;
+  const translated: Record<string, unknown> = { ...source };
+  if (typeof source["filePath"] === "string" && translated["file_path"] === undefined) {
+    translated["file_path"] = source["filePath"];
+  }
+  return translated;
+}
+
+/**
  * The execute.before gate: relay each opt-in PreToolUse shim with a
- * synthetic Claude-Code-shaped payload, so the pure decision cores and
- * the vault hook-state ledger see the same view the Claude Code lane
- * sees. Fail-soft by construction: only an explicit structured
+ * synthetic Claude-Code-shaped payload - the host's tool name and
+ * argument keys translated onto the spellings the shim decision cores
+ * parse (`pretool-orient` reads `Read` and `file_path`; the backup shim
+ * reads the Write/Edit family), and an explicit `hook_host` marker so
+ * runtime detection answers `opencode` instead of guessing. The pure
+ * decision cores and the vault hook-state ledger see the same view the
+ * Claude Code lane sees, and the audit trail records the translated
+ * spellings - the census declares that divergence.
+ *
+ * Fail-soft by construction: only an explicit structured
  * `permissionDecision: "deny"` throws, carrying the shim's
  * `permissionDecisionReason` - the one blocking channel opencode
  * offers. A flag that is off (which also means zero spawns), a missing
- * binary, a spawn failure, a timeout, or malformed stdout all pass the
- * tool call untouched.
+ * binary, a spawn failure, a timeout, malformed stdout, and an
+ * untranslatable payload all pass the tool call untouched.
  */
 function runPretoolGate(call: {
   tool: string;
@@ -520,17 +581,23 @@ function runPretoolGate(call: {
   toolInput: unknown;
   cwd: string;
 }): void {
-  const tool = call.tool.toLowerCase();
-  const payload: Record<string, unknown> = {
-    hook_event_name: "PreToolUse",
-    ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
-    tool_name: tool,
-    tool_input: call.toolInput ?? {},
-    cwd: call.cwd,
-  };
+  let payload: Record<string, unknown>;
+  try {
+    payload = {
+      hook_event_name: "PreToolUse",
+      ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
+      hook_host: PAYLOAD_HOST_MARKER,
+      tool_name: PRETOOL_TOOL_NAMES[call.tool.toLowerCase()] ?? call.tool,
+      tool_input: translateToolInput(call.toolInput),
+      cwd: call.cwd,
+    };
+  } catch {
+    return; // a payload this host shape breaks is not a deny: pass
+  }
+  const mutating = MUTATING_TOOLS.has(call.tool.toLowerCase());
   for (const shim of PRETOOL_SHIMS) {
     if (!configFlagOn(shim.envKey, shim.configKey)) continue;
-    if (shim.mutatingOnly === true && !MUTATING_TOOLS.has(tool)) continue;
+    if (shim.mutatingOnly === true && !mutating) continue;
     const verdict = spawnHookVerdict(shim.name, payload);
     if (verdict.deny) {
       throw new Error(
@@ -541,58 +608,112 @@ function runPretoolGate(call: {
 }
 
 /**
- * The per-turn queue for prompt-time context. Single slot: each prompt
- * starts a new turn (replacing any payload a previous prompt left
- * undelivered), every answering shim appends into the slot, and the
- * first model request of the turn drains it exactly once - the context
- * hooks fire per model request, so a turn with several requests would
- * otherwise inject the shim payload repeatedly. The take-once cursor of
- * the reground carrier is the pattern; the active inject's TTL cache is
- * deliberately untouched.
+ * The per-turn queue for prompt-time context, keyed by SESSION. The
+ * plugin instance is server-wide: every session on the opencode host
+ * shares one queue object, so a single slot would deliver one session's
+ * recalled vault context into another session's model request and let
+ * any background request consume the turn's injection. Each session
+ * owns a single slot: its prompt starts a new turn (replacing any
+ * payload a previous prompt left undelivered), every answering shim
+ * appends into that session's slot, and the first model request
+ * belonging to the session drains it exactly once - the context hooks
+ * fire per model request, so a turn with several requests would
+ * otherwise inject the shim payload repeatedly. Events that name no
+ * session share one session-less bucket, which is the pre-keying
+ * behavior for hosts that never identify the session. The take-once
+ * cursor of the reground carrier is the pattern; the active inject's
+ * TTL cache is deliberately untouched.
  */
 function promptContextQueue(): {
-  beginTurn(): void;
-  offer(text: string): void;
-  take(): string | null;
+  beginTurn(sessionId: string | null): void;
+  offer(sessionId: string | null, text: string): void;
+  take(sessionId: string | null): string | null;
 } {
-  let slot: string | null = null;
+  const slots = new Map<string, string | null>();
+  const slotKey = (sessionId: string | null): string => sessionId ?? "";
   return {
-    beginTurn() {
-      slot = null;
+    beginTurn(sessionId) {
+      slots.set(slotKey(sessionId), null);
     },
-    offer(text) {
-      slot = slot === null ? text : `${slot}\n\n${text}`;
+    offer(sessionId, text) {
+      const key = slotKey(sessionId);
+      const current = slots.get(key);
+      slots.set(key, current === null || current === undefined ? text : `${current}\n\n${text}`);
     },
-    take() {
-      const value = slot;
-      slot = null;
+    take(sessionId) {
+      const key = slotKey(sessionId);
+      const value = slots.get(key) ?? null;
+      slots.set(key, null);
       return value;
     },
   };
 }
 
+/** The session id a context-delivery input names, when it names one. */
+function contextSessionId(input: unknown): string | null {
+  const record = asRecord(input);
+  if (record === null) return null;
+  const direct = record["sessionID"] ?? record["sessionId"];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const message = asRecord(record["message"]);
+  const nested = message?.["sessionID"] ?? message?.["sessionId"];
+  return typeof nested === "string" && nested.length > 0 ? nested : null;
+}
+
 /**
- * Best-effort read of a V1 `chat.message` / V2 `prompt` event: the
- * prompt text plus the opencode session id (the ledger inside the vault
- * hook-state dedupes on it). The exact event shape has drifted across
- * upstream releases, so every field is defensive.
+ * The user text of one prompt event, across the shapes upstream releases
+ * have shipped: the text rides the event record, its `message`, or the
+ * output's `message`/text `parts` (the documented V1 `chat.message`
+ * shape, whose input carries only session/agent/model ids).
  */
-function observePrompt(event: unknown): { prompt: string | null; sessionId: string | null } {
-  const record = asRecord(event);
-  if (record === null) return { prompt: null, sessionId: null };
-  let prompt: string | null = null;
+function observePromptText(record: Record<string, unknown>, output: unknown): string | null {
   for (const candidate of [record, asRecord(record["message"])]) {
     if (candidate === null) continue;
     const value = candidate["prompt"] ?? candidate["text"];
-    if (typeof value === "string" && value.length > 0) {
-      prompt = value;
-      break;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  const outRecord = asRecord(output);
+  if (outRecord !== null) {
+    const message = asRecord(outRecord["message"]);
+    const messageText = message?.["text"] ?? message?.["content"];
+    if (typeof messageText === "string" && messageText.length > 0) return messageText;
+    // Text parts ride the output directly on one shape and inside its
+    // message on the other; both spellings are joined in part order.
+    for (const parts of [outRecord["parts"], message?.["parts"]]) {
+      if (!Array.isArray(parts)) continue;
+      const text = parts
+        .map((part) => (asRecord(part)?.["type"] === "text" ? asRecord(part)?.["text"] : null))
+        .filter((value): value is string => typeof value === "string")
+        .join("");
+      if (text.length > 0) return text;
     }
   }
+  return null;
+}
+
+/**
+ * Best-effort read of a V1 `chat.message` / V2 `prompt` event: the
+ * prompt text plus the opencode session id (the ledger inside the vault
+ * hook-state dedupes on it). The id is taken only where a SESSION id can
+ * appear - the record or its message's `sessionID`, or the `session`
+ * record's own id - never a top-level or message `id`, which on the
+ * documented V1 shape is a MESSAGE id and would key the per-session
+ * ledger per message.
+ */
+function observePrompt(
+  event: unknown,
+  output?: unknown,
+): { prompt: string | null; sessionId: string | null } {
+  const record = asRecord(event);
+  if (record === null) return { prompt: null, sessionId: null };
+  const prompt = observePromptText(record, output);
   let sessionId: string | null = null;
   for (const candidate of [record, asRecord(record["message"]), asRecord(record["session"])]) {
     if (candidate === null) continue;
-    const value = candidate["sessionID"] ?? candidate["id"];
+    const value =
+      candidate === record || candidate === asRecord(record["message"])
+        ? candidate["sessionID"]
+        : (candidate["id"] ?? candidate["sessionID"]);
     if (typeof value === "string" && value.length > 0) {
       sessionId = value;
       break;
@@ -616,7 +737,7 @@ function runPromptShims(call: {
   cwd: string;
   queue: ReturnType<typeof promptContextQueue>;
 }): void {
-  call.queue.beginTurn();
+  call.queue.beginTurn(call.sessionId);
   const payload: Record<string, unknown> = {
     hook_event_name: "UserPromptSubmit",
     ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
@@ -626,7 +747,7 @@ function runPromptShims(call: {
   for (const shim of PROMPT_SHIMS) {
     if (!configFlagOn(shim.envKey, shim.configKey)) continue;
     const verdict = spawnHookVerdict(shim.name, payload);
-    if (verdict.context !== null) call.queue.offer(verdict.context);
+    if (verdict.context !== null) call.queue.offer(call.sessionId, verdict.context);
   }
 }
 
@@ -733,7 +854,7 @@ const openSecondBrainV1 = async (pluginInput: {
       }
     },
 
-    "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
+    "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
       try {
         if (!Array.isArray(output?.system)) return;
         const context = getActiveContext();
@@ -741,9 +862,10 @@ const openSecondBrainV1 = async (pluginInput: {
           output.system.push(context);
         }
         // Drain the prompt lane's per-turn queue beside the cached active
-        // inject: the first model request of the turn delivers it, the
-        // take() clearing makes later requests in the turn no-ops.
-        const queued = promptQueue.take();
+        // inject: the first model request BELONGING TO THE PROMPTING
+        // SESSION delivers it, the take() clearing makes later requests in
+        // the turn no-ops, and another session's request drains nothing.
+        const queued = promptQueue.take(contextSessionId(input));
         if (queued !== null) {
           output.system.push(queued);
         }
@@ -752,9 +874,9 @@ const openSecondBrainV1 = async (pluginInput: {
       }
     },
 
-    "chat.message": async (input: unknown, _output: unknown) => {
+    "chat.message": async (input: unknown, output: unknown) => {
       try {
-        const observed = observePrompt(input);
+        const observed = observePrompt(input, output);
         if (observed.prompt === null) return;
         runPromptShims({
           prompt: observed.prompt,
@@ -798,7 +920,11 @@ interface V2Context {
   session: {
     hook(
       name: "context",
-      callback: (event: { system: Array<{ type: "text"; text: string }> }) => void,
+      callback: (event: {
+        system: Array<{ type: "text"; text: string }>;
+        /** The session the model request belongs to, when the host names it. */
+        sessionID?: string;
+      }) => void,
     ): Promise<unknown>;
     hook(name: "prompt", callback: (event: unknown) => void): Promise<unknown>;
     get(input: { sessionID: string }): Promise<unknown>;
@@ -872,8 +998,9 @@ export default {
           // Drain the prompt lane's per-turn queue beside the cached
           // active inject; the take() clearing delivers the queued
           // context exactly once per turn even when this hook fires for
-          // several model requests.
-          const queued = promptQueue.take();
+          // several model requests, and only for the session the prompt
+          // came from.
+          const queued = promptQueue.take(contextSessionId(event));
           if (queued !== null) event.system.push({ type: "text", text: queued });
         } catch {
           // Context injection is best-effort.

@@ -129,13 +129,18 @@ fresh install never reports drift against itself.
   `o2b-hook pretool-orient` (flag `hook_strict_enabled`) and
   `o2b-hook pretool-host-backup` (flag `host_settings_backup`,
   file-mutating tools only) shims with synthetic PreToolUse payloads
-  carrying the opencode session id, so the vault hook-state stamps and
-  audit trail behave exactly as on the Claude Code lane. Only an
-  explicit structured `permissionDecision: "deny"` blocks the tool
-  call, by throwing with the shim's `permissionDecisionReason` as the
-  error text; a flag that is off (which also means zero spawns), a
-  missing binary, a spawn failure, a timeout, or malformed shim output
-  all pass the tool call untouched. Both flags are default-OFF.
+  carrying the opencode session id and an explicit host marker, with
+  the host's tool names and argument keys translated onto the
+  Claude Code spellings the shim decision cores parse - so the vault
+  hook-state stamps dedupe per session exactly as on the Claude Code
+  lane, the orient gate denies the first raw vault read here too, and
+  the audit trail records the translated spellings (the declared
+  divergence below). Only an explicit structured
+  `permissionDecision: "deny"` blocks the tool call, by throwing with
+  the shim's `permissionDecisionReason` as the error text; a flag that
+  is off (which also means zero spawns), a missing binary, a spawn
+  failure, a timeout, or malformed shim output all pass the tool call
+  untouched. Both flags are default-OFF.
 
 - **Prompt-time injection** - on `chat.message` (V1) /
   `session.hook("prompt")` (V2) the plugin relays the opt-in
@@ -146,8 +151,11 @@ fresh install never reports drift against itself.
   payloads carrying the opencode session id, so the injection ledger
   dedupes (recall once per session, brief on the first qualifying
   turn, reground's take-once cursor) exactly as on the Claude Code
-  lane. The prompt hook observes the prompt before durable admission
-  and is not a delivery channel: shim context enters a single-slot
+  lane, and the queued context is delivered only to a model request of
+  the session that prompted - one session's recalled context never
+  rides into another session's request. The prompt hook observes the
+  prompt before durable admission and is not a delivery channel: shim
+  context enters a single-slot
   per-turn queue that the context delivery points drain on the first
   model request of the turn, beside the cached active inject, exactly
   once per turn. All four flags are default-OFF; with them off the
@@ -220,21 +228,22 @@ declared divergence with a written reason; the census in
 build when a row appears in hooks.json without an opencode decision, or
 when a declared divergence outlives the gap it excuses.
 
-| Divergence                              | Reason                                                                                                                                                                    |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Stop:stop-log-guardrail`               | opencode exposes no blocking stop hook, so the veto that holds an unlogged artifact turn cannot be reproduced (documented known gap); the post-write reminder still fires |
-| `Stop:answer-quote-check`               | opencode exposes no stop hook to audit quoted spans against the turn's notes on turn end                                                                                  |
-| `Stop:hygiene-digest`                   | opencode exposes no stop hook to surface pending hygiene findings on turn end                                                                                             |
-| `SubagentStart:subagent-inject`         | opencode has no subagent spawn hook; there is no subagent lifecycle event to deliver context to                                                                           |
-| `PreToolUse:nudge-channel`              | opencode tool calls carry no additionalContext channel, so the orient allow-verdict nudge passes silently; only a structured deny is relayed                              |
-| `UserPromptSubmit:pre-admission-caveat` | the prompt hook observes before durable prompt admission, so shim context rides the context hook's per-turn queue instead of the prompt event                             |
-| `PostToolUse:subagent-inject`           | opencode tool events carry no agent_id, so the subagent/main-thread discrimination the PostToolUse fallback carrier relies on does not exist                              |
-| `PostToolUse:reground-deliver`          | reground parts ride the prompt lane's per-turn queue; opencode has no per-tool-call context channel to re-deliver on                                                      |
-| `SessionStart:gap-agenda`               | opencode exposes no session-start hook to a loaded plugin; the opt-in recall-gap agenda shim has no carrier outside Claude Code / Codex                                   |
-| `SessionStart:backlog-nudge`            | opencode exposes no session-start hook to a loaded plugin; the opt-in backlog nudge shim has no carrier outside Claude Code / Codex                                       |
-| `SessionStart:log-catchup`              | opencode exposes no session-start hook to a loaded plugin; the opt-in log catch-up shim has no carrier outside Claude Code / Codex                                        |
-| `SessionEnd:gap-promote`                | opencode exposes no session-end hook; gap promotion runs only where the Claude Code lane fires it                                                                         |
-| `SubagentStop:session-capture`          | opencode has no subagent lifecycle events, so a delegated sub-agent's turns never enter a capturable session                                                              |
+| Divergence                              | Reason                                                                                                                                                                                                                     |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stop:stop-log-guardrail`               | opencode exposes no blocking stop hook, so the veto that holds an unlogged artifact turn cannot be reproduced (documented known gap); the post-write reminder still fires                                                  |
+| `Stop:answer-quote-check`               | opencode exposes no stop hook to audit quoted spans against the turn's notes on turn end                                                                                                                                   |
+| `Stop:hygiene-digest`                   | opencode exposes no stop hook to surface pending hygiene findings on turn end                                                                                                                                              |
+| `SubagentStart:subagent-inject`         | opencode has no subagent spawn hook; there is no subagent lifecycle event to deliver context to                                                                                                                            |
+| `PreToolUse:nudge-channel`              | opencode tool calls carry no additionalContext channel, so the orient allow-verdict nudge passes silently; only a structured deny is relayed                                                                               |
+| `PreToolUse:payload-mapping`            | the gate translates the host's lowercase tool names and camelCase argument keys onto the Claude Code payload shapes the shim decision cores parse, so the audit trail records the translated spellings, not the host's own |
+| `UserPromptSubmit:pre-admission-caveat` | the prompt hook observes before durable prompt admission, so shim context rides the context hook's per-turn queue instead of the prompt event                                                                              |
+| `PostToolUse:subagent-inject`           | opencode tool events carry no agent_id, so the subagent/main-thread discrimination the PostToolUse fallback carrier relies on does not exist                                                                               |
+| `PostToolUse:reground-deliver`          | reground parts ride the prompt lane's per-turn queue; opencode has no per-tool-call context channel to re-deliver on                                                                                                       |
+| `SessionStart:gap-agenda`               | opencode exposes no session-start hook to a loaded plugin; the opt-in recall-gap agenda shim has no carrier outside Claude Code / Codex                                                                                    |
+| `SessionStart:backlog-nudge`            | opencode exposes no session-start hook to a loaded plugin; the opt-in backlog nudge shim has no carrier outside Claude Code / Codex                                                                                        |
+| `SessionStart:log-catchup`              | opencode exposes no session-start hook to a loaded plugin; the opt-in log catch-up shim has no carrier outside Claude Code / Codex                                                                                         |
+| `SessionEnd:gap-promote`                | opencode exposes no session-end hook; gap promotion runs only where the Claude Code lane fires it                                                                                                                          |
+| `SubagentStop:session-capture`          | opencode has no subagent lifecycle events, so a delegated sub-agent's turns never enter a capturable session                                                                                                               |
 
 - **V1 context inject rides an experimental hook**
   (`experimental.chat.system.transform`). V2 instead uses the session

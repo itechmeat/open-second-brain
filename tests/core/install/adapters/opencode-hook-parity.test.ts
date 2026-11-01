@@ -53,6 +53,8 @@ const DECLARED_OPENCODE_DIVERGENCES: Readonly<Record<string, string>> = Object.f
     "opencode has no subagent spawn hook; there is no subagent lifecycle event to deliver context to",
   "PreToolUse:nudge-channel":
     "opencode tool calls carry no additionalContext channel, so the orient allow-verdict nudge passes silently; only a structured deny is relayed",
+  "PreToolUse:payload-mapping":
+    "the gate translates the host's lowercase tool names and camelCase argument keys onto the Claude Code payload shapes the shim decision cores parse, so the audit trail records the translated spellings, not the host's own",
   "UserPromptSubmit:pre-admission-caveat":
     "the prompt hook observes before durable prompt admission, so shim context rides the context hook's per-turn queue instead of the prompt event",
   "PostToolUse:subagent-inject":
@@ -145,6 +147,7 @@ const COVERAGE_FAMILIES: ReadonlyArray<{
  */
 const BEHAVIORAL_DIVERGENCE_SITES: Readonly<Record<string, ReadonlyArray<RegExp>>> = Object.freeze({
   "PreToolUse:nudge-channel": [/execute\.before/, /"pretool-orient"/],
+  "PreToolUse:payload-mapping": [/execute\.before/, /PRETOOL_TOOL_NAMES/, /translateToolInput/],
   "UserPromptSubmit:pre-admission-caveat": [/chat\.message|session\.hook\("prompt"/],
 });
 

@@ -16,6 +16,9 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import OpenSecondBrain from "../../plugins/opencode/open-second-brain.ts";
+import { detectHookRuntime } from "../../hooks/lib/detect.ts";
+import { decideOrient } from "../../src/core/brain/pretool-orient.ts";
+import { decideHostBackup } from "../../src/core/brain/pretool-host-backup.ts";
 
 let spoolDir: string;
 let binDir: string;
@@ -254,7 +257,9 @@ async function makeV2Plugin(
   sessionDirectories: Record<string, string> = {},
   disconnectedStreams: Array<"error" | "end"> = [],
 ) {
-  let contextHook: ((event: { system: Array<{ type: "text"; text: string }> }) => void) | undefined;
+  let contextHook:
+    | ((event: { system: Array<{ type: "text"; text: string }>; sessionID?: string }) => void)
+    | undefined;
   let toolHook: ((event: V2ToolEvent) => void) | undefined;
   const sessionHooks = new Map<string, (event: never) => void>();
   const toolHooks = new Map<string, (...args: never[]) => void>();
@@ -1172,8 +1177,9 @@ describe("opencode plugin - execute.before gate (pretool relay)", () => {
       expect(payload).toEqual({
         hook_event_name: "PreToolUse",
         session_id: "sess-gate",
-        tool_name: "read",
-        tool_input: { filePath: "/vault/Brain/active.md" },
+        hook_host: "opencode",
+        tool_name: "Read",
+        tool_input: { filePath: "/vault/Brain/active.md", file_path: "/vault/Brain/active.md" },
         cwd: "/work/dir",
       });
     },
@@ -1267,9 +1273,9 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
         prompt!(undefined as never);
         prompt!({ sessionID: "sess-turn", prompt: "find my notes on delivery trust" } as never);
         const first = { system: [{ type: "text" as const, text: "base" }] };
-        plugin.contextHook(first);
+        plugin.contextHook({ ...first, sessionID: "sess-turn" });
         const second = { system: [{ type: "text" as const, text: "base" }] };
-        plugin.contextHook(second);
+        plugin.contextHook({ ...second, sessionID: "sess-turn" });
 
         // Queued context arrives on the first model request of the turn only.
         expect(systemTexts(first)).toContain("RECALL BLOCK");
@@ -1313,7 +1319,7 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
       });
       prompt({ sessionID: "sess-turn", prompt: "second" } as never);
       const request = { system: [{ type: "text" as const, text: "base" }] };
-      plugin.contextHook(request);
+      plugin.contextHook({ ...request, sessionID: "sess-turn" });
       // The second prompt's payload is the one delivered, exactly once;
       // the first prompt's undelivered slot was replaced, not stacked.
       expect(systemTexts(request)).toContain("SECOND BLOCK");
@@ -1381,6 +1387,55 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
   });
 
   dispatchTest(
+    "another session's context request drains nothing and the prompting session still delivers",
+    async () => {
+      // One plugin instance serves every session on the host: a queue
+      // drained by whichever request fired first would leak one
+      // session's recalled vault context into another session's model
+      // request.
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+      armPromptFlags();
+      const plugin = await makeV2Plugin([]);
+      try {
+        const prompt = plugin.sessionHooks.get("prompt")!;
+        prompt({ sessionID: "sess-a", prompt: "find my notes" } as never);
+        const forB = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook({ ...forB, sessionID: "sess-b" });
+        expect(systemTexts(forB)).toEqual("base");
+        const forA = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook({ ...forA, sessionID: "sess-a" });
+        expect(systemTexts(forA)).toContain("RECALL BLOCK");
+      } finally {
+        plugin.cleanup();
+      }
+    },
+  );
+
+  dispatchTest(
+    "the documented V1 chat.message shape - ids on the input, text in output.parts - is read",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+      armPromptFlags();
+      const hooks = await makeHooks(fakeClient(MESSAGES));
+      const message = hooks["chat.message"]!;
+      await message(
+        {
+          sessionID: "sess-parts",
+          agent: "build",
+          model: "test-model",
+          messageID: "msg-1",
+        } as never,
+        { message: { id: "msg-1", parts: [{ type: "text", text: "find my notes" }] } } as never,
+      );
+      expect(recordedCalls()).toContain("recall-inject");
+      const payload = recordedStdin("recall-inject");
+      expect(payload["prompt"]).toBe("find my notes");
+      // The session id - never the message id the same record carries.
+      expect(payload["session_id"]).toBe("sess-parts");
+    },
+  );
+
+  dispatchTest(
     "V1 chat.message observes the prompt and the system transform drains the queue once",
     async () => {
       process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
@@ -1389,12 +1444,79 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
       const message = hooks["chat.message"]!;
       await message({ sessionID: "sess-v1", prompt: "find my notes" } as never, {} as never);
       const first = { system: ["base"] };
-      await hooks["experimental.chat.system.transform"]!({} as never, first as never);
+      await hooks["experimental.chat.system.transform"]!(
+        { sessionID: "sess-v1" } as never,
+        first as never,
+      );
       const second = { system: ["base"] };
-      await hooks["experimental.chat.system.transform"]!({} as never, second as never);
+      await hooks["experimental.chat.system.transform"]!(
+        { sessionID: "sess-v1" } as never,
+        second as never,
+      );
       expect(first.system).toEqual(["base", "RECALL BLOCK"]);
       expect(second.system).toEqual(["base"]);
       expect(recordedCalls().filter((shim) => shim === "recall-inject")).toHaveLength(1);
     },
   );
+});
+
+describe("the relayed payload drives the real decision cores", () => {
+  // Byte-for-byte the shape the gate spawns with (pinned by the payload
+  // test above): the translated tool spelling, the snake_case path key
+  // beside the host's camelCase one, and the explicit host marker.
+  const payload: Record<string, unknown> = {
+    hook_event_name: "PreToolUse",
+    session_id: "sess-core",
+    hook_host: "opencode",
+    tool_name: "Read",
+    tool_input: { filePath: "/vault/Brain/active.md", file_path: "/vault/Brain/active.md" },
+    cwd: "/work/dir",
+  };
+
+  test("runtime detection answers opencode, not unknown", () => {
+    expect(detectHookRuntime(payload)).toBe("opencode");
+  });
+
+  test("the orient core denies the first raw vault read on the opencode lane", () => {
+    const vaultRoot = mkdtempSync(join(tmpdir(), "o2b-orient-core-"));
+    try {
+      // The raw read names a file inside the configured vault root - the
+      // structural condition the core keys on, with the translated tool
+      // name and path key the gate now delivers.
+      const inside: Record<string, unknown> = {
+        ...payload,
+        tool_input: {
+          filePath: join(vaultRoot, "Brain", "active.md"),
+          file_path: join(vaultRoot, "Brain", "active.md"),
+        },
+      };
+      const decision = decideOrient({
+        runtime: detectHookRuntime(inside),
+        toolName: inside["tool_name"] as string,
+        toolInput: inside["tool_input"],
+        vaultRoot,
+        isOriented: false,
+        alreadyBlocked: false,
+      });
+      expect(decision.kind).toBe("deny");
+    } finally {
+      rmSync(vaultRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("the backup core matches the translated write-tool spelling and path key", () => {
+    // An opencode edit against a host settings file: the translated
+    // tool name and the snake_case path are what the backup shim reads.
+    const decision = decideHostBackup({
+      runtime: detectHookRuntime(payload),
+      toolName: "Edit",
+      toolInput: {
+        filePath: "/repo/.claude/settings.json",
+        file_path: "/repo/.claude/settings.json",
+      },
+      home: tmpdir(),
+      cwd: "/repo",
+    });
+    expect(decision.kind).toBe("backup");
+  });
 });
