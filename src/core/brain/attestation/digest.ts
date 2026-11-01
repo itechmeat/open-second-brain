@@ -16,7 +16,8 @@
  *     appender's own log-directory lock (`collectLogShardHeads`),
  *   - a file-name inventory of every ledger directory the doctor sweeps,
  *   - the search index's recorded embedding-ABI stamp, hashed to one
- *     token, or null when no index exists.
+ *     token, or null when no index exists - an index that exists but
+ *     cannot be read refuses the manifest instead of reading as absent.
  *
  * The digest of that manifest - `sha256Hex(canonicalJson(manifest))`, the
  * one encoding `src/core/integrity/digest.ts` persists - is what a
@@ -28,7 +29,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import { readEmbeddingAbiSync } from "../../search/store/embedding-abi.ts";
+import { peekEmbeddingAbiSync } from "../../search/store/embedding-abi.ts";
 import { resolveConfiguredIndexPath } from "../../search/paths.ts";
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
@@ -108,7 +109,12 @@ export interface CollectAttestationManifestOptions {
  * The directories whose file inventory the manifest records: the same
  * ledger directories `syncConflictLogCheck` sweeps in
  * `doctor/store-integrity.ts`, resolved through the same exported path
- * builders that file names.
+ * builders that file names, and descended the same way - the per-
+ * preference audit parent and the per-repository git store contribute
+ * their SUBDIRECTORIES only, because "the root itself holds no ledger"
+ * is the doctor's own ruling and a stray file at either root would
+ * otherwise flip the store digest with no shard or directory naming
+ * why.
  *
  * The doctor's `LEDGER_DIRS` list is module-private, and this module
  * deliberately does not grow a second authority by exporting it from a
@@ -133,7 +139,6 @@ function ledgerSweepDirs(vault: string): string[] {
     brainStateDirPath(vault),
     join(vault, BRAIN_SKILL_PROPOSALS_REL),
     brainDirs(vault).preferences,
-    gitStoreRootDir(vault),
   ];
   // Two of the swept roots hold one directory per subject (per
   // preference, per repository), exactly as the doctor's own sweep
@@ -167,10 +172,22 @@ function inventoryKey(vault: string, dir: string): string {
   return relative(vault, dir).split(sep).join("/");
 }
 
-/** The index stamp token, or null when no readable index exists. */
+/**
+ * The index stamp token, or null when no index exists.
+ *
+ * An index that EXISTS but cannot be read is not "no index": the peek's
+ * three outcomes are kept apart, and an unreadable one refuses the
+ * manifest - signing a corrupt index as the null stamp would make it
+ * digest-identical to a vault with no index, and the recomputed
+ * manifest at verify time would call the same corruption a match.
+ */
 function indexStampToken(vault: string): string | null {
-  const tokens = readEmbeddingAbiSync(resolveConfiguredIndexPath(vault));
-  return tokens === null ? null : sha256Hex(canonicalJson(tokens));
+  const peek = peekEmbeddingAbiSync(resolveConfiguredIndexPath(vault));
+  if (peek.kind === "absent") return null;
+  if (peek.kind === "unreadable") {
+    throw new Error(`attestation: the search index exists but could not be read: ${peek.detail}`);
+  }
+  return sha256Hex(canonicalJson(peek.value));
 }
 
 /**

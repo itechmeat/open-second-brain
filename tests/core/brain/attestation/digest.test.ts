@@ -215,6 +215,28 @@ describe("collectAttestationManifest", () => {
     for (const key of keys) expect(key).not.toContain("entities");
   });
 
+  test("a file at the git store root itself stays out of the inventories, its per-repository shards stay in", () => {
+    // The doctor's own ruling: the git store root holds no ledger, so
+    // the manifest descends one level exactly as the doctor does - a
+    // stray file at the root must not flip the store digest with
+    // nothing naming why.
+    const gitRoot = join(vault, "Brain", "projects", "git");
+    // The commits shards sit next to the repo's state.json, one level
+    // below the root - the layout the doctor's sweep descends into.
+    mkdirSync(join(gitRoot, "repo-one"), { recursive: true });
+    writeFileSync(join(gitRoot, "repo-one", "commits-2026-06-03.jsonl"), "{}\n", "utf8");
+    writeFileSync(join(gitRoot, "stray.jsonl"), "{}\n", "utf8");
+    const inventories = collectAttestationManifest(vault).ledgerInventories;
+    expect(Object.keys(inventories)).not.toContain("Brain/projects/git");
+    expect(inventories["Brain/projects/git/repo-one"]).toEqual(["commits-2026-06-03.jsonl"]);
+    expect(JSON.stringify(inventories)).not.toContain("stray.jsonl");
+  });
+
+  test("an index that exists but cannot be read refuses the manifest instead of reading as absent", () => {
+    mkdirSync(join(vault, ".open-second-brain", "brain.sqlite"), { recursive: true });
+    expect(() => collectAttestationManifest(vault)).toThrow(/could not be read/);
+  });
+
   test("the store digest is stable while the store stands still and moves with a shard head", () => {
     append(1);
     const first = collectAttestationManifest(vault);
