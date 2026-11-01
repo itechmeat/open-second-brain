@@ -35,7 +35,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { acquireLogLock, appendLogEvent } from "../../src/core/brain/log.ts";
+import { brainDirs } from "../../src/core/brain/paths.ts";
 import { attestationsDir } from "../../src/core/brain/attestation/record.ts";
 import { writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -330,6 +331,62 @@ test("verify with nothing signed says so and exits zero", async () => {
   const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
   expect(res.returncode).toBe(0);
   expect(res.stdout).toMatch(/no attestation|nothing to verify/i);
+});
+
+test("a store that cannot be measured reads as its own fact, not as damage", async () => {
+  append(3);
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  // A log lock held past the collector's bounded retry: the manifest
+  // cannot be recomputed. The shard walk and the signature still ran,
+  // so the report names what it knows and words the unknown as unknown.
+  const release = acquireLogLock(brainDirs(vault).log);
+  try {
+    const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
+    expect(res.returncode).toBe(1);
+    expect(res.stdout).toContain("could not be measured");
+    expect(res.stdout).toContain("re-run");
+    expect(res.stdout).not.toContain("diverged");
+  } finally {
+    release();
+  }
+}, 30_000);
+
+test("a twin that predates its JSONL, and a JSONL whose twin never lands, are both growth", async () => {
+  append(2);
+  // A markdown day file with no JSONL yet (a legacy md-only day): it
+  // joins the attested inventory with no chain head to attest.
+  writeFileSync(join(vault, "Brain", "log", "2026-06-04.md"), "a markdown-only day\n", "utf8");
+  await runCli(["brain", "attest", "keygen", "--vault", vault]);
+  await runCli(["brain", "attest", "sign", "--vault", vault]);
+  // The day then gains its JSONL: a new attested shard whose twin was
+  // already in the inventory - the set reading, not a doubled list.
+  appendLogEvent(
+    vault,
+    {
+      timestamp: "2026-06-04T10:00:00Z",
+      eventType: "note",
+      body: { text: "the md-only day gains its sidecar", agent: "@tester" },
+    },
+    { deviceId: "" },
+  );
+  const lateTwin = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(lateTwin.returncode).toBe(0);
+
+  // A new JSONL shard whose markdown twin never landed (the appender's
+  // own partial-failure shape): growth with a missing twin is not drift.
+  appendLogEvent(
+    vault,
+    {
+      timestamp: "2026-06-05T10:00:00Z",
+      eventType: "note",
+      body: { text: "the next day", agent: "@tester" },
+    },
+    { deviceId: "" },
+  );
+  rmSync(join(vault, "Brain", "log", "2026-06-05.md"));
+  const noTwin = await runCli(["brain", "attest", "verify", "--vault", vault]);
+  expect(noTwin.returncode).toBe(0);
 });
 
 test("usage errors exit two and the usage line names every verb", async () => {

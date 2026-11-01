@@ -157,6 +157,19 @@ export const attestationCheck: DoctorCheck = {
     const diverged = verification.shards.filter(
       (shard) => shard.state === "diverged" || shard.state === "missing",
     );
+    // The kernel could not re-measure the manifest: whether the store
+    // still matches is unknown, which is the uncertain stream's question
+    // - never a clean bill and never a damage fact.
+    if (!verification.storeMeasured) {
+      pushUncertain(out.uncertain, {
+        code: ATTESTATION_STATE_UNMEASURED_CODE,
+        path: attestationsDir(ctx.vault),
+        message:
+          `the store could not be measured against the newest attestation (${record.id}) ` +
+          "this pass - a log lock was held or a surface could not be read - so whether it " +
+          "still matches the signed point is unknown",
+      });
+    }
     if (!verification.signatureValid) {
       facts.push("the newest attestation's signature does not verify against this vault's key");
     }
@@ -190,7 +203,9 @@ export const attestationCheck: DoctorCheck = {
     // half still verifies, and age alone by a re-sign.
     const publicMissing = !existsSync(attestationKeyPaths(ctx.vault).publicPath);
     let nextCommand = "o2b brain attest sign";
-    if (diverged.length > 0 || verification.unexplainedDrift) {
+    if (diverged.length > 0 || verification.unexplainedDrift || !verification.storeMeasured) {
+      // An unmeasured store is not one to vouch for either: inspect (or
+      // re-run) before any key or signing decision.
       nextCommand = "o2b brain attest verify";
     } else if (keyMissing && publicMissing) {
       nextCommand = "o2b brain attest keygen";

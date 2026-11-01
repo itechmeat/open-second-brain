@@ -325,17 +325,7 @@ function unexplainedManifestDrift(
     const now = recomputed.ledgerInventories[dir];
     if (now === undefined) return true; // an inventoried directory vanished
     if (dir === logDirKey) {
-      // Log growth, in set semantics: every attested file and every new
-      // shard's JSONL must still be there, the new shards' markdown
-      // twins MAY be there (a twin can predate its JSONL on a legacy
-      // md-only day, and the appender's own partial-failure path can
-      // leave a JSONL without one), and nothing else may appear or
-      // vanish.
-      const allowed = new Set([...attestedFiles, ...newLogFiles]);
-      const required = new Set([...attestedFiles, ...newShards]);
-      const explained =
-        [...required].every((name) => now.includes(name)) && now.every((name) => allowed.has(name));
-      if (!explained) return true;
+      if (!explainedLogGrowth(attestedFiles, newShards, newLogFiles, now)) return true;
       continue;
     }
     if (!sameFiles(attestedFiles, now)) return true;
@@ -344,11 +334,33 @@ function unexplainedManifestDrift(
     if (dir in attested.ledgerInventories) continue;
     // A directory that gained ledger status since signing is only
     // explained when it is the log directory filling with the new
-    // shards.
-    if (dir === logDirKey && sameFiles(newLogFiles, recomputed.ledgerInventories[dir] ?? [])) {
+    // shards - the same growth rule, against an empty attested list.
+    if (
+      dir === logDirKey &&
+      explainedLogGrowth([], newShards, newLogFiles, recomputed.ledgerInventories[dir] ?? [])
+    ) {
       continue;
     }
     return true;
   }
   return false;
+}
+
+/**
+ * Whether the log directory's file list is explained by growth, in set
+ * semantics: every attested file and every new shard's JSONL must still
+ * be there, the new shards' markdown twins MAY be there (a twin can
+ * predate its JSONL on a legacy md-only day, and the appender's own
+ * partial-failure path can leave a JSONL without one), and nothing else
+ * may appear or vanish.
+ */
+function explainedLogGrowth(
+  attestedFiles: ReadonlyArray<string>,
+  newShards: ReadonlyArray<string>,
+  newLogFiles: ReadonlyArray<string>,
+  now: ReadonlyArray<string>,
+): boolean {
+  const allowed = new Set([...attestedFiles, ...newLogFiles]);
+  const required = [...attestedFiles, ...newShards];
+  return required.every((name) => now.includes(name)) && now.every((name) => allowed.has(name));
 }

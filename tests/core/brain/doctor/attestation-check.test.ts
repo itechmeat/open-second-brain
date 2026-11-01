@@ -43,7 +43,8 @@ import type {
   DoctorCheckContext,
   DoctorFindings,
 } from "../../../../src/core/brain/doctor/check.ts";
-import { appendLogEvent } from "../../../../src/core/brain/log.ts";
+import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
+import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 
 const DATE = "2026-06-03";
@@ -142,6 +143,24 @@ test("a fresh attestation with its key and an untouched store is silent", () => 
   append(2);
   writeAttestationAt(new Date("2026-06-03T10:05:00Z"));
   expect(runCheck(new Date("2026-06-04T00:00:00Z")).issues).toEqual([]);
+});
+
+test("a store that cannot be measured reaches the uncertain stream, never a clean bill", () => {
+  append(2);
+  writeAttestationAt(new Date("2026-06-03T10:05:00Z"));
+  // A log lock held past the collector's bounded retry: the manifest
+  // cannot be recomputed, so the store's state is unknown - an
+  // uncertain entry, not silence and not a damage fact.
+  const release = acquireLogLock(brainDirs(vault).log);
+  try {
+    const result = runCheck(new Date("2026-06-04T00:00:00Z"));
+    expect(result.issues).toEqual([]);
+    expect(result.uncertain).toHaveLength(1);
+    expect(result.uncertain[0]!.code).toBe("attestation-state-unmeasured");
+    expect(result.uncertain[0]!.message).toContain("could not be measured");
+  } finally {
+    release();
+  }
 });
 
 test(`a newest attestation older than ${ATTESTATION_STALE_DAYS} days is reported once`, () => {

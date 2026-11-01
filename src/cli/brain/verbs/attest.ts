@@ -395,28 +395,25 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
       `signature ${result.signatureValid ? "valid" : "INVALID"}`,
   );
   for (const shard of result.shards) info(`  ${shard.shardId}: ${shard.state}`);
-  if (!result.storeMeasured) {
+  // The digest verdict prints on every run, healthy or not: growth and
+  // match are both facts an operator or a cron log reads.
+  info(
+    result.storeDigestMatches
+      ? "store digest matches the attested one"
+      : "store digest differs from the attested one" +
+          (unexplainedDrift ? "" : " (log growth since signing explains it)"),
+  );
+  if (healthy) return 0;
+  // An unmeasured manifest is reported as its own fact - and only when
+  // nothing else is wrong: the shard walk and the signature check ran,
+  // so real damage names itself first and the unmeasured prose must not
+  // cover it. No advisory rail here either: the state is not store
+  // damage, and the prose names the remedy (re-run) directly.
+  if (!result.storeMeasured && !damaged && result.signatureValid && !unexplainedDrift) {
     info(
       "the store could not be measured this run - a log lock was held or a surface could " +
         "not be read - so whether it still matches the attestation is unknown; re-run",
     );
-  } else {
-    info(
-      result.storeDigestMatches
-        ? "store digest matches the attested one"
-        : "store digest differs from the attested one" +
-            (unexplainedDrift ? "" : " (log growth since signing explains it)"),
-    );
-  }
-  if (healthy) return 0;
-  if (!result.storeMeasured) {
-    // The advisory rail still names the state; the prose must not call
-    // an unmeasured store damaged.
-    emitNextStep(ATTESTATION_STORE_DAMAGED_CODE, {
-      command: "brain",
-      argv,
-      jsonRequested: asJson,
-    });
     return 1;
   }
   if (damaged) {
