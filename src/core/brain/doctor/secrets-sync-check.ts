@@ -16,12 +16,17 @@
  * directory exists.
  */
 
+import { readFileSync } from "node:fs";
+
+import { attestationKeyPaths, attestationKeysDir } from "../attestation/signing.ts";
 import {
   attestationKeysSyncExposure,
   formatAttestationKeysSyncExposure,
+  formatAttestationWrappedKeysSyncExposure,
   formatSecretsSyncExposure,
   secretsSyncExposure,
 } from "../secrets/sync-exposure.ts";
+import { isEnvelopeBytes } from "../secrets/envelope.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 
@@ -41,11 +46,26 @@ export const secretsSyncExposureCheck: DoctorCheck = {
     }
     const keysExposure = attestationKeysSyncExposure(ctx.vault);
     if (keysExposure === null) return;
+    // The row's path is the keys directory, not the shared .stignore:
+    // two rows under one code stay machine-distinguishable instead of
+    // separating only by prose (and a consumer deduping on code+path
+    // cannot drop one). A wrapped private half gets the envelope wording:
+    // what would sync is the envelope, and the passphrase is the
+    // protection left on a peer.
+    let wrapped = false;
+    try {
+      wrapped = isEnvelopeBytes(readFileSync(attestationKeyPaths(ctx.vault).privatePath));
+    } catch {
+      // The sweep already proved the private half exists; an unreadable
+      // one keeps the plain wording.
+    }
     out.issues.push({
       severity: "warning",
       code: SECRETS_SYNC_EXPOSED_CODE,
-      path: keysExposure.stignorePath,
-      message: formatAttestationKeysSyncExposure(keysExposure),
+      path: attestationKeysDir(ctx.vault),
+      message: wrapped
+        ? formatAttestationWrappedKeysSyncExposure(keysExposure)
+        : formatAttestationKeysSyncExposure(keysExposure),
     } satisfies DoctorIssue);
   },
 };
