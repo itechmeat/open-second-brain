@@ -221,9 +221,10 @@ test("a shard created after signing is growth, not unexplained drift", async () 
   );
   const res = await runCli(["brain", "attest", "verify", "--vault", vault]);
   expect(res.returncode).toBe(0);
-  // The digest differs and the report says the delivered shards name
-  // why - the growth reading, not the damage one.
-  expect(res.stdout).toContain("name why");
+  // The digest differs and the report reads it as growth, not damage -
+  // the new shard is not an attested row, so the prose names the growth
+  // itself instead of pointing at shard verdicts that do not exist.
+  expect(res.stdout).toContain("(log growth since signing explains it)");
   expect(res.stdout).not.toContain("no shard above explains it");
 });
 

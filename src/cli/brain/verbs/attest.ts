@@ -367,19 +367,21 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
     return failAttestation("verify", exc);
   }
 
-  const result = verifyAttestation(vault, record, {
-    ...(publicKeyPath !== undefined ? { publicPath: publicKeyPath } : {}),
-  });
+  const result =
+    publicKeyPath !== undefined
+      ? verifyAttestation(vault, record, { publicPath: publicKeyPath })
+      : verifyAttestation(vault, record);
   const damaged = result.shards.some(
     (shard) => shard.state === "diverged" || shard.state === "missing",
   );
   // The kernel classifies the manifest diff surface by surface: log
   // growth - appended attested shards and shards created after signing -
   // is explained, everything else (an inventoried ledger, the vault
-  // identity, the search index) is drift no shard names. One rule here
+  // identity, the search index) is drift no shard names, and a manifest
+  // that could not be recomputed at all is its own fact. One rule here
   // and in the doctor, computed once in the kernel.
   const unexplainedDrift = result.unexplainedDrift;
-  const healthy = !damaged && !unexplainedDrift && result.signatureValid;
+  const healthy = !damaged && !unexplainedDrift && result.storeMeasured && result.signatureValid;
 
   if (flags["json"]) {
     // The K4 AttestationVerification shape, field for field.
@@ -393,13 +395,30 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
       `signature ${result.signatureValid ? "valid" : "INVALID"}`,
   );
   for (const shard of result.shards) info(`  ${shard.shardId}: ${shard.state}`);
-  info(
-    result.storeDigestMatches
-      ? "store digest matches the attested one"
-      : "store digest differs from the attested one" +
-          (unexplainedDrift ? "" : " (the appended and new shards above name why)"),
-  );
+  if (!result.storeMeasured) {
+    info(
+      "the store could not be measured this run - a log lock was held or a surface could " +
+        "not be read - so whether it still matches the attestation is unknown; re-run",
+    );
+  } else {
+    info(
+      result.storeDigestMatches
+        ? "store digest matches the attested one"
+        : "store digest differs from the attested one" +
+            (unexplainedDrift ? "" : " (log growth since signing explains it)"),
+    );
+  }
   if (healthy) return 0;
+  if (!result.storeMeasured) {
+    // The advisory rail still names the state; the prose must not call
+    // an unmeasured store damaged.
+    emitNextStep(ATTESTATION_STORE_DAMAGED_CODE, {
+      command: "brain",
+      argv,
+      jsonRequested: asJson,
+    });
+    return 1;
+  }
   if (damaged) {
     info(
       "the store diverged from the point this attestation vouches for: the shards named " +

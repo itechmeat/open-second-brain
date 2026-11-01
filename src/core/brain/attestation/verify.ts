@@ -92,6 +92,15 @@ export interface AttestationVerification {
    * cannot drift about what counts as damage.
    */
   readonly unexplainedDrift: boolean;
+  /**
+   * Whether the manifest could be recomputed at all. False for a run
+   * that could not measure - a log lock still held after the retries, a
+   * directory that could not be listed, an index that could not be
+   * read - which is a different fact from drift, and the faces word it
+   * differently: "re-run" for the CLI, the uncertain stream for the
+   * doctor, never ledger-damage prose.
+   */
+  readonly storeMeasured: boolean;
 }
 
 export interface VerifyAttestationOptions {
@@ -249,12 +258,14 @@ export function verifyAttestation(
   checkpoint();
 
   let storeDigestMatches = false;
-  let unexplainedDrift = true;
+  let storeMeasured = false;
+  let unexplainedDrift = false;
   try {
     const recomputeOptions: CollectAttestationManifestOptions = { safeguard: opts.safeguard };
     const recomputed = collectAttestationManifest(vault, recomputeOptions);
     storeDigestMatches = attestationStoreDigest(recomputed) === record.storeDigest;
     unexplainedDrift = unexplainedManifestDrift(record.manifest, recomputed);
+    storeMeasured = true;
   } catch (err) {
     // The caller's own deadline is not a store fact: a run the safeguard
     // aborts must surface as the abort, never as a normal-looking report
@@ -262,8 +273,8 @@ export function verifyAttestation(
     if (err instanceof SafeguardAbortError) throw err;
     // A manifest that cannot be recomputed (a held log lock, an
     // unlistable ledger directory) is a store this run could not
-    // measure. "Not measured" is not "matching", and no shard names it,
-    // so it reads as unexplained.
+    // measure. "Not measured" is not "matching", and it is not drift
+    // either - it is its own fact, and the faces word it as one.
     storeDigestMatches = false;
   }
 
@@ -274,6 +285,7 @@ export function verifyAttestation(
     shards: Object.freeze(shards),
     storeDigestMatches,
     unexplainedDrift,
+    storeMeasured,
   });
 }
 
@@ -313,9 +325,17 @@ function unexplainedManifestDrift(
     const now = recomputed.ledgerInventories[dir];
     if (now === undefined) return true; // an inventoried directory vanished
     if (dir === logDirKey) {
-      // Log growth: the new shards' files are the only allowed additions;
-      // a removal or any other addition is drift.
-      if (!sameFiles([...attestedFiles, ...newLogFiles].toSorted(), now)) return true;
+      // Log growth, in set semantics: every attested file and every new
+      // shard's JSONL must still be there, the new shards' markdown
+      // twins MAY be there (a twin can predate its JSONL on a legacy
+      // md-only day, and the appender's own partial-failure path can
+      // leave a JSONL without one), and nothing else may appear or
+      // vanish.
+      const allowed = new Set([...attestedFiles, ...newLogFiles]);
+      const required = new Set([...attestedFiles, ...newShards]);
+      const explained =
+        [...required].every((name) => now.includes(name)) && now.every((name) => allowed.has(name));
+      if (!explained) return true;
       continue;
     }
     if (!sameFiles(attestedFiles, now)) return true;

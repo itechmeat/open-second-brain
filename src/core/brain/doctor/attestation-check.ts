@@ -182,26 +182,19 @@ export const attestationCheck: DoctorCheck = {
     }
 
     if (facts.length === 0) return;
-    // The next command answers the worst fact: damage first (verify),
-    // then the missing key - but keygen REFUSES while either half
-    // exists, so it is the remedy only when both halves are gone;
-    // otherwise the answer is inspecting the verdict (verify), then age
-    // alone (sign).
-    let nextCommand = "o2b brain attest sign";
+    // Damage first (verify): the shard walk and the manifest diff need
+    // no key, so a store with diverged shards is inspected before any
+    // key decision. Keygen REFUSES while either half exists, so it is
+    // the remedy only when both are gone and nothing is damaged;
+    // otherwise a missing key is answered by the verdict the surviving
+    // half still verifies, and age alone by a re-sign.
     const publicMissing = !existsSync(attestationKeyPaths(ctx.vault).publicPath);
-    if (keyMissing && publicMissing) {
-      // Nothing to verify against and nothing to sign with: keygen is
-      // the remedy, and it no longer refuses.
-      nextCommand = "o2b brain attest keygen";
-    } else if (
-      diverged.length > 0 ||
-      !verification.signatureValid ||
-      verification.unexplainedDrift
-    ) {
+    let nextCommand = "o2b brain attest sign";
+    if (diverged.length > 0 || verification.unexplainedDrift) {
       nextCommand = "o2b brain attest verify";
-    } else if (keyMissing) {
-      // Keygen refuses while the public half survives, so the answer
-      // with a surviving half is the verdict it still verifies.
+    } else if (keyMissing && publicMissing) {
+      nextCommand = "o2b brain attest keygen";
+    } else if (keyMissing || !verification.signatureValid) {
       nextCommand = "o2b brain attest verify";
     }
     out.issues.push({
