@@ -26,9 +26,12 @@ import { runDoctor } from "../../../../src/core/brain/doctor.ts";
 import { SECRETS_SYNC_EXPOSED_CODE } from "../../../../src/core/brain/doctor/secrets-sync-check.ts";
 import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
 import {
+  attestationKeysSyncExposure,
+  formatAttestationKeysSyncExposure,
   formatWrappedKeyfileExposure,
   secretsSyncExposure,
 } from "../../../../src/core/brain/secrets/sync-exposure.ts";
+import { generateAttestationKeypair } from "../../../../src/core/brain/attestation/signing.ts";
 import { secretsDir } from "../../../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { runCli } from "../../../helpers/run-cli.ts";
@@ -129,6 +132,34 @@ describe("the secrets-sync-exposed doctor check", () => {
 
     writeFileSync(join(tmp, ".stignore"), "/vault/.open-second-brain/secrets\n");
     expect(await exposureFindings()).toHaveLength(0);
+  });
+});
+
+describe("the attestation keys directory under the same sweep", () => {
+  test("is quiet while no key exists", () => {
+    syncthingFolder(tmp, null);
+    expect(attestationKeysSyncExposure(vault)).toBeNull();
+  });
+
+  test("warns with the exact line once keygen creates the key, under the same doctor code", async () => {
+    syncthingFolder(tmp, null);
+    generateAttestationKeypair(vault);
+    const exposure = attestationKeysSyncExposure(vault);
+    expect(exposure).not.toBeNull();
+    const message = formatAttestationKeysSyncExposure(exposure!);
+    expect(message).toContain("attestation signing key");
+    expect(message).toContain(exposure!.suggestedPattern);
+
+    const findings = await exposureFindings();
+    const keysRow = findings.find((f) => f.message.includes("attestation signing key"));
+    expect(keysRow).toBeDefined();
+    expect(keysRow!.message).toContain(".stignore");
+  });
+
+  test("is quiet once .stignore covers the keys directory", () => {
+    syncthingFolder(tmp, "/vault/.open-second-brain/keys/attestation\n");
+    generateAttestationKeypair(vault);
+    expect(attestationKeysSyncExposure(vault)).toBeNull();
   });
 });
 

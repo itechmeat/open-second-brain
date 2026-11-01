@@ -25,6 +25,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+import { attestationKeysDir } from "../attestation/signing.ts";
 import { secretsDir } from "./store.ts";
 
 /** The marker Syncthing keeps at the root of every synced folder. */
@@ -133,12 +134,29 @@ function isIgnored(patterns: ReadonlyArray<IgnorePattern>, relPath: string): boo
 }
 
 /**
- * The exposure, or null when there is none to report: no secrets
- * directory, no Syncthing folder around the vault, or a `.stignore` that
- * already ignores the directory or one of its ancestors.
+ * The secrets store's exposure, or null when there is none to report.
  */
 export function secretsSyncExposure(vault: string): SecretsSyncExposure | null {
-  const dir = secretsDir(vault);
+  return dirSyncExposure(vault, secretsDir(vault));
+}
+
+/**
+ * The attestation signing key's exposure, under the same matcher. The
+ * keys directory lives beside the secrets store under the derived store
+ * and gets only git exclusion from keygen, so the same question the
+ * secrets family answers - does a synced folder carry the private half
+ * to every peer - is asked of it too, by the same doctor check.
+ */
+export function attestationKeysSyncExposure(vault: string): SecretsSyncExposure | null {
+  return dirSyncExposure(vault, attestationKeysDir(vault));
+}
+
+/**
+ * The exposure for one directory, or null when there is none to report:
+ * the directory is absent, no Syncthing folder around the vault, or a
+ * `.stignore` that already ignores the directory or one of its ancestors.
+ */
+function dirSyncExposure(vault: string, dir: string): SecretsSyncExposure | null {
   if (!existsSync(dir)) return null;
   // Syncthing walks real directories and does not follow symbolic links,
   // so the question is asked of the real paths: a vault reached through a
@@ -180,6 +198,20 @@ export function formatSecretsSyncExposure(exposure: SecretsSyncExposure): string
     `the secrets directory sits inside a Syncthing folder (${exposure.folderRoot}) whose ` +
     `${STIGNORE_FILE} does not ignore it, so the keyfile and the ciphertext it decrypts sync ` +
     `to every peer (Syncthing does not read .gitignore). Add this line to ` +
+    `${exposure.stignorePath}: ${exposure.suggestedPattern}`
+  );
+}
+
+/**
+ * The same gap, stated for the ATTESTATION signing key: what would sync
+ * is the private half of the operator's Ed25519 keypair, so the sentence
+ * names that instead of the custody store's keyfile-and-ciphertext pair.
+ */
+export function formatAttestationKeysSyncExposure(exposure: SecretsSyncExposure): string {
+  return (
+    `the attestation signing key sits inside a Syncthing folder (${exposure.folderRoot}) ` +
+    `whose ${STIGNORE_FILE} does not ignore it, so the private half would sync to every ` +
+    "peer (Syncthing does not read .gitignore). Add this line to " +
     `${exposure.stignorePath}: ${exposure.suggestedPattern}`
   );
 }
