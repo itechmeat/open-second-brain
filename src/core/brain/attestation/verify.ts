@@ -23,7 +23,11 @@
  * head on purpose: an attestation anchors a point in each shard's
  * history, not the whole history, and integrity of the rows BEFORE that
  * point is the log-chain verifier's standing question (`o2b brain log
- * verify`), not this one.
+ * verify`), not this one. The attested row itself and everything after
+ * it are this walk's question, held to the full standard: the attested
+ * row's own hash must recompute from its fields, and a row at or after
+ * it that the walk cannot chain (unparseable, stripped links) reads as
+ * `diverged`, never as silence between chained rows.
  *
  * Head reads at verify time are lock-free, also like `verifyLogChain`:
  * the COLLECTOR takes the appender's lock because a wrong head gets
@@ -54,7 +58,7 @@ import type { AttestationRecord } from "./record.ts";
 import { LOG_CHAIN_FIELDS, logChainHash } from "../log.ts";
 import { scanJsonlRows } from "../log-jsonl.ts";
 import { brainDirs } from "../paths.ts";
-import type { Safeguard } from "../safeguard.ts";
+import { SafeguardAbortError, type Safeguard } from "../safeguard.ts";
 import type { ProgressSink } from "../progress.ts";
 
 /** The state of one attested shard, as verification reports it. */
@@ -149,22 +153,39 @@ function classifyShard(
 
   const rows: ChainRow[] = [];
   let currentHead: string | null = null;
+  let anchorIndex = -1;
   for (const line of scan.lines) {
-    if (line.row === null) continue;
-    const row = chainRow(line.row);
-    if (row !== null) {
-      rows.push(row);
-      currentHead = row.h;
+    const row = line.row === null ? null : chainRow(line.row);
+    if (row === null) {
+      // Before the attested point a row the projection refuses is
+      // pre-chain history - the log-chain verifier's standing question,
+      // not this walk's. At or after it, a row that cannot be chained
+      // (unparseable JSON, stripped links, a payload shape the
+      // projection refuses) is an edit: skipping it would read a
+      // garbled or rewritten row as legitimate growth.
+      if (anchorIndex >= 0) return "diverged";
+      continue;
     }
+    rows.push(row);
+    currentHead = row.h;
+    if (anchorIndex < 0 && row.h === attestedHead) anchorIndex = rows.length - 1;
+  }
+  if (anchorIndex < 0) return "diverged";
+
+  // The attested row is what the attestation vouches for, so its stored
+  // hash must recompute from its own fields: a row edited after signing
+  // with its `h` field left in place would otherwise ride both the
+  // `intact` verdict and the forward walk's anchor.
+  const anchor = rows[anchorIndex]!;
+  if (logChainHash(anchor.prev, anchor.ts, anchor.kind, anchor.payload) !== attestedHead) {
+    return "diverged";
   }
   if (currentHead === attestedHead) return "intact";
 
   // Forward walk from the attested head: every row after it must hash to
   // itself and link to its predecessor, ending exactly at the head.
-  const anchor = rows.findIndex((row) => row.h === attestedHead);
-  if (anchor < 0) return "diverged";
   let previous = attestedHead;
-  for (let i = anchor + 1; i < rows.length; i++) {
+  for (let i = anchorIndex + 1; i < rows.length; i++) {
     const row = rows[i]!;
     if (row.prev !== previous) return "diverged";
     if (logChainHash(row.prev, row.ts, row.kind, row.payload) !== row.h) return "diverged";
@@ -204,7 +225,11 @@ export function verifyAttestation(
     storeDigestMatches =
       attestationStoreDigest(collectAttestationManifest(vault, recomputeOptions)) ===
       record.storeDigest;
-  } catch {
+  } catch (err) {
+    // The caller's own deadline is not a store fact: a run the safeguard
+    // aborts must surface as the abort, never as a normal-looking report
+    // whose digest happens to differ.
+    if (err instanceof SafeguardAbortError) throw err;
     // A manifest that cannot be recomputed (a held log lock, an
     // unlistable ledger directory) is a store this run could not
     // measure. "Not measured" is not "matching".

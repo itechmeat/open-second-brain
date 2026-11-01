@@ -32,7 +32,7 @@ import { verifyAttestation } from "../../../../src/core/brain/attestation/verify
 import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 import { brainDirs, logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
-import { noopSafeguard } from "../../../../src/core/brain/safeguard.ts";
+import { noopSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
 
 const DATE = "2026-06-03";
 
@@ -140,6 +140,51 @@ describe("verifyAttestation", () => {
     expect(shardState(result, `${DATE}.jsonl`)).toBe("diverged");
   });
 
+  test("the attested head row edited after signing diverges its shard", () => {
+    append(1);
+    const record = signedRecord();
+    // Rewrite the ATTESTED row's payload (the shard's only line, whose
+    // `h` is the attested head) and leave its `h` field alone: every
+    // stored hash string still lines up, so only recomputing the
+    // attested row's own hash can see the edit.
+    const path = logShardJsonlPath(vault, DATE, "");
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    const row = JSON.parse(lines[0]!) as Record<string, unknown>;
+    (row["payload"] as Record<string, unknown>)["text"] = "rewritten after signing";
+    lines[0] = JSON.stringify(row);
+    writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(shardState(result, `${DATE}.jsonl`)).toBe("diverged");
+  });
+
+  test("a garbled line at or after the attested head diverges its shard", () => {
+    append(1);
+    const record = signedRecord();
+    append(1);
+    const path = logShardJsonlPath(vault, DATE, "");
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    // Garble the APPENDED row: an unparseable line after the attested
+    // point is an edit the walk must not skip past.
+    lines[1] = lines[1]!.slice(0, Math.floor(lines[1]!.length / 2));
+    writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(shardState(result, `${DATE}.jsonl`)).toBe("diverged");
+  });
+
+  test("a garbled line before the attested head stays the log-chain verifier's question", () => {
+    append(1);
+    const record = signedRecord();
+    const path = logShardJsonlPath(vault, DATE, "");
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    // Pre-chain history sits before the anchor; damage there is the
+    // standing question `o2b brain log verify` asks, and the attested
+    // point itself still links up.
+    lines.unshift("{not json");
+    writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(shardState(result, `${DATE}.jsonl`)).toBe("intact");
+  });
+
   test("a shard rewritten below the attested head diverges rather than pretending", () => {
     append(2);
     const record = signedRecord();
@@ -230,5 +275,33 @@ describe("verifyAttestation", () => {
     });
     expect(checkpoints).toBeGreaterThanOrEqual(1);
     expect(result.shards.length).toBe(1);
+  });
+
+  test("a safeguard abort during the manifest recompute aborts instead of reading as drift", () => {
+    append(1);
+    const record = signedRecord();
+    // Checkpoint order for a one-shard record: post-signature, the shard
+    // walk, the pre-digest boundary, then the recompute's own boundaries.
+    // Aborting from the fourth call onward lands inside the recompute -
+    // the arm whose catch-all would otherwise fold the abort into a
+    // normal-looking `storeDigestMatches: false`.
+    let checkpoints = 0;
+    const aborting = Object.freeze({
+      operation: "attestation-test",
+      timeoutMs: 1_000,
+      checkpoint: () => {
+        checkpoints++;
+        if (checkpoints >= 4) {
+          throw new SafeguardAbortError("attestation-test");
+        }
+      },
+    });
+    let thrown: unknown = null;
+    try {
+      verifyAttestation(vault, record, { safeguard: aborting });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SafeguardAbortError);
   });
 });
