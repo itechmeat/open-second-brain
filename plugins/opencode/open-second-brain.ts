@@ -116,17 +116,29 @@ const PRETOOL_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
 });
 
 /**
- * opencode names MCP tools `<server>_<tool>` with a single underscore,
- * so the Brain surfaces arrive as `open-second-brain_brain_search` and
- * the decision cores' suffix matchers - built for the `mcp__` double
- * underscore spellings - never fire. The relay strips the server prefix
- * from a Brain tool name, so an orientation refresh and every
+ * The MCP server names this project registers under (`OSB_KEY_FULL` and
+ * its underscore spelling), which is how opencode prefixes its MCP tool
+ * names: `<server>_<tool>` with a single underscore. The decision
+ * cores' brain-tool matchers are built for the `mcp__` double-underscore
+ * spellings and never fire on those names, so the relay strips a KNOWN
+ * server prefix from a Brain tool name - never a prefix-shaped suffix of
+ * some other server's tool - and an orientation refresh plus every
  * brain-tool branch of the cores see the bare name.
  */
+const BRAIN_SERVER_PREFIXES: ReadonlyArray<string> = Object.freeze([
+  "open-second-brain_",
+  "open_second_brain_",
+]);
+
 function translateToolName(tool: string): string {
   const mapped = PRETOOL_TOOL_NAMES[tool.toLowerCase()] ?? tool;
-  const brainIndex = mapped.toLowerCase().indexOf("_brain_");
-  return brainIndex >= 0 ? mapped.slice(brainIndex + 1) : mapped;
+  const lower = mapped.toLowerCase();
+  for (const prefix of BRAIN_SERVER_PREFIXES) {
+    if (lower.startsWith(prefix) && lower.slice(prefix.length).startsWith("brain_")) {
+      return mapped.slice(prefix.length);
+    }
+  }
+  return mapped;
 }
 const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 /** A failed render retries sooner than a successful one expires. */
@@ -649,31 +661,23 @@ function promptContextQueue(): {
   take(sessionId: string | null): string | null;
 } {
   const slots = new Map<string, string | null>();
-  const slotKey = (sessionId: string | null): string => sessionId ?? "";
   return {
     beginTurn(sessionId) {
-      slots.set(slotKey(sessionId), null);
+      slots.set(sessionId ?? "", null);
     },
     offer(sessionId, text) {
-      const key = slotKey(sessionId);
+      const key = sessionId ?? "";
       const current = slots.get(key);
       slots.set(key, current === null || current === undefined ? text : `${current}\n\n${text}`);
     },
     take(sessionId) {
-      if (sessionId !== null) {
-        const value = slots.get(sessionId) ?? null;
-        // Deleted, not nulled: the plugin instance is server-wide and
-        // the map would otherwise grow one entry per session forever.
-        slots.delete(sessionId);
-        return value;
-      }
-      // A delivery input that names no session (older hosts) may drain
-      // THE one pending slot - unambiguous while exactly one session has
-      // context queued, and silence otherwise, which keeps the
-      // cross-session guarantee intact.
-      const pending = [...slots.entries()].filter(([, value]) => value !== null);
-      if (pending.length !== 1) return null;
-      const [key] = pending[0]!;
+      // Deleted, not nulled: the plugin instance is server-wide and the
+      // map would otherwise grow one entry per session forever. A
+      // delivery input that names no session drains only the session-
+      // less bucket (the empty key) - the one its own prompt events
+      // wrote to - so no request can ever consume another session's
+      // queued context.
+      const key = sessionId ?? "";
       const value = slots.get(key) ?? null;
       slots.delete(key);
       return value;

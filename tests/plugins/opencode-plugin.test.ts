@@ -1441,24 +1441,32 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     },
   );
 
-  dispatchTest("a session-less delivery request drains the one pending slot", async () => {
-    // Older hosts call the transform with no session id: delivering
-    // nothing there would silently kill the lane, and delivering
-    // regardless would break the cross-session guarantee - the
-    // unambiguous middle is exactly one pending slot.
-    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
-    armPromptFlags();
-    const plugin = await makeV2Plugin([]);
-    try {
-      const prompt = plugin.sessionHooks.get("prompt")!;
-      prompt({ sessionID: "sess-only", prompt: "find my notes" } as never);
-      const request = { system: [{ type: "text" as const, text: "base" }] };
-      plugin.contextHook(request);
-      expect(systemTexts(request)).toContain("RECALL BLOCK");
-    } finally {
-      plugin.cleanup();
-    }
-  });
+  dispatchTest(
+    "a session-less prompt and delivery still meet in the session-less bucket",
+    async () => {
+      // A host that names no session on either event writes and reads the
+      // one session-less bucket, so the lane still works there; a prompt
+      // that DID name a session is never drained by a session-less
+      // request, which is the cross-session guarantee.
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+      armPromptFlags();
+      const plugin = await makeV2Plugin([]);
+      try {
+        const prompt = plugin.sessionHooks.get("prompt")!;
+        prompt({ prompt: "find my notes" } as never);
+        const request = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook(request);
+        expect(systemTexts(request)).toContain("RECALL BLOCK");
+
+        prompt({ sessionID: "sess-a", prompt: "find my notes" } as never);
+        const forNobody = { system: [{ type: "text" as const, text: "base" }] };
+        plugin.contextHook(forNobody);
+        expect(systemTexts(forNobody)).toEqual("base");
+      } finally {
+        plugin.cleanup();
+      }
+    },
+  );
 
   dispatchTest(
     "a patch tool call maps the diff body onto the shape the backup shim parses",

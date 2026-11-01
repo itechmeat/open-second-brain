@@ -183,20 +183,20 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  *   1. Grok: camelCase payload shape (`hookEventName` / `workspaceRoot`) or a
  *      `GROK_*` hook env var. Grok ships no `transcript_path` and uses
  *      camelCase keys Claude/Codex never send, so this is unambiguous.
- *   2. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
- *   3. `transcript_path` substring (`/.codex/sessions/`).
- *   4. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
- *   5. Claude Code Stop shape: `hook_event_name === "Stop"` with
- *      `stop_hook_active` and `last_assistant_message` but no `turn_id`
- *      (Codex adds `turn_id` to every Stop payload). Catches a Claude Code
- *      install whose transcripts live outside `~/.claude` (`CLAUDE_CONFIG_DIR`).
- *   3. `hook_host: "opencode"` - the explicit marker the opencode
+ *   2. `hook_host: "opencode"` - the explicit marker the opencode
  *      plugin's synthetic payloads carry (plugins/opencode/
  *      open-second-brain.ts states the same literal; the plugin is
  *      copied alone and cannot import this module). An honest marker,
  *      where a fabricated Claude Code `tool_use_id` would mislabel
  *      every audit row the lane writes - and it outranks the
  *      apply_patch shape, which an opencode patch payload shares.
+ *   3. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
+ *   4. `transcript_path` substring (`/.codex/sessions/`).
+ *   5. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
+ *   6. Claude Code Stop shape: `hook_event_name === "Stop"` with
+ *      `stop_hook_active` and `last_assistant_message` but no `turn_id`
+ *      (Codex adds `turn_id` to every Stop payload). Catches a Claude Code
+ *      install whose transcripts live outside `~/.claude` (`CLAUDE_CONFIG_DIR`).
  *   7. Codex apply_patch shape (`tool_name === "apply_patch"` with
  *      a patch body in `tool_input.input`).
  *   8. `"unknown"`.
