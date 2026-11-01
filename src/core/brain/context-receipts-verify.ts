@@ -60,7 +60,7 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { parseFrontmatterWithNotices } from "../vault.ts";
-import { isContextReceiptTrigger, type ContextReceiptTrigger } from "./context-receipts.ts";
+import { isContextReceiptTrigger, type ContextReceiptTrigger } from "./context-receipt-trigger.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { guardBrainContextSnippet } from "./safety/context-guard.ts";
