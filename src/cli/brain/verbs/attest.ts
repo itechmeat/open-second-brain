@@ -395,14 +395,18 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
       `signature ${result.signatureValid ? "valid" : "INVALID"}`,
   );
   for (const shard of result.shards) info(`  ${shard.shardId}: ${shard.state}`);
-  // The digest verdict prints on every run, healthy or not: growth and
-  // match are both facts an operator or a cron log reads.
-  info(
-    result.storeDigestMatches
-      ? "store digest matches the attested one"
-      : "store digest differs from the attested one" +
-          (unexplainedDrift ? "" : " (log growth since signing explains it)"),
-  );
+  // The digest verdict prints on every MEASURED run, healthy or not:
+  // growth and match are both facts an operator or a cron log reads. An
+  // unmeasured run prints no digest reading at all - it has none to
+  // give.
+  if (result.storeMeasured) {
+    info(
+      result.storeDigestMatches
+        ? "store digest matches the attested one"
+        : "store digest differs from the attested one" +
+            (unexplainedDrift ? "" : " (log growth since signing explains it)"),
+    );
+  }
   if (healthy) return 0;
   // An unmeasured manifest is reported as its own fact - and only when
   // nothing else is wrong: the shard walk and the signature check ran,
