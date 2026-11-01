@@ -46,7 +46,11 @@ import {
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../fs-atomic.ts";
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  FileAlreadyExistsError,
+} from "../../fs-atomic.ts";
 import {
   isEnvelopeBytes,
   unlockKeyfile,
@@ -203,9 +207,13 @@ export interface GenerateAttestationKeypairOptions {
  * The seed is written through the exclusive-create shared writer at
  * 0600 so two concurrent keygens cannot truncate each other: the loser
  * refuses with {@link AttestationKeyExistsError} rather than replacing
- * the winner. The public half is written beside it (safe to copy to
- * every peer), and the sync-exclusion marker keeps git from ever
- * carrying the directory.
+ * the winner. A keypair that survives in ANY half refuses too - a
+ * surviving public half still verifies every past attestation, and
+ * regenerating over it would orphan them - and the exclusive-create
+ * race loser's own error is translated onto the same named refusal. The
+ * public half is written beside the private one (safe to copy to every
+ * peer), and the sync-exclusion marker keeps git from ever carrying the
+ * directory.
  */
 export function generateAttestationKeypair(
   vault: string,
@@ -217,7 +225,9 @@ export function generateAttestationKeypair(
     opts.passphraseFromEnv === undefined ? null : ingestPassphrase(vault, opts.passphraseFromEnv);
   assertVaultIdentityForWrite(vault, undefined, WRITE_LANE.audit);
   const { privatePath, publicPath } = attestationKeyPaths(vault);
-  if (existsSync(privatePath)) throw new AttestationKeyExistsError(privatePath);
+  if (existsSync(privatePath) || existsSync(publicPath)) {
+    throw new AttestationKeyExistsError(privatePath);
+  }
   const dir = attestationKeysDir(vault);
   // The 0700 mode takes effect on POSIX for directories this call
   // creates; `restrictToOwner` sets the equivalent ACL on Windows.
@@ -232,7 +242,14 @@ export function generateAttestationKeypair(
   // even for an instant. It is stored as hex TEXT - the shared writers
   // encode UTF-8, and 64 hex characters survive any text round trip
   // byte-identically, which raw binary through a text writer does not.
-  atomicCreateFileSyncExclusive(privatePath, seed.toString("hex"), { mode: 0o600 });
+  // A concurrent keygen that passes the pre-check above loses here, and
+  // its refusal carries the same named code the pre-check gives.
+  try {
+    atomicCreateFileSyncExclusive(privatePath, seed.toString("hex"), { mode: 0o600 });
+  } catch (err) {
+    if (err instanceof FileAlreadyExistsError) throw new AttestationKeyExistsError(privatePath);
+    throw err;
+  }
   restrictToOwner(privatePath, "file");
   const written = Buffer.from(readFileSync(privatePath, "utf8").trim(), "hex");
   if (!seed.equals(written)) {

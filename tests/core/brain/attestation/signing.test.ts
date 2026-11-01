@@ -26,6 +26,7 @@ import { join } from "node:path";
 
 import {
   ATTESTATION_KEY_MISSING,
+  AttestationKeyExistsError,
   AttestationKeyMissingError,
   attestationKeyPaths,
   generateAttestationKeypair,
@@ -115,6 +116,21 @@ describe("generateAttestationKeypair", () => {
     const before = readFileSync(first.privatePath);
     expect(() => generateAttestationKeypair(vault)).toThrow(/already exists/);
     expect(readFileSync(first.privatePath)).toEqual(before);
+  });
+
+  test("a surviving public half refuses keygen: regenerating would orphan the attestations it still verifies", () => {
+    const first = generateAttestationKeypair(vault);
+    const pubBefore = readFileSync(first.publicPath, "utf8");
+    rmSync(first.privatePath);
+    let caught: unknown = null;
+    try {
+      generateAttestationKeypair(vault);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AttestationKeyExistsError);
+    expect((caught as AttestationKeyExistsError).code).toBe("attestation_key_exists");
+    expect(readFileSync(first.publicPath, "utf8")).toBe(pubBefore);
   });
 
   test("the passphrase wrap replaces the raw seed with an envelope", () => {
