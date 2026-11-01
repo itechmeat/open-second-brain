@@ -18,6 +18,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
+import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
+import {
+  ORIGIN_CHANNEL,
+  clearOriginChannel,
+  setOriginChannel,
+} from "../../src/core/origin-channel.ts";
 import { addRecallSource } from "../../src/core/brain/portability/recall-sources.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -56,6 +62,7 @@ let configHome: string;
 const searchTool = () => SEARCH_TOOLS.find((t) => t.name === "brain_search")!;
 const expandTool = () => SEARCH_TOOLS.find((t) => t.name === "brain_search_expand")!;
 const fileContextTool = () => SEARCH_TOOLS.find((t) => t.name === "brain_file_context")!;
+const updateTool = () => NOTES_TOOLS.find((t) => t.name === "brain_update_note")!;
 
 function ctxFor(reach: TransportReach): ServerContext {
   return {
@@ -222,6 +229,36 @@ describe("brain_search rows at remote reach", () => {
     expect(remoteCard).toBeDefined();
     expect(remoteCard!.snippet).toBe(fenceFor(AGENT_LABEL, localCard!.snippet));
     expect(remoteCard!.chunk_id).toBe(localCard!.chunk_id);
+  });
+
+  test("an mcp update of an operator page does not deliver its new agent body as plain", async () => {
+    // `notes/operator.md` is stamped `origin_channel: cli` and ships
+    // plain. An MCP-lane mutation rewrites the body; the page's new words
+    // are agent-authored, so the stale operator stamp must not survive
+    // the commit path to vouch for them at remote reach - the row has to
+    // arrive inside the fence naming the channel that wrote it.
+    const mutated = "zzrewrittenbyagentzz";
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    try {
+      await updateTool().handler(ctxFor(TRANSPORT_REACH.local), {
+        path: "notes/operator.md",
+        content: `agent-authored rewrite carrying ${mutated} entirely.`,
+      });
+    } finally {
+      clearOriginChannel();
+    }
+    await indexVault(
+      resolveSearchConfig({ vault, configPath: join(configHome, "config.yaml") }),
+      {},
+    );
+    const local = await search(mutated, TRANSPORT_REACH.local);
+    const remote = await search(mutated, TRANSPORT_REACH.remote);
+    const localRow = rowFor(local, "notes/operator.md");
+    expect(localRow.content).toContain(mutated);
+    expect(localRow.content).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
+    expect(rowFor(remote, "notes/operator.md").content).toBe(
+      fenceFor(AGENT_LABEL, localRow.content),
+    );
   });
 });
 

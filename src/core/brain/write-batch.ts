@@ -57,7 +57,7 @@ import {
   type AppendApplyEvidenceOptions,
 } from "./apply-evidence.ts";
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
-import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
+import { ORIGIN_CHANNEL, ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { CONTENT_CLASS_FIELD } from "./provenance/content-class.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
@@ -764,16 +764,43 @@ function projectCreateNote(
  * Frontmatter keys a caller-named UPDATE may not set, whatever the value.
  * They are read as boundary state, not note content: `visibility` carries
  * the page's read-scope tokens (the reserved `private` among them), and
- * `origin_channel` and `content_class` are the server-derived stamps
- * creation writes once and mutation never rewrites. Keys are matched
- * through {@link normToken}, so a capitalised spelling (`Visibility:`)
- * meets the same refusal as the lower-case one.
+ * `origin_channel` and `content_class` are the server-derived stamps the
+ * process that writes the page owns - a caller never names them. The one
+ * rewrite a mutation does make is {@link mutationChannelStamp}: a writer
+ * whose own channel differs may not keep an inherited `cli` stamp, since
+ * the delivery side reads that stamp as operator-authorship of whatever
+ * text the mutation left. Keys are matched through {@link normToken}, so a
+ * capitalised spelling (`Visibility:`) meets the same refusal as the
+ * lower-case one.
  */
 const RESERVED_UPDATE_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "visibility",
   ORIGIN_CHANNEL_FIELD,
   CONTENT_CLASS_FIELD,
 ]);
+
+/**
+ * The channel correction a note MUTATION commits under, as the frontmatter
+ * keys to merge on top of the caller's map (empty when none apply).
+ *
+ * A note keeps the `origin_channel` its creation wrote - a stamp describes
+ * the process that put the record there, and mutation never rewrites it.
+ * The one exception is the stamp a mutation inherits but its own process
+ * did not earn: a page stamped `cli` reads at delivery as operator-
+ * authored plain text, so when the writer is not the CLI lane - an MCP
+ * tool call, an import replay, an unclaimed embedded process - leaving
+ * that stamp in place would deliver the mutation's own words under a
+ * provenance they do not have. In that one case the stamp is rewritten to
+ * {@link originChannelStamp}, the current process's own answer; a page
+ * with no stamp stays unstamped (backfill is refused by the stamp
+ * doctrine), and a CLI-lane mutation keeps the page exactly as it reads.
+ */
+function mutationChannelStamp(existing: FrontmatterMap): FrontmatterMap {
+  const current = originChannelStamp();
+  if (current === ORIGIN_CHANNEL.cli) return {};
+  if (existing[ORIGIN_CHANNEL_FIELD] !== ORIGIN_CHANNEL.cli) return {};
+  return { [ORIGIN_CHANNEL_FIELD]: current };
+}
 
 /**
  * The informal privacy marker keys (`access`, `confidentiality`,
@@ -910,8 +937,12 @@ function projectUpdateNote(
       );
     }
   }
+  // The caller's map wins over the file's; the mutation's own channel
+  // correction wins over both (see {@link mutationChannelStamp}).
   const frontmatter =
-    op.frontmatter !== undefined ? { ...state.frontmatter, ...op.frontmatter } : state.frontmatter;
+    op.frontmatter !== undefined
+      ? { ...state.frontmatter, ...op.frontmatter, ...mutationChannelStamp(state.frontmatter) }
+      : { ...state.frontmatter, ...mutationChannelStamp(state.frontmatter) };
   const body = op.body !== undefined ? op.body : state.body;
   const contents = formatFrontmatter(frontmatter, body);
   return {
@@ -991,7 +1022,12 @@ function projectAppendNote(
   const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   const appended = op.content.trim();
   const body = state.body.length > 0 ? `${state.body}${APPEND_SEPARATOR}${appended}` : appended;
-  const contents = formatFrontmatter(state.frontmatter, body);
+  // The appended text is this process's authorship, so the same channel
+  // correction the update arm applies holds here ({@link mutationChannelStamp}).
+  const contents = formatFrontmatter(
+    { ...state.frontmatter, ...mutationChannelStamp(state.frontmatter) },
+    body,
+  );
   return {
     commit: () => {
       const audit = commitNoteRewrite(

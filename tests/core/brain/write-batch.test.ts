@@ -46,6 +46,11 @@ import {
   type WriteOperation,
 } from "../../../src/core/brain/write-batch.ts";
 import { PRIVACY_MARKER_KEYS } from "../../../src/core/graph/privacy-markers.ts";
+import {
+  ORIGIN_CHANNEL,
+  clearOriginChannel,
+  setOriginChannel,
+} from "../../../src/core/origin-channel.ts";
 import { WriteRefusedError } from "../../../src/core/brain/pending/pending-lanes.ts";
 import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import * as ledger from "../../../src/core/brain/idempotency-ledger.ts";
@@ -210,6 +215,75 @@ describe("applyWriteBatch note operations", () => {
       ]),
     ).toThrow(WriteBatchError);
     expect(readFileSync(join(vault, "Notes/Other.md"), "utf8")).not.toContain("status: final");
+  });
+
+  test("an mcp-lane update of a cli-stamped page re-stamps the channel it did not earn", () => {
+    seedNote("Notes/Operator.md", "operator body", "title: O\norigin_channel: cli");
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    try {
+      const res = applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Operator.md", body: "agent-authored body" },
+      ]);
+      expect(res.results[0]).toMatchObject({ kind: "update_note", updated: true });
+    } finally {
+      clearOriginChannel();
+    }
+    const md = readFileSync(join(vault, "Notes/Operator.md"), "utf8");
+    // The stamp now names the process that wrote the page's current
+    // words; the delivery side reads `cli` as operator-authored plain
+    // text, so the inherited stamp could not survive the mutation.
+    expect(md).toContain("origin_channel: mcp-tool");
+    expect(md).not.toContain("origin_channel: cli");
+    expect(md).toContain("agent-authored body");
+  });
+
+  test("an mcp-lane append of a cli-stamped page re-stamps the channel too", () => {
+    seedNote("Notes/Operator.md", "operator body", "title: O\norigin_channel: cli");
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    try {
+      const res = applyWriteBatch(vault, [
+        { kind: "append_note", path: "Notes/Operator.md", content: "appended by agent" },
+      ]);
+      expect(res.results[0]).toMatchObject({ kind: "append_note", appended: true });
+    } finally {
+      clearOriginChannel();
+    }
+    const md = readFileSync(join(vault, "Notes/Operator.md"), "utf8");
+    expect(md).toContain("origin_channel: mcp-tool");
+    expect(md).not.toContain("origin_channel: cli");
+    expect(md).toContain("operator body");
+    expect(md).toContain("appended by agent");
+  });
+
+  test("a cli-lane mutation keeps the operator stamp it earned", () => {
+    seedNote("Notes/Operator.md", "operator body", "title: O\norigin_channel: cli");
+    setOriginChannel(ORIGIN_CHANNEL.cli);
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Operator.md", body: "operator's own edit" },
+      ]);
+    } finally {
+      clearOriginChannel();
+    }
+    const md = readFileSync(join(vault, "Notes/Operator.md"), "utf8");
+    expect(md).toContain("origin_channel: cli");
+    expect(md).not.toContain("origin_channel: mcp-tool");
+  });
+
+  test("a mutation never backfills a stamp onto a legacy page", () => {
+    seedNote("Notes/Legacy.md", "legacy body", "title: L");
+    setOriginChannel(ORIGIN_CHANNEL.mcpTool);
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Legacy.md", body: "agent-authored body" },
+      ]);
+    } finally {
+      clearOriginChannel();
+    }
+    const md = readFileSync(join(vault, "Notes/Legacy.md"), "utf8");
+    // No stamp existed, so none is added: absence means "written before
+    // the stamp existed" and the delivery side already fails closed on it.
+    expect(md).not.toContain("origin_channel");
   });
 
   test("update_note refuses the informal privacy marker keys, creation does not", () => {
