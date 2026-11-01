@@ -24,7 +24,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { atomicCreateFileSyncExclusive } from "../../fs-atomic.ts";
 import { canonicalJson, digestVerifies, sealWithDigest } from "../../integrity/digest.ts";
@@ -56,9 +56,9 @@ const ATTEST_FILE_PREFIX = "attest-";
  * The shape {@link utcCompact} produces and every id carries: the
  * compact UTC instant (`20260603T100000500Z`). The writer refuses an
  * off-shape id rather than join it into a file path, and the reader
- * refuses a record whose id does not answer to its own naming, so a
- * crafted or hand-edited id can never name a file outside the
- * attestations directory.
+ * refuses both an off-shape id and one that does not match its file's
+ * own name, so a crafted or hand-edited id can never name a file
+ * outside the attestations directory nor outrank its own instant.
  */
 const ATTESTATION_ID_SHAPE = new RegExp(`^${ATTEST_FILE_PREFIX}\\d{8}T\\d{9}Z$`);
 
@@ -209,6 +209,13 @@ export function readAttestationRecordFile(path: string): AttestationRecord {
     new Error(`attestation record is malformed (${detail}): ${path}`);
   if (typeof obj.id !== "string" || !ATTESTATION_ID_SHAPE.test(obj.id)) {
     throw malformed("id is not an attest-<UTC-compact> instant");
+  }
+  // The id IS the file's base name: the listing ranks by file name
+  // (name order is time order), so a valid record copied under a future
+  // dated name would rank as the newest attestation while carrying an
+  // older instant - the reader refuses the mismatch.
+  if (basename(path, ".json") !== obj.id) {
+    throw malformed(`id ${JSON.stringify(obj.id)} does not answer to the file name`);
   }
   if (typeof obj.createdAt !== "string" || typeof obj.deviceId !== "string") {
     throw malformed("created_at and device_id must be strings");

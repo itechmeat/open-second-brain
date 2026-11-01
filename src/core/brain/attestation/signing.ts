@@ -226,7 +226,9 @@ export function generateAttestationKeypair(
   assertVaultIdentityForWrite(vault, undefined, WRITE_LANE.audit);
   const { privatePath, publicPath } = attestationKeyPaths(vault);
   if (existsSync(privatePath) || existsSync(publicPath)) {
-    throw new AttestationKeyExistsError(privatePath);
+    // Name the half that actually survives: a refusal pointing at a file
+    // that does not exist sends the operator looking in the wrong place.
+    throw new AttestationKeyExistsError(existsSync(privatePath) ? privatePath : publicPath);
   }
   const dir = attestationKeysDir(vault);
   // The 0700 mode takes effect on POSIX for directories this call

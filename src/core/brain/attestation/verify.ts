@@ -54,12 +54,14 @@ import { join } from "node:path";
 import {
   attestationStoreDigest,
   collectAttestationManifest,
+  type AttestationManifest,
   type CollectAttestationManifestOptions,
 } from "./digest.ts";
 import { verifyAttestationSignature } from "./signing.ts";
 import type { AttestationRecord } from "./record.ts";
 import { LOG_CHAIN_FIELDS, logChainHash } from "../log.ts";
 import { scanJsonlRows } from "../log-jsonl.ts";
+import { BRAIN_LOG_REL } from "../path-constants.ts";
 import { brainDirs } from "../paths.ts";
 import { SafeguardAbortError, type Safeguard } from "../safeguard.ts";
 import type { ProgressSink } from "../progress.ts";
@@ -82,6 +84,14 @@ export interface AttestationVerification {
    * per-shard states are what distinguish "moved" from "broken".
    */
   readonly storeDigestMatches: boolean;
+  /**
+   * Whether the recomputed manifest differs from the attested one in a
+   * way the shard verdicts cannot explain: a vault-identity, index or
+   * ledger change, or log growth the new-shard rule does not cover. The
+   * one boolean both faces exit and warn on, so the CLI and the doctor
+   * cannot drift about what counts as damage.
+   */
+  readonly unexplainedDrift: boolean;
 }
 
 export interface VerifyAttestationOptions {
@@ -211,10 +221,12 @@ function classifyShard(
 /**
  * Verify one attestation against the store as it stands now.
  *
- * Never throws, performs no writes, and reports every attested shard
- * even when the signature is invalid - the operator needs the whole
- * picture, and a signature check alone would hide how far the store
- * moved.
+ * Performs no writes and reports every attested shard even when the
+ * signature is invalid - the operator needs the whole picture, and a
+ * signature check alone would hide how far the store moved. Every
+ * failure mode lands in the report; the one throw is the caller's OWN
+ * {@link SafeguardAbortError}, which propagates from a deadline rather
+ * than reading as a verdict.
  */
 export function verifyAttestation(
   vault: string,
@@ -222,9 +234,10 @@ export function verifyAttestation(
   opts: VerifyAttestationOptions = {},
 ): AttestationVerification {
   const checkpoint = (): void => opts.safeguard?.checkpoint();
-  const signatureValid = verifyAttestationSignature(record, vault, {
-    ...(opts.publicPath !== undefined ? { publicPath: opts.publicPath } : {}),
-  });
+  const signatureValid =
+    opts.publicPath !== undefined
+      ? verifyAttestationSignature(record, vault, { publicPath: opts.publicPath })
+      : verifyAttestationSignature(record, vault);
   checkpoint();
 
   const shards = Object.entries(record.manifest.logHeads)
@@ -236,11 +249,12 @@ export function verifyAttestation(
   checkpoint();
 
   let storeDigestMatches = false;
+  let unexplainedDrift = true;
   try {
     const recomputeOptions: CollectAttestationManifestOptions = { safeguard: opts.safeguard };
-    storeDigestMatches =
-      attestationStoreDigest(collectAttestationManifest(vault, recomputeOptions)) ===
-      record.storeDigest;
+    const recomputed = collectAttestationManifest(vault, recomputeOptions);
+    storeDigestMatches = attestationStoreDigest(recomputed) === record.storeDigest;
+    unexplainedDrift = unexplainedManifestDrift(record.manifest, recomputed);
   } catch (err) {
     // The caller's own deadline is not a store fact: a run the safeguard
     // aborts must surface as the abort, never as a normal-looking report
@@ -248,7 +262,8 @@ export function verifyAttestation(
     if (err instanceof SafeguardAbortError) throw err;
     // A manifest that cannot be recomputed (a held log lock, an
     // unlistable ledger directory) is a store this run could not
-    // measure. "Not measured" is not "matching".
+    // measure. "Not measured" is not "matching", and no shard names it,
+    // so it reads as unexplained.
     storeDigestMatches = false;
   }
 
@@ -258,5 +273,62 @@ export function verifyAttestation(
     signatureValid,
     shards: Object.freeze(shards),
     storeDigestMatches,
+    unexplainedDrift,
   });
+}
+
+function sameFiles(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+  return a.length === b.length && a.every((name, i) => name === b[i]);
+}
+
+/**
+ * Whether the recomputed manifest differs from the attested one beyond
+ * what the shard verdicts explain. Log growth is the NORMAL case: a
+ * shard appended after signing is classified `appended`, and a shard
+ * created after signing is new growth - its file joins the log
+ * directory's inventory and its head joins `logHeads`. Everything else
+ * (the vault identity, the index stamp, any other ledger inventory, a
+ * file removed from or added to an inventoried directory without being
+ * a new log shard) is drift no verdict names.
+ */
+function unexplainedManifestDrift(
+  attested: AttestationManifest,
+  recomputed: AttestationManifest,
+): boolean {
+  if (attested.vaultIdentityId !== recomputed.vaultIdentityId) return true;
+  if (attested.indexStamp !== recomputed.indexStamp) return true;
+  const logDirKey = BRAIN_LOG_REL;
+  const newShards = Object.keys(recomputed.logHeads)
+    .filter((shard) => !(shard in attested.logHeads))
+    .toSorted();
+  // A new JSONL shard lands beside its markdown twin (the appender
+  // writes the pair), and only the JSONL half carries a chain head - so
+  // the log directory's allowed growth is both files of each new shard.
+  const newLogFiles = newShards
+    .flatMap((shard) =>
+      shard.endsWith(".jsonl") ? [shard, `${shard.slice(0, -".jsonl".length)}.md`] : [shard],
+    )
+    .toSorted();
+  for (const [dir, attestedFiles] of Object.entries(attested.ledgerInventories)) {
+    const now = recomputed.ledgerInventories[dir];
+    if (now === undefined) return true; // an inventoried directory vanished
+    if (dir === logDirKey) {
+      // Log growth: the new shards' files are the only allowed additions;
+      // a removal or any other addition is drift.
+      if (!sameFiles([...attestedFiles, ...newLogFiles].toSorted(), now)) return true;
+      continue;
+    }
+    if (!sameFiles(attestedFiles, now)) return true;
+  }
+  for (const dir of Object.keys(recomputed.ledgerInventories)) {
+    if (dir in attested.ledgerInventories) continue;
+    // A directory that gained ledger status since signing is only
+    // explained when it is the log directory filling with the new
+    // shards.
+    if (dir === logDirKey && sameFiles(newLogFiles, recomputed.ledgerInventories[dir] ?? [])) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
