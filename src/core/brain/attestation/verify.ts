@@ -1,0 +1,221 @@
+/**
+ * The attestation verification kernel (delivery trust, card t_3bdb82b0).
+ *
+ * The operator question is "did the state these surfaces stamp change
+ * since the attestation", and the answer is a REPORT, per surface:
+ *
+ *   - `intact`  - the shard's current head is still the attested head;
+ *   - `appended`- the head moved, and walking forward from the attested
+ *     head through `prev` links reaches the new head with every row
+ *     hashing to itself: the shard grew legitimately since signing;
+ *   - `diverged`- the attested head is gone, or the forward walk meets a
+ *     row whose hash does not recompute, whose `prev` does not link, or
+ *     whose links were stripped: an edit, deletion or rewrite after the
+ *     signed point;
+ *   - `missing` - the shard file is gone.
+ *
+ * ## Report-only, and forward-only, exactly like the log chain
+ *
+ * Nothing here writes, and nothing here throws - "could not verify" is
+ * never folded into "verified clean" (a store whose manifest cannot be
+ * recomputed reads as `storeDigestMatches: false`, which is the honest
+ * answer the contract's shape can carry). The walk starts AT the attested
+ * head on purpose: an attestation anchors a point in each shard's
+ * history, not the whole history, and integrity of the rows BEFORE that
+ * point is the log-chain verifier's standing question (`o2b brain log
+ * verify`), not this one.
+ *
+ * Head reads at verify time are lock-free, also like `verifyLogChain`:
+ * the COLLECTOR takes the appender's lock because a wrong head gets
+ * signed and a signature is permanent, while a verifier's misread is a
+ * report the operator re-runs - and the log directory lock is the
+ * appender's bounded-retry lock, which a report must not queue behind.
+ *
+ * ## What a legitimately advanced store reads as
+ *
+ * Appends after signing are the NORMAL case. The verdict says so per
+ * shard, and `storeDigestMatches` reports `false` because the recomputed
+ * manifest really does differ from the attested one - with the appended
+ * shards naming why. The record's own seal and signature still verify;
+ * a false store digest beside nothing but `appended` shards is a store
+ * that moved, not a store that was broken.
+ */
+
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import {
+  attestationStoreDigest,
+  collectAttestationManifest,
+  type CollectAttestationManifestOptions,
+} from "./digest.ts";
+import { verifyAttestationSignature } from "./signing.ts";
+import type { AttestationRecord } from "./record.ts";
+import { LOG_CHAIN_FIELDS, logChainHash } from "../log.ts";
+import { scanJsonlRows } from "../log-jsonl.ts";
+import { brainDirs } from "../paths.ts";
+import type { Safeguard } from "../safeguard.ts";
+import type { ProgressSink } from "../progress.ts";
+
+/** The state of one attested shard, as verification reports it. */
+export type AttestationShardState = "intact" | "appended" | "diverged" | "missing";
+
+export interface AttestationVerification {
+  readonly recordId: string;
+  readonly createdAt: string;
+  readonly signatureValid: boolean;
+  /** One verdict per ATTESTED shard, in shard-name order. */
+  readonly shards: ReadonlyArray<{
+    readonly shardId: string;
+    readonly state: AttestationShardState;
+  }>;
+  /**
+   * Whether the manifest recomputed NOW still digests to the record's
+   * `storeDigest`. False for a legitimately advanced store too - the
+   * per-shard states are what distinguish "moved" from "broken".
+   */
+  readonly storeDigestMatches: boolean;
+}
+
+export interface VerifyAttestationOptions {
+  /** Cooperative deadline guard, consulted per shard and per manifest surface. */
+  readonly safeguard?: Safeguard;
+  /**
+   * Accepted per the kernel contract. Nothing is emitted today: a
+   * `ProgressEvent` names an operation from the closed `OPERATION`
+   * vocabulary, and no attestation member exists there yet - a
+   * mislabelled operation would put an unresolvable name on every live
+   * progress stream. Wiring one member into `OPERATION` plus a
+   * `progressCounter` here is the whole change when the vocabulary
+   * opens to attestation.
+   */
+  readonly progress?: ProgressSink;
+}
+
+/** One shard row as the chain walk needs it, or null when it is not that shape. */
+interface ChainRow {
+  readonly h: string;
+  readonly prev: string | null;
+  readonly ts: string;
+  readonly kind: string;
+  readonly payload: Readonly<Record<string, string | ReadonlyArray<string>>>;
+}
+
+/** Strict projection: the exact shape `renderJsonlLine` can emit. */
+function chainRow(row: Readonly<Record<string, unknown>>): ChainRow | null {
+  const prev = row[LOG_CHAIN_FIELDS.prev];
+  if (prev !== null && typeof prev !== "string") return null;
+  const ts = row["ts"];
+  const kind = row["kind"];
+  const payload = row["payload"];
+  if (typeof ts !== "string" || typeof kind !== "string") return null;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const projected: Record<string, string | ReadonlyArray<string>> = {};
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      projected[key] = value;
+      continue;
+    }
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      projected[key] = value as string[];
+      continue;
+    }
+    return null;
+  }
+  const h = row[LOG_CHAIN_FIELDS.h];
+  if (typeof h !== "string" || h === "") return null;
+  return { h, prev, ts, kind, payload: projected };
+}
+
+/**
+ * Classify one attested shard. Never throws: an unreadable shard is
+ * damage to name (`diverged`), never a crash and never a clean bill.
+ */
+function classifyShard(
+  vault: string,
+  shardName: string,
+  attestedHead: string,
+): AttestationShardState {
+  let logDir: string;
+  try {
+    logDir = brainDirs(vault).log;
+  } catch {
+    return "missing";
+  }
+  const path = join(logDir, shardName);
+  if (!existsSync(path)) return "missing";
+  const scan = scanJsonlRows(path);
+  if (!scan.readable) return "diverged";
+
+  const rows: ChainRow[] = [];
+  let currentHead: string | null = null;
+  for (const line of scan.lines) {
+    if (line.row === null) continue;
+    const row = chainRow(line.row);
+    if (row !== null) {
+      rows.push(row);
+      currentHead = row.h;
+    }
+  }
+  if (currentHead === attestedHead) return "intact";
+
+  // Forward walk from the attested head: every row after it must hash to
+  // itself and link to its predecessor, ending exactly at the head.
+  const anchor = rows.findIndex((row) => row.h === attestedHead);
+  if (anchor < 0) return "diverged";
+  let previous = attestedHead;
+  for (let i = anchor + 1; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.prev !== previous) return "diverged";
+    if (logChainHash(row.prev, row.ts, row.kind, row.payload) !== row.h) return "diverged";
+    previous = row.h;
+  }
+  return previous === currentHead ? "appended" : "diverged";
+}
+
+/**
+ * Verify one attestation against the store as it stands now.
+ *
+ * Never throws, performs no writes, and reports every attested shard
+ * even when the signature is invalid - the operator needs the whole
+ * picture, and a signature check alone would hide how far the store
+ * moved.
+ */
+export function verifyAttestation(
+  vault: string,
+  record: AttestationRecord,
+  opts: VerifyAttestationOptions = {},
+): AttestationVerification {
+  const checkpoint = (): void => opts.safeguard?.checkpoint();
+  const signatureValid = verifyAttestationSignature(record, vault);
+  checkpoint();
+
+  const shards = Object.entries(record.manifest.logHeads)
+    .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([shardId, head]) => {
+      checkpoint();
+      return { shardId, state: classifyShard(vault, shardId, head) };
+    });
+  checkpoint();
+
+  let storeDigestMatches = false;
+  try {
+    const recomputeOptions: CollectAttestationManifestOptions = { safeguard: opts.safeguard };
+    storeDigestMatches =
+      attestationStoreDigest(collectAttestationManifest(vault, recomputeOptions)) ===
+      record.storeDigest;
+  } catch {
+    // A manifest that cannot be recomputed (a held log lock, an
+    // unlistable ledger directory) is a store this run could not
+    // measure. "Not measured" is not "matching".
+    storeDigestMatches = false;
+  }
+
+  return Object.freeze({
+    recordId: record.id,
+    createdAt: record.createdAt,
+    signatureValid,
+    shards: Object.freeze(shards),
+    storeDigestMatches,
+  });
+}
