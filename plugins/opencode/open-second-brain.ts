@@ -114,6 +114,20 @@ const PRETOOL_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
   patch: "apply_patch",
   apply_patch: "apply_patch",
 });
+
+/**
+ * opencode names MCP tools `<server>_<tool>` with a single underscore,
+ * so the Brain surfaces arrive as `open-second-brain_brain_search` and
+ * the decision cores' suffix matchers - built for the `mcp__` double
+ * underscore spellings - never fire. The relay strips the server prefix
+ * from a Brain tool name, so an orientation refresh and every
+ * brain-tool branch of the cores see the bare name.
+ */
+function translateToolName(tool: string): string {
+  const mapped = PRETOOL_TOOL_NAMES[tool.toLowerCase()] ?? tool;
+  const brainIndex = mapped.toLowerCase().indexOf("_brain_");
+  return brainIndex >= 0 ? mapped.slice(brainIndex + 1) : mapped;
+}
 const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 /** A failed render retries sooner than a successful one expires. */
 const ACTIVE_CONTEXT_NEGATIVE_TTL_MS = 30 * 1000;
@@ -554,6 +568,11 @@ function translateToolInput(toolInput: unknown): Record<string, unknown> {
   if (typeof source["filePath"] === "string" && translated["file_path"] === undefined) {
     translated["file_path"] = source["filePath"];
   }
+  // opencode's patch tool carries the diff body under its own key; the
+  // Codex apply_patch shape the backup shim parses reads `input`.
+  if (typeof source["patchText"] === "string" && translated["input"] === undefined) {
+    translated["input"] = source["patchText"];
+  }
   return translated;
 }
 
@@ -587,7 +606,7 @@ function runPretoolGate(call: {
       hook_event_name: "PreToolUse",
       ...(call.sessionId !== null ? { session_id: call.sessionId } : {}),
       hook_host: PAYLOAD_HOST_MARKER,
-      tool_name: PRETOOL_TOOL_NAMES[call.tool.toLowerCase()] ?? call.tool,
+      tool_name: translateToolName(call.tool),
       tool_input: translateToolInput(call.toolInput),
       cwd: call.cwd,
     };
@@ -641,9 +660,22 @@ function promptContextQueue(): {
       slots.set(key, current === null || current === undefined ? text : `${current}\n\n${text}`);
     },
     take(sessionId) {
-      const key = slotKey(sessionId);
+      if (sessionId !== null) {
+        const value = slots.get(sessionId) ?? null;
+        // Deleted, not nulled: the plugin instance is server-wide and
+        // the map would otherwise grow one entry per session forever.
+        slots.delete(sessionId);
+        return value;
+      }
+      // A delivery input that names no session (older hosts) may drain
+      // THE one pending slot - unambiguous while exactly one session has
+      // context queued, and silence otherwise, which keeps the
+      // cross-session guarantee intact.
+      const pending = [...slots.entries()].filter(([, value]) => value !== null);
+      if (pending.length !== 1) return null;
+      const [key] = pending[0]!;
       const value = slots.get(key) ?? null;
-      slots.set(key, null);
+      slots.delete(key);
       return value;
     },
   };

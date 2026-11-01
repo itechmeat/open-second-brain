@@ -1441,6 +1441,79 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
     },
   );
 
+  dispatchTest("a session-less delivery request drains the one pending slot", async () => {
+    // Older hosts call the transform with no session id: delivering
+    // nothing there would silently kill the lane, and delivering
+    // regardless would break the cross-session guarantee - the
+    // unambiguous middle is exactly one pending slot.
+    process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);
+    armPromptFlags();
+    const plugin = await makeV2Plugin([]);
+    try {
+      const prompt = plugin.sessionHooks.get("prompt")!;
+      prompt({ sessionID: "sess-only", prompt: "find my notes" } as never);
+      const request = { system: [{ type: "text" as const, text: "base" }] };
+      plugin.contextHook(request);
+      expect(systemTexts(request)).toContain("RECALL BLOCK");
+    } finally {
+      plugin.cleanup();
+    }
+  });
+
+  dispatchTest(
+    "a patch tool call maps the diff body onto the shape the backup shim parses",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+        "pretool-orient": JSON.stringify({
+          hookSpecificOutput: {
+            permissionDecision: "allow",
+            permissionDecisionReason: "consider brain_search first",
+          },
+        }),
+        "pretool-host-backup": null,
+      });
+      process.env["OPEN_SECOND_BRAIN_HOST_SETTINGS_BACKUP"] = "true";
+      const hooks = await makeHooks(fakeClient(MESSAGES));
+      hooks["tool.execute.before"]!(
+        { tool: "patch", sessionID: "sess-patch", callID: "c1" } as never,
+        {
+          args: { patchText: "*** Begin Patch\n*** Update File: /repo/.claude/settings.json" },
+        } as never,
+      );
+      const payload = recordedStdin("pretool-host-backup");
+      // The Codex apply_patch shape the backup shim reads its candidate
+      // paths from.
+      expect(payload["tool_input"]).toEqual({
+        patchText: "*** Begin Patch\n*** Update File: /repo/.claude/settings.json",
+        input: "*** Begin Patch\n*** Update File: /repo/.claude/settings.json",
+      });
+      // The explicit host marker outranks the shared patch-body shape:
+      // detection answers opencode, never codex.
+      expect(detectHookRuntime(payload)).toBe("opencode");
+    },
+  );
+
+  dispatchTest("a server-prefixed brain tool name reaches the cores as the bare tool", async () => {
+    process.env["OSB_HOOK_BIN"] = stubHookDispatch({
+      "pretool-orient": JSON.stringify({
+        hookSpecificOutput: {
+          permissionDecision: "allow",
+          permissionDecisionReason: "consider brain_search first",
+        },
+      }),
+    });
+    process.env["OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED"] = "true";
+    const hooks = await makeHooks(fakeClient(MESSAGES));
+    hooks["tool.execute.before"]!(
+      { tool: "open-second-brain_brain_search", sessionID: "sess-mcp", callID: "c1" } as never,
+      { args: {} } as never,
+    );
+    // The cores' brain-tool suffix matchers parse the double-underscore
+    // spellings; the relay strips the server prefix so an orientation
+    // refresh fires for the opencode lane too.
+    expect(recordedStdin("pretool-orient")["tool_name"]).toBe("brain_search");
+  });
+
   dispatchTest(
     "V1 chat.message observes the prompt and the system transform drains the queue once",
     async () => {
