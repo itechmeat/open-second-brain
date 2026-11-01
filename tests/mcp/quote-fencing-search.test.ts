@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
+import { addRecallSource } from "../../src/core/brain/portability/recall-sources.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
@@ -115,6 +116,45 @@ beforeEach(async () => {
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
+});
+
+describe("cross-vault union rows", () => {
+  test("a foreign row ships fenced even when the local vault carries a same-named page", async () => {
+    // A second vault registered as a recall source holds a page at the
+    // SAME relative path as the local operator-authored note, and its
+    // own stamps are cli too. The union row's path is a FOREIGN vault's
+    // path, so probing it against the local vault would let the local
+    // page's operator stamp vouch for text the foreign vault carried -
+    // the foreign row probes the guaranteed-absent page instead and
+    // ships fenced, while its `origin` field keeps naming its vault.
+    const foreign = mkdtempSync(join(tmpdir(), "o2b-quote-search-foreign-"));
+    try {
+      mkdirSync(join(foreign, "notes"), { recursive: true });
+      writeFileSync(
+        join(foreign, "notes", "operator.md"),
+        `---\norigin_channel: cli\ntitle: Operator\n---\n\nclean agent prose about agent.md and ${OPERATOR_WORD} in the foreign vault.\n`,
+      );
+      await indexVault(
+        resolveSearchConfig({ vault: foreign, configPath: join(configHome, "config.yaml") }),
+        {},
+      );
+      addRecallSource(join(configHome, "config.yaml"), vault, "peer", foreign);
+
+      const remote = await search(OPERATOR_WORD, TRANSPORT_REACH.remote, { global: true });
+      const foreignRow = remote.results.find((r) => r["origin"] === "source/peer");
+      expect(foreignRow).toBeDefined();
+      expect(foreignRow!["content"]).toContain(OPERATOR_WORD);
+      expect(foreignRow!["content"]).toContain(LEGACY_LABEL);
+      expect(foreignRow!["content"]).not.toContain(AGENT_LABEL);
+      // The local page at the same relative path keeps its own
+      // treatment: operator-authored, shipped plain.
+      const localRow = rowFor(remote, "notes/operator.md");
+      expect(localRow.content).toContain(OPERATOR_WORD);
+      expect(localRow.content).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("brain_search rows at remote reach", () => {

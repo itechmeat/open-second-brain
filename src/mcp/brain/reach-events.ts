@@ -92,6 +92,18 @@ export function deliveryView(
 }
 
 /**
+ * A vault-relative page no vault can carry: NUL is not a legal byte in a
+ * file name on any supported host, so the provenance probe reads a
+ * guaranteed-absent page and the shaper answers with the fail-closed
+ * fence. It is the rel for stored text whose OWN page cannot be asked -
+ * a cross-vault search row naming a foreign vault's relative path, a
+ * note contribution with no page of its own - where probing a guessed
+ * local path would let whatever happens to sit there decide the
+ * treatment.
+ */
+export const UNPROBED_DELIVERY_REL = "\u0000unprobed";
+
+/**
  * The vault-relative page whose provenance governs a delivery naming a
  * Brain artifact by id, or any vault page by relative path.
  *

@@ -19,6 +19,8 @@ import { CONTEXT_TOOLS } from "../../src/mcp/brain/context-tools.ts";
 import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_LOG_EVENT_KIND,
@@ -36,6 +38,7 @@ import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 const PRINCIPLE = "Prefer zzwholepagedoczz prose when rendering digests.";
 const FRESH_PRINCIPLE = "Prefer zzfreshdigestzz same-day evidence for the digest window.";
 const DEAD_END_APPROACH = "zzdeadendapproachzz rewriting the index on every read";
+const OBJECTION_PRINCIPLE = "zzagentobjectionzz the strongest case against this rule";
 const AGENT_LABEL = "stored text: agent-authored (origin_channel=mcp-tool)";
 const LEGACY_LABEL = "stored text: unverified provenance (no derivable stamps)";
 const FENCE_CLOSE = `</${UNTRUSTED_SOURCE_TAG}>`;
@@ -224,6 +227,72 @@ describe("osb:// resource readers", () => {
     expect(local.text).toContain(PRINCIPLE);
     expect(local.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
     expectClosedFenceSpan(remote.text, AGENT_LABEL, PRINCIPLE);
+  });
+
+  test("the objection block is shaped at the counter-signal's own page, not the preference's", () => {
+    // The one plain treatment: an operator-authored preference. Against
+    // it, an agent-authored negative counter-signal from its own page.
+    writePreference(vault, {
+      slug: "cliobjection",
+      topic: "cliobjection",
+      principle: PRINCIPLE,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: BRAIN_CONFIDENCE.high,
+      confidence_value: 0.8,
+    });
+    stamp("Brain/preferences/pref-cliobjection.md", "origin_channel: cli\n");
+    writeSignal(vault, {
+      topic: "cliobjection",
+      signal: "negative",
+      agent: "agent-b",
+      principle: OBJECTION_PRINCIPLE,
+      created_at: "2026-05-04T00:00:00Z",
+      date: "2026-05-04",
+      slug: "cliobjection-negative",
+    });
+
+    const local = readResource(resourceCtx(TRANSPORT_REACH.local), "osb://topic/cliobjection");
+    expect(local.text).toContain(OBJECTION_PRINCIPLE);
+    expect(local.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
+
+    const remote = readResource(resourceCtx(TRANSPORT_REACH.remote), "osb://topic/cliobjection");
+    // The cli-authored body ships plain: no fence names it.
+    expect(remote.text).toContain("Current preference");
+    expect(remote.text).not.toContain(AGENT_LABEL);
+    // The agent-authored objection never rides the preference page's
+    // treatment: it arrives inside its own closed fence naming the
+    // signal page's derived provenance, and no raw copy ships outside.
+    const objectionLine =
+      "- A recorded counter-signal (`sig-2026-05-04-cliobjection-negative`) argues " +
+      `against this: "${OBJECTION_PRINCIPLE}". Treat the preference as contested.`;
+    expectClosedFenceSpan(remote.text, LEGACY_LABEL, objectionLine);
+  });
+
+  test("a withheld backlinks target answers exactly like an absent one", () => {
+    // The target exists and is stamped, but the remote caller may not
+    // read it: the empty-document answer must carry the same unverified
+    // label an absent target gets, or the fence's origin attribute
+    // discloses that the page exists and what stamps it.
+    stamp("Brain/preferences/pref-agented.md", `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n`);
+    const absent = readResource(resourceCtx(TRANSPORT_REACH.remote), "osb://backlinks/pref-legacy");
+    const withheld = readResource(
+      resourceCtx(TRANSPORT_REACH.remote),
+      "osb://backlinks/pref-agented",
+    );
+    // Same label, same empty shape (the echoed target is the caller's
+    // own argument, not an answer about the page).
+    expect(withheld.text).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`);
+    expect(withheld.text).toContain("_No inbound references found._");
+    expect(withheld.text).not.toContain(AGENT_LABEL);
+    expect(absent.text).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`);
+    expect(absent.text.replace("pref-legacy", "pref-agented")).toBe(withheld.text);
   });
 
   test("osb://backlinks/{id} fences at remote; the status and log readers stay raw", () => {

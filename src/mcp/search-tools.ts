@@ -52,7 +52,8 @@ import {
   retrievalTrailEnvelope,
 } from "../core/search/retrieval-trail.ts";
 import { corpusVerdictAtReach, probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
-import { deliveryView } from "./brain/reach-events.ts";
+import { deliveryView, UNPROBED_DELIVERY_REL } from "./brain/reach-events.ts";
+import { LOCAL_ORIGIN } from "../core/brain/portability/origins.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolErrorCode } from "./tool-error-codes.ts";
 import { contextReach } from "./tool-contract.ts";
@@ -754,6 +755,21 @@ function storedTextDelivery(ctx: ServerContext): { shape(text: string, rel: stri
 }
 
 /**
+ * The rel a search row's body is probed at. A cross-vault union row
+ * names a FOREIGN vault's page by relative path; probing it against the
+ * local vault would let whatever happens to sit at that relative path
+ * here - an operator-authored note with the same name - decide the
+ * treatment of text it never carried. A foreign row therefore probes
+ * the guaranteed-absent page and ships fenced, while the row's own
+ * `origin` field keeps naming the vault it came from.
+ */
+function rowDeliveryRel(row: { path: string; origin?: string }, globalSearch: boolean): string {
+  return globalSearch && row.origin !== undefined && row.origin !== LOCAL_ORIGIN
+    ? UNPROBED_DELIVERY_REL
+    : row.path;
+}
+
+/**
  * The `content` window for one MCP result: at most `max` characters
  * INCLUDING its continuation markers, centred on the first significant
  * query term the chunk contains (task E).
@@ -1123,7 +1139,10 @@ async function toolBrainSearch(
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
       title: r.title,
-      content: delivery.shape(windowContent(r.content, query, MCP_CONTENT_MAX), r.path),
+      content: delivery.shape(
+        windowContent(r.content, query, MCP_CONTENT_MAX),
+        rowDeliveryRel(r, globalSearch),
+      ),
       score: r.score,
       startLine: r.startLine,
       endLine: r.endLine,
@@ -1147,7 +1166,7 @@ async function toolBrainSearch(
       ? {
           cards: outcome.cards.map((c) => {
             const card = serializeSearchCard(c);
-            return { ...card, snippet: delivery.shape(c.snippet, c.path) };
+            return { ...card, snippet: delivery.shape(c.snippet, rowDeliveryRel(c, globalSearch)) };
           }),
         }
       : {}),

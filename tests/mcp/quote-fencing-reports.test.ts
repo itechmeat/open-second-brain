@@ -13,12 +13,20 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { QUERY_TOOLS } from "../../src/mcp/brain/query-tools.ts";
 import { DECISIONS_TOOLS } from "../../src/mcp/brain/decisions-tools.ts";
+import { KNOWLEDGE_TOOLS } from "../../src/mcp/brain/knowledge-tools.ts";
 import { recordDecision } from "../../src/core/brain/decisions/record.ts";
 import { deliveryView } from "../../src/mcp/brain/reach-events.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -58,6 +66,15 @@ async function call(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const tool = QUERY_TOOLS.find((t) => t.name === name)!;
+  return (await tool.handler(ctxFor(reach), args)) as Record<string, unknown>;
+}
+
+/** The brain_claims tool answers through the same handler shape. */
+async function callKnowledge(
+  reach: TransportReach,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const tool = KNOWLEDGE_TOOLS.find((t) => t.name === "brain_claims")!;
   return (await tool.handler(ctxFor(reach), args)) as Record<string, unknown>;
 }
 
@@ -149,6 +166,31 @@ beforeEach(() => {
     slug: "agented-signal",
     raw: RAW_BODY,
   });
+
+  // One more unstamped preference whose body mentions the agented id
+  // unlinked, so brain_unlinked_mentions has a source row whose context
+  // line is this page's own prose.
+  writePreference(vault, {
+    slug: "mentioning",
+    topic: "mentioning",
+    principle: "Cross-reference pref-agented in plain prose for the mention scanner.",
+    created_at: "2026-05-01T00:00:00Z",
+    unconfirmed_until: "2026-05-08T00:00:00Z",
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+    evidenced_by: [],
+    confirmed_at: "2026-05-02T00:00:00Z",
+    applied_count: 1,
+    violated_count: 0,
+    last_evidence_at: "2026-05-02T00:00:00Z",
+    confidence: BRAIN_CONFIDENCE.high,
+    confidence_value: 0.8,
+  });
+  // The scanner walks page BODIES (frontmatter stripped), so the
+  // mention rides the body, not the frontmatter principle.
+  appendFileSync(
+    join(vault, "Brain/preferences/pref-mentioning.md"),
+    "\nCross-reference pref-agented in plain prose for the mention scanner.\n",
+  );
 
   // One note page plus the note-write event that names it, for the
   // agent contribution rows.
@@ -557,5 +599,42 @@ describe("brain_decision page text at remote reach", () => {
       id: openId,
     })) as Record<string, unknown>;
     expect(after["discard_reason"]).toBe(fenceFor(LEGACY_LABEL, REASON));
+  });
+});
+
+describe("sibling report surfaces through the same binding", () => {
+  test("brain_claims shapes the claim principle at remote reach", async () => {
+    const local = await callKnowledge(TRANSPORT_REACH.local, { operation: "current" });
+    const remote = await callKnowledge(TRANSPORT_REACH.remote, { operation: "current" });
+    const localRows = local["claims"] as ReadonlyArray<Record<string, unknown>>;
+    const remoteRows = remote["claims"] as ReadonlyArray<Record<string, unknown>>;
+    // The legacy preference's claim row is the stored text this suite
+    // already fences inside brain_query's preference payloads.
+    const localLegacy = localRows.find((r) => r["id"] === "pref-legacy");
+    const remoteLegacy = remoteRows.find((r) => r["id"] === "pref-legacy");
+    expect(localLegacy).toBeDefined();
+    expect(remoteLegacy).toBeDefined();
+    expect(localLegacy!["principle"]).toBe(PREF_PRINCIPLE);
+    expect(remoteLegacy!["principle"]).toBe(fenceFor(LEGACY_LABEL, PREF_PRINCIPLE));
+  });
+
+  test("brain_unlinked_mentions shapes the source page's prose line at remote reach", async () => {
+    const local = await call("brain_unlinked_mentions", TRANSPORT_REACH.local, {
+      id: "pref-agented",
+    });
+    const remote = await call("brain_unlinked_mentions", TRANSPORT_REACH.remote, {
+      id: "pref-agented",
+    });
+    const localMentions = local["mentions"] as ReadonlyArray<Record<string, unknown>>;
+    const remoteMentions = remote["mentions"] as ReadonlyArray<Record<string, unknown>>;
+    expect(localMentions.length).toBeGreaterThan(0);
+    expect(localMentions.length).toBe(remoteMentions.length);
+    // The mention's context is the mentioning page's own prose - an
+    // unstamped preference - so the remote delivery fences it naming
+    // that page's derived provenance.
+    expect(localMentions[0]!["context"]).toContain("pref-agented");
+    expect(remoteMentions[0]!["context"]).toBe(
+      fenceFor(LEGACY_LABEL, localMentions[0]!["context"] as string),
+    );
   });
 });

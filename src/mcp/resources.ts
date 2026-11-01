@@ -96,7 +96,12 @@ import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
 import { parseLogDayFile, renderLogEntryBlock, type ParseLogDayResult } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
-import { deliveryRelForBrainArtifact, deliveryView } from "./brain/reach-events.ts";
+import {
+  deliveryRelForBrainArtifact,
+  deliveryView,
+  signalDeliveryRel,
+  UNPROBED_DELIVERY_REL,
+} from "./brain/reach-events.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 export interface ResourceContext {
@@ -582,20 +587,32 @@ function readTopic(
     signals: view.refs.keep(result.signals, (s) => [s.id]),
     all_log_events: logEntriesAtReach(view.refs, result.all_log_events),
   });
-  return {
-    uri,
-    mimeType: MIME_MARKDOWN,
-    // The synthesis quotes the governing rule's principle (delivery-trust,
-    // lane A): the fence names that page's derived provenance. A topic
-    // with no current rule probes the page that would hold it - the
-    // absent-page probe, which is the fail-closed answer.
-    text: deliveryFor(ctx, view).shape(
-      renderTopicMarkdown(rawSlug, scoped),
-      result.preference
-        ? deliveryRelForBrainArtifact(ctx.vault, result.preference.id)
-        : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`,
-    ),
-  };
+  // The synthesis is composed from spans shaped at the page each span
+  // quotes (delivery-trust, lane A): the body under the governing
+  // preference page's provenance - a topic with no current rule probes
+  // the page that would hold it, the absent-page fail-closed answer -
+  // and the objection block under the page ITS text quotes, because the
+  // strongest objection may quote an agent-authored counter-signal
+  // whose page is not the page that decided the body's treatment.
+  const delivery = deliveryFor(ctx, view);
+  const preferenceRel = result.preference
+    ? deliveryRelForBrainArtifact(ctx.vault, result.preference.id)
+    : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`;
+  const objection = topicObjectionSection(ctx.vault, scoped);
+  let text: string;
+  if (objection === null) {
+    text = delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel);
+  } else if (objection.rel === null) {
+    // The block quotes the governing preference itself (or no page at
+    // all): one document, one probe.
+    text = delivery.shape(
+      `${renderTopicMarkdown(rawSlug, scoped)}\n${objection.text}`,
+      preferenceRel,
+    );
+  } else {
+    text = `${delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel)}\n${delivery.shape(objection.text, objection.rel)}`;
+  }
+  return { uri, mimeType: MIME_MARKDOWN, text };
 }
 
 function readLog(
@@ -684,7 +701,8 @@ function readBacklinks(
   // Every spelling the target answers to across its retirement: a
   // retired reserved record is otherwise asked as `pref-x`, which names
   // no page once `ret-x` is the one on disk.
-  const refs = view.refs.row(...recordRefs(target))
+  const targetVisible = view.refs.row(...recordRefs(target));
+  const refs = targetVisible
     ? (index.get(target) ?? []).filter((ref) => view.refs.visible(ref.source))
     : [];
   return {
@@ -692,10 +710,14 @@ function readBacklinks(
     mimeType: MIME_MARKDOWN,
     // The rendered document is derived from stored pages (delivery-trust,
     // lane A): fenced at remote reach, named for the TARGET page's own
-    // derived provenance; local keeps the bytes.
+    // derived provenance; local keeps the bytes. A withheld target probes
+    // the guaranteed-absent page instead: reading a hidden target's real
+    // stamps would name its existence and its channel through the fence's
+    // origin label, while an absent one reads as unverified - the two
+    // answers must stay identical.
     text: deliveryFor(ctx, view).shape(
       renderBacklinksMarkdown(target, refs),
-      deliveryRelForBrainArtifact(ctx.vault, target),
+      targetVisible ? deliveryRelForBrainArtifact(ctx.vault, target) : UNPROBED_DELIVERY_REL,
     ),
   };
 }
@@ -842,15 +864,6 @@ function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopi
     }
     lines.push("");
   }
-  // Steelman: always surface the single best-formed objection to the
-  // topic's implicit conclusion (the current preference) so a reader
-  // confronts the strongest dissent before acting. Deterministic
-  // selection — no generated prose — kept consistent with the
-  // deep-synthesis dossier.
-  lines.push("## Strongest objection");
-  lines.push("");
-  lines.push(`- ${buildTopicObjection(result)}`);
-  lines.push("");
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n") + "\n";
 }
@@ -862,16 +875,44 @@ function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopi
  * unconfirmed rule still in its trial window. Returns a "no standing
  * objection" line when none applies.
  */
-function buildTopicObjection(result: ReturnType<typeof queryByTopic>): string {
+/**
+ * The rendered "Strongest objection" section, and the page whose
+ * provenance governs it: null rel when the block quotes the governing
+ * preference itself (retired, quarantined, unconfirmed) or no page at
+ * all, so the document's own probe covers it; the counter-signal's own
+ * page when the block quotes a negative signal's principle - agent-
+ * authored text from a DIFFERENT page than the preference that decided
+ * the document's treatment, which brain_query's signal payloads shape
+ * at the same page.
+ */
+function topicObjectionSection(
+  vault: string,
+  result: ReturnType<typeof queryByTopic>,
+): { readonly text: string; readonly rel: string | null } {
+  const sentence = buildTopicObjection(vault, result);
+  const text = `## Strongest objection\n\n- ${sentence.sentence}`;
+  return { text, rel: sentence.rel };
+}
+
+function buildTopicObjection(
+  vault: string,
+  result: ReturnType<typeof queryByTopic>,
+): { readonly sentence: string; readonly rel: string | null } {
   const pref = result.preference;
   if (pref && pref.id.startsWith("ret-")) {
     const r = pref as BrainRetired;
-    return `This rule was already retired (\`${r.retired_reason}\`); adopting "${r.principle}" again would repeat a judgment the Brain has discarded.`;
+    return {
+      sentence: `This rule was already retired (\`${r.retired_reason}\`); adopting "${r.principle}" again would repeat a judgment the Brain has discarded.`,
+      rel: null,
+    };
   }
   if (pref) {
     const p = pref as BrainPreference;
     if (p.status === "quarantine") {
-      return `The rule "${p.principle}" is on probation — recent evidence has been dominantly negative, and a single further violation retires it.`;
+      return {
+        sentence: `The rule "${p.principle}" is on probation — recent evidence has been dominantly negative, and a single further violation retires it.`,
+        rel: null,
+      };
     }
   }
   const negatives = result.signals
@@ -879,13 +920,23 @@ function buildTopicObjection(result: ReturnType<typeof queryByTopic>): string {
     .toSorted((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   if (negatives.length > 0) {
     const n = negatives[0]!;
-    return `A recorded counter-signal (\`${n.id}\`) argues against this: "${n.principle}". Treat the preference as contested.`;
+    return {
+      sentence: `A recorded counter-signal (\`${n.id}\`) argues against this: "${n.principle}". Treat the preference as contested.`,
+      rel: signalDeliveryRel(vault, n.id),
+    };
   }
   if (pref) {
     const p = pref as BrainPreference;
     if (p.status === "unconfirmed") {
-      return `The rule "${p.principle}" is unconfirmed — it has not yet earned applied evidence and may not survive its trial window (until ${p.unconfirmed_until.slice(0, 10)}).`;
+      return {
+        sentence: `The rule "${p.principle}" is unconfirmed — it has not yet earned applied evidence and may not survive its trial window (until ${p.unconfirmed_until.slice(0, 10)}).`,
+        rel: null,
+      };
     }
   }
-  return "No standing objection: the current preference is confirmed and faces no recorded counter-signal.";
+  return {
+    sentence:
+      "No standing objection: the current preference is confirmed and faces no recorded counter-signal.",
+    rel: null,
+  };
 }

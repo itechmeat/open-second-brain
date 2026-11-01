@@ -521,7 +521,12 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // the scoped rules are the operator's own voice delivered local-only,
   // and the pinned scratchpad shapes through the same binding beside
   // this assembly, so neither slips past the fence the body carries.
-  content = delivery.shape(content, `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`);
+  // An unfetchable body has nothing to fence: the pinned scratchpad's
+  // shaper skips empty bodies, and the main body answers the same way
+  // instead of wrapping an empty block in the fence.
+  if (content.length > 0) {
+    content = delivery.shape(content, `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`);
+  }
   content = prependBlock(standing.text, prependBlock(scoped?.text ?? "", content));
   content = appendPinnedToContextContent(content, shapedPinnedContent(ctx, pinned, delivery));
 

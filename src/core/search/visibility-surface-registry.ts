@@ -207,7 +207,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "and Brain/retired itself, so the MCP handler passes reachView alongside the owner scope: " +
       "a reserved SOURCE is skipped before its body is read, and a reserved TARGET answers with " +
       "no mentions - the reply an absent target gets - because each mention's `term` is the " +
-      "target's title or alias.",
+      "target's title or alias. Each mention's `context` is one line of the source page's own " +
+      "prose, so it shapes through the request's delivery binding at the page the source id was " +
+      "parsed from.",
   },
   {
     surface: "brain_sources",
@@ -369,7 +371,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "artifact's id, vault-relative path, topic and full principle text; every row-returning " +
       "operation and the rebuild count keep a row only when it passes gatedOwnerScopeView and, " +
       "at the caller's reach, reachView over its page, its id under the pref- and ret- " +
-      "spellings, and the records that superseded or contest it.",
+      "spellings, and the records that superseded or contest it. The principle is the record's " +
+      "own stored text, so it shapes through the request's delivery binding at the claim's own " +
+      "page - the same text brain_query fences inside the preference payloads.",
   },
   {
     surface: "brain_truth",

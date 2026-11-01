@@ -76,7 +76,12 @@ import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-re
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../../core/brain/path-constants.ts";
 import type { AgentSourceContribution } from "../../core/brain/agent-source/types.ts";
-import { deliveryView, signalDeliveryRel } from "./reach-events.ts";
+import {
+  deliveryRelForBrainArtifact,
+  deliveryView,
+  signalDeliveryRel,
+  UNPROBED_DELIVERY_REL,
+} from "./reach-events.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
@@ -102,11 +107,15 @@ function preferenceDeliveryRel(p: BrainPreference | BrainRetired): string {
  * which the delivery-shaping boundary deliberately leaves untouched.
  * The signal walk is {@link signalDeliveryRel}, shared with the
  * artifact-id mapping in reach-events.ts so the two faces cannot drift.
+ * A note with no page of its own probes the guaranteed-absent page -
+ * null means "leave untouched" for log rows only, because a fenced
+ * delivery is the fail-closed answer for note text whose provenance
+ * nothing can name.
  */
 function contributionDeliveryRel(vault: string, c: AgentSourceContribution): string | null {
   switch (c.kind) {
     case "note":
-      return c.path ?? null;
+      return c.path ?? UNPROBED_DELIVERY_REL;
     case "preference":
       return c.id.startsWith("ret-")
         ? `${BRAIN_RETIRED_REL}/${c.id}.md`
@@ -975,6 +984,12 @@ async function toolBrainUnlinkedMentions(
     reachView: reachView(ctx.vault, contextReach(ctx)),
   });
   const page = pageSlice(mentions, offset, pageSize);
+  // Each mention's `context` is one line of the source page's own prose
+  // (delivery-trust, lane A): shaped through the request's delivery
+  // binding at the page the source id was parsed from, the same pages
+  // whose bodies every wired surface fences. Local reach keeps the
+  // bytes.
+  const delivery = deliveryView(ctx);
   return {
     vault_path: vaultPathField(ctx),
     target_id: targetId,
@@ -983,7 +998,7 @@ async function toolBrainUnlinkedMentions(
       source: m.source,
       line: m.line,
       term: m.term,
-      context: m.contextSnippet,
+      context: delivery.shape(m.contextSnippet, deliveryRelForBrainArtifact(ctx.vault, m.source)),
     })),
     next_cursor: page.next_cursor,
   };
