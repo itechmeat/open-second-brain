@@ -50,6 +50,9 @@ import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
 import { formatPrimaryAgentYamlValue } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
+import { ORIGIN_CHANNEL, ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
+import { formatFrontmatter, parseFrontmatter } from "../vault.ts";
+import type { FrontmatterMap } from "../types.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
 
@@ -273,7 +276,44 @@ export function copyStarterBundle(
           (new Date(`${today}T00:00:00Z`).getTime() - new Date(`${anchor}T00:00:00Z`).getTime()) /
             DAY_MS,
         );
-  return Object.freeze({ copied: ageStarterCopy(vault, copied, days) });
+  const placed = ageStarterCopy(vault, copied, days);
+  stampStarterCopy(vault, placed);
+  return Object.freeze({ copied: placed });
+}
+
+/**
+ * Stamp every dropped page with the channel that dropped it.
+ *
+ * The bootstrap is an `o2b` CLI run, so `origin_channel: cli` is the
+ * true authorship statement for the bundle: operator-seed content the
+ * run itself vouches for, delivered plain at every reach. Without the
+ * stamp the delivery-provenance doctor check would name all eighteen
+ * pages on every fresh vault's first pass - the warn-on-every-vault-
+ * forever outcome the check's system-rendered exclusions exist to
+ * prevent, recreated through the seed path. A page that already carries
+ * a channel (a custom bundle stamped by its author) keeps it, and a
+ * bundle page without frontmatter at all is left byte-identical.
+ */
+function stampStarterCopy(vault: string, placed: ReadonlyArray<string>): void {
+  for (const rel of placed) {
+    if (!rel.endsWith(".md")) continue;
+    const abs = join(vault, rel);
+    let metadata: FrontmatterMap;
+    let body: string;
+    try {
+      [metadata, body] = parseFrontmatter(abs);
+    } catch {
+      continue;
+    }
+    const keys = Object.keys(metadata);
+    if (keys.length === 0 || keys.includes(ORIGIN_CHANNEL_FIELD)) continue;
+    // The stamp rides first, which is where a tier-merging rewrite
+    // re-emits a user-tier field it preserves - so the dropped bytes
+    // are exactly what the next dream pass's no-op pre-flight renders,
+    // and the fresh vault's first pass stays a no-op.
+    const stamped: FrontmatterMap = { [ORIGIN_CHANNEL_FIELD]: ORIGIN_CHANNEL.cli, ...metadata };
+    atomicWriteFileSync(abs, formatFrontmatter(stamped, body));
+  }
 }
 
 export interface BootstrapBrainOptions {

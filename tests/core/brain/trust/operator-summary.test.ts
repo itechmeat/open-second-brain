@@ -53,7 +53,16 @@ describe("buildOperatorSummary - structural envelope", () => {
   });
 
   test("instruction-file warning surfaces in envelope; verdict stays clean (informational)", () => {
-    writeFileSync(join(vault, "CLAUDE.md"), "line\n".repeat(300));
+    // The fixture's instruction file is operator-authored, so it carries
+    // the `cli` stamp - the page-origin vocabulary's one operator-authored
+    // answer. Unstamped, the delivery-provenance doctor check would fire
+    // on it and the trust verdict would read `watch` for a reason this
+    // test is not about: here only the instruction-file ceiling is under
+    // test, and that warning is informational by contract.
+    writeFileSync(
+      join(vault, "CLAUDE.md"),
+      "---\norigin_channel: cli\n---\n" + "line\n".repeat(300),
+    );
     const r = buildOperatorSummary(vault, {
       dreamSummary: emptyDream(),
       guardrails: {
