@@ -38,7 +38,15 @@ export function scanTriggers(vault: string, opts: ScanTriggersOptions): ScanTrig
   const candidates: InsightCandidate[] = [];
   try {
     const readable = opts.readable;
-    const doctor = runDoctor(vault, readable !== undefined ? { readable } : {});
+    // The caller's clock rides through to every source: the doctor's
+    // age-based checks (stale claims) judged the scan against the wall
+    // clock while the retention and collision sources used `opts.now`,
+    // so an injected `now` was only half-honoured and a scan pinned for
+    // determinism still moved with the calendar.
+    const doctor = runDoctor(vault, {
+      now: opts.now,
+      ...(readable !== undefined ? { readable } : {}),
+    });
     if (doctor.semantic_health !== undefined) {
       candidates.push(...candidatesFromHealth(doctor.semantic_health));
     }
