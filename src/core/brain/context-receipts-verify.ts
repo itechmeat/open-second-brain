@@ -21,19 +21,20 @@
  *
  * ## The projection
  *
- * The recorded hash covers the delivered text, not the file: the body
- * after frontmatter strip, after the context guard, after the
- * `applyCharBudget` cut when the item was delivered trimmed. The receipt
- * records what the re-derivation needs - `trimmed: true` and
- * `budget.max_chars_per_memory` - so the kernel re-applies exactly that
- * cut; without it, every trimmed item would silently false-CHANGED. Two
- * limits are stated rather than hidden: a receipt emitted while the
- * `untrusted_source_delimiting` guardrail was enabled recorded wrapped
- * text the recorded payload cannot describe, so those items report
- * CHANGED (the honest reading of bytes the projection cannot reproduce);
- * and the guard's default blocklist mode is re-run over the page's
- * current frontmatter, which is the faithful reproduction for receipts
- * the pack builders write.
+ * The recorded hash covers the delivered text, not the file: for a
+ * `context_pack` item, the body after frontmatter strip, after the
+ * context guard, after the `applyCharBudget` cut when the item was
+ * delivered trimmed; for a `pre_compress` item, the raw file the
+ * pre-compress writer guarded (no frontmatter strip, no metadata, no
+ * trust). The receipt records what the re-derivation needs - `trimmed:
+ * true` and `budget.max_chars_per_memory` - so the kernel re-applies
+ * exactly that cut; without it, every trimmed item would silently
+ * false-CHANGED. The projection facts the receipt does not record (the
+ * cut mode, the delimit guardrail) are re-derived from the vault's
+ * current config - the same sources the pack builders read at emit time
+ * - and a changed item whose verdict rode on a config-derived fact names
+ * that sourcing in its note instead of pretending precision: a config
+ * change since emit reads as changed, and the note says why.
  *
  * ## One hash, one resolution rule, never a throw
  *
@@ -53,15 +54,16 @@
  * of scope by construction, and the result says so instead of pretending.
  */
 
-import { existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
-import { ensureInsideVault } from "../path-safety.ts";
+import { canonicalNotePath, ensureInsideVault } from "../path-safety.ts";
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { isContextReceiptTrigger, type ContextReceiptTrigger } from "./context-receipt-trigger.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import { loadBrainConfig, loadGuardrailsConfigSafe } from "./policy.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { guardBrainContextSnippet } from "./safety/context-guard.ts";
 
@@ -93,6 +95,47 @@ export const RECEIPT_VERIFY_UNAVAILABLE_REASON = Object.freeze({
 export type ReceiptVerifyUnavailableReason =
   (typeof RECEIPT_VERIFY_UNAVAILABLE_REASON)[keyof typeof RECEIPT_VERIFY_UNAVAILABLE_REASON];
 
+/**
+ * The membership lists, exported so the verdict-vocabulary census trio is
+ * complete (values + members + guard) and a refusal can name the
+ * vocabulary instead of restating it - the same rule
+ * `DELIVERY_TREATMENTS` follows.
+ */
+export const RECEIPT_VERIFY_VERDICTS: ReadonlyArray<ReceiptVerifyVerdict> = Object.freeze(
+  Object.values(RECEIPT_VERIFY_VERDICT) as ReceiptVerifyVerdict[],
+);
+
+export const RECEIPT_VERIFY_UNAVAILABLE_REASONS: ReadonlyArray<ReceiptVerifyUnavailableReason> =
+  Object.freeze(
+    Object.values(RECEIPT_VERIFY_UNAVAILABLE_REASON) as ReceiptVerifyUnavailableReason[],
+  );
+
+/** Takes `unknown`: a verdict can arrive from a persisted or wire payload. */
+export function isReceiptVerifyVerdict(value: unknown): value is ReceiptVerifyVerdict {
+  return (
+    typeof value === "string" && (RECEIPT_VERIFY_VERDICTS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** Takes `unknown`: an unavailable reason can arrive from a wire payload. */
+export function isReceiptVerifyUnavailableReason(
+  value: unknown,
+): value is ReceiptVerifyUnavailableReason {
+  return (
+    typeof value === "string" &&
+    (RECEIPT_VERIFY_UNAVAILABLE_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
+ * The header marker for a receipt whose trigger is not a member of the
+ * closed `ContextReceiptTrigger` vocabulary. The header never asserts a
+ * trigger the receipt did not carry: `trigger` names the gap and
+ * `triggerRaw` carries the receipt's own string value beside it, instead
+ * of the old fallback literal claiming `context_pack`.
+ */
+export const RECEIPT_TRIGGER_UNKNOWN = "unknown";
+
 /** One receipt item's verification outcome. */
 export interface ReceiptItemVerification {
   readonly id: string;
@@ -115,7 +158,18 @@ export interface ReceiptItemVerification {
 export interface ReceiptVerification {
   readonly receiptId: string;
   readonly createdAt: string;
-  readonly trigger: ContextReceiptTrigger;
+  /**
+   * The closed-vocabulary trigger the projection ran under, or the
+   * unknown marker when the receipt's own trigger is not a member - the
+   * header never asserts a trigger the receipt did not carry.
+   */
+  readonly trigger: ContextReceiptTrigger | typeof RECEIPT_TRIGGER_UNKNOWN;
+  /**
+   * The receipt's own trigger value when it was not a vocabulary member
+   * (string raws only; a non-string raw has no honest value to carry and
+   * reads as null beside the marker).
+   */
+  readonly triggerRaw: string | null;
   readonly sessionInjected: boolean;
   readonly items: ReadonlyArray<ReceiptItemVerification>;
   readonly counts: { match: number; changed: number; unavailable: number };
@@ -144,17 +198,34 @@ export function verifyContextReceipt(
 ): ReceiptVerification {
   const payload = receipt.payload;
   const rawTrigger = payload["trigger"];
-  const trigger: ContextReceiptTrigger = isContextReceiptTrigger(rawTrigger)
+  const triggerKnown = isContextReceiptTrigger(rawTrigger);
+  const trigger: ContextReceiptTrigger | typeof RECEIPT_TRIGGER_UNKNOWN = triggerKnown
     ? rawTrigger
-    : "context_pack";
+    : RECEIPT_TRIGGER_UNKNOWN;
   // An unreadable trigger means the delivery-time projection cannot be
   // chosen, so nothing on the receipt is verifiable; the per-item notes
-  // carry that, and the counts stay honest.
-  const triggerUnreadable = !isContextReceiptTrigger(rawTrigger);
-  const sessionInjected = trigger === "session_inject";
+  // carry that, and the counts stay honest. The header answers with the
+  // unknown marker and the raw value, never a vocabulary member the
+  // receipt did not carry.
+  const triggerUnreadable = !triggerKnown;
+  const sessionInjected = triggerKnown && rawTrigger === "session_inject";
   const maxCharsPerMemory = budgetMaxCharsPerMemory(payload["budget"]);
+  // The delivery-time projection facts the receipt does not record are
+  // re-derived from the vault's current config - the same sources the
+  // pack builders read at emit time - and a changed item names that
+  // sourcing instead of pretending precision (see verifyItem).
+  const degradation = resolveDegradation(vault, payload["budget"]);
+  const delimitUntrusted = resolveDelimitUntrusted(vault);
   const items = readReceiptItems(payload).map((item) =>
-    verifyItem(vault, item, { trigger, triggerUnreadable, sessionInjected, maxCharsPerMemory }),
+    verifyItem(vault, item, {
+      trigger,
+      triggerUnreadable,
+      sessionInjected,
+      maxCharsPerMemory,
+      degradation: degradation.mode,
+      degradationFromConfig: degradation.fromConfig,
+      delimitUntrusted,
+    }),
   );
   const counts = { match: 0, changed: 0, unavailable: 0 };
   for (const item of items) counts[item.verdict] += 1;
@@ -162,6 +233,8 @@ export function verifyContextReceipt(
     receiptId: receipt.id,
     createdAt: receipt.createdAt,
     trigger,
+    triggerRaw:
+      !triggerKnown && typeof rawTrigger === "string" && rawTrigger.length > 0 ? rawTrigger : null,
     sessionInjected,
     items: Object.freeze(items),
     counts: Object.freeze(counts),
@@ -194,10 +267,16 @@ function readReceiptItems(
 
 /** Everything {@link verifyItem} needs beside the item itself. */
 interface VerifyEnvironment {
-  readonly trigger: ContextReceiptTrigger;
+  readonly trigger: ContextReceiptTrigger | typeof RECEIPT_TRIGGER_UNKNOWN;
   readonly triggerUnreadable: boolean;
   readonly sessionInjected: boolean;
   readonly maxCharsPerMemory: number | null;
+  /** The cut mode the re-applied budget uses; undefined is the default hard cut. */
+  readonly degradation: "staged" | undefined;
+  /** True when the cut mode had to be re-derived from the vault's current config. */
+  readonly degradationFromConfig: boolean;
+  /** The writer's delimit guardrail, re-derived from the vault's current config. */
+  readonly delimitUntrusted: boolean;
 }
 
 function verifyItem(
@@ -265,8 +344,22 @@ function verifyItem(
     );
   }
 
-  const [meta, body, notices] = parseFrontmatterWithNotices(absolute);
-  if (notices.some((notice) => notice.code === DEGRADATION_CODE.frontmatterUnreadable)) {
+  let raw: string;
+  let meta: Readonly<Record<string, unknown>>;
+  let body: string;
+  try {
+    raw = readFileSync(absolute, "utf8");
+    const parsed = parseFrontmatterWithNotices(absolute);
+    meta = parsed[0];
+    body = parsed[1];
+    if (parsed[2].some((notice) => notice.code === DEGRADATION_CODE.frontmatterUnreadable)) {
+      return unavailable(
+        item,
+        RECEIPT_VERIFY_UNAVAILABLE_REASON.unreadable,
+        "the page could not be read",
+      );
+    }
+  } catch {
     return unavailable(
       item,
       RECEIPT_VERIFY_UNAVAILABLE_REASON.unreadable,
@@ -274,7 +367,10 @@ function verifyItem(
     );
   }
 
-  const projected = projectDeliveredText(item, body, meta, env.maxCharsPerMemory);
+  const projected =
+    env.trigger === "pre_compress"
+      ? projectPreCompressText(item, absolute, raw.trim(), env)
+      : projectContextPackText(vault, item, absolute, body, meta, env);
   const observedHash = sha256Hex(projected);
   const changed = observedHash !== item.expectedHash;
   return Object.freeze({
@@ -284,42 +380,137 @@ function verifyItem(
     expectedHash: item.expectedHash,
     observedHash,
     unavailableReason: null,
-    // A trimmed item whose receipt lost its budget block cannot have the
-    // cut re-applied; the comparison still runs over the uncut body, and
-    // a CHANGED there says exactly that instead of pretending precision.
-    note:
-      changed && item.trimmed && env.maxCharsPerMemory === null
-        ? "the item is marked trimmed but the receipt records no " +
-          "max_chars_per_memory, so the recorded cut cannot be re-applied"
-        : null,
+    // A verdict that could not be derived the plain way says exactly what
+    // stood in the way instead of pretending precision: a trimmed item
+    // whose receipt lost its budget block, and the projection facts that
+    // had to be re-derived from the vault's current config because the
+    // receipt records none.
+    note: changedProjectionNote(item, env),
   });
 }
 
 /**
- * Re-derive the delivered text: the body after frontmatter strip, after
- * the context guard (with the page's current frontmatter as the guard
- * source, matching the pack builders), after the recorded budget cut
- * when the item was delivered trimmed.
+ * The note a changed verdict carries when the projection could not be
+ * derived from recorded data alone. Null on a plain changed: an edit is
+ * an edit, and a note on every one would bury the projection gaps.
  */
-function projectDeliveredText(
+function changedProjectionNote(item: ReceiptItemData, env: VerifyEnvironment): string | null {
+  const gaps: string[] = [];
+  if (item.trimmed && env.maxCharsPerMemory === null) {
+    gaps.push(
+      "the item is marked trimmed but the receipt records no " +
+        "max_chars_per_memory, so the recorded cut cannot be re-applied",
+    );
+  } else if (item.trimmed && env.degradationFromConfig) {
+    gaps.push(
+      "the receipt's budget block records no cut mode, so the staged cut " +
+        "was re-derived from the vault's current config",
+    );
+  }
+  if (env.delimitUntrusted && env.trigger !== "pre_compress") {
+    gaps.push(
+      "the untrusted-source delimiting guardrail was re-derived from the " +
+        "vault's current config",
+    );
+  }
+  if (gaps.length === 0) return null;
+  return `${gaps.join("; ")} - a delivery-config change since emit reads as changed`;
+}
+
+/**
+ * Re-derive the delivered text of a `context_pack` item: the body after
+ * frontmatter strip, after the context guard with the page's current
+ * frontmatter as the guard source (metadata and trust), path included,
+ * and the delimit guardrail the vault's current config names - the same
+ * guard call the context-pack builders make - then the recorded budget
+ * cut when the item was delivered trimmed.
+ */
+function projectContextPackText(
+  vault: string,
   item: ReceiptItemData,
+  absolute: string,
   body: string,
   meta: Readonly<Record<string, unknown>>,
-  maxCharsPerMemory: number | null,
+  env: VerifyEnvironment,
 ): string {
   const guarded = guardBrainContextSnippet(body, {
-    source: { id: item.id, metadata: meta },
+    source: { id: item.id, path: absolute, metadata: meta },
     ...(meta["context_safety"] === "trusted-instruction"
       ? { trust: "trusted-instruction" as const }
       : {}),
+    ...(env.delimitUntrusted
+      ? {
+          delimitUntrusted: true,
+          provenancePath: canonicalNotePath(relative(vault, absolute)),
+        }
+      : {}),
   });
-  let text = guarded.safeText;
-  if (item.trimmed && maxCharsPerMemory !== null) {
-    text = applyCharBudget([{ item: item.id, text }], {
-      maxCharsPerEntry: maxCharsPerMemory,
+  return cutToBudget(item, guarded.safeText, env);
+}
+
+/**
+ * Re-derive the delivered text of a `pre_compress` item: the pre-compress
+ * writer guards the WHOLE file - the raw file bytes, no frontmatter
+ * strip - with source `{id, path}` and no metadata or trust, and never
+ * passes the delimit guardrail. The projection reproduces exactly that,
+ * so a frontmatter value that moved the writer's bytes moves the verdict
+ * the same way instead of reading as a phantom change.
+ */
+function projectPreCompressText(
+  item: ReceiptItemData,
+  absolute: string,
+  rawFile: string,
+  env: VerifyEnvironment,
+): string {
+  const guarded = guardBrainContextSnippet(rawFile, {
+    source: { id: item.id, path: absolute },
+  });
+  return cutToBudget(item, guarded.safeText, env);
+}
+
+/** The recorded budget cut, in the cut mode the writer used. */
+function cutToBudget(item: ReceiptItemData, text: string, env: VerifyEnvironment): string {
+  if (item.trimmed && env.maxCharsPerMemory !== null) {
+    return applyCharBudget([{ item: item.id, text }], {
+      maxCharsPerEntry: env.maxCharsPerMemory,
+      ...(env.degradation !== undefined ? { degradation: env.degradation } : {}),
     }).kept[0]!.text;
   }
   return text;
+}
+
+/**
+ * The cut mode the re-applied budget uses. A receipt whose budget block
+ * records the mode (additive, forward-compatible) is honored verbatim;
+ * otherwise the vault's current `recall.degradation` config is the only
+ * source - the same source the pack builders read at emit time - and the
+ * sourcing is reported so a changed trimmed item can name the gap.
+ */
+function resolveDegradation(
+  vault: string,
+  budget: unknown,
+): { mode: "staged" | undefined; fromConfig: boolean } {
+  if (typeof budget === "object" && budget !== null) {
+    const recorded = (budget as Record<string, unknown>)["degradation"];
+    if (recorded === "staged") return { mode: "staged", fromConfig: false };
+  }
+  try {
+    return {
+      mode: loadBrainConfig(vault).recall?.degradation === "staged" ? "staged" : undefined,
+      fromConfig: true,
+    };
+  } catch {
+    return { mode: undefined, fromConfig: true };
+  }
+}
+
+/** The writer's delimit guardrail, read the way the pack builders read it. */
+function resolveDelimitUntrusted(vault: string): boolean {
+  try {
+    return loadGuardrailsConfigSafe(vault).untrusted_source_delimiting === true;
+  } catch {
+    return false;
+  }
 }
 
 /** The recorded per-memory char budget, when the receipt carries a usable one. */

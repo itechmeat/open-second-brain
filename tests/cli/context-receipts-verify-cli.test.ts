@@ -108,6 +108,10 @@ test("--json emits the exact K2 ReceiptVerification shape", async () => {
 
   expect(run.returncode).toBe(0);
   const parsed = JSON.parse(run.stdout) as Record<string, unknown>;
+  // The K2 ReceiptVerification shape, field for field, including the
+  // additive trigger header: `triggerRaw` carries the receipt's own
+  // trigger when the closed vocabulary cannot name it, and is null on a
+  // readable one (fix wave 1, F13).
   expect(Object.keys(parsed).toSorted()).toEqual([
     "counts",
     "createdAt",
@@ -115,9 +119,11 @@ test("--json emits the exact K2 ReceiptVerification shape", async () => {
     "receiptId",
     "sessionInjected",
     "trigger",
+    "triggerRaw",
   ]);
   expect(parsed["receiptId"]).toBe(receipt.id);
   expect(parsed["trigger"]).toBe("context_pack");
+  expect(parsed["triggerRaw"]).toBeNull();
   expect(parsed["sessionInjected"]).toBe(false);
   const items = parsed["items"] as ReadonlyArray<Record<string, unknown>>;
   expect(Object.keys(items[0]!).toSorted()).toEqual([
