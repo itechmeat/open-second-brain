@@ -36,6 +36,7 @@ import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { ATTEST_TOOLS } from "../../src/mcp/brain/attest-tools.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { INTERNAL_ERROR } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
 const DATE = "2026-06-03";
@@ -167,6 +168,28 @@ test("list returns the fixture attestation newest-first with id, created_at, dev
   expect(rows[0]!["created_at"]).toBe("2026-06-03T10:05:00.000Z");
   expect(typeof rows[0]!["device_id"]).toBe("string");
   expect(rows[0]!["path"]).toBe(path.slice(vault.length + 1));
+});
+
+test("list against a malformed record refuses by name instead of skipping the row", async () => {
+  append(2);
+  writeFixtureAttestation();
+  // A record file that exists but cannot be read is damage to name:
+  // silently dropping the evidence is the one failure this family exists
+  // to prevent, so list refuses with the corruption named, never an
+  // empty answer and never a silently-skipped row.
+  writeFileSync(
+    join(vault, ".open-second-brain", "attestations", "attest-20990101T000000000Z.json"),
+    "{not json at all",
+    "utf8",
+  );
+
+  const { result, error } = await callAttestations({ operation: "list" });
+
+  expect(result).toBeNull();
+  expect(error).not.toBeNull();
+  expect(error!.code).toBe(INTERNAL_ERROR);
+  expect(error!.message).toContain("corrupted JSON");
+  expect(error!.message).toContain("attest-20990101T000000000Z");
 });
 
 test("verify returns the K4 shape over the harness", async () => {

@@ -39,6 +39,16 @@ import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { attestationsDir } from "../../src/core/brain/attestation/record.ts";
 import { writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+/**
+ * Passphrases assembled at runtime so no source line carries a literal
+ * shaped like a real credential (the fake-credentials doctrine); the
+ * two stdin routes use distinct values the way two operators would.
+ */
+const STDIN_PASSPHRASE = fakeCredential("attest", "-passphrase-", "9137");
+const STDIN_PASSPHRASE_ALT = fakeCredential("attest", "-passphrase-", "2468");
+const ENV_ROUTE_PASSPHRASE = fakeCredential("env-route", "-pass-", "5150");
 
 const DATE = "2026-06-03";
 
@@ -245,10 +255,14 @@ test("json shapes: keygen paths, sign record, list rows, verify K4", async () =>
   expect(verifyJson.storeDigestMatches).toBe(true);
 });
 
+// Each of these three rungs boots two cold CLIs (bun startup, the full
+// import graph, Ed25519 keygen and sign), which the 5 s default does not
+// leave headroom for in CI; the plugin suite's hung-shim test carries the
+// same explicit bound.
 test("passphrase ladder: wrap at keygen, sign from stdin in a fresh process", async () => {
   append(1);
   const first = await runCli(["brain", "attest", "keygen", "--vault", vault], {
-    stdin: "attest-passphrase-9137\n",
+    stdin: `${STDIN_PASSPHRASE}\n`,
     subprocess: true,
   });
   expect(first.returncode).toBe(0);
@@ -259,24 +273,24 @@ test("passphrase ladder: wrap at keygen, sign from stdin in a fresh process", as
   expect(keyBytes).not.toMatch(/^[0-9a-f]{64}\s*$/); // wrapped, not raw seed
 
   const signed = await runCli(["brain", "attest", "sign", "--vault", vault], {
-    stdin: "attest-passphrase-9137\n",
+    stdin: `${STDIN_PASSPHRASE}\n`,
     subprocess: true,
   });
   expect(signed.returncode).toBe(0);
   expect(recordFiles()).toHaveLength(1);
-});
+}, 30_000);
 
 test("passphrase ladder: a wrapped key with no source refuses by name", async () => {
   append(1);
   await runCli(["brain", "attest", "keygen", "--vault", vault], {
-    stdin: "attest-passphrase-2468\n",
+    stdin: `${STDIN_PASSPHRASE_ALT}\n`,
     subprocess: true,
   });
   const res = await runCli(["brain", "attest", "sign", "--vault", vault], { subprocess: true });
   expect(res.returncode).toBe(1);
   expect(res.stderr).toContain("passphrase");
   expect(recordFiles()).toEqual([]);
-});
+}, 30_000);
 
 test("passphrase ladder: --passphrase-from-env with an unset variable exits two", async () => {
   const res = await runCli(
@@ -295,13 +309,13 @@ test("passphrase ladder: --passphrase-from-env with a set variable wraps and sig
   append(1);
   const keygen = await runCli(
     ["brain", "attest", "keygen", "--vault", vault, "--passphrase-from-env", "O2B_ATTEST_PASS"],
-    { env: { O2B_ATTEST_PASS: "env-route-pass-5150" }, subprocess: true },
+    { env: { O2B_ATTEST_PASS: ENV_ROUTE_PASSPHRASE }, subprocess: true },
   );
   expect(keygen.returncode).toBe(0);
   const signed = await runCli(
     ["brain", "attest", "sign", "--vault", vault, "--passphrase-from-env", "O2B_ATTEST_PASS"],
-    { env: { O2B_ATTEST_PASS: "env-route-pass-5150" }, subprocess: true },
+    { env: { O2B_ATTEST_PASS: ENV_ROUTE_PASSPHRASE }, subprocess: true },
   );
   expect(signed.returncode).toBe(0);
   expect(recordFiles()).toHaveLength(1);
-});
+}, 30_000);

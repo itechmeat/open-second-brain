@@ -40,6 +40,17 @@ import { collectAttestationManifest } from "../../../../src/core/brain/attestati
 import { isEnvelopeBytes } from "../../../../src/core/brain/secrets/envelope.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 import { canonicalJson } from "../../../../src/core/integrity/digest.ts";
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
+
+/**
+ * Passphrases assembled at runtime so no source line carries a literal
+ * shaped like a real credential (the fake-credentials doctrine): the
+ * second is the first's anagram, because the two wrap cases must stay
+ * distinct values.
+ */
+const WRAP_PASSPHRASE = fakeCredential("correct horse", " battery", " staple");
+const WRAP_PASSPHRASE_ANAGRAM = fakeCredential("staple horse", " correct", " battery");
 
 let tmp: string;
 let vault: string;
@@ -77,6 +88,11 @@ describe("generateAttestationKeypair", () => {
     const dir = join(vault, ".open-second-brain", "keys", "attestation");
     expect(privatePath.startsWith(dir)).toBe(true);
     expect(publicPath.startsWith(dir)).toBe(true);
+    // Windows has no POSIX mode bits (libuv synthesizes st_mode and never
+    // reports the ACL restrictToOwner applies); access there is an
+    // owner-only ACL, pinned in the owner-acl suite the secrets family
+    // shares.
+    if (IS_WINDOWS) return;
     expect(statSync(privatePath).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     // Raw seed form: 64 hex characters decoding to the 32-byte seed, NOT
@@ -102,7 +118,7 @@ describe("generateAttestationKeypair", () => {
   });
 
   test("the passphrase wrap replaces the raw seed with an envelope", () => {
-    process.env["O2B_TEST_ATTEST_PASS"] = "correct horse battery staple";
+    process.env["O2B_TEST_ATTEST_PASS"] = WRAP_PASSPHRASE;
     const { privatePath } = generateAttestationKeypair(vault, {
       passphraseFromEnv: "O2B_TEST_ATTEST_PASS",
     });
@@ -111,7 +127,7 @@ describe("generateAttestationKeypair", () => {
 
   test("a $secret: reference resolves through the named-secret resolver", () => {
     process.env["O2B_TEST_ATTEST_REF"] = "$secret:O2B_TEST_ATTEST_MATERIAL";
-    process.env["O2B_TEST_ATTEST_MATERIAL"] = "staple horse correct battery";
+    process.env["O2B_TEST_ATTEST_MATERIAL"] = WRAP_PASSPHRASE_ANAGRAM;
     const { privatePath } = generateAttestationKeypair(vault, {
       passphraseFromEnv: "O2B_TEST_ATTEST_REF",
     });
@@ -183,7 +199,7 @@ describe("signAttestationRecord", () => {
   });
 
   test("the wrapped path unlocks with the passphrase and signs", () => {
-    process.env["O2B_TEST_ATTEST_PASS"] = "correct horse battery staple";
+    process.env["O2B_TEST_ATTEST_PASS"] = WRAP_PASSPHRASE;
     generateAttestationKeypair(vault, { passphraseFromEnv: "O2B_TEST_ATTEST_PASS" });
     const signed = signAttestationRecord(unsignedRecord(), vault, {
       passphraseFromEnv: "O2B_TEST_ATTEST_PASS",
@@ -192,7 +208,7 @@ describe("signAttestationRecord", () => {
   });
 
   test("a wrapped key and no passphrase is the named locked refusal", () => {
-    process.env["O2B_TEST_ATTEST_PASS"] = "correct horse battery staple";
+    process.env["O2B_TEST_ATTEST_PASS"] = WRAP_PASSPHRASE;
     generateAttestationKeypair(vault, { passphraseFromEnv: "O2B_TEST_ATTEST_PASS" });
     expect(() => signAttestationRecord(unsignedRecord(), vault)).toThrow(/locked/);
   });
