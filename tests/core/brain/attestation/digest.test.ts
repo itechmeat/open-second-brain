@@ -17,14 +17,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import {
   ATTESTATION_MANIFEST_SCHEMA_VERSION,
   attestationStoreDigest,
   collectAttestationManifest,
 } from "../../../../src/core/brain/attestation/digest.ts";
-import { collectLogShardHeads, appendLogEvent } from "../../../../src/core/brain/log.ts";
+import {
+  acquireLogLock,
+  collectLogShardHeads,
+  appendLogEvent,
+} from "../../../../src/core/brain/log.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 import { noopSafeguard } from "../../../../src/core/brain/safeguard.ts";
@@ -124,7 +126,10 @@ describe("collectLogShardHeads", () => {
   test("shares the appender's lock: a held log lock is a refusal, never a lock-free read", () => {
     append(1);
     const logDir = brainDirs(vault).log;
-    const release = lockfile.lockSync(logDir, { stale: 10_000, realpath: false });
+    // The production lock helper, not a hand-rolled lockSync call: its
+    // bounded retry still ends in the ELOCKED throw when the lock is
+    // held, which is the refusal under test.
+    const release = acquireLogLock(logDir);
     try {
       let caught: NodeJS.ErrnoException | null = null;
       try {

@@ -29,11 +29,10 @@ import {
   signAttestationRecord,
 } from "../../../../src/core/brain/attestation/signing.ts";
 import { verifyAttestation } from "../../../../src/core/brain/attestation/verify.ts";
-import { appendLogEvent } from "../../../../src/core/brain/log.ts";
+import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 import { brainDirs, logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
 import { noopSafeguard } from "../../../../src/core/brain/safeguard.ts";
-import lockfile from "proper-lockfile";
 
 const DATE = "2026-06-03";
 
@@ -178,7 +177,10 @@ describe("verifyAttestation", () => {
   test("never throws: a held log lock degrades the store verdict, not the report", () => {
     append(1);
     const record = signedRecord();
-    const release = lockfile.lockSync(brainDirs(vault).log, { stale: 10_000, realpath: false });
+    // The production lock helper, not a hand-rolled lockSync call: the
+    // fixture reproduces exactly the contention the appender takes the
+    // same lock for, and follows the site if it moves.
+    const release = acquireLogLock(brainDirs(vault).log);
     try {
       let result: ReturnType<typeof verifyAttestation> | null = null;
       expect(() => {

@@ -282,12 +282,17 @@ export function parseLogDayFile(vault: string, date: string, path: string): Pars
  * tries again, up to `MAX_ATTEMPTS`. Any non-`ELOCKED` error is
  * rethrown immediately (permission, fs corruption, …).
  *
+ * Exported so the fixtures that reproduce log-lock contention hold the
+ * SAME lock the appender takes (the attestation digest and verify
+ * suites): if this site or its options move, the fixtures fail loudly
+ * instead of silently reproducing nothing.
+ *
  * Total worst-case wait: `MAX_ATTEMPTS * SLEEP_MS` ≈ 500 ms — short
  * enough to feel synchronous to a coding agent, long enough to ride
  * out a sibling `appendLogEvent` call that landed within the same
  * millisecond.
  */
-function acquireLogLock(logDir: string): () => void {
+export function acquireLogLock(logDir: string): () => void {
   const MAX_ATTEMPTS = 10;
   const SLEEP_MS = 50;
   let lastErr: unknown;
