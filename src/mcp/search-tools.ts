@@ -52,6 +52,14 @@ import {
   retrievalTrailEnvelope,
 } from "../core/search/retrieval-trail.ts";
 import { corpusVerdictAtReach, probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
+import type { FrontmatterCache } from "../core/search/result-filters.ts";
+import {
+  deliveryOriginLabel,
+  pageOriginForDelivery,
+  storedTextTreatment,
+} from "../core/brain/provenance/page-origin.ts";
+import { shapeStoredTextForDelivery } from "../core/brain/delivery-shaping.ts";
+import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolErrorCode } from "./tool-error-codes.ts";
 import { contextReach } from "./tool-contract.ts";
@@ -718,6 +726,43 @@ function parseReinforceArgument(raw: unknown): string[] | undefined {
 }
 
 /**
+ * The delivery shaper for one search-family request (delivery-trust,
+ * lane A): how this caller's stored record text - row `content`, card
+ * `snippet`, `brain_search_expand` note and chunk bodies - is shaped on
+ * its way out.
+ *
+ * At local reach the shaper is the identity and holds no state at all:
+ * the operator's own tools get the pre-wave bytes, which is what the
+ * dozens of local-reach shape pins assert. At remote reach every
+ * shaped string is probed through ONE `FrontmatterCache` per request -
+ * one frontmatter read per distinct page however many rows or chunks
+ * name it - and delivered through the K1 shaper: fenced unless the page
+ * proves operator-authorship, fail-closed to fenced on every absence.
+ * The fence lives inside the existing `content` / `snippet` fields, so
+ * no output schema changes and a row the reach view already withheld
+ * never reaches the shaper (a fence on a withheld row would be an
+ * existence leak).
+ *
+ * A cross-vault union row names a page of a FOREIGN vault by
+ * relative path; probing it here would read the local vault and find
+ * nothing, which is the fail-closed answer: foreign text with no
+ * probeable provenance is fenced, never trusted.
+ */
+function storedTextDelivery(ctx: ServerContext): { shape(text: string, rel: string): string } {
+  if (contextReach(ctx) === TRANSPORT_REACH.local) return { shape: (text) => text };
+  const cache: FrontmatterCache = new Map();
+  return {
+    shape(text: string, rel: string): string {
+      const origin = pageOriginForDelivery(ctx.vault, rel, cache);
+      return shapeStoredTextForDelivery(text, {
+        treatment: storedTextTreatment(origin),
+        origin: deliveryOriginLabel(origin),
+      }).text;
+    },
+  };
+}
+
+/**
  * The `content` window for one MCP result: at most `max` characters
  * INCLUDING its continuation markers, centred on the first significant
  * query term the chunk contains (task E).
@@ -1033,6 +1078,10 @@ async function toolBrainSearch(
   }
 
   const recallHint = deriveRecallHint(outcome.results, outcome.total);
+  // Delivery shaping (delivery-trust, lane A): one shaper per request,
+  // applied AFTER the window so the fence wraps the exact snippet the
+  // pre-wave shape carried, inside the same field.
+  const delivery = storedTextDelivery(ctx);
   // Under disclosure:'cards' the surfaced rows live on `cards`, not
   // `results`; both shapes carry documentId/chunkId/path/score, so the
   // telemetry count/status/top-artifacts stay honest either way.
@@ -1083,7 +1132,7 @@ async function toolBrainSearch(
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
       title: r.title,
-      content: windowContent(r.content, query, MCP_CONTENT_MAX),
+      content: delivery.shape(windowContent(r.content, query, MCP_CONTENT_MAX), r.path),
       score: r.score,
       startLine: r.startLine,
       endLine: r.endLine,
@@ -1101,7 +1150,16 @@ async function toolBrainSearch(
       // from. Absent, never null, when nothing was merged.
       ...(r.duplicates && r.duplicates.length > 0 ? { duplicates: r.duplicates } : {}),
     })),
-    ...(outcome.cards ? { cards: outcome.cards.map(serializeSearchCard) } : {}),
+    // Cards shape their snippet under the same rule the rows shape
+    // `content`: same request shaper, same field, no schema change.
+    ...(outcome.cards
+      ? {
+          cards: outcome.cards.map((c) => {
+            const card = serializeSearchCard(c);
+            return { ...card, snippet: delivery.shape(c.snippet, c.path) };
+          }),
+        }
+      : {}),
     warnings: outcome.warnings,
     total: outcome.total,
     ...(outcome.evidencePack ? { evidence_pack: serializeEvidencePack(outcome.evidencePack) } : {}),
@@ -1885,6 +1943,12 @@ async function toolBrainSearchExpand(
     if (e instanceof MCPError) throw e;
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
+  // Delivery shaping (delivery-trust, lane A): the drill-down bodies are
+  // stored record text of ONE page - the note `expandHit` already proved
+  // readable at this caller's reach - so every body this envelope hands
+  // back is shaped under the same remote-quoted / local-identical rule
+  // the search rows follow, probed once per request.
+  const delivery = storedTextDelivery(ctx);
   return {
     chunk_id: result.chunkId,
     note: {
@@ -1897,7 +1961,7 @@ async function toolBrainSearchExpand(
       // Drill-down tool: return the full note (layer 2) and raw chunks
       // (layer 3), not a snippet. The preview budget caps the envelope
       // and hands back an artifact_id when the payload is large.
-      content: result.note.content,
+      content: delivery.shape(result.note.content, result.note.path),
     },
     raw_content: result.raw_content.map((c) => ({
       chunk_id: c.chunkId,
@@ -1905,7 +1969,7 @@ async function toolBrainSearchExpand(
       start_line: c.startLine,
       end_line: c.endLine,
       pointer: c.pointer,
-      content: c.content,
+      content: delivery.shape(c.content, result.note.path),
     })),
     next_cursor: result.next_cursor,
   };
