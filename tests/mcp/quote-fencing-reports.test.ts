@@ -315,7 +315,7 @@ describe("agent contribution bodies at remote reach", () => {
       // body; an unfenced copy in data would not be a fence.
       if (row.kind === "signal") {
         expect(row.data["principle"]).toBe(
-          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"]),
+          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"] as string),
         );
       }
     }
@@ -343,7 +343,7 @@ describe("agent contribution bodies at remote reach", () => {
       expect(row.text).toBe(fenceFor(LABEL_BY_KIND[row.kind]!, localRow.text));
       if (row.kind === "signal") {
         expect(row.data["principle"]).toBe(
-          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"]),
+          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"] as string),
         );
       }
     }
