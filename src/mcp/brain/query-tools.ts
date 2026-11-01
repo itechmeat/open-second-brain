@@ -6,6 +6,9 @@
  * BRAIN_TOOLS surface.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { buildBacklinkIndex } from "../../core/brain/backlinks.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { readPrefAudit } from "../../core/brain/pref-audit.ts";
@@ -76,12 +79,7 @@ import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-re
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../../core/brain/path-constants.ts";
 import type { AgentSourceContribution } from "../../core/brain/agent-source/types.ts";
-import {
-  deliveryRelForBrainArtifact,
-  deliveryView,
-  signalDeliveryRel,
-  UNPROBED_DELIVERY_REL,
-} from "./reach-events.ts";
+import { deliveryView, signalDeliveryRel, UNPROBED_DELIVERY_REL } from "./reach-events.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
@@ -986,9 +984,13 @@ async function toolBrainUnlinkedMentions(
   const page = pageSlice(mentions, offset, pageSize);
   // Each mention's `context` is one line of the source page's own prose
   // (delivery-trust, lane A): shaped through the request's delivery
-  // binding at the page the source id was parsed from, the same pages
-  // whose bodies every wired surface fences. Local reach keeps the
-  // bytes.
+  // binding at the page the source id was parsed from - asked in the
+  // scanner's own walk order (preferences, then retired), so the probe
+  // reads the exact page the line came from. The scanner also accepts
+  // basenames outside the two record-id prefixes, which answer with the
+  // guaranteed-absent page: fail closed, never a guessed root page
+  // whose stamps could vouch for prose it does not carry. Local reach
+  // keeps the bytes.
   const delivery = deliveryView(ctx);
   return {
     vault_path: vaultPathField(ctx),
@@ -998,10 +1000,24 @@ async function toolBrainUnlinkedMentions(
       source: m.source,
       line: m.line,
       term: m.term,
-      context: delivery.shape(m.contextSnippet, deliveryRelForBrainArtifact(ctx.vault, m.source)),
+      context: delivery.shape(m.contextSnippet, mentionSourceRel(ctx.vault, m.source)),
     })),
     next_cursor: page.next_cursor,
   };
+}
+
+/**
+ * The page a mention's source id was parsed from: the scanner walks the
+ * preferences folder then the retired one, so the same walk order
+ * answers which of the two holds the file, and a basename from neither
+ * vocabulary probes the guaranteed-absent page.
+ */
+function mentionSourceRel(vault: string, id: string): string {
+  for (const dir of [BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]) {
+    const rel = `${dir}/${id}.md`;
+    if (existsSync(join(vault, rel))) return rel;
+  }
+  return UNPROBED_DELIVERY_REL;
 }
 
 // ----- brain_foresight (t_08a79c81) -----------------------------------------

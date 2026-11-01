@@ -600,17 +600,18 @@ function readTopic(
     : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`;
   const objection = topicObjectionSection(ctx.vault, scoped);
   let text: string;
-  if (objection === null) {
-    text = delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel);
-  } else if (objection.rel === null) {
+  if (objection.rel === null) {
     // The block quotes the governing preference itself (or no page at
-    // all): one document, one probe.
+    // all): one document, one probe. The trailing newline keeps the
+    // unfenced bytes identical to the pre-shaping document.
     text = delivery.shape(
-      `${renderTopicMarkdown(rawSlug, scoped)}\n${objection.text}`,
+      `${renderTopicMarkdown(rawSlug, scoped)}\n${objection.text}\n`,
       preferenceRel,
     );
   } else {
-    text = `${delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel)}\n${delivery.shape(objection.text, objection.rel)}`;
+    text =
+      `${delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel)}\n` +
+      `${delivery.shape(objection.text, objection.rel)}\n`;
   }
   return { uri, mimeType: MIME_MARKDOWN, text };
 }
@@ -869,13 +870,6 @@ function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopi
 }
 
 /**
- * The single best-formed reason to distrust the topic's current
- * preference, by fixed priority: an already-retired rule > a
- * quarantined rule > a recorded negative counter-signal > an
- * unconfirmed rule still in its trial window. Returns a "no standing
- * objection" line when none applies.
- */
-/**
  * The rendered "Strongest objection" section, and the page whose
  * provenance governs it: null rel when the block quotes the governing
  * preference itself (retired, quarantined, unconfirmed) or no page at
@@ -894,6 +888,14 @@ function topicObjectionSection(
   return { text, rel: sentence.rel };
 }
 
+/**
+ * The single best-formed reason to distrust the topic's current
+ * preference, by fixed priority: an already-retired rule > a
+ * quarantined rule > a recorded negative counter-signal > an
+ * unconfirmed rule still in its trial window, and a "no standing
+ * objection" sentence when none applies. The rel names the page the
+ * sentence quotes, for the section renderer to probe.
+ */
 function buildTopicObjection(
   vault: string,
   result: ReturnType<typeof queryByTopic>,
