@@ -93,7 +93,7 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // verb LEFT the population - its runs dir was hoisted to `BENCH_RUNS_REL` in
 // `path-constants.ts`, so it no longer spells the directory - taking its now
 // stale exclusion with it.
-const SWEPT_POPULATION_SIZE = 28;
+const SWEPT_POPULATION_SIZE = 30;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,
@@ -103,7 +103,11 @@ const SWEPT_POPULATION_SIZE = 28;
 // 51 -> 52: the pending mining surveys row (v1.86.1 review fixes).
 // 52 -> 53: the cross-topic rule ledger row (t_642bc2b8 substrate), the
 // same join the rollup ladder ledger made.
-const DECLARED_SURFACE_COUNT = 53;
+// 53 -> 55: the delivery-trust wave's attestation kernel joins the
+// population with two rows - the signed attestation records (attestations)
+// and the operator's Ed25519 signing keypair (attestation_keys), the same
+// derived-store join the ingest checkpoints row made.
+const DECLARED_SURFACE_COUNT = 55;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

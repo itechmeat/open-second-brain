@@ -224,7 +224,7 @@ describe("verifyAttestation", () => {
     });
     const result = verifyAttestation(vault, record, {
       safeguard: guarded,
-      progress: () => {},
+      onProgress: () => {},
     });
     expect(checkpoints).toBeGreaterThanOrEqual(1);
     expect(result.shards.length).toBe(1);

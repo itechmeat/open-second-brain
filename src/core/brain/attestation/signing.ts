@@ -129,7 +129,7 @@ const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "he
 const SYNC_EXCLUSION_CONTENT = "*\n!.gitignore\n";
 
 /** `<vault>/.open-second-brain/keys/attestation/`. */
-function attestationKeysDir(vault: string): string {
+export function attestationKeysDir(vault: string): string {
   return join(vault, ".open-second-brain", ...KEY_DIR_SEGMENTS);
 }
 

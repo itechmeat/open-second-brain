@@ -89,7 +89,7 @@ export interface VerifyAttestationOptions {
    * `progressCounter` here is the whole change when the vocabulary
    * opens to attestation.
    */
-  readonly progress?: ProgressSink;
+  readonly onProgress?: ProgressSink;
 }
 
 /** One shard row as the chain walk needs it, or null when it is not that shape. */

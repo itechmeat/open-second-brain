@@ -42,6 +42,7 @@ import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
 import { schemaMutationAuditDir } from "../schema-integrity.ts";
 import { watchdogFallbackAuditDir } from "../watchdog.ts";
 import type { Safeguard } from "../safeguard.ts";
+import type { ProgressSink } from "../progress.ts";
 import { readVaultIdentity } from "../vault-identity.ts";
 import { collectLogShardHeads } from "../log.ts";
 
@@ -91,6 +92,16 @@ export interface CollectAttestationManifestOptions {
    * deadline and it is honoured whenever offered.
    */
   readonly safeguard?: Safeguard;
+  /**
+   * Accepted per the progress census. Nothing is emitted today: a
+   * `ProgressEvent` names an operation from the closed `OPERATION`
+   * vocabulary, and no attestation member exists there yet - a
+   * mislabelled operation would put an unresolvable name on every live
+   * progress stream. Wiring one member into `OPERATION` plus a
+   * `progressCounter` here is the whole change when the vocabulary
+   * opens to attestation.
+   */
+  readonly onProgress?: ProgressSink;
 }
 
 /**

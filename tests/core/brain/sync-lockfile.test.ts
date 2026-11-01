@@ -317,6 +317,7 @@ describe("every module that takes a lock is under a scanned root", () => {
    */
   const DECLARED: ReadonlyMap<string, string> = new Map([
     ["core/brain/architect/generate.ts", "Brain"],
+    ["core/brain/attestation/record.ts", ".open-second-brain"],
     ["core/brain/checkpoint-store.ts", ".open-second-brain"],
     ["core/brain/continuity/store.ts", "Brain"],
     ["core/brain/diagnostics.ts", "Brain"],
