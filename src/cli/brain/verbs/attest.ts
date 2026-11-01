@@ -41,6 +41,11 @@ import {
   signAttestationRecord,
 } from "../../../core/brain/attestation/signing.ts";
 import { verifyAttestation } from "../../../core/brain/attestation/verify.ts";
+import {
+  ATTESTATION_STORE_DAMAGED_CODE,
+  ATTESTATIONS_ABSENT_CODE,
+} from "../../../core/brain/diagnostics.ts";
+import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, info, parse, writeJson, ok, okJson } from "../helpers.ts";
 import { readStdinText } from "../../stdin.ts";
 
@@ -246,6 +251,10 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
+  // Captured before any narrowing: the advisory stream needs the parsed
+  // flag after the point where the truthiness check above the JSON
+  // branch has narrowed the record access away from `true`.
+  const asJson = flags["json"] === true;
   const { vault } = brainVerbContext(flags);
 
   // Name order is time order (the id is the compact UTC instant), so
@@ -272,7 +281,15 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
     return 0;
   }
   if (records.length === 0) {
-    info("no attestation on record; `o2b brain attest sign` writes one");
+    info("no attestation on record");
+    // The forward pointer rides the advisory rail (no-dead-ends phase 3):
+    // the empty-list state is a registered signal, not a hand-written
+    // invocation literal inside an info() argument.
+    emitNextStep(ATTESTATIONS_ABSENT_CODE, {
+      command: "brain",
+      argv,
+      jsonRequested: asJson,
+    });
     return 0;
   }
   info(`attestations: ${records.length} (newest first)`);
@@ -298,6 +315,8 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
+  // Captured before any narrowing, same as the list verb above.
+  const asJson = flags["json"] === true;
   const { vault } = brainVerbContext(flags);
 
   let record: AttestationRecord;
@@ -345,7 +364,16 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
   info(
     "the store diverged from the point this attestation vouches for: the shards named " +
       "above were edited, removed, or rewritten after it was signed. Nothing here repairs " +
-      "a store; `o2b brain log verify` answers whether the chain itself still links up.",
+      "a store; whether the log chain itself still links up is the adjacent question.",
   );
+  // The forward pointer rides the advisory rail (no-dead-ends phase 3):
+  // the diverged-store state is a registered signal whose exit is the
+  // log chain's verifier, not a hand-written invocation literal inside
+  // an info() argument.
+  emitNextStep(ATTESTATION_STORE_DAMAGED_CODE, {
+    command: "brain",
+    argv,
+    jsonRequested: asJson,
+  });
   return 1;
 }
