@@ -29,10 +29,15 @@ import { join } from "node:path";
 import { atomicCreateFileSyncExclusive } from "../../fs-atomic.ts";
 import { canonicalJson, digestVerifies, sealWithDigest } from "../../integrity/digest.ts";
 import { WRITE_LANE } from "../freeze-marker.ts";
-import { resolveAppendShardId } from "../ledger-shards.ts";
+import { parseShardedName, resolveAppendShardId } from "../ledger-shards.ts";
+import { LOG_HEAD_GRAMMAR } from "../log.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { attestationStoreDigest, type AttestationManifest } from "./digest.ts";
+import {
+  ATTESTATION_MANIFEST_SCHEMA_VERSION,
+  attestationStoreDigest,
+  type AttestationManifest,
+} from "./digest.ts";
 
 /** The record schema version. Additive fields only, per the schema doctrine. */
 export const ATTESTATION_FILE_SCHEMA_VERSION = "o2b.attestation.v1";
@@ -46,6 +51,16 @@ export const ATTESTATIONS_REL = "attestations";
  * listing never leaves the two readings open.
  */
 const ATTEST_FILE_PREFIX = "attest-";
+
+/**
+ * The shape {@link utcCompact} produces and every id carries: the
+ * compact UTC instant (`20260603T100000500Z`). The writer refuses an
+ * off-shape id rather than join it into a file path, and the reader
+ * refuses a record whose id does not answer to its own naming, so a
+ * crafted or hand-edited id can never name a file outside the
+ * attestations directory.
+ */
+const ATTESTATION_ID_SHAPE = new RegExp(`^${ATTEST_FILE_PREFIX}\\d{8}T\\d{9}Z$`);
 
 /**
  * One signed attestation. `digest` is the seal over the record without
@@ -165,10 +180,16 @@ export class AttestationSchemaError extends Error {
  * Read one attestation file, refusing an unknown schema by name.
  *
  * Every other malformation - corrupted JSON, a body that is not an
- * object - refuses too: an attestation that cannot be read is never
- * treated as valid or skipped silently, because the artifact is
+ * object, a body whose fields the verification kernel would otherwise
+ * meet unvalidated - refuses too: an attestation that cannot be read is
+ * never treated as valid or skipped silently, because the artifact is
  * evidence, and silently dropping evidence is the one failure this
- * family exists to prevent.
+ * family exists to prevent. The shape check is what keeps the kernel's
+ * "never throws" contract true for records read from disk: the manifest
+ * must be the schema's shape and its `logHeads` must map LOG SHARD FILE
+ * NAMES (the one grammar the head collector names shards with) to chain
+ * heads, so a crafted or hand-edited manifest can neither crash a
+ * verifier nor walk it off the log directory.
  */
 export function readAttestationRecordFile(path: string): AttestationRecord {
   let parsed: unknown;
@@ -183,6 +204,42 @@ export function readAttestationRecordFile(path: string): AttestationRecord {
   const obj = parsed as Partial<AttestationRecord>;
   if (obj.schemaVersion !== ATTESTATION_FILE_SCHEMA_VERSION) {
     throw new AttestationSchemaError(path, obj.schemaVersion);
+  }
+  const malformed = (detail: string): Error =>
+    new Error(`attestation record is malformed (${detail}): ${path}`);
+  if (typeof obj.id !== "string" || !ATTESTATION_ID_SHAPE.test(obj.id)) {
+    throw malformed("id is not an attest-<UTC-compact> instant");
+  }
+  if (typeof obj.createdAt !== "string" || typeof obj.deviceId !== "string") {
+    throw malformed("created_at and device_id must be strings");
+  }
+  if (typeof obj.storeDigest !== "string" || typeof obj.digest !== "string") {
+    throw malformed("store_digest and digest must be strings");
+  }
+  if (obj.signature !== null && typeof obj.signature !== "string") {
+    throw malformed("signature must be a string or null");
+  }
+  const manifest = obj.manifest;
+  if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw malformed("manifest must be an object");
+  }
+  if (manifest.schemaVersion !== ATTESTATION_MANIFEST_SCHEMA_VERSION) {
+    throw malformed(
+      `manifest schema_version ${JSON.stringify(manifest.schemaVersion)} is not ` +
+        `supported (expected ${ATTESTATION_MANIFEST_SCHEMA_VERSION})`,
+    );
+  }
+  const logHeads = manifest.logHeads;
+  if (logHeads === null || typeof logHeads !== "object" || Array.isArray(logHeads)) {
+    throw malformed("manifest.logHeads must be an object");
+  }
+  for (const [shardName, head] of Object.entries(logHeads)) {
+    if (parseShardedName(shardName, LOG_HEAD_GRAMMAR) === null) {
+      throw malformed(`manifest.logHeads key ${JSON.stringify(shardName)} is not a log shard name`);
+    }
+    if (typeof head !== "string" || head.length === 0) {
+      throw malformed(`manifest.logHeads[${JSON.stringify(shardName)}] must be a chain head`);
+    }
   }
   return Object.freeze(obj) as AttestationRecord;
 }
@@ -234,6 +291,12 @@ export function writeAttestationRecord(
   assertVaultIdentityForWrite(vault, undefined, WRITE_LANE.audit);
   if (!attestationSealVerifies(record)) {
     throw new Error(`refusing to write attestation ${record.id}: its seal does not verify`);
+  }
+  if (!ATTESTATION_ID_SHAPE.test(record.id)) {
+    throw new Error(
+      `refusing to write attestation: id ${JSON.stringify(record.id)} is not an ` +
+        "attest-<UTC-compact> instant, so it does not name a file inside the attestations directory",
+    );
   }
   const dir = attestationsDir(vault);
   const path = join(dir, `${record.id}.json`);

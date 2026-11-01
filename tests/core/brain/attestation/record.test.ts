@@ -34,7 +34,7 @@ import {
 import { attestationsDir } from "../../../../src/core/brain/attestation/record.ts";
 import { collectAttestationManifest } from "../../../../src/core/brain/attestation/digest.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
-import { digestVerifies } from "../../../../src/core/integrity/digest.ts";
+import { digestVerifies, sealWithDigest } from "../../../../src/core/integrity/digest.ts";
 
 let tmp: string;
 let vault: string;
@@ -110,6 +110,43 @@ describe("writeAttestationRecord", () => {
     forged["schemaVersion"] = "o2b.attestation.v0";
     writeFileSync(path, JSON.stringify(forged, null, 2), "utf8");
     expect(() => readAttestationRecordFile(path)).toThrow(/o2b\.attestation\.v0/);
+  });
+
+  test("a manifest naming shards outside the log grammar is refused by name", () => {
+    const manifest = collectAttestationManifest(vault);
+    const record = buildAttestationRecord(vault, manifest, {
+      now: new Date("2026-06-03T10:00:00Z"),
+    });
+    const { path } = writeAttestationRecord(vault, record);
+    const forged = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const manifestField = forged["manifest"] as Record<string, unknown>;
+    manifestField["logHeads"] = { "../../outside/2026-06-03.jsonl": "a".repeat(64) };
+    writeFileSync(path, JSON.stringify(forged, null, 2), "utf8");
+    expect(() => readAttestationRecordFile(path)).toThrow(/not a log shard name/);
+  });
+
+  test("a record without a readable manifest is refused, not verified into a crash", () => {
+    const manifest = collectAttestationManifest(vault);
+    const record = buildAttestationRecord(vault, manifest, {
+      now: new Date("2026-06-03T10:00:00Z"),
+    });
+    const { path } = writeAttestationRecord(vault, record);
+    const forged = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    delete forged["manifest"];
+    writeFileSync(path, JSON.stringify(forged, null, 2), "utf8");
+    expect(() => readAttestationRecordFile(path)).toThrow(/manifest must be an object/);
+  });
+
+  test("the write refuses an id that does not answer to its own naming", () => {
+    const manifest = collectAttestationManifest(vault);
+    const record = buildAttestationRecord(vault, manifest, {
+      now: new Date("2026-06-03T10:00:00Z"),
+    });
+    const { digest: _digest, ...body } = record;
+    // Re-sealed, so the refusal the writer names is the id shape, not a
+    // broken seal.
+    const forged = sealWithDigest({ ...body, id: "../outside" });
+    expect(() => writeAttestationRecord(vault, forged)).toThrow(/does not name a file inside/);
   });
 
   test("a concurrent second write of the same instant is refused, not overwritten", () => {
