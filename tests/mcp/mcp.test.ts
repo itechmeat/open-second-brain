@@ -240,6 +240,8 @@ describe("tool listing", () => {
         "brain_backlinks",
         // Per-preference mutation audit + morning brief (added in v0.21.0).
         "brain_audit",
+        // Read-only Ed25519-signed store attestations (delivery-trust wave).
+        "brain_attestations",
         // Vault portability suite (added in v0.22.0).
         "brain_sources",
         "brain_switch_vault",

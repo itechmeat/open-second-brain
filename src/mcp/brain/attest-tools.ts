@@ -22,7 +22,8 @@ import {
   readAttestationRecordFile,
 } from "../../core/brain/attestation/record.ts";
 import { verifyAttestation } from "../../core/brain/attestation/verify.ts";
-import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { unknownOperationError } from "../coerce.ts";
+import { INTERNAL_ERROR, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
@@ -32,10 +33,11 @@ async function toolBrainAttestations(
 ): Promise<Record<string, unknown>> {
   const operation = args["operation"];
   if (operation !== "list" && operation !== "verify") {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `brain_attestations: operation must be one of list, verify ` +
-        `(keygen and sign are operator CLI verbs: o2b brain attest)`,
+    // The shared dispatch refusal: every operation-dispatching tool
+    // answers an out-of-set operation with the unknown_operation code.
+    throw unknownOperationError(
+      "brain_attestations: operation must be list|verify " +
+        "(keygen and sign are operator CLI verbs: o2b brain attest)",
     );
   }
 
@@ -89,11 +91,10 @@ export const ATTEST_TOOLS: ReadonlyArray<ToolDefinition> = [
     name: "brain_attestations",
     kind: "read",
     description:
-      "List the vault's Ed25519-signed store attestations (newest first: id, created-at, " +
-      "signing device, store digest) or verify the store against the newest one: per-shard " +
-      "intact / appended / diverged / missing, the signature, and the store-digest comparison. " +
-      "Report-only evidence about store state; carries no note content. Key generation and " +
-      "signing are operator CLI verbs (o2b brain attest keygen | sign) and have no tool surface.",
+      "List Ed25519-signed store attestations (newest first: id, created-at, device, digest) " +
+      "or verify the store against the newest one (per-shard verdicts and the signature). " +
+      "Report-only store evidence, no note content; keygen and sign are operator CLI verbs " +
+      "(o2b brain attest).",
     inputSchema: {
       type: "object",
       properties: {
@@ -106,6 +107,7 @@ export const ATTEST_TOOLS: ReadonlyArray<ToolDefinition> = [
         },
       },
       required: ["operation"],
+      additionalProperties: false,
     },
     handler: toolBrainAttestations,
   },

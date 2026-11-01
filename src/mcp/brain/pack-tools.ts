@@ -1553,7 +1553,10 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_context_receipts",
     kind: "read",
     description:
-      "List context receipt summaries, show one full receipt by id, fold a window into a retrieval summary (distinct items, per-item injection frequency, token cost, observed use), or re-hash-verify one receipt against the vault it was drawn from (per-item match/changed/unavailable; local reach only; private or redacted receipts refused). Receipts are append-only continuity records emitted by opt-in injection callers. Read-only.",
+      "List receipt summaries, show one receipt, fold a window into a retrieval summary " +
+      "(distinct items, frequency, token cost, observed use), or re-hash-verify a receipt " +
+      "against its vault (match/changed/unavailable; local reach; withheld refused). " +
+      "Append-only records from opt-in injectors. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1561,7 +1564,8 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["list", "show", "summary", "verify"],
           description:
-            "list returns summaries, show returns one full receipt by id, summary folds a window into a retrieval report, verify re-hashes one receipt's items against the current vault pages.",
+            "list returns summaries, show returns one full receipt by id, summary folds a " +
+            "window into a retrieval report, verify re-hashes one receipt against the vault.",
         },
         id: {
           type: "string",
