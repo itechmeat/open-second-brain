@@ -52,14 +52,7 @@ import {
   retrievalTrailEnvelope,
 } from "../core/search/retrieval-trail.ts";
 import { corpusVerdictAtReach, probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
-import type { FrontmatterCache } from "../core/search/result-filters.ts";
-import {
-  deliveryOriginLabel,
-  pageOriginForDelivery,
-  storedTextTreatment,
-} from "../core/brain/provenance/page-origin.ts";
-import { shapeStoredTextForDelivery } from "../core/brain/delivery-shaping.ts";
-import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
+import { deliveryView } from "./brain/reach-events.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolErrorCode } from "./tool-error-codes.ts";
 import { contextReach } from "./tool-contract.ts";
@@ -731,17 +724,25 @@ function parseReinforceArgument(raw: unknown): string[] | undefined {
  * `snippet`, `brain_search_expand` note and chunk bodies - is shaped on
  * its way out.
  *
- * At local reach the shaper is the identity and holds no state at all:
- * the operator's own tools get the pre-wave bytes, which is what the
- * dozens of local-reach shape pins assert. At remote reach every
- * shaped string is probed through ONE `FrontmatterCache` per request -
- * one frontmatter read per distinct page however many rows or chunks
- * name it - and delivered through the K1 shaper: fenced unless the page
- * proves operator-authorship, fail-closed to fenced on every absence.
- * The fence lives inside the existing `content` / `snippet` fields, so
- * no output schema changes and a row the reach view already withheld
- * never reaches the shaper (a fence on a withheld row would be an
- * existence leak).
+ * This delegates to the ONE shared binding (`deliveryView`, beside
+ * `requestRefView` in reach-events.ts) instead of re-implementing the
+ * probe-plus-shape body, so the two constructors cannot drift: at local
+ * reach the shape is the identity and holds no state at all - the
+ * operator's own tools get the pre-wave bytes, which is what the dozens
+ * of local-reach shape pins assert. At remote reach every shaped string
+ * is probed through ONE `FrontmatterCache` per request - one frontmatter
+ * read per distinct page however many rows or chunks name it - and
+ * delivered through the K1 shaper: fenced unless the page proves
+ * operator-authorship, fail-closed to fenced on every absence. The fence
+ * lives inside the existing `content` / `snippet` fields, so no output
+ * schema changes and a row the reach view already withheld never reaches
+ * the shaper (a fence on a withheld row would be an existence leak).
+ *
+ * The binding's cache is the shaper's own per-request Map, not the
+ * search pipeline's internal one: that cache lives inside `search()` and
+ * is not part of the returned outcome, so sharing it would extend the
+ * core search contract. Both are per-request Maps, so each stage still
+ * reads a given page's frontmatter at most once.
  *
  * A cross-vault union row names a page of a FOREIGN vault by
  * relative path; probing it here would read the local vault and find
@@ -749,17 +750,7 @@ function parseReinforceArgument(raw: unknown): string[] | undefined {
  * probeable provenance is fenced, never trusted.
  */
 function storedTextDelivery(ctx: ServerContext): { shape(text: string, rel: string): string } {
-  if (contextReach(ctx) === TRANSPORT_REACH.local) return { shape: (text) => text };
-  const cache: FrontmatterCache = new Map();
-  return {
-    shape(text: string, rel: string): string {
-      const origin = pageOriginForDelivery(ctx.vault, rel, cache);
-      return shapeStoredTextForDelivery(text, {
-        treatment: storedTextTreatment(origin),
-        origin: deliveryOriginLabel(origin),
-      }).text;
-    },
-  };
+  return deliveryView(ctx);
 }
 
 /**

@@ -118,7 +118,18 @@ function contributionDeliveryRel(vault: string, c: AgentSourceContribution): str
   }
 }
 
-/** Serialize one preference payload with its principle shaped. */
+/**
+ * Serialize one preference payload with its principle shaped.
+ *
+ * Delivery boundary (delivery-trust, lane A): `principle` is the payload's
+ * stored-record body and fences; a retired payload's `retired_reason` does
+ * NOT, because it is not free text - `parseRetired` refuses any value
+ * outside the closed `BRAIN_RETIRED_REASON` vocabulary (and every writer
+ * passes an enum member), so the field is a machine-readable token, not
+ * stored prose, and fencing it would break the closed-vocabulary reading
+ * remote consumers do. The free text the retire path actually collects
+ * lands in `user_rejected_reason`, which no MCP surface delivers.
+ */
 function shapePreferencePayload(
   delivery: ReturnType<typeof deliveryView>,
   p: BrainPreference | BrainRetired,

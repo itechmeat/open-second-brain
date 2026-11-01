@@ -274,7 +274,7 @@ function serializePinnedContext(
   pinned: PinnedContext,
   operation?: PinnedContextOperation,
   done?: boolean,
-  opts?: { shapeBody?: boolean },
+  opts?: { shapeBody?: boolean; delivery?: ReturnType<typeof deliveryView> },
 ): Record<string, unknown> {
   return {
     ...(operation ? { operation } : {}),
@@ -285,7 +285,10 @@ function serializePinnedContext(
     // batch confirmation echoes bytes the caller just authored - the
     // terminal-ack contract stays byte-stable; the delivery contract is
     // about handing stored text to a caller that did not write it.
-    content: opts?.shapeBody === true ? shapedPinnedContent(ctx, pinned) : pinned.content,
+    content:
+      opts?.shapeBody === true
+        ? shapedPinnedContent(ctx, pinned, opts.delivery ?? deliveryView(ctx))
+        : pinned.content,
     // Terminal/idempotent marker on successful writes so the agent does
     // not redundantly re-call after the store already committed.
     ...(done ? { done: true } : {}),
@@ -406,6 +409,11 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
+  // The request's delivery binding, resolved ONCE and used for the active
+  // body AND the pinned scratchpad beside it (delivery-trust, lane A): one
+  // frontmatter cache serves the whole assembly, instead of the pinned
+  // serializer building a second binding per call.
+  const delivery = deliveryView(ctx);
   // Bounded to the single newest `Brain/log/` day - see
   // `computeMaintenanceOverdueFlag`'s docblock for the cost bound. This
   // is the always-loaded path, so the full `maintenance_debt` derivation
@@ -439,7 +447,10 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
       content: prependBlock(standing.text, prependBlock(scoped?.text ?? "", "")),
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
-      pinned: serializePinnedContext(ctx, pinned, undefined, undefined, { shapeBody: true }),
+      pinned: serializePinnedContext(ctx, pinned, undefined, undefined, {
+        shapeBody: true,
+        delivery,
+      }),
       maintenance_overdue: maintenanceOverdue,
       ...standingRulesField(ctx, standing),
       ...scopedRulesField(scoped),
@@ -510,7 +521,6 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // the scoped rules are the operator's own voice delivered local-only,
   // and the pinned scratchpad shapes through the same binding beside
   // this assembly, so neither slips past the fence the body carries.
-  const delivery = deliveryView(ctx);
   content = delivery.shape(content, `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`);
   content = prependBlock(standing.text, prependBlock(scoped?.text ?? "", content));
   content = appendPinnedToContextContent(content, shapedPinnedContent(ctx, pinned, delivery));
@@ -540,7 +550,10 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     content,
     counts,
     generated_at: generatedAt,
-    pinned: serializePinnedContext(ctx, pinned, undefined, undefined, { shapeBody: true }),
+    pinned: serializePinnedContext(ctx, pinned, undefined, undefined, {
+      shapeBody: true,
+      delivery,
+    }),
     maintenance_overdue: maintenanceOverdue,
     ...(error ? { error } : {}),
     ...standingRulesField(ctx, standing),

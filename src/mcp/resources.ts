@@ -446,7 +446,15 @@ function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView):
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: rendered.content,
+    // The digest quotes stored principles (delivery-trust, lane A) in the
+    // same render family as the active and lessons digests, so it shapes
+    // through the same binding: fenced at remote reach, named for the
+    // compiled-digest render's own absence of stamps - the system's voice
+    // is not operator prose, and the derivation says so rather than
+    // guessing authorship. The probe rel names that family's on-disk
+    // member (BRAIN_COMPILED_DIGEST_RELS), whose generated page carries
+    // no stamps, the exact probe readActive's render makes.
+    text: deliveryFor(ctx, view).shape(rendered.content, ACTIVE_REL),
   };
 }
 

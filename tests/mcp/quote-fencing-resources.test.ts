@@ -34,6 +34,7 @@ import { UNTRUSTED_SOURCE_TAG } from "../../src/core/brain/untrusted-source.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const PRINCIPLE = "Prefer zzwholepagedoczz prose when rendering digests.";
+const FRESH_PRINCIPLE = "Prefer zzfreshdigestzz same-day evidence for the digest window.";
 const DEAD_END_APPROACH = "zzdeadendapproachzz rewriting the index on every read";
 const AGENT_LABEL = "stored text: agent-authored (origin_channel=mcp-tool)";
 const LEGACY_LABEL = "stored text: unverified provenance (no derivable stamps)";
@@ -56,6 +57,30 @@ function resourceCtx(reach: TransportReach): ResourceContext {
 
 function fenced(label: string, body: string): string {
   return `<${UNTRUSTED_SOURCE_TAG} origin="${label}">\n${body}\n${FENCE_CLOSE}`;
+}
+
+/**
+ * The whole delivered document is ONE closed fence span that contains
+ * every occurrence of the stored body, and no raw stored text ships
+ * outside the span: the containment-only form (toContain open/body/close)
+ * passes a reader that fences only a leading section or keeps quoting
+ * after the close tag, which is exactly the defect class the wave closes.
+ */
+function expectClosedFenceSpan(text: string, label: string, body: string): void {
+  const open = `<${UNTRUSTED_SOURCE_TAG} origin="${label}">`;
+  const openIdx = text.indexOf(open);
+  expect(openIdx).toBeGreaterThanOrEqual(0);
+  const closeIdx = text.indexOf(FENCE_CLOSE, openIdx);
+  expect(closeIdx).toBeGreaterThan(openIdx);
+  const first = text.indexOf(body);
+  const last = text.lastIndexOf(body);
+  expect(first).toBeGreaterThan(openIdx);
+  expect(first).toBeLessThan(closeIdx);
+  expect(last).toBeGreaterThanOrEqual(first);
+  expect(last + body.length).toBeLessThan(closeIdx);
+  const outside = text.slice(0, openIdx) + text.slice(closeIdx + FENCE_CLOSE.length);
+  expect(outside).not.toContain(body);
+  expect(outside).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
 }
 
 function stamp(rel: string, line: string): void {
@@ -138,10 +163,9 @@ describe("brain_context and brain_pinned_context", () => {
     };
     expect(local.content).toContain(PRINCIPLE);
     expect(local.content).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
-    expect(remote.content).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`);
-    // A valid fence: the stored principle survives inside a closed span.
-    expect(remote.content).toContain(PRINCIPLE);
-    expect(remote.content).toContain(FENCE_CLOSE);
+    // The active body (both listed principles) sits inside one closed
+    // span, with no raw stored text outside it.
+    expectClosedFenceSpan(remote.content, LEGACY_LABEL, PRINCIPLE);
   });
 
   test("a pinned scratchpad body is fenced at remote, untouched at local", async () => {
@@ -190,9 +214,7 @@ describe("osb:// resource readers", () => {
       const remote = readResource(resourceCtx(TRANSPORT_REACH.remote), uri);
       expect(local.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
       expect(local.text).toContain(stored[uri]!);
-      expect(remote.text).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`);
-      expect(remote.text).toContain(stored[uri]!);
-      expect(remote.text).toContain(FENCE_CLOSE);
+      expectClosedFenceSpan(remote.text, LEGACY_LABEL, stored[uri]!);
     }
   });
 
@@ -201,18 +223,53 @@ describe("osb:// resource readers", () => {
     const remote = readResource(resourceCtx(TRANSPORT_REACH.remote), "osb://topic/agented");
     expect(local.text).toContain(PRINCIPLE);
     expect(local.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
-    expect(remote.text).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${AGENT_LABEL}">`);
-    expect(remote.text).toContain(PRINCIPLE);
-    expect(remote.text).toContain(FENCE_CLOSE);
+    expectClosedFenceSpan(remote.text, AGENT_LABEL, PRINCIPLE);
   });
 
-  test("osb://backlinks/{id} fences at remote; status, digest and log readers stay raw", () => {
+  test("osb://backlinks/{id} fences at remote; the status and log readers stay raw", () => {
     const remote = readResource(resourceCtx(TRANSPORT_REACH.remote), "osb://backlinks/pref-legacy");
-    expect(remote.text).toContain(`<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`);
-    expect(remote.text).toContain(FENCE_CLOSE);
-    for (const uri of ["osb://status", "osb://digest/latest", "osb://log/2026-05-04"] as const) {
+    // The rendered document carries no stored-record body (this fixture's
+    // target has no inbound references), so the span shape is pinned
+    // structurally: exactly one closed fence, closing at the end.
+    const open = `<${UNTRUSTED_SOURCE_TAG} origin="${LEGACY_LABEL}">`;
+    expect(remote.text.indexOf(open)).toBeGreaterThanOrEqual(0);
+    expect(remote.text.indexOf(open)).toBe(remote.text.lastIndexOf(open));
+    expect(remote.text.indexOf(FENCE_CLOSE)).toBeGreaterThan(remote.text.indexOf(open));
+    expect(remote.text.indexOf(FENCE_CLOSE)).toBe(remote.text.lastIndexOf(FENCE_CLOSE));
+    expect(remote.text.trimEnd().endsWith(FENCE_CLOSE)).toBe(true);
+    for (const uri of ["osb://status", "osb://log/2026-05-04"] as const) {
       const out = readResource(resourceCtx(TRANSPORT_REACH.remote), uri);
       expect(out.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
     }
+  });
+
+  test("osb://digest/latest fences the same stored principles the active reader fences", () => {
+    // The digest renders the current day's changes, so the fixture
+    // records the preference today: the digest then quotes the stored
+    // principle the same way osb://preferences/active does, and one
+    // sibling must not undo the other's fence.
+    writePreference(vault, {
+      slug: "fresh",
+      topic: "fresh",
+      principle: FRESH_PRINCIPLE,
+      created_at: new Date().toISOString(),
+      unconfirmed_until: "2027-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: new Date().toISOString(),
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: new Date().toISOString(),
+      confidence: BRAIN_CONFIDENCE.high,
+      confidence_value: 0.8,
+    });
+    const local = readResource(resourceCtx(TRANSPORT_REACH.local), "osb://digest/latest");
+    const remote = readResource(resourceCtx(TRANSPORT_REACH.remote), "osb://digest/latest");
+    expect(local.text).toContain(FRESH_PRINCIPLE);
+    expect(local.text).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
+    // The render is the system's own voice quoting stored text, named
+    // for the generated render's own absence of stamps, the way the
+    // active and lessons readers are.
+    expectClosedFenceSpan(remote.text, LEGACY_LABEL, FRESH_PRINCIPLE);
   });
 });

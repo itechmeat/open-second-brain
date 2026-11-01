@@ -126,7 +126,9 @@ beforeEach(() => {
     created_at: "2026-05-01T00:00:00Z",
     unconfirmed_until: "2026-05-08T00:00:00Z",
     status: BRAIN_PREFERENCE_STATUS.confirmed,
-    evidenced_by: [],
+    // Evidence naming the signal below gives the agent-query walk a
+    // preference contribution, so every non-log kind is in the fixture.
+    evidenced_by: ["[[sig-2026-05-03-agented-signal]]"],
     confirmed_at: "2026-05-02T00:00:00Z",
     applied_count: 1,
     violated_count: 0,
@@ -162,6 +164,18 @@ beforeEach(() => {
       eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
       agent: "agent-a",
       body: { target: "notes/agent.md", op: "create", write_id: "w1" },
+    },
+    { deviceId: "" },
+  );
+  // One plain note event, so the log kind is a real row and the
+  // "log serializers untouched" branch is not vacuous.
+  appendLogEvent(
+    vault,
+    {
+      timestamp: "2026-05-04T01:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "agent-a",
+      body: { text: "zzplainlogtextzz the operator journaled" },
     },
     { deviceId: "" },
   );
@@ -264,7 +278,20 @@ describe("agent contribution bodies at remote reach", () => {
     kind: string;
     id: string;
     text: string;
+    data: Record<string, unknown>;
   }
+
+  /**
+   * The fence label each non-log kind's governing page derives in this
+   * fixture: the note-write row probes the stamped note page, the
+   * preference row the stamped preference, the signal row its unstamped
+   * signal page.
+   */
+  const LABEL_BY_KIND: Record<string, string> = {
+    note: AGENT_LABEL,
+    preference: AGENT_LABEL,
+    signal: LEGACY_LABEL,
+  };
 
   test("brain_agent_query fences note, preference and signal bodies; log rows untouched", async () => {
     const local = (await call("brain_agent_query", TRANSPORT_REACH.local, {
@@ -278,15 +305,25 @@ describe("agent contribution bodies at remote reach", () => {
       const localRow = local.contributions.find((c) => c.id === row.id)!;
       if (row.kind === "log") {
         expect(row.text).toBe(localRow.text);
-      } else {
-        expect(row.text.startsWith(`<${UNTRUSTED_SOURCE_TAG} origin="`)).toBe(true);
-        expect(row.text).not.toBe(localRow.text);
+        continue;
+      }
+      // Exact whole-fence equality, not a prefix: a shaper that fenced
+      // only a leading section, or emitted stored text after the close
+      // tag, fails here.
+      expect(row.text).toBe(fenceFor(LABEL_BY_KIND[row.kind]!, localRow.text));
+      // The structured data block echoes the same stored text beside the
+      // body; an unfenced copy in data would not be a fence.
+      if (row.kind === "signal") {
+        expect(row.data["principle"]).toBe(
+          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"]),
+        );
       }
     }
-    const note = remote.contributions.find((c) => c.kind === "note");
-    expect(note?.text).toBe(
-      fenceFor(AGENT_LABEL, local.contributions.find((c) => c.kind === "note")!.text),
-    );
+    // Every non-log kind is in the fixture, so the loop above exercised
+    // note, preference and signal rows, not one representative kind.
+    for (const kind of ["note", "preference", "signal"]) {
+      expect(remote.contributions.some((c) => c.kind === kind)).toBe(true);
+    }
   });
 
   test("brain_agent_diff fences the same contribution bodies", async () => {
@@ -301,9 +338,17 @@ describe("agent contribution bodies at remote reach", () => {
       const localRow = local.contributions.find((c) => c.id === row.id)!;
       if (row.kind === "log") {
         expect(row.text).toBe(localRow.text);
-      } else {
-        expect(row.text.startsWith(`<${UNTRUSTED_SOURCE_TAG} origin="`)).toBe(true);
+        continue;
       }
+      expect(row.text).toBe(fenceFor(LABEL_BY_KIND[row.kind]!, localRow.text));
+      if (row.kind === "signal") {
+        expect(row.data["principle"]).toBe(
+          fenceFor(LABEL_BY_KIND[row.kind]!, localRow.data["principle"]),
+        );
+      }
+    }
+    for (const kind of ["note", "preference", "signal"]) {
+      expect(remote.contributions.some((c) => c.kind === kind)).toBe(true);
     }
   });
 });

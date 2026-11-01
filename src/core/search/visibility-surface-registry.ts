@@ -119,8 +119,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "(core/brain/file-recall.ts), which calls search() with the derived query and no visibility " +
       "override, so it inherits the same pool-filters gate as brain_search. It is covered " +
       "transitively, not by an independent check of its own. Delivery shaping (delivery-trust, " +
-      "lane A): the file-recall snippets are fenced at remote reach through the same shaper, " +
-      "byte-identical at local reach.",
+      "lane A): the tool delivers path, title and score only - no stored text crosses this " +
+      "surface at any reach, so there is nothing to fence (quote-fencing-search.test.ts pins " +
+      "the exact key set).",
   },
   {
     surface: "search query",
@@ -1376,7 +1377,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "preference or retired record the caller cannot read is absent from every row and count, " +
       "with the log events, backlink sources and action targets naming one, and the agent " +
       "summary counts only the events the caller may read; the token-footprint action " +
-      "measures the whole vault.",
+      "measures the whole vault. Delivery shaping (delivery-trust, lane A): the delivered " +
+      "markdown is fenced at remote reach through the shared delivery shaper, named for the " +
+      "compiled-digest render's own absence of stamps (the same probe the active and lessons " +
+      "readers make); local keeps the bytes.",
   },
   {
     surface: "osb://status",
