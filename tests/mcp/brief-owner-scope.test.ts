@@ -21,7 +21,7 @@
  * position a reader below local reach is already in.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -266,15 +266,24 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
     seedTwoOwnerActivity();
     setGate(GATE_MODE.fail);
 
-    const asB = await call({ view: "today" }, OWNER_B);
-    expect(stableText(asB)).not.toContain(OWNED_BY_A);
-    const activityB = asB["recent_activity"] as { total: number; bullets: string[] };
-    expect(activityB.total).toBe(1);
-    expect(activityB.bullets.join("\n")).toContain("confirmed=1");
+    // The handler reads a live `new Date()` per call and the seeded
+    // event sits exactly on the hour, so two calls that straddle an
+    // hour boundary would render different age labels. Both calls
+    // answer at the same frozen instant, the CLOCK anchor's own now.
+    setSystemTime(CLOCK.now);
+    try {
+      const asB = await call({ view: "today" }, OWNER_B);
+      expect(stableText(asB)).not.toContain(OWNED_BY_A);
+      const activityB = asB["recent_activity"] as { total: number; bullets: string[] };
+      expect(activityB.total).toBe(1);
+      expect(activityB.bullets.join("\n")).toContain("confirmed=1");
 
-    const asA = await call({ view: "today" }, OWNER_A);
-    expect(stableText(asA)).toContain(OWNED_BY_A);
-    expect((asA["recent_activity"] as { total: number }).total).toBe(2);
+      const asA = await call({ view: "today" }, OWNER_A);
+      expect(stableText(asA)).toContain(OWNED_BY_A);
+      expect((asA["recent_activity"] as { total: number }).total).toBe(2);
+    } finally {
+      setSystemTime();
+    }
   });
 
   // The load-bearing convention of the delivery surfaces: a gate that
