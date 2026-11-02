@@ -177,6 +177,9 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_session_grep",
   "brain_session_summary",
   "brain_skill_proposals",
+  // benchmark-gated rewrite status (t_635e3e72, agent-presence): read-only
+  // ids-and-rates status beside brain_skill_proposals; never accepts, never scores
+  "brain_skill_rewrite_status",
   "brain_sources",
   "brain_stale_scan",
   "brain_status",

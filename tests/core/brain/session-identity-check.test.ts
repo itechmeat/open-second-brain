@@ -377,6 +377,15 @@ const KIND_WRITERS: ReadonlyArray<{
     writers: ["core/decision-model/record.ts"],
   },
   {
+    // Agent-presence (t_635e3e72): one record per COMPLETED benchmark-gated
+    // rewrite gate run. Machine-side evidence keyed by skill, spec hash and
+    // round ids - a scoring pass no host session took part in, so
+    // sessionless exactly like the decision-model eval grade beside it.
+    kind: "skill_rewrite_eval_grade",
+    sessionScoped: false,
+    writers: ["core/brain/skill-proposals.ts"],
+  },
+  {
     kind: "decision_model_extract_commit",
     sessionScoped: true,
     writers: ["core/brain/extract-signals-prefilter.ts"],

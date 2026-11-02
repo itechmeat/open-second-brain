@@ -625,6 +625,10 @@ const NO_PREFERENCE_BYTES: Readonly<Record<string, string>> = Object.freeze({
     "builds preference paths only to detect install conflicts; its preferences land through " +
     "`restorePreferences`, and its one direct write adds the install fingerprint to a page it " +
     "just staged under `OKF Review/`, never to a preference.",
+  "src/core/brain/lessons-promotion.ts":
+    "builds a preference path only to READ the lesson's source preference; its two atomic " +
+    "writes land the lessons-approvals ledger in the derived store, outside Brain/ and outside " +
+    "any note surface, so there are no preference bytes to own (t_1e952e43).",
 });
 
 test("every module that writes preference bytes reaches the ownership resolver", async () => {

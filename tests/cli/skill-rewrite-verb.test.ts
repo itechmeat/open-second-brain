@@ -368,7 +368,7 @@ describe("rewrite-score", () => {
 
   test("a short dev arm is not_enough_evidence and stages nothing", async () => {
     seedBenchmark();
-    writeRounds("baseline", [passingTranscript(DEV_TASKS[0])]);
+    writeRounds("baseline", [passingTranscript(DEV_TASKS[0]!)]);
     writeRounds(
       "candidate",
       DEV_TASKS.map((taskId) => passingTranscript(taskId)),

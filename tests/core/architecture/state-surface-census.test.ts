@@ -94,24 +94,15 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // verb LEFT the population - its runs dir was hoisted to `BENCH_RUNS_REL` in
 // `path-constants.ts`, so it no longer spells the directory - taking its now
 // stale exclusion with it.
-// 28 -> 30, net, from the agent-presence wave: the approvals ledger writer
+// 30 -> 32, net, from the agent-presence wave: the approvals ledger writer
 // (`src/core/brain/lessons-promotion.ts`, t_1e952e43) spells the directory
-// for `lessons-approvals.json` and is answered by that surface's row (its
-// attribution lands with the lessons lane's final task), and the
-// instruction-block installer (`src/core/install/instruction-block.ts`,
+// for `lessons-approvals.json` and is answered by that surface's row, and
+// the instruction-block installer (`src/core/install/instruction-block.ts`,
 // t_ba41a78a) spells it for `instruction-block.lock.json` and is answered
 // by the `instruction_block_lock` row's `sources`.
-/** 32 -> 33: the agent-presence lane's skill-benchmarks tree joins the swept
- * population (its modules attribute to the new skill_benchmarks row); the
- * operator-approved-lessons modules landing in the same window attribute
- * to that lane's rows in its own lane-final commit.
- */
-/** 32 -> 33: the agent-presence lane's skill-benchmarks tree joins the swept
- * population (its modules attribute to the new skill_benchmarks row). The
- * operator-approved-lessons modules that landed in the same window attribute
- * to that lane's rows in its own lane-final commit; the declared-surface
- * count below moves with each lane's row in the same way.
- */
+// 32 -> 33: the lessons-block readiness check
+// (`src/core/brain/doctor/lessons-block-check.ts`, t_1e952e43) joins with
+// the same wave, answered by the `lesson_approvals` row's `sources`.
 const SWEPT_POPULATION_SIZE = 33;
 
 /** Declared surfaces today. Pinned for the same reason. */
@@ -129,6 +120,9 @@ const SWEPT_POPULATION_SIZE = 33;
 // 55 -> 56: the instruction-block lock row (t_ba41a78a Task B4) joins the
 // catalogue - the ownership record uninstall reads to remove exactly the
 // recorded pair, the same derived-store join the install manifest made.
+// 56 -> 57: the skill-benchmarks row (t_635e3e72 Task A5) joins the
+// catalogue - the preregistration a staged scored_rewrite proposal is
+// audited against, the same vault-content join the skills tree made.
 // 57 -> 58: the lesson_approvals row joins the catalogue with the lessons lane's final
 // commit (t_1e952e43), the same join the session-mining ledger made.
 const DECLARED_SURFACE_COUNT = 58;

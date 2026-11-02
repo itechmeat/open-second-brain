@@ -194,6 +194,11 @@ export const FOLDABLE_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Ob
  *     would sever the receipt-to-presence join for every record past the
  *     cutoff, turning "checked and verified/missed" into an
  *     `unjoined` read.
+ *   - `skill_rewrite_eval_grade` - the benchmark-gated rewrite lane's
+ *     completed gate-run verdicts (t_635e3e72), read back as data by the
+ *     read-only rewrite status surface; the evidence an operator audits a
+ *     staged scored_rewrite proposal against, per-record identity past
+ *     any correlation window, and additive by design - kept never-folded.
  */
 export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
   "source_invalidation",
@@ -213,6 +218,7 @@ export const KEPT_CONTINUITY_KINDS: ReadonlyArray<ContinuityRecordKind> = Object
   "receipt_compaction",
   "skill_invoked",
   "reply_presence",
+  "skill_rewrite_eval_grade",
 ]);
 
 /** One shard selected for compaction, as a scan reported it. */

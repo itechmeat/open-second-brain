@@ -427,6 +427,10 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
     "core/brain/doctor/git-tracked-state-check.ts",
     "composes the ls-files pathspec and the guard ignore line from the constant",
   ],
+  [
+    "core/brain/doctor/lessons-block-check.ts",
+    "lessons-block readiness probe naming the store-side approval ledger (t_1e952e43)",
+  ],
   ["core/brain/ingest/checkpoint.ts", "ingest checkpoints under the store"],
   [
     "core/brain/ingest/content-manifest.ts",
@@ -435,6 +439,10 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   [
     "core/brain/inject-failopen.ts",
     "inject cache under the store, spelled as the private INJECT_CACHE_DIR beside its join",
+  ],
+  [
+    "core/brain/lessons-promotion.ts",
+    "lesson-approval ledger under the store (t_1e952e43), the decisions-in-force table",
   ],
   ["core/brain/maintenance/journal.ts", "maintenance journals under the store"],
   ["core/brain/maintenance/lease.ts", "maintenance lease sqlite under the store"],
@@ -468,6 +476,10 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   [
     "core/install/adapters/aider-wrapper.ts",
     "aider context artifact under the store, spelled as a join literal",
+  ],
+  [
+    "core/install/instruction-block.ts",
+    "instruction-block ownership lockfile under the store (t_ba41a78a)",
   ],
   ["core/install/manifest.ts", "install lockfile under the store, spelled as a join literal"],
   ["core/maintenance/self-heal-upgrade-state.ts", "self-heal upgrade state under the store"],

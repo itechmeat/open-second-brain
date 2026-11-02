@@ -116,7 +116,7 @@ describe("brain_skill_rewrite_status", () => {
     expect(result.grades[0]?.verdict).toBe(SKILL_REWRITE_VERDICT.hold);
     expect(result.grades[0]?.spec_hash).toBe(specHash);
     const pending = listPendingSkillProposals(vault);
-    expect(result.pending_rewrite_slug).toBe(pending[0]?.slug);
+    expect(result.pending_rewrite_slug).toBe(pending[0]!.slug);
     // Ids and rates only: no task text, no transcript text anywhere.
     expect(JSON.stringify(result)).not.toContain("File the meeting summary");
   });
