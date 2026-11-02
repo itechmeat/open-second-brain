@@ -71,10 +71,22 @@ export function readCachedFrontmatterEntry(
   // One spelling per (vault, rel): fold Windows separators before the
   // cache key and the join, so a caller handed `notes\page.md` and one
   // handed `notes/page.md` share one cached entry - and one read - of
-  // the same logical page. Unnormalized, the backslash spelling misses
-  // the cache on every host and fails closed on POSIX ones, where the
-  // backslash would name a file the vault cannot carry.
+  // the same logical page where `\` is a separator. Where it is a legal
+  // filename character the rel passes through unchanged, and the
+  // containment check below judges exactly that spelling.
   const rel = posixRel(path);
+  // Containment of the JOINED path inside the vault, before cache or
+  // read: a rel that climbs out of the vault names no page, and probing
+  // it would open - and parse - a file BESIDE the vault. Resolving both
+  // sides collapses `..` segments before the comparison, and the
+  // platform-relative suffix check keeps the boundary on the host's own
+  // separator. The refusal is the unreadable verdict every caller of
+  // this helper already fails closed on.
+  if (!pathIsInside(join(vault, rel), vault)) {
+    const refusal: CachedFrontmatter = Object.freeze({ meta: {}, unreadable: true });
+    cache.set(rel, refusal);
+    return refusal;
+  }
   const cached = cache.get(rel);
   if (cached !== undefined) return cached;
   const [meta, , notices] = parseFrontmatterWithNotices(join(vault, rel), {
