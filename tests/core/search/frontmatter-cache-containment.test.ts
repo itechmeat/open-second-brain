@@ -21,6 +21,7 @@ import {
   readCachedFrontmatterEntry,
   type FrontmatterCache,
 } from "../../../src/core/search/result-filters.ts";
+import { posixRel } from "../../../src/core/path-safety.ts";
 
 let vault: string;
 let outsideDir: string;
@@ -53,7 +54,14 @@ test("a rel that resolves outside the vault is fail-closed unreadable without an
   // surfaced, so an unreadable verdict with an empty map is the proof
   // the read never happened.
   expect(entry).toEqual({ meta: {}, unreadable: true });
-  expect(cache.get(rel)).toEqual({ meta: {}, unreadable: true });
+  // The cache keys a rel by its folded POSIX spelling - the fold that
+  // makes `notes\page.md` and `notes/page.md` one logical page sharing
+  // one entry - so the refusal is cached under that spelling on every
+  // platform, and a repeat probe through the raw spelling answers the
+  // refusal again without ever growing a second entry.
+  expect(cache.get(posixRel(rel))).toEqual({ meta: {}, unreadable: true });
+  expect(readCachedFrontmatterEntry(cache, vault, rel)).toEqual({ meta: {}, unreadable: true });
+  expect(cache.size).toBe(1);
 });
 
 test("isPathOwnerVisible inherits the refusal for an escaping rel", () => {

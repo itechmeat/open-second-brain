@@ -9,7 +9,16 @@
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  join,
+  posix as pathPosix,
+  relative,
+  resolve,
+  sep,
+  win32 as pathWin32,
+} from "node:path";
 
 /** The `code` a {@link VaultEscapeError} carries, beside the errno codes of fs errors. */
 export const VAULT_ESCAPE_CODE = "ESCAPE";
@@ -52,7 +61,7 @@ export function ensureInsideVault(target: string, vault: string): string {
   const resolvedTarget = resolve(target);
   const resolvedVault = resolve(vault);
 
-  if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
+  if (!isLexicallyInsideHost(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault: ${target}`);
   }
 
@@ -78,7 +87,7 @@ export function realpathInsideVault(target: string, vault: string): boolean {
   if (!existsSync(resolvedVault)) return true;
   const realVault = safeRealpath(resolvedVault);
   const realAncestor = safeRealpath(deepestExistingAncestor(resolve(target)));
-  return isLexicallyInside(realAncestor, realVault);
+  return isLexicallyInsideHost(realAncestor, realVault);
 }
 
 /**
@@ -91,18 +100,52 @@ export function realpathInsideVault(target: string, vault: string): boolean {
  * vault" and "the check could not run" into one arm.
  */
 export function pathIsInside(target: string, root: string): boolean {
-  return isLexicallyInside(resolve(target), resolve(root));
+  return pathIsInsideOn(hostPlatform(), target, root);
 }
 
-function isLexicallyInside(target: string, root: string): boolean {
+/**
+ * Does `target` resolve, under `platform`'s own path rules, to `root` or a
+ * descendant of it? The pure judgment behind {@link pathIsInside},
+ * parameterized by platform so the Windows rules can be exercised from a
+ * POSIX test process.
+ *
+ * Both sides go through the SAME named platform's `path` module, whose
+ * whole surface is string work: `path.win32.resolve` treats `\` and `/`
+ * alike as separators, returns a backslash-separated absolute path, and
+ * collapses `..` lexically - it never touches the filesystem, so an 8.3
+ * short spelling (`RUNNER~1`) stays exactly as spelled on both sides.
+ * That symmetry is what makes the check fail-closed under spelling
+ * divergence: a short-vs-long mismatch can only make the prefix
+ * MISmatch, which refuses an actually-inside path, never admits an
+ * actually-escaped one.
+ */
+export function pathIsInsideOn(platform: "win32" | "posix", target: string, root: string): boolean {
+  const pathImpl = platform === "win32" ? pathWin32 : pathPosix;
+  return isLexicallyInside(platform, pathImpl.resolve(target), pathImpl.resolve(root));
+}
+
+function isLexicallyInside(platform: "win32" | "posix", target: string, root: string): boolean {
   // Windows file paths are case-insensitive at the filesystem level —
   // `C:\Vault\x.md` and `c:\vault\x.md` resolve to the same inode. Doing
   // a case-sensitive string compare on Windows would falsely reject a
   // user's lower-cased argument against a vault stored with the canonical
-  // capitalisation. POSIX stays case-sensitive.
-  const t = process.platform === "win32" ? target.toLowerCase() : target;
-  const r = process.platform === "win32" ? root.toLowerCase() : root;
-  return t === r || t.startsWith(r + sep);
+  // capitalisation. POSIX stays case-sensitive. The separator is the named
+  // platform's own, so a win32 judgment keeps working from a POSIX host.
+  const fold = platform === "win32";
+  const sepChar = fold ? pathWin32.sep : pathPosix.sep;
+  const t = fold ? target.toLowerCase() : target;
+  const r = fold ? root.toLowerCase() : root;
+  return t === r || t.startsWith(r + sepChar);
+}
+
+/** This host's path-rules name, narrowed to the two `node:path` flavors. */
+function hostPlatform(): "win32" | "posix" {
+  return process.platform === "win32" ? "win32" : "posix";
+}
+
+/** The lexical answer for THIS host, over paths its own `path` module resolved. */
+function isLexicallyInsideHost(target: string, root: string): boolean {
+  return isLexicallyInside(hostPlatform(), target, root);
 }
 
 function deepestExistingAncestor(target: string): string {
@@ -277,5 +320,5 @@ export function vaultRelative(target: string, vault: string): string {
   return rel
     .split(/[\\/]/)
     .filter((p) => p.length > 0)
-    .join(posix.sep);
+    .join(pathPosix.sep);
 }

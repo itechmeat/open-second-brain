@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 
-import { ensureInsideVault, vaultRelative } from "../../src/core/path-safety.ts";
+import { ensureInsideVault, pathIsInsideOn, vaultRelative } from "../../src/core/path-safety.ts";
 
 // Resolving `/v` produces a platform-appropriate absolute path:
 // `/v` on POSIX, `C:\v` (or the current drive) on Windows. Building all
@@ -94,5 +94,79 @@ describe("vaultRelative", () => {
 
   test("returns empty string for the vault root itself", () => {
     expect(vaultRelative(VAULT, VAULT)).toBe("");
+  });
+});
+
+describe("pathIsInsideOn — the win32 rules judged from any host", () => {
+  // `path.win32` is pure string work: `resolve` treats `\` and `/` alike
+  // as separators, returns a backslash-separated absolute path and
+  // collapses `..` lexically, never touching the filesystem - so these
+  // judgments run identically on a Linux CI runner. The vault spelling is
+  // the shape a Windows runner actually hands over: os.tmpdir() there is
+  // the 8.3 short form (TEMP=C:\Users\RUNNER~1\...), and mkdtempSync
+  // appends to it verbatim.
+  const SHORT_TMP_VAULT = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\o2b-fm-cache-inside-ABC";
+
+  test("a `..` rel that lands on a sibling of an 8.3-spelled vault refuses", () => {
+    // The spelling a caller holds before any join/resolve folds it: the
+    // climb is still lexical, `path.win32.resolve` collapses it, and the
+    // collapsed sibling is not inside the vault.
+    const raw = `${SHORT_TMP_VAULT}\\..\\o2b-fm-cache-outside-XYZ\\escape.md`;
+    expect(win32.resolve(raw)).toBe(
+      "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\o2b-fm-cache-outside-XYZ\\escape.md",
+    );
+    expect(pathIsInsideOn("win32", raw, SHORT_TMP_VAULT)).toBe(false);
+  });
+
+  test("forward slashes fold to separators, so the folded spelling is judged too", () => {
+    expect(
+      pathIsInsideOn(
+        "win32",
+        "C:/Users/RUNNER~1/AppData/Local/Temp/o2b-fm-cache-inside-ABC/notes/page.md",
+        SHORT_TMP_VAULT,
+      ),
+    ).toBe(true);
+    expect(
+      pathIsInsideOn(
+        "win32",
+        "C:/Users/RUNNER~1/AppData/Local/Temp/o2b-fm-cache-outside-XYZ/escape.md",
+        SHORT_TMP_VAULT,
+      ),
+    ).toBe(false);
+  });
+
+  test("the comparison is case-insensitive, as the Windows filesystem names", () => {
+    expect(
+      pathIsInsideOn(
+        "win32",
+        "c:\\users\\runner~1\\appdata\\local\\temp\\o2b-fm-cache-inside-abc\\page.md",
+        SHORT_TMP_VAULT,
+      ),
+    ).toBe(true);
+  });
+
+  test("a sibling sharing only the vault's name prefix is not inside", () => {
+    expect(
+      pathIsInsideOn(
+        "win32",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\o2b-fm-cache-inside-ABC2\\page.md",
+        SHORT_TMP_VAULT,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("pathIsInsideOn — the posix rules stay case-sensitive and slash-separated", () => {
+  test("a `..` rel that escapes refuses", () => {
+    expect(pathIsInsideOn("posix", "/v/../escape.md", "/v")).toBe(false);
+    expect(pathIsInsideOn("posix", "/v/notes/../../escape.md", "/v")).toBe(false);
+  });
+
+  test("case differences do not fold on posix", () => {
+    expect(pathIsInsideOn("posix", "/V/page.md", "/v")).toBe(false);
+  });
+
+  test("a descendant accepts", () => {
+    expect(pathIsInsideOn("posix", "/v/notes/page.md", "/v")).toBe(true);
   });
 });
