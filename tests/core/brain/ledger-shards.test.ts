@@ -106,6 +106,23 @@ describe("parseShardedName", () => {
     expect(parseShardedName("pref-ax.jsonl", grammar)).toBeNull();
   });
 
+  test("an exact grammar admits the bare name and nothing else", () => {
+    const grammar: LedgerShardGrammar = {
+      base: literalBase("digest"),
+      extensions: ["md"],
+      exact: true,
+    };
+    expect(parseShardedName("digest.md", grammar)).toEqual({
+      base: "digest",
+      shardId: "",
+      ext: "md",
+    });
+    // The shard segment the ordinary grammar treats as optional is a
+    // planted name here, never a writer's: an exact grammar refuses it.
+    expect(parseShardedName("digest.evil.md", grammar)).toBeNull();
+    expect(parseShardedName("digest.md.bak", grammar)).toBeNull();
+  });
+
   test("round-trips whatever the name builder produced", () => {
     for (const shardId of ["", "testdev1", "a-b-c"]) {
       const name = shardedFileName("2026-08", shardId, "jsonl");

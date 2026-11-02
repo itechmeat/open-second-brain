@@ -370,6 +370,21 @@ describe("verifyAttestation", () => {
     expect(result.unexplainedDrift).toBe(true);
   });
 
+  test("a shard-spelled impostor of a store root file is still drift", () => {
+    // The writer names its root files exactly; a name that only rides
+    // the shard grammar's optional device segment (`digest.evil.md`)
+    // is a planted file, never growth.
+    const record = signedRecord();
+    const store = gitStoreDir(vault, "some-repo");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "state.json"), "{}\n", "utf8");
+    writeFileSync(join(store, "digest.md"), "# some-repo\n", "utf8");
+    writeFileSync(join(store, "commits.jsonl"), "", "utf8");
+    writeFileSync(join(store, "digest.evil.md"), "planted\n", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
+  });
+
   test("an addition to Brain/preferences stays drift: those files are authored state", () => {
     mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
     writeFileSync(
