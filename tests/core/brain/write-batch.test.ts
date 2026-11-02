@@ -255,6 +255,27 @@ describe("applyWriteBatch note operations", () => {
     expect(md).toContain("appended by agent");
   });
 
+  test("an unclaimed-process mutation of a cli-stamped page stamps unset", () => {
+    seedNote("Notes/Operator.md", "operator body", "title: O\norigin_channel: cli");
+    // No lane claimed this process, so the mutation's channel is the
+    // explicit `unset` literal - the stamp a page inherits but its
+    // writer did not earn is rewritten to THAT, never left as `cli`:
+    // the delivery side reads a surviving `cli` as operator-authored
+    // plain text, which words an unclaimed process wrote are not.
+    clearOriginChannel();
+    try {
+      applyWriteBatch(vault, [
+        { kind: "append_note", path: "Notes/Operator.md", content: "unclaimed text" },
+      ]);
+    } finally {
+      clearOriginChannel();
+    }
+    const md = readFileSync(join(vault, "Notes/Operator.md"), "utf8");
+    expect(md).toContain("origin_channel: unset");
+    expect(md).not.toContain("origin_channel: cli");
+    expect(md).not.toContain("origin_channel: mcp-tool");
+  });
+
   test("a cli-lane mutation keeps the operator stamp it earned", () => {
     seedNote("Notes/Operator.md", "operator body", "title: O\norigin_channel: cli");
     setOriginChannel(ORIGIN_CHANNEL.cli);
