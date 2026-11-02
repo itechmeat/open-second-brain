@@ -37,7 +37,14 @@
  *     body that moved under an untouched file: rewritten, not refused.
  *     No install time at all refuses too - a block nobody recorded cannot
  *     be proven ours, and silently replacing it would clobber operator
- *     text;
+ *     text. The same refusal covers a file that cannot be re-statted at
+ *     gate time and an install stamp that sits in the future: neither can
+ *     prove the block untouched, and the gate fails closed;
+ *   - the bytes the merge was based on are re-checked before anything is
+ *     written, and again inside the atomic writer immediately before the
+ *     rename. A mid-flight edit elsewhere refuses with kind
+ *     `concurrent-modification`, leaving the file and any backup
+ *     untouched; `force` is the deliberate overwrite;
  *   - symbolic links are refused before any read or write: a writer that
  *     follows a link has left the file the audit measures;
  *   - multiple, unpaired or reversed markers of the block's OWN spelling
@@ -58,7 +65,9 @@ import { lstatSync, readFileSync, statSync } from "node:fs";
 import {
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
+  fileMatchesExpected,
   isFileAlreadyExists,
+  isFileDrift,
 } from "../fs-atomic.ts";
 import {
   DEFAULT_BEGIN_MARKER,
@@ -96,6 +105,14 @@ export const RULES_BLOCK_ERROR_KIND = Object.freeze({
    * be applied to it.
    */
   invalidPlan: "invalid-plan",
+  /**
+   * The on-disk bytes moved while the operation was being prepared: the
+   * merge or removal was based on bytes that are no longer current.
+   * Nothing was written and no backup was taken; the operator re-runs
+   * the command (a re-run re-reads the file and converges) or passes
+   * `--force` to overwrite the current bytes deliberately.
+   */
+  concurrentModification: "concurrent-modification",
 } as const);
 
 /** Closed union over {@link RULES_BLOCK_ERROR_KIND}. */
@@ -372,9 +389,34 @@ export interface RulesBlockWriteOptions {
    * refuses unless `force`; a diverged block on an older file is a
    * canonical body that moved and is rewritten. `null` or omitted means
    * no ownership record exists, so every diverged block refuses - a block
-   * nobody recorded cannot be proven ours.
+   * nobody recorded cannot be proven ours. A stamp further than
+   * {@link FUTURE_ANCHOR_ALLOWANCE_MS} into the future counts as no
+   * record either: a future stamp would silently disarm the gate.
    */
   readonly installedAtMs?: number | null;
+  /** Test seams for the race-window refusals; production omits them. */
+  readonly seams?: RulesBlockSeams;
+}
+
+/**
+ * Test-only indirections over the two re-reads the fail-closed gates
+ * perform, so the race-window refusals can be pinned deterministically
+ * without racing a real second writer (the same pattern as
+ * `RenameRetrySeams` in `src/core/fs-atomic.ts`). Production callers
+ * never pass this.
+ */
+export interface RulesBlockSeams {
+  /**
+   * The mtime the hand-edit gate reads from the live file; null models a
+   * stat failure (a mid-flight move). Defaults to a real `statSync`.
+   */
+  readonly fileMtimeMs?: (path: string) => number | null;
+  /**
+   * The current-bytes comparison behind the drift refusal; false models
+   * the file having moved since the merge read it. Defaults to
+   * `fileMatchesExpected` from `src/core/fs-atomic.ts`.
+   */
+  readonly currentBytesMatch?: (target: string, expected: string | null) => boolean;
 }
 
 export interface RulesBlockWriteResult {
@@ -396,6 +438,17 @@ export const RULES_BLOCK_BACKUP_MAX_ATTEMPTS = 128;
  * of its own record must not read as a later hand edit.
  */
 const MTIME_SLACK_MS = 1000;
+
+/**
+ * How far past `Date.now()` an install or promotion anchor may sit and
+ * still count as a record: a small clock-skew allowance. An anchor any
+ * further into the future is treated as NO record - the fail-closed
+ * direction - because the anchor lives in agent-writable state, and a
+ * future-stamped record would make every later operator hand-edit read
+ * as a canonical move under an untouched file, silently disarming the
+ * hand-edit gate.
+ */
+export const FUTURE_ANCHOR_ALLOWANCE_MS = 5 * 60 * 1000;
 
 /** Candidate `attempt` of the backup-name ladder. */
 function collisionCandidate(base: string, attempt: number): string {
@@ -439,10 +492,14 @@ function backupRulesFile(file: string, before: string): string {
  *
  * Refusals, all named: symlinks (`symlink`), unreadable paths
  * (`unreadable`), malformed marker pairs of this spelling (`markers`,
- * wrapping `ManagedBlockError`), and a hand-edited block
+ * wrapping `ManagedBlockError`), a hand-edited block
  * (`user-modified-block`) when the body diverged from the canonical body
- * and the file mtime is newer than `installedAtMs` - or when no install
- * time is known at all. `force` overrides only the hand-edit refusal.
+ * and the file is newer than `installedAtMs` - or when no trustworthy
+ * install time is known at all, which includes a file that cannot be
+ * re-statted at gate time and a stamp sitting in the future - and a
+ * mid-flight edit elsewhere (`concurrent-modification`). `force`
+ * overrides the hand-edit refusal and the drift refusal; it is the
+ * operator's deliberate overwrite.
  */
 export function writeRulesBlock(
   file: string,
@@ -458,18 +515,28 @@ export function writeRulesBlock(
   if (next === read.content) return { changed: false, backupPath: null };
 
   // The hand-edit safety net: a diverged block on a file the operator
-  // touched after the install (or with no recorded install) is theirs
-  // until `force` says otherwise.
+  // touched after the install (or with no trustworthy recorded install)
+  // is theirs until `force` says otherwise.
   if (read.present) {
     const diverged = !sameBlockBody(read.body as string, canonicalBody);
-    const recorded = typeof opts.installedAtMs === "number" && Number.isFinite(opts.installedAtMs);
-    const mtime = fileMtimeMs(file);
+    const anchor =
+      typeof opts.installedAtMs === "number" && Number.isFinite(opts.installedAtMs)
+        ? opts.installedAtMs
+        : null;
+    const anchorTrusted = anchor !== null && anchor <= Date.now() + FUTURE_ANCHOR_ALLOWANCE_MS;
+    const mtime = (opts.seams?.fileMtimeMs ?? fileMtimeMs)(file);
     const touchedAfterInstall =
-      !recorded || (mtime !== null && mtime > (opts.installedAtMs as number) + MTIME_SLACK_MS);
+      !anchorTrusted || mtime === null || mtime > (anchor as number) + MTIME_SLACK_MS;
     if (diverged && touchedAfterInstall && !opts.force) {
+      const gateDetail =
+        anchor !== null && !anchorTrusted
+          ? " - the recorded install time is in the future and is treated as no record"
+          : mtime === null
+            ? " - the file could not be re-statted, so it cannot be proven untouched"
+            : "";
       throw new RulesBlockError(
         `${file} appears hand-edited after the last install (the ${blockId} block diverges ` +
-          "from canonical content); refusing to overwrite. " +
+          `from canonical content${gateDetail}); refusing to overwrite. ` +
           "Re-run with --force to overwrite, or uninstall first",
         RULES_BLOCK_ERROR_KIND.userModifiedBlock,
         file,
@@ -477,11 +544,45 @@ export function writeRulesBlock(
     }
   }
 
+  // The drift guard: the merge above was computed from the bytes the
+  // first read saw. If those are no longer current, writing would clobber
+  // an edit this run never saw - refused before the backup is taken, so
+  // the refused run touches nothing. The atomic writer re-checks the same
+  // expectation immediately before the rename, closing the window this
+  // pre-check leaves; a drift surfacing there is wrapped into the same
+  // named refusal.
+  const expected = absent ? null : read.content;
+  const concurrentMessage =
+    `${file} changed while the ${blockId} block write was being prepared; refusing to ` +
+    "overwrite bytes this run never saw. Re-run the command to converge, or pass " +
+    "--force to overwrite the current bytes deliberately";
+  if (!opts.force && !(opts.seams?.currentBytesMatch ?? fileMatchesExpected)(file, expected)) {
+    throw new RulesBlockError(
+      concurrentMessage,
+      RULES_BLOCK_ERROR_KIND.concurrentModification,
+      file,
+    );
+  }
+
   if (opts.dryRun) {
     return { changed: true, backupPath: null };
   }
   const backupPath = absent ? null : backupRulesFile(file, read.content);
-  atomicWriteFileSync(file, next);
+  try {
+    atomicWriteFileSync(file, next, opts.force ? {} : { expectBefore: expected });
+  } catch (err) {
+    if (isFileDrift(err)) {
+      throw new RulesBlockError(
+        concurrentMessage,
+        RULES_BLOCK_ERROR_KIND.concurrentModification,
+        file,
+        {
+          cause: err,
+        },
+      );
+    }
+    throw err;
+  }
   return { changed: true, backupPath };
 }
 
@@ -496,6 +597,8 @@ function fileMtimeMs(path: string): number | null {
 export interface RulesBlockRemoveOptions {
   /** Plan the removal and touch nothing. */
   readonly dryRun?: boolean;
+  /** Test seams for the race-window refusal; production omits them. */
+  readonly seams?: RulesBlockSeams;
 }
 
 export interface RulesBlockRemoveResult {
@@ -512,7 +615,9 @@ export interface RulesBlockRemoveResult {
  * carried, every other byte preserved. A file with no pair of this
  * spelling is a NAMED SKIP (`removed: false`), not an error, so
  * uninstalling an install that never landed stays quiet. The file itself
- * is never removed. Symlinks refuse by name, as everywhere above.
+ * is never removed. Symlinks refuse by name, as everywhere above, and
+ * the same drift guard as the write path refuses a mid-flight edit with
+ * kind `concurrent-modification`, leaving the file untouched.
  */
 export function removeRulesBlock(
   file: string,
@@ -524,7 +629,31 @@ export function removeRulesBlock(
   if (!state.present) return { removed: false };
   const next = removeManagedBlock(read.content, blockOpts(blockId));
   if (next === read.content) return { removed: false };
+  const concurrentMessage =
+    `${file} changed while the ${blockId} block removal was being prepared; refusing to ` +
+    "overwrite bytes this run never saw. Re-run the removal to converge";
+  if (!(opts.seams?.currentBytesMatch ?? fileMatchesExpected)(file, read.content)) {
+    throw new RulesBlockError(
+      concurrentMessage,
+      RULES_BLOCK_ERROR_KIND.concurrentModification,
+      file,
+    );
+  }
   if (opts.dryRun) return { removed: true };
-  atomicWriteFileSync(file, next);
+  try {
+    atomicWriteFileSync(file, next, { expectBefore: read.content });
+  } catch (err) {
+    if (isFileDrift(err)) {
+      throw new RulesBlockError(
+        concurrentMessage,
+        RULES_BLOCK_ERROR_KIND.concurrentModification,
+        file,
+        {
+          cause: err,
+        },
+      );
+    }
+    throw err;
+  }
   return { removed: true };
 }

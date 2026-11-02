@@ -543,7 +543,7 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
   // same vocabulary protect/unprotect/doctor record.
   const consent: LaneConsentVerdict = args.yes ? "yes-flag" : "interactive-yes";
 
-  let instructionWrote = false;
+  let instructionApply: ReturnType<typeof applyInstructionBlock> | null = null;
   try {
     const result = adapter.apply(plan, payload, env, opts);
     // t_ba41a78a B3: the instruction write runs after the adapter apply,
@@ -553,12 +553,11 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     // converges because the step is idempotent and bound to a fresh
     // plan. The approved binding is the plan this run rendered.
     if (instruction !== null) {
-      const instructionResult = applyInstructionBlock(env, {
+      instructionApply = applyInstructionBlock(env, {
         dryRun: opts.dryRun,
         force: opts.force,
         approved: instruction.plan,
       });
-      instructionWrote = instructionResult.backupPath !== null;
     }
     // An apply that returned changed the machine, so the close fires
     // unconditionally here - unlike verify, where exit 0 also covers a
@@ -570,12 +569,19 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
       process.stdout.write(renderApplyResult(result, consent));
       // The instruction write is invisible in the adapter's own summary
       // (its step count is the adapter's), so one line says what this
-      // lane did with the operator's consent.
-      if (instruction !== null && !opts.dryRun) {
+      // lane did with the operator's consent. The line is derived from
+      // what the apply actually did - a first install CREATES the file
+      // and takes no backup, so `backupPath` alone cannot tell created
+      // from already-current, and claiming "already carries" right after
+      // creating would be false.
+      if (instructionApply !== null && !opts.dryRun) {
+        const path = instruction?.plan.path ?? "";
         process.stdout.write(
-          instructionWrote
-            ? `instruction block: ${instruction.plan.path} now carries the write-gate block\n`
-            : `instruction block: ${instruction.plan.path} already carries the current write-gate block\n`,
+          instructionApply.created
+            ? `instruction block: ${path} created with the write-gate block\n`
+            : instructionApply.changed
+              ? `instruction block: ${path} now carries the write-gate block\n`
+              : `instruction block: ${path} already carries the current write-gate block\n`,
         );
       }
       process.stdout.write(renderDataOwnership(ownership));

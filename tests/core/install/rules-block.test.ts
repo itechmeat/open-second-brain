@@ -262,6 +262,92 @@ describe("writeRulesBlock", () => {
     expect(readFileSync(real, "utf8")).toBe(OPERATOR);
   });
 
+  test("an install anchor stamped into the future is untrusted: the diverged block refuses", () => {
+    // A future-stamped anchor would make every later operator hand-edit
+    // read as a canonical move under an untouched file. It must count as
+    // no record, which refuses every diverged block (fail closed).
+    const file = join(tmp, "AGENTS.md");
+    const futureAnchor = Date.now() + 10 * 60_000; // far past the skew allowance
+    writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, { installedAtMs: futureAnchor });
+    const edited = readFileSync(file, "utf8").replace("atomic facts", "my own wording");
+    writeFileSync(file, edited);
+    // The file is OLDER than the (future) anchor, which is exactly the
+    // shape that used to slip through the gate.
+    setMtime(file, Date.now() - 60_000);
+    let thrown: unknown = null;
+    try {
+      writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, { installedAtMs: futureAnchor });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    const err = thrown as Error & { kind?: string };
+    expect(err.kind).toBe(RULES_BLOCK_ERROR_KIND.userModifiedBlock);
+    expect(err.message).toContain("future");
+    expect(err.message).toContain("--force");
+    expect(readFileSync(file, "utf8")).toBe(edited);
+  });
+
+  test("a stat failure at the hand-edit gate refuses the write, fail closed", () => {
+    // The gate re-stats the file after the read; a mid-flight move makes
+    // that stat fail. "Not touched" would overwrite a diverged block
+    // without --force, so the failure must refuse instead.
+    const file = join(tmp, "AGENTS.md");
+    const installedAtMs = 1_700_000_000_000;
+    writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, { installedAtMs });
+    const edited = readFileSync(file, "utf8").replace("atomic facts", "my own wording");
+    writeFileSync(file, edited);
+    setMtime(file, installedAtMs - 60_000); // older than the anchor
+    let thrown: unknown = null;
+    try {
+      writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, {
+        installedAtMs,
+        seams: { fileMtimeMs: () => null },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    const err = thrown as Error & { kind?: string };
+    expect(err.kind).toBe(RULES_BLOCK_ERROR_KIND.userModifiedBlock);
+    expect(err.message).toContain("--force");
+    // Nothing was written and no backup was taken (the fixture write was
+    // a create, which takes none).
+    expect(readFileSync(file, "utf8")).toBe(edited);
+    expect(backupsOf("AGENTS.md").length).toBe(0);
+  });
+
+  test("current bytes that moved during the write refuse by name, touching nothing", () => {
+    const file = join(tmp, "AGENTS.md");
+    writeFileSync(file, OPERATOR);
+    let thrown: unknown = null;
+    try {
+      writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, {
+        seams: { currentBytesMatch: () => false },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    const err = thrown as Error & { kind?: string };
+    expect(err.kind).toBe(RULES_BLOCK_ERROR_KIND.concurrentModification);
+    expect(err.message).toContain("--force");
+    // The refused run left the operator bytes alone and took no backup.
+    expect(readFileSync(file, "utf8")).toBe(OPERATOR);
+    expect(backupsOf("AGENTS.md").length).toBe(0);
+  });
+
+  test("force deliberately writes over the moved bytes", () => {
+    const file = join(tmp, "AGENTS.md");
+    writeFileSync(file, OPERATOR);
+    const result = writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, {
+      force: true,
+      seams: { currentBytesMatch: () => false },
+    });
+    expect(result.changed).toBe(true);
+    expect(readRulesBlock(file, RULES_BLOCK_ID.usage)).toBe(USAGE_BODY);
+  });
+
   test("refuses multiple begin markers of the block's own spelling, wrapping ManagedBlockError", () => {
     const file = join(tmp, "AGENTS.md");
     writeFileSync(
@@ -504,5 +590,25 @@ describe("removeRulesBlock", () => {
     const link = join(tmp, "AGENTS.md");
     symlinkSync(real, link);
     expect(() => removeRulesBlock(link, RULES_BLOCK_ID.usage)).toThrow(RulesBlockError);
+  });
+
+  test("current bytes that moved during the removal refuse by name, touching nothing", () => {
+    const file = join(tmp, "AGENTS.md");
+    writeFileSync(file, OPERATOR);
+    writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY);
+    let thrown: unknown = null;
+    try {
+      removeRulesBlock(file, RULES_BLOCK_ID.usage, {
+        seams: { currentBytesMatch: () => false },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    expect((thrown as Error & { kind?: string }).kind).toBe(
+      RULES_BLOCK_ERROR_KIND.concurrentModification,
+    );
+    // The removal was refused before any rewrite.
+    expect(readRulesBlock(file, RULES_BLOCK_ID.usage)).toBe(USAGE_BODY);
   });
 });

@@ -236,6 +236,15 @@ export interface InstructionBlockApplyOptions {
 export interface InstructionBlockApplyResult {
   /** The exclusive-create backup of the prior bytes; null when none was taken. */
   readonly backupPath: string | null;
+  /** True when the apply changed the file's bytes (or would, under `dryRun`). */
+  readonly changed: boolean;
+  /**
+   * True when the apply CREATED the file: it did not exist when the plan
+   * was re-derived. A first install takes no backup (there are no prior
+   * bytes), so `backupPath === null` cannot distinguish "created" from
+   * "already current" - the CLI's post-apply line branches on this field.
+   */
+  readonly created: boolean;
 }
 
 /**
@@ -313,7 +322,11 @@ export function applyInstructionBlock(
       applied_at: env.now.toISOString(),
     });
   }
-  return { backupPath: result.backupPath };
+  return {
+    backupPath: result.backupPath,
+    changed: result.changed,
+    created: result.changed && !fresh.exists,
+  };
 }
 
 // ----- Uninstall ------------------------------------------------------------

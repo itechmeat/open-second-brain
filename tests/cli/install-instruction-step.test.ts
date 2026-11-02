@@ -178,6 +178,41 @@ describe("o2b install --target <host> --apply: one consent verdict, both writes"
     expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toBe(once);
   });
 
+  test("the post-apply line reports created, updated and already-current honestly", async () => {
+    // First install on a vault with no AGENTS.md: the block is CREATED,
+    // and the line must not claim the file already carried it.
+    const created = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
+      env: envBase(),
+    });
+    expect(created.returncode).toBe(0);
+    expect(created.stdout).toContain("instruction block: ");
+    expect(created.stdout).toContain("created with the write-gate block");
+    expect(created.stdout).not.toContain("already carries");
+
+    // A hand-edited block rewritten under --force is an UPDATE.
+    const rulesPath = join(vault, "AGENTS.md");
+    writeFileSync(
+      rulesPath,
+      readFileSync(rulesPath, "utf8").replace(
+        "observing-memory layer. At session start, read the current preferences",
+        "hand-edited wording that no longer matches the canonical body",
+      ),
+    );
+    const updated = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--force"], {
+      env: envBase(),
+    });
+    expect(updated.returncode).toBe(0);
+    expect(updated.stdout).toContain("now carries the write-gate block");
+    expect(updated.stdout).not.toContain("already carries");
+
+    // A re-apply with nothing to change is already current.
+    const current = await runCli(["install", "--target", "cursor", "--apply", "--yes"], {
+      env: envBase(),
+    });
+    expect(current.returncode).toBe(0);
+    expect(current.stdout).toContain("already carries the current write-gate block");
+  });
+
   test("apply with --yes --dry-run writes nothing on either lane", async () => {
     const r = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--dry-run"], {
       env: envBase(),

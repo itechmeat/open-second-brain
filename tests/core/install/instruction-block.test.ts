@@ -323,6 +323,60 @@ describe("applyInstructionBlock", () => {
     applyInstructionBlock(env, { approved });
     expect(readInstructionBlockLock(tmp).files["AGENTS.md"]).toBeDefined();
   });
+
+  test("the apply result names what happened: created, updated, or already current", () => {
+    const env = envFor(tmp);
+    // First apply on a vault with no AGENTS.md: the file is CREATED. The
+    // result must say so - a backupPath-only derivation would report the
+    // creation as "already carries the block".
+    const created = applyInstructionBlock(env, { approved: planInstructionBlock(env, "codex") });
+    expect(created.created).toBe(true);
+    expect(created.changed).toBe(true);
+    expect(created.backupPath).toBeNull();
+    // A re-apply is already current on both fields.
+    const current = applyInstructionBlock(env, { approved: planInstructionBlock(env, "codex") });
+    expect(current.created).toBe(false);
+    expect(current.changed).toBe(false);
+    // A diverged block rewritten under force is an UPDATE of an existing
+    // file, not a creation.
+    writeFileSync(join(tmp, "AGENTS.md"), DOCS_SNIPPET_FILE);
+    const updated = applyInstructionBlock(env, {
+      approved: planInstructionBlock(env, "codex"),
+      force: true,
+    });
+    expect(updated.created).toBe(false);
+    expect(updated.changed).toBe(true);
+    expect(updated.backupPath).not.toBeNull();
+  });
+
+  test("a future-stamped applied_at is untrusted: a diverged block refuses without force", () => {
+    // The lock lives in agent-writable state; an applied_at stamped into
+    // the future would make every operator hand-edit read as a canonical
+    // move under an untouched file. The gate must treat it as no record.
+    writeFileSync(join(tmp, "AGENTS.md"), DOCS_SNIPPET_FILE);
+    recordInstructionBlock(tmp, "AGENTS.md", {
+      block_id: RULES_BLOCK_ID.usage,
+      begin_marker: RULES_BLOCK_MARKERS.usage.begin,
+      applied_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    });
+    const env = envFor(tmp);
+    const approved = planInstructionBlock(env, "codex");
+    let thrown: unknown = null;
+    try {
+      applyInstructionBlock(env, { approved });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    const err = thrown as Error & { kind?: string };
+    expect(err.kind).toBe(RULES_BLOCK_ERROR_KIND.userModifiedBlock);
+    expect(err.message).toContain("future");
+    expect(readFileSync(join(tmp, "AGENTS.md"), "utf8")).toBe(DOCS_SNIPPET_FILE);
+    // --force stays the documented override.
+    const forced = applyInstructionBlock(env, { approved, force: true });
+    expect(forced.changed).toBe(true);
+    expect(auditWritebackContractFile(join(tmp, "AGENTS.md")).finding).toBe("conforming");
+  });
 });
 
 describe("instruction-block lock I/O", () => {
