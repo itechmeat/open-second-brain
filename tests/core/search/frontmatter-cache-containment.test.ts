@@ -75,8 +75,14 @@ test("a backslash spelling is judged by what it names on each platform", () => {
   const rel = escapeRel().replaceAll("/", "\\");
   // The literal backslash-named file INSIDE the vault, carrying a stamp
   // that differs from the outside file's: whichever file the probe
-  // reads, the entry names it.
-  writeFileSync(join(vault, rel), "---\nowner: agent-a\n---\n\nliteral\n");
+  // reads, the entry names it. POSIX only - on Windows the same
+  // spelling folds into the escape (the backslashes are separators), so
+  // this setup write would land on the OUTSIDE file and clobber the
+  // stamp the contrast depends on; there the probe is refused before
+  // any read and the literal file is never consulted.
+  if (process.platform !== "win32") {
+    writeFileSync(join(vault, rel), "---\nowner: agent-a\n---\n\nliteral\n");
+  }
   const entry = readCachedFrontmatterEntry(cache, vault, rel);
   if (process.platform === "win32") {
     // The spelling folds into the escape, so the probe is refused
