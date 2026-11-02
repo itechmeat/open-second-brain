@@ -10,8 +10,8 @@
  * stderr line and a non-zero exit.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,12 @@ import {
 } from "../../src/core/config.ts";
 import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// The wave's explicit per-test budget (test-audit F3): most tests here boot
+// the real CLI, and the budget keeps a loaded machine from turning process
+// start into a flaky verdict.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let vault: string;
 let scratch: string;
@@ -267,6 +273,31 @@ describe("rewrite-plan", () => {
     expect(r.returncode).not.toBe(0);
     expect(r.stderr).toContain("turbo");
   });
+
+  test("the --json receipt aggregates held-out membership to a count, never ids", async () => {
+    // The verb docblock promises held-out members never appear on this
+    // surface. The JSON receipt is what the calling agent consumes, so the
+    // pin covers the serialized payload: a count, and no held-out id
+    // anywhere in it.
+    seedBenchmark();
+    const r = await runCli([
+      "brain",
+      "skill-proposals",
+      "rewrite-plan",
+      "example-skill",
+      "--vault",
+      vault,
+      "--json",
+      "--candidate-file",
+      join(scratch, "candidate.md"),
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as { receipt: Record<string, unknown> };
+    expect(payload.receipt["heldout_task_count"]).toBe(HELDOUT_TASKS.length);
+    expect(payload.receipt["heldout_task_ids"]).toBeUndefined();
+    const serialized = JSON.stringify(payload);
+    for (const taskId of HELDOUT_TASKS) expect(serialized).not.toContain(taskId);
+  });
 });
 
 describe("rewrite-score", () => {
@@ -331,6 +362,58 @@ describe("rewrite-score", () => {
     const grades = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" });
     expect(grades.length).toBe(1);
     expect(grades[0]?.payload["verdict"]).toBe("promote");
+  });
+
+  test("the operator accept lands the rewrite end to end through the CLI", async () => {
+    // The designed flow, whole: the gate stages, the operator accepts on
+    // the command line, and the accept-time re-verification (security M1)
+    // passes against exactly what the gate round wrote - receipt, take,
+    // and its own promote grade record.
+    seedBenchmark();
+    writeRounds(
+      "baseline",
+      DEV_TASKS.map((taskId, index) =>
+        index < 3 ? passingTranscript(taskId) : failingTranscript(taskId),
+      ),
+    );
+    writeRounds(
+      "candidate",
+      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+    );
+    writeRounds(
+      "heldout",
+      HELDOUT_TASKS.map((taskId) => passingTranscript(taskId)),
+    );
+    const scored = await runCli([
+      "brain",
+      "skill-proposals",
+      "rewrite-score",
+      "example-skill",
+      "--vault",
+      vault,
+      "--candidate-file",
+      join(scratch, "candidate.md"),
+    ]);
+    expect(scored.returncode).toBe(0);
+    const pending = listPendingSkillProposals(vault);
+    expect(pending.length).toBe(1);
+
+    const accepted = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      pending[0]!.slug,
+      "--vault",
+      vault,
+      "--note",
+      "gate passed",
+    ]);
+    expect(accepted.returncode).toBe(0);
+    // The incumbent body was replaced by the candidate, and the draft is
+    // consumed - the accept the design promised, still human-initiated.
+    const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
+    expect(readFileSync(skillPath, "utf8")).toContain("Candidate body: plan first");
+    expect(listPendingSkillProposals(vault).length).toBe(0);
   });
 
   test("a promote without held-out transcripts prints the one held-out round and stages nothing", async () => {

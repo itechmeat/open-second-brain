@@ -11,7 +11,7 @@
  * handler writes nothing.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,7 +29,14 @@ import {
 import { parseSkillBenchmarkTasks } from "../../src/core/brain/skill-rewrite-tasks.ts";
 import { skillBenchmarkSpecPath, skillBenchmarkTasksPath } from "../../src/core/brain/paths.ts";
 import { PROCEDURE_TOOLS } from "../../src/mcp/brain/procedure-tools.ts";
+import { MCPError, INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// The wave's explicit per-test budget (test-audit F3): this file drives the
+// MCP server objects directly, and the budget keeps a loaded machine from
+// turning process-start cost into a flaky verdict.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let vault: string;
 let ctx: ServerContext;
@@ -143,6 +150,64 @@ describe("brain_skill_rewrite_status", () => {
 
   test("a missing skill_name argument is refused", async () => {
     await expect(tool()?.handler(ctx, {})).rejects.toThrow(/skill_name/);
+  });
+});
+
+describe("the MCP accept boundary", () => {
+  test("accept refuses a scored_rewrite proposal and names the operator's command", async () => {
+    // The design boundary (security M1c): MCP proposes, the operator
+    // accepts. The proposal below is fully gate-valid - benchmark on disk,
+    // matching promote grade record - so the refusal proves the boundary
+    // itself, not a broken gate.
+    seedBenchmark();
+    const spec = buildSkillRewriteSpec("example-skill", TASKS);
+    const specHash = skillRewriteSpecHash(spec);
+    recordSkillRewriteGrade(vault, {
+      payload: {
+        skill: "example-skill",
+        spec_hash: specHash,
+        tasks_hash: spec.tasksHash,
+        metric: "tasks_passed_rate",
+        seed: spec.seed,
+        split_rule: spec.splitRule,
+        verdict: SKILL_REWRITE_VERDICT.promote,
+        baseline_rate: 0.5,
+        candidate_rate: 0.9,
+        dev: [],
+        held_out: [],
+      },
+    });
+    stageScoredRewriteProposal(vault, {
+      skill: {
+        name: "example-skill",
+        description: "Does a thing, safely.",
+        triggers: ["thing"],
+        body: "Candidate body.",
+      },
+      spec,
+      specHash,
+      baselineScore: 0.5,
+      candidateScore: 0.9,
+      heldoutScore: 1,
+      incumbentVersion: 3,
+    });
+    const pending = listPendingSkillProposals(vault);
+    expect(pending.length).toBe(1);
+    const proposalsTool = PROCEDURE_TOOLS.find((t) => t.name === "brain_skill_proposals");
+
+    let thrown: unknown = null;
+    try {
+      await proposalsTool?.handler(ctx, { operation: "accept", slug: pending[0]!.slug });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    const err = thrown as MCPError;
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.message).toContain("scored_rewrite");
+    expect(err.message).toContain("skill-proposals accept");
+    // Refused, not consumed: the draft is still pending for the operator.
+    expect(listPendingSkillProposals(vault).length).toBe(1);
   });
 });
 

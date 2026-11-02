@@ -9,7 +9,7 @@ import {
   rmSync,
   unlinkSync,
 } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveSkillsDir } from "../config.ts";
@@ -26,6 +26,7 @@ import {
   skillRewriteSpecHash,
   verifyRewriteTake,
   SKILL_REWRITE_METRIC,
+  SKILL_REWRITE_VERDICT,
   type SkillRewriteSpec,
   type SkillRewriteVerdict,
 } from "./skill-rewrite-spec.ts";
@@ -1049,6 +1050,14 @@ export function acceptSkillProposal(
     // proposal's pattern kind, once, here - so the journal, the write and
     // the returned result all name the same file.
     const skillDraft = readSkillDraft(fm);
+    // The rest of the gate is re-verified against the CURRENT vault state
+    // before the journal is stamped (review security M1): field presence
+    // and score ranges alone never overwrite an incumbent skill. A forged
+    // or stale scored_rewrite is refused here by name, with nothing
+    // written and the draft left pending for the operator.
+    if (isRewrite && skillDraft !== null) {
+      verifyScoredRewriteGate(vault, fm, skillDraft.name);
+    }
     const materializedPath =
       skillDraft === null
         ? procedurePath(vault, slug)
@@ -1382,9 +1391,39 @@ function restorePriorSkillContent(vault: string, journal: SkillAcceptJournalEntr
         skillAcceptJournalPath(vault, journal.slug),
     );
   }
+  // The target is a journal-supplied string, read from the same
+  // agent-writable file as the source above, so it gets the same distrust
+  // (review security M4): a restore may only land inside the vault or the
+  // skills root the materialize step itself resolves. A hand-edited
+  // journal is not a recovery input.
+  const skillsRoot = resolveSkillsRoot(vault, undefined);
+  if (!isLexicallyInside(target, vault) && !isLexicallyInside(target, skillsRoot)) {
+    throw new Error(
+      `skill proposal accept rollback for '${journal.slug}' refuses the journal's materialized ` +
+        `path ${target}: a restore target must resolve inside the vault or the skills root ` +
+        `(${skillsRoot}); a hand-edited journal is not a recovery input. ` +
+        `Journal retained for recovery: ${skillAcceptJournalPath(vault, journal.slug)}`,
+    );
+  }
   // The restore rides the shared atomic writer: an interrupted rollback
   // leaves either the incumbent or the candidate, never a hybrid.
   atomicWriteFileSync(target, prior);
+}
+
+/**
+ * Lexical containment of `target` inside `root`, resolved the way
+ * `ensureInsideVault` resolves before it checks. The rollback validation
+ * is a pure path predicate - the target usually exists (it holds the
+ * candidate bytes), but the guard must not depend on that - and the
+ * symlink sweep is intentionally not repeated here: the accept that wrote
+ * the journal already refused symlinked skills roots, and the restore
+ * rides the rename-based atomic writer, which replaces a swapped-in link
+ * rather than following it.
+ */
+function isLexicallyInside(target: string, root: string): boolean {
+  const resolvedTarget = resolve(target);
+  const resolvedRoot = resolve(root) + sep;
+  return resolvedTarget.startsWith(resolvedRoot);
 }
 
 /**
@@ -2356,6 +2395,12 @@ function readSkillDraft(
  * stamped - a pending file missing any field is a corrupted draft, and
  * the human accept must refuse it by name rather than overwrite an
  * incumbent skill on an unverifiable claim.
+ *
+ * The rewrite claim and the materialize target must also name the SAME
+ * skill (review security M1d): staging writes both from one name, so a
+ * pending file where they diverge is hand-edited, and the divergence would
+ * aim the one overwrite in this module at a directory the receipt never
+ * mentioned.
  */
 function validateScoredRewriteContract(fm: Readonly<Record<string, unknown>>): void {
   const rewrites = fm[SKILL_REWRITES_SKILL_KEY];
@@ -2365,6 +2410,14 @@ function validateScoredRewriteContract(fm: Readonly<Record<string, unknown>>): v
   const specHash = fm[SKILL_SPEC_HASH_KEY];
   if (typeof specHash !== "string" || specHash.trim().length === 0) {
     throw new Error(`scored rewrite proposal is missing '${SKILL_SPEC_HASH_KEY}'`);
+  }
+  const draftName = fm[SKILL_DRAFT_NAME_KEY];
+  if (rewrites !== draftName) {
+    throw new Error(
+      `scored rewrite proposal claims to rewrite '${String(rewrites)}' but its ` +
+        `'${SKILL_DRAFT_NAME_KEY}' materializes '${String(draftName)}'; ` +
+        "the two must name the same skill",
+    );
   }
   for (const key of [
     SKILL_BASELINE_SCORE_KEY,
@@ -2380,6 +2433,113 @@ function validateScoredRewriteContract(fm: Readonly<Record<string, unknown>>): v
       );
     }
   }
+}
+
+/**
+ * How closely a grade record's rate must sit to the proposal's
+ * three-decimal score for the two to be the same rate: the staged proposal
+ * carries the rate rounded to three places, so anything within half of the
+ * last written digit is the same number.
+ */
+const SCORE_MATCH_TOLERANCE = 0.0005 + Number.EPSILON;
+
+/**
+ * Re-verify a `scored_rewrite` proposal's gate claims against the CURRENT
+ * vault state at accept (review security M1).
+ *
+ * `validateScoredRewriteContract` proves the proposal's six fields exist
+ * and are shaped right; a hand-forged pending file passes that trivially.
+ * This is the part that cannot be forged into existence by editing one
+ * file, because it re-reads the vault:
+ *
+ *   1. the benchmark receipt on disk must still hash to the proposal's
+ *      `spec_hash` - a swapped task set or an edited spec invalidates the
+ *      proposal instead of quietly re-scoping its claim - and the take
+ *      must still verify against the live task set;
+ *   2. the grade history must hold the gate's final promote for THIS
+ *      proposal: a `skill_rewrite_eval_grade` record with verdict
+ *      `promote`, the same spec hash and skill, and a candidate rate that
+ *      matches the proposal's candidate score. No promote record, no
+ *      accept.
+ *
+ * Every refusal fires BEFORE the accept journal is stamped, so a refused
+ * accept writes nothing: the incumbent is untouched and the draft stays
+ * pending for the operator to judge. The residual is stated rather than
+ * hidden: an agent that can also forge the benchmark documents and the
+ * grade store can forge these inputs too - the MCP accept refusal is the
+ * boundary that removes this path from the agent's reach entirely.
+ */
+function verifyScoredRewriteGate(
+  vault: string,
+  fm: Readonly<Record<string, unknown>>,
+  skillName: string,
+): void {
+  const specHash = String(fm[SKILL_SPEC_HASH_KEY]);
+  const tasksPath = skillBenchmarkTasksPath(vault, skillName);
+  const specPath = skillBenchmarkSpecPath(vault, skillName);
+  let spec: SkillRewriteSpec;
+  let tasks: ReturnType<typeof parseSkillBenchmarkTasks>;
+  try {
+    tasks = parseSkillBenchmarkTasks(JSON.parse(readFileSync(tasksPath, "utf8")), tasksPath);
+    spec = parseSkillRewriteSpec(JSON.parse(readFileSync(specPath, "utf8")), specPath);
+  } catch (error) {
+    throw new Error(
+      `scored rewrite gate for '${skillName}': the benchmark documents cannot be read to ` +
+        `re-verify the proposal's receipt against ${skillBenchmarkRelPath(skillName, "")} ` +
+        `(${errorMessage(error)}); the accept is refused`,
+      { cause: error },
+    );
+  }
+  const liveHash = skillRewriteSpecHash(spec);
+  if (liveHash !== specHash) {
+    throw new Error(
+      `scored rewrite gate for '${skillName}': the proposal's spec hash ${specHash} does not ` +
+        `match the benchmark receipt on disk (${liveHash}); a swapped task set or an edited ` +
+        "spec invalidates the proposal, so the accept is refused",
+    );
+  }
+  const take = verifyRewriteTake(spec, tasks);
+  if (!take.ok) {
+    throw new Error(
+      `scored rewrite gate for '${skillName}': the benchmark take no longer verifies ` +
+        `(${take.reason ?? "receipt mismatch"}); the accept is refused`,
+    );
+  }
+  const candidateScore = Number(fm[SKILL_CANDIDATE_SCORE_KEY]);
+  const hasPromote = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).some(
+    (record) => {
+      const payload = record.payload as Record<string, unknown>;
+      return (
+        payload["skill"] === skillName &&
+        payload["spec_hash"] === specHash &&
+        payload["verdict"] === SKILL_REWRITE_VERDICT.promote &&
+        typeof payload["candidate_rate"] === "number" &&
+        Math.abs(payload["candidate_rate"] - candidateScore) <= SCORE_MATCH_TOLERANCE
+      );
+    },
+  );
+  if (!hasPromote) {
+    throw new Error(
+      `scored rewrite gate for '${skillName}': no skill_rewrite_eval_grade record with verdict ` +
+        `'${SKILL_REWRITE_VERDICT.promote}' matches this proposal's spec hash ${specHash} and ` +
+        `candidate rate ${candidateScore}; the gate's final promote is missing from the grade ` +
+        "history, so the accept is refused",
+    );
+  }
+}
+
+/**
+ * The pattern kind of the pending proposal at `slug`, or null when no
+ * readable pending file is there. Read by the MCP surface so it can
+ * refuse `scored_rewrite` accepts at the boundary the design names -
+ * MCP proposes, the operator accepts - without re-deriving the proposal
+ * paths or re-parsing frontmatter spelling rules outside this module.
+ */
+export function pendingSkillProposalPatternKind(vault: string, slug: string): string | null {
+  const pendingPath = skillProposalPendingPath(vault, slug);
+  if (!existsSync(pendingPath)) return null;
+  const [fm] = parseFrontmatter(pendingPath);
+  return typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : null;
 }
 
 /**

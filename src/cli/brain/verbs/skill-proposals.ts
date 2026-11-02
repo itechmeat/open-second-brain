@@ -527,7 +527,10 @@ function rewritePlan(argv: string[]): number {
             seed: spec.seed,
             split_rule: spec.splitRule,
             dev_task_ids: spec.devTaskIds,
-            heldout_task_ids: spec.heldoutTaskIds,
+            // The count, never the ids: held-out members do not leave the
+            // kernel through this surface, and their single check is handed
+            // out by rewrite-score only after a promote.
+            heldout_task_count: spec.heldoutTaskIds.length,
             required_margin: spec.requiredMargin,
             min_dev_tasks: spec.minDevTasks,
             spec_hash: specHash,
