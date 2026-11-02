@@ -1979,10 +1979,13 @@ export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
 /**
  * Rewrite-gate mode for benchmark-gated skill rewrites (agent-presence,
  * Lane A). `gated` (the default) runs one candidate per gate round;
- * `iterative` allows a bounded edit loop over the dev tasks - still gated
- * before any write. The flat machine-config key is `skill_rewrite.mode`;
- * an unknown value is a named error from the kernel's own resolver, never
- * a silent fallback to the default.
+ * `iterative` is accepted and currently behaves exactly like `gated` -
+ * one candidate per round - because the bounded edit loop it reserves is
+ * not implemented yet; the value is carried so operators can opt in
+ * without a config migration when the loop ships. The flat
+ * machine-config key is `skill_rewrite.mode`; an unknown value is a named
+ * error from the kernel's own resolver, never a silent fallback to the
+ * default.
  */
 export const SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode";
 export const SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE";

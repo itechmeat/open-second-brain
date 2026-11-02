@@ -116,8 +116,10 @@ export function isSkillRewriteRoundArm(value: unknown): value is SkillRewriteRou
   );
 }
 
-/** The closed rewrite-mode vocabulary: one candidate per round, or the
- * explicitly opted-in bounded edit loop. Both are gated before a write. */
+/** The closed rewrite-mode vocabulary. `gated` is one candidate per
+ * round; `iterative` reserves the explicitly opted-in bounded edit loop
+ * and is accepted but not implemented yet, so it currently resolves to
+ * the same single-candidate behavior. Both are gated before a write. */
 export const SKILL_REWRITE_MODE = Object.freeze({
   gated: "gated",
   iterative: "iterative",
