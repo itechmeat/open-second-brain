@@ -48,7 +48,7 @@
  * that moved, not a store that was broken.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import {
@@ -299,17 +299,38 @@ function sameFiles(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean 
 }
 
 /**
+ * The kind of one entry of an inventoried directory, read through the
+ * directory's inventory key, or null when the entry cannot be stated
+ * (it vanished or cannot be read between the listing and this check).
+ * An entry this run cannot measure is never explained growth.
+ */
+function entryKind(vault: string, dirKey: string, name: string): "file" | "directory" | null {
+  try {
+    const dir = join(vault, ...dirKey.split("/"));
+    return statSync(join(dir, name)).isDirectory() ? "directory" : "file";
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether one inventoried directory's entry list is explained: every
- * attested entry must still be there, and every name that was not
- * attested must be normal growth for that directory - a file parsing
- * under the directory's ledger grammar (a new ISO-week audit shard, a
- * new continuity month, a new metric surface) or the entry of a known
- * ledger subdirectory created beneath it (a first continuity month
- * inside `Brain/log`, a first per-preference trail inside the
- * preference-audit root). A directory with no grammar entry is strict -
- * additions there are not something this build's writers produce.
+ * attested entry must still be there as the file it was signed as, and
+ * every name that was not attested must be normal growth for that
+ * directory - a file parsing under the directory's ledger grammar (a
+ * new ISO-week audit shard, a new continuity month, a new metric
+ * surface) or a known ledger subdirectory created beneath it (a first
+ * continuity month inside `Brain/log`, a first per-preference trail
+ * inside the preference-audit root). The name alone does not settle it:
+ * the producers append files, so an entry whose kind is not the
+ * producer's (a directory spelled as a shard, or a file where a known
+ * ledger subdirectory belongs) is not something this build writes, and
+ * a kind this run cannot read is not provable growth either. A
+ * directory with no grammar entry is strict - additions there are not
+ * something this build's writers produce.
  */
 function ledgerGrowthExplained(
+  vault: string,
   grammars: ReadonlyMap<string, ReadonlyArray<LedgerShardGrammar>>,
   dir: string,
   attestedFiles: ReadonlyArray<string>,
@@ -318,12 +339,14 @@ function ledgerGrowthExplained(
   const layout = grammars.get(dir);
   if (layout === undefined) return sameFiles(attestedFiles, now);
   const attestedSet = new Set(attestedFiles);
+  const kind = (name: string): string | null => entryKind(vault, dir, name);
   return (
-    attestedFiles.every((name) => now.includes(name)) &&
-    now.every(
-      (name) =>
-        attestedSet.has(name) || isGrammarValidName(name, layout) || grammars.has(`${dir}/${name}`),
-    )
+    attestedFiles.every((name) => now.includes(name) && kind(name) === "file") &&
+    now.every((name) => {
+      if (attestedSet.has(name)) return kind(name) === "file";
+      if (isGrammarValidName(name, layout)) return kind(name) === "file";
+      return grammars.has(`${dir}/${name}`) && kind(name) === "directory";
+    })
   );
 }
 
@@ -335,8 +358,10 @@ function ledgerGrowthExplained(
  * directory's inventory and `logHeads`, and the append-only ledger
  * directories gain their time-window shards (a new hook-audit week, a
  * new continuity month, a new metric surface) - allowed exactly when the
- * new names parse under the producer's own grammar, with every attested
- * entry still present. Known ledger subdirectories of `Brain/log` that
+ * new names parse under the producer's own grammar and carry the kind
+ * the producer writes (files; a known subdirectory where a nested
+ * ledger belongs), with every attested entry still present as the file
+ * it was signed as. Known ledger subdirectories of `Brain/log` that
  * were created entirely after signing follow the same rule against an
  * empty attested list. Everything else is drift no verdict names: the
  * vault identity, the index stamp, an attested entry gone, an invalid
@@ -380,7 +405,7 @@ function unexplainedManifestDrift(
       }
       continue;
     }
-    if (!ledgerGrowthExplained(grammars, dir, attestedFiles, now)) return true;
+    if (!ledgerGrowthExplained(vault, grammars, dir, attestedFiles, now)) return true;
   }
   for (const dir of Object.keys(recomputed.ledgerInventories)) {
     if (dir in attested.ledgerInventories) continue;
@@ -405,7 +430,7 @@ function unexplainedManifestDrift(
     }
     if (
       (dir.startsWith(`${BRAIN_LOG_REL}/`) || isFirstRepoStoreDir(vault, dir)) &&
-      ledgerGrowthExplained(grammars, dir, [], recomputed.ledgerInventories[dir] ?? [])
+      ledgerGrowthExplained(vault, grammars, dir, [], recomputed.ledgerInventories[dir] ?? [])
     ) {
       continue;
     }

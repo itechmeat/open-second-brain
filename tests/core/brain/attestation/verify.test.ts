@@ -301,6 +301,26 @@ describe("verifyAttestation", () => {
     expect(result.unexplainedDrift).toBe(true);
   });
 
+  test("a directory spelled as a week shard is still drift, whatever it holds", () => {
+    // The audit writer appends files; a directory riding a lawful shard
+    // name is not something this build's writers produce, and no
+    // manifest inventories what sits inside it - so the name alone must
+    // never explain the store's growth.
+    appendAuditRecord(hookAuditDir(vault), {
+      timestamp: "2026-05-28T10:00:00Z",
+      actor: "@tester",
+      action: "capture",
+      target: "session-1",
+      ok: true,
+    });
+    const record = signedRecord();
+    const impostor = join(hookAuditDir(vault), "2026-W45.jsonl");
+    mkdirSync(impostor, { recursive: true });
+    writeFileSync(join(impostor, "planted.txt"), "arbitrary bytes\n", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
+  });
+
   test("a removed attested ledger file is still drift", () => {
     const file = appendAuditRecord(hookAuditDir(vault), {
       timestamp: "2026-05-28T10:00:00Z",
