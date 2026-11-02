@@ -15,8 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -44,11 +43,20 @@ import {
 } from "../../../src/core/brain/lineage/resolve.ts";
 import { captureSessionLifecycleEvent } from "../../../src/core/brain/session-lifecycle.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
+
+// Every test's throwaway workspace is minted through the tracked helper
+// so a directory is owned twice over: the afterEach removes the current
+// test's directory, and the helper's file-end sweep removes any directory
+// whose afterEach did not get to run. The run's temp-hygiene guard
+// (tests/setup.ts) fails the whole run on a single survivor, so cleanup
+// here may not depend on one hook firing exactly once.
+const mkTemp = tempDirs();
 
 let tmp: string;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "o2b-continuation-"));
+  tmp = mkTemp("o2b-continuation-");
 });
 
 afterEach(() => {
