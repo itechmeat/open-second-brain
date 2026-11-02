@@ -167,6 +167,21 @@ describe("pageOriginForDelivery probe", () => {
     expect(cache.size).toBe(1);
     expect(second).toEqual(first);
   });
+
+  test("a backslash-spelled rel probes as the same page as the posix spelling", () => {
+    const rel = page("notes/spelled.md", `${ORIGIN_CHANNEL_FIELD}: cli\n`);
+    const posix = pageOriginForDelivery(vault, rel, cache);
+    // The same page named with Windows separators probes to the same
+    // origin through the same cache - one entry, one read. Before the
+    // fold this diverged by host: a fail-closed absent-page probe on
+    // POSIX (a backslash cannot appear in a vault-walked rel, and on
+    // Linux it would name a file the vault cannot carry) and a second
+    // cache entry on Windows. Meaningful on every platform; on an
+    // unfixed build it fails here on Linux too.
+    const backslash = pageOriginForDelivery(vault, rel.replaceAll("/", "\\"), cache);
+    expect(backslash).toEqual(posix);
+    expect(cache.size).toBe(1);
+  });
 });
 
 describe("deliveryOriginLabel", () => {

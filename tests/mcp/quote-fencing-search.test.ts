@@ -24,6 +24,8 @@ import {
   clearOriginChannel,
   setOriginChannel,
 } from "../../src/core/origin-channel.ts";
+import { LOCAL_ORIGIN } from "../../src/core/brain/portability/origins.ts";
+import { pageOriginForDelivery } from "../../src/core/brain/provenance/page-origin.ts";
 import { addRecallSource } from "../../src/core/brain/portability/recall-sources.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -153,11 +155,26 @@ describe("cross-vault union rows", () => {
       expect(foreignRow!["content"]).toContain(OPERATOR_WORD);
       expect(foreignRow!["content"]).toContain(LEGACY_LABEL);
       expect(foreignRow!["content"]).not.toContain(AGENT_LABEL);
+      // Diagnostic, ahead of the treatment assertion (Windows CI run
+      // 41368512585 shipped the foreign row's fenced body here): probe
+      // the local page directly so a future failure names the derived
+      // origin rather than a fence string.
+      const localOrigin = pageOriginForDelivery(vault, "notes/operator.md", new Map());
+      expect(localOrigin.originChannel).toBe(ORIGIN_CHANNEL.cli);
+      // Two union rows share one relative path spelling (the foreign
+      // vault mounts the same `notes/operator.md`), so the local row is
+      // selected by ORIGIN, never by path alone: the union's merge
+      // order is score-driven and cross-origin scores differ at
+      // rounding scale, so which same-path row sorts first is not
+      // stable across platforms.
+      const localRow = remote.results.find(
+        (r) => r.path === "notes/operator.md" && r["origin"] === LOCAL_ORIGIN,
+      );
+      expect(localRow).toBeDefined();
       // The local page at the same relative path keeps its own
       // treatment: operator-authored, shipped plain.
-      const localRow = rowFor(remote, "notes/operator.md");
-      expect(localRow.content).toContain(OPERATOR_WORD);
-      expect(localRow.content).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
+      expect(localRow!.content).toContain(OPERATOR_WORD);
+      expect(localRow!.content).not.toContain(`<${UNTRUSTED_SOURCE_TAG}`);
     } finally {
       rmSync(foreign, { recursive: true, force: true });
     }

@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import { readerRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { eventAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
+import { posixRel } from "../../core/path-safety.ts";
 import {
   BRAIN_ARCHIVED_SIGNALS_REL,
   BRAIN_INBOX_REL,
@@ -82,7 +83,10 @@ export function deliveryView(
   return {
     reach,
     shape(text: string, rel: string): string {
-      const origin = pageOriginForDelivery(ctx.vault, rel, cache);
+      // The rel is a vault-relative POSIX path by contract; fold any
+      // Windows separators a caller's spelling carries so the probe
+      // names the same page on every host.
+      const origin = pageOriginForDelivery(ctx.vault, posixRel(rel), cache);
       return shapeStoredTextForDelivery(text, {
         treatment: storedTextTreatment(origin),
         origin: deliveryOriginLabel(origin),

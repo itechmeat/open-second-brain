@@ -202,6 +202,26 @@ export function toPosix(p: string): string {
 }
 
 /**
+ * Fold Windows separators in a vault-relative path to forward slashes,
+ * on every host.
+ *
+ * `toPosix` above renders an OS-native path for display and is a no-op
+ * where the platform separator is already `/`; boundaries that KEY or
+ * PROBE by a vault-relative rel need the stronger rule instead: a rel
+ * uses `/` as its only separator wherever the value came from, so a `\`
+ * byte in one is a Windows separator artifact, never a filename
+ * character (Windows cannot create such a name, and the index walker
+ * spells rels with `/` on every platform). One unconditional fold, so a
+ * caller handed `notes\page.md` and one handed `notes/page.md` name the
+ * same logical page - one cache entry, one probe, one read - instead of
+ * a fail-closed miss on POSIX hosts and a duplicate cache entry on
+ * Windows.
+ */
+export function posixRel(p: string): string {
+  return p.replaceAll("\\", "/");
+}
+
+/**
  * Canonical vault-relative note identity: forward-slash POSIX form plus
  * Unicode NFC.
  *

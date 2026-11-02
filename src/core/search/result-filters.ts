@@ -9,7 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
-import { pathIsInside } from "../path-safety.ts";
+import { pathIsInside, posixRel } from "../path-safety.ts";
 import { BRAIN_STATE_REL, isBrainLogRel, isCompiledDigestRel } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -68,16 +68,23 @@ export function readCachedFrontmatterEntry(
   vault: string,
   path: string,
 ): CachedFrontmatter {
-  const cached = cache.get(path);
+  // One spelling per (vault, rel): fold Windows separators before the
+  // cache key and the join, so a caller handed `notes\page.md` and one
+  // handed `notes/page.md` share one cached entry - and one read - of
+  // the same logical page. Unnormalized, the backslash spelling misses
+  // the cache on every host and fails closed on POSIX ones, where the
+  // backslash would name a file the vault cannot carry.
+  const rel = posixRel(path);
+  const cached = cache.get(rel);
   if (cached !== undefined) return cached;
-  const [meta, , notices] = parseFrontmatterWithNotices(join(vault, path), {
+  const [meta, , notices] = parseFrontmatterWithNotices(join(vault, rel), {
     site: FRONTMATTER_CACHE_SITE,
   });
   const entry: CachedFrontmatter = Object.freeze({
     meta,
     unreadable: notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable),
   });
-  cache.set(path, entry);
+  cache.set(rel, entry);
   return entry;
 }
 
