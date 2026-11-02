@@ -36,6 +36,7 @@ import {
   readLessonApprovals,
   recordLessonApproval,
   renderLessonsBlockBody,
+  lessonIdsInBlockBody,
   type LessonApprovalRow,
   type LessonPromotionCandidate,
 } from "../../../src/core/brain/lessons-promotion.ts";
@@ -606,5 +607,28 @@ describe("writer routing", () => {
       expect(`${banned}: ${new RegExp(`\\b${banned}\\b`).test(source)}`).toBe(`${banned}: false`);
     }
     expect(source).toContain("atomicWriteFileSync");
+  });
+});
+
+// ----- Block body ids (t_1e952e43 C3: the doctor and the verb read back
+// which lessons a managed block carries; the parser lives beside the
+// render so the format coupling stays in one module) ------------------------
+
+describe("lessonIdsInBlockBody", () => {
+  test("extracts the pref ids a rendered body carries, in render order", () => {
+    const prefs = [buildPref("pref-b"), buildPref("pref-a")];
+    const lessons = [buildLesson("pref-b"), buildLesson("pref-a")];
+    const rows = [buildRow("pref-b"), buildRow("pref-a")];
+    const { promotable } = lessonPromotionCandidates(prefs, lessons, rows, {
+      enabledScopes: ["backend"],
+    });
+    const body = renderLessonsBlockBody(promotable, { limit: 20 });
+    // Same scope and tier, so the render order is the id order.
+    expect(lessonIdsInBlockBody(body)).toEqual(["pref-a", "pref-b"]);
+  });
+
+  test("a body with no lesson lines yields no ids", () => {
+    expect(lessonIdsInBlockBody("# house rules\n")).toEqual([]);
+    expect(lessonIdsInBlockBody("- not a lesson line\n- `unterminated\n")).toEqual([]);
   });
 });

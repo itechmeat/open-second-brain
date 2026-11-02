@@ -49,7 +49,7 @@ import { computeContentHash } from "./content-hash.ts";
 import { listDeadEnds } from "./dead-ends.ts";
 import { LESSON_TIER, computeLessons, type LessonEntry, type LessonTier } from "./lessons.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { brainDirs } from "./paths.ts";
+import { brainDirs, preferencePath } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
@@ -660,4 +660,128 @@ function readActivePreferencesForPromotion(vault: string): BrainPreference[] {
     }
   }
   return out;
+}
+
+// ----- Managed-block plan and status counts (C3) ------------------------------
+
+/**
+ * What one managed lessons block would look like if a refresh ran now:
+ * the canonical body, the lessons it would carry, and the lessons whose
+ * approvals went stale for this file. The one derivation the verbs, the
+ * doctor check and the tests all consume, so "what a refresh would
+ * render" can never disagree between the surfaces that ask.
+ */
+export interface LessonsBlockPlan {
+  /** The rules file the plan is for (a basename from the fixed list). */
+  readonly file: string;
+  /**
+   * The canonical body, or null when no qualified lesson's approval
+   * covers this file - the caller removes the block (never renders an
+   * empty fence).
+   */
+  readonly body: string | null;
+  /** The pref ids the canonical body carries, in render order. */
+  readonly qualifiedIds: ReadonlyArray<string>;
+  /** Approved ids whose pinned hash no longer matches, for this file. */
+  readonly staleIds: ReadonlyArray<string>;
+}
+
+export interface PlanLessonsBlockOptions {
+  /** The o2b config file scopes resolve against; null for discovery. */
+  readonly configPath?: string | null;
+  /** Wall clock for the recency decay; defaults to now. */
+  readonly now?: Date;
+}
+
+/**
+ * Derive the plan for one managed block: qualification over the vault's
+ * live inputs, the approvals covering this file, and the same render the
+ * verbs write. Read-only; throws only when the approvals ledger is
+ * damaged (fail-closed, the reader's contract).
+ */
+export function planLessonsBlock(
+  vault: string,
+  file: string,
+  opts: PlanLessonsBlockOptions = {},
+): LessonsBlockPlan {
+  const ledger = readLessonApprovals(vault);
+  const inputs = gatherLessonsPromotionInputs(vault, {
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
+  const { promotable, blocked } = lessonPromotionCandidates(
+    inputs.preferences,
+    inputs.lessons,
+    ledger,
+    { enabledScopes: inputs.scopes.scopes },
+  );
+  const covers = (id: string): boolean => {
+    const row = currentApprovalFor(ledger, id);
+    return row !== null && row.decision === "approved" && row.targets.includes(file);
+  };
+  const qualified = promotable.filter((candidate) => covers(candidate.prefId));
+  const staleIds = blocked
+    .filter((entry) => entry.reason === LESSON_PROMOTION_BLOCKED.staleApproval)
+    .map((entry) => entry.prefId)
+    .filter((id) => covers(id));
+  return {
+    file,
+    body:
+      qualified.length === 0
+        ? null
+        : renderLessonsBlockBody(qualified, { limit: lessonsBlockLimit(vault) }),
+    qualifiedIds: qualified.map((candidate) => candidate.prefId),
+    staleIds,
+  };
+}
+
+/**
+ * The pref ids a rendered block body carries, in render order. The
+ * parser lives beside the render so the one-line-per-lesson format
+ * couples only within this module; a line that is not a lesson entry
+ * yields nothing.
+ */
+export function lessonIdsInBlockBody(body: string): ReadonlyArray<string> {
+  const ids: string[] = [];
+  for (const line of body.split("\n")) {
+    const match = /^- `([^`]+)` /.exec(line);
+    if (match !== null) ids.push(match[1] as string);
+  }
+  return ids;
+}
+
+/** Approval counts for the status snapshot: the ledger plus staleness. */
+export interface LessonApprovalCounts {
+  readonly approved: number;
+  readonly denied: number;
+  /** Approvals whose pinned hash no longer matches the live text. */
+  readonly stale: number;
+}
+
+/**
+ * Count the approval decisions currently in force: approved, denied, and
+ * how many of the approved rows went STALE - the pinned hash no longer
+ * matches the live preference text, or the preference cannot be read at
+ * all (a missing or damaged preference cannot be promoted, so its
+ * approval holds nothing fresh). Reads only.
+ */
+export function lessonApprovalCounts(vault: string): LessonApprovalCounts {
+  const ledger = readLessonApprovals(vault);
+  let approved = 0;
+  let denied = 0;
+  let stale = 0;
+  for (const row of ledger) {
+    if (row.decision === "denied") {
+      denied += 1;
+      continue;
+    }
+    approved += 1;
+    try {
+      const pref = parsePreference(preferencePath(vault, row.prefId.replace(/^pref-/, "")));
+      if (computeContentHash(pref.principle, pref.scope) !== row.approvedContentHash) stale += 1;
+    } catch {
+      stale += 1;
+    }
+  }
+  return { approved, denied, stale };
 }

@@ -98,6 +98,7 @@ import { frozenVaultCheck } from "./doctor/frozen-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
+import { lessonsBlockCheck } from "./doctor/lessons-block-check.ts";
 import { attestationCheck } from "./doctor/attestation-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
@@ -231,6 +232,13 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   // grammar the neutralizer escapes with.
   plantedRowsCheck,
   logChainCheck,
+  // The lessons-block readiness check (t_1e952e43): the managed lessons
+  // blocks of the agent rules files graded against the same derivation
+  // a refresh would render. Fail-soft, read-only, operator-scope only.
+  lessonsBlockCheck,
+  // The lessons-block readiness check (t_1e952e43): the managed lessons
+  // blocks of the agent rules files graded against the same derivation
+  // a refresh would render. Fail-soft, read-only, operator-scope only.
   // The attestation liveness check (delivery trust, t_3bdb82b0): a stale,
   // unkeyed or diverged newest attestation, one warning under one code.
   attestationCheck,
