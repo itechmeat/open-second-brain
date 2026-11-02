@@ -1,0 +1,580 @@
+/**
+ * Operator-approved lesson promotion (t_1e952e43).
+ *
+ * The promotion kernel the CLI verbs, the doctor check and the status
+ * snapshot all consume. A lesson leaves the brain and enters the managed
+ * lessons block of an agent rules file ONLY when the full qualification
+ * conjunction holds:
+ *
+ *   - preference-derived (dead-end lessons never promote);
+ *   - the preference is `confirmed` (not unconfirmed, not quarantine);
+ *   - the confidence band is `high`;
+ *   - the lesson tier is `preferred` in the current digest;
+ *   - the preference's scope is an explicitly enabled promotion scope
+ *     (`lessons.promotion.scopes`; absent-or-empty disables promotion);
+ *   - an approval row is on record, decision `approved`, and FRESH: the
+ *     approved content hash still matches the live preference text. The
+ *     operator approves text, not an id - a drifted preference drops from
+ *     the block until it is approved again.
+ *
+ * Every non-member carries exactly ONE named blocked reason from the
+ * closed {@link LESSON_PROMOTION_BLOCKED} vocabulary, with a pinned
+ * precedence (an operator denial dominates the report; intrinsic gates
+ * are reported before the approval gates that sit downstream of them).
+ *
+ * The block body is a pure, deterministic render of the qualified set:
+ * identical inputs produce identical bytes, no timestamp ever appears,
+ * ordering is tier, then scope, then id. Idempotence lives in the shared
+ * rules-block writer (`src/core/install/rules-block.ts`), which is the
+ * ONLY writer for these files: this module never touches a rules file,
+ * it only renders bodies and keeps the approval ledger.
+ *
+ * The approval ledger is machine state in the derived store
+ * (`<vault>/.open-second-brain/lessons-approvals.json`), deliberately
+ * outside `Brain/`: an agent must not read its own approval state as a
+ * note surface. It is a state TABLE keyed by preference id (the latest
+ * decision per id wins), not a history - the audit history is the
+ * `lessons-approved` / `lessons-denied` / `lessons-promoted` log events.
+ * It follows the house ledger discipline (`session-mining-ledger.ts`):
+ * schema-versioned, fail-closed on any damage, written under the file
+ * lock through the shared atomic writer, sorted-key serialization.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { RULES_BLOCK_ID, type RulesBlockId } from "../install/rules-block.ts";
+import { computeContentHash } from "./content-hash.ts";
+import { LESSON_TIER, type LessonEntry, type LessonTier } from "./lessons.ts";
+import { DERIVED_STORE_DIR } from "./path-constants.ts";
+import {
+  LESSONS_LIMIT_DEFAULT,
+  LESSONS_PROMOTION_SCOPES_CONFIG_KEY,
+} from "./policy/blocks/lessons.ts";
+import { loadBrainConfig } from "./policy.ts";
+import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
+import { isoSecond } from "./time.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainConfidence, type BrainPreference } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+export { LESSONS_PROMOTION_SCOPES_CONFIG_KEY };
+export {
+  LESSONS_PROMOTION_SCOPES_ORIGIN,
+  resolveLessonsPromotionScopes,
+  type LessonsPromotionScopesOrigin,
+  type LessonsPromotionScopesResolution,
+} from "./policy/blocks/lessons.ts";
+
+// ----- Promotion qualification ----------------------------------------------
+
+/**
+ * Why a lesson is NOT promotable. Closed vocabulary; every non-member of
+ * the qualified set carries exactly one member as its reason.
+ */
+export const LESSON_PROMOTION_BLOCKED = Object.freeze({
+  /** An operator deny row is on record for this id. */
+  denied: "denied",
+  /** The preference is unconfirmed or quarantined. */
+  unconfirmed: "unconfirmed",
+  /** No scope, or a scope outside the enabled promotion scopes. */
+  scopeNotEnabled: "scope_not_enabled",
+  /** The confidence band is below `high`. */
+  lowConfidence: "low_confidence",
+  /** No lesson entry yet, or its tier is below `preferred`. */
+  tierNotPreferred: "tier_not_preferred",
+  /** An approval is on record but its pinned content hash no longer matches. */
+  staleApproval: "stale_approval",
+  /** No approval row is on record for this id. */
+  notApproved: "not_approved",
+} as const);
+
+/** Closed union over {@link LESSON_PROMOTION_BLOCKED}. */
+export type LessonPromotionBlocked =
+  (typeof LESSON_PROMOTION_BLOCKED)[keyof typeof LESSON_PROMOTION_BLOCKED];
+
+/** The blocked reasons, in pinned precedence order (see below). */
+export const LESSON_PROMOTION_BLOCKED_MEMBERS: ReadonlyArray<LessonPromotionBlocked> =
+  Object.freeze(Object.values(LESSON_PROMOTION_BLOCKED));
+
+/** True when `value` (read back off disk or wire) is a blocked reason. */
+export function isLessonPromotionBlocked(value: unknown): value is LessonPromotionBlocked {
+  return (
+    typeof value === "string" &&
+    (LESSON_PROMOTION_BLOCKED_MEMBERS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** One lesson qualified for promotion into the rules-file block. */
+export interface LessonPromotionCandidate {
+  readonly prefId: string;
+  readonly principle: string;
+  readonly scope: string;
+  readonly tier: LessonTier;
+  readonly confidence: BrainConfidence;
+  /**
+   * Hash of the LIVE preference text in the shared `content-hash.ts`
+   * vocabulary - the value an approval row must pin to stay fresh.
+   */
+  readonly contentHash: string;
+}
+
+/** One non-member of the qualified set, with its single named reason. */
+export interface BlockedLessonPromotion {
+  readonly prefId: string;
+  readonly reason: LessonPromotionBlocked;
+}
+
+export interface LessonPromotionCandidatesOptions {
+  /** The enabled promotion scope names (resolved `lessons.promotion.scopes`). */
+  readonly enabledScopes: ReadonlyArray<string>;
+}
+
+/**
+ * The approval decision currently in force for one preference id: the
+ * LAST row for that id in array order (the ledger is a state table; its
+ * reader returns rows in id order, so a caller passing `undefined` for a
+ * missing id resolves to `undefined` here).
+ */
+export function currentApprovalFor(
+  approvals: ReadonlyArray<LessonApprovalRow>,
+  prefId: string,
+): LessonApprovalRow | null {
+  let found: LessonApprovalRow | null = null;
+  for (const row of approvals) {
+    if (row.prefId === prefId) found = row;
+  }
+  return found;
+}
+
+/**
+ * Classify every input preference into promotable lessons and
+ * blocked-with-one-reason rows. Pure: reads nothing, writes nothing; the
+ * caller resolves the enabled scopes (with the vault) and reads the
+ * ledger. Blocked reasons follow the pinned precedence:
+ *
+ *   1. `denied`      - the operator's explicit will dominates the report;
+ *   2. `unconfirmed` - intrinsic gate, cheapest and first in the ladder;
+ *   3. `scope_not_enabled` - promotion must stay inside enabled scopes;
+ *   4. `low_confidence`    - band below `high`;
+ *   5. `tier_not_preferred` - the digest has not earned the tier;
+ *   6. `stale_approval`    - approved once, but the text moved;
+ *   7. `not_approved`      - no operator decision yet.
+ */
+export function lessonPromotionCandidates(
+  preferences: ReadonlyArray<BrainPreference>,
+  lessons: ReadonlyArray<LessonEntry>,
+  approvals: ReadonlyArray<LessonApprovalRow>,
+  opts: LessonPromotionCandidatesOptions,
+): {
+  readonly promotable: ReadonlyArray<LessonPromotionCandidate>;
+  readonly blocked: ReadonlyArray<BlockedLessonPromotion>;
+} {
+  const lessonByPrefId = new Map<string, LessonEntry>();
+  for (const entry of lessons) {
+    if (entry.kind !== "preference") continue;
+    lessonByPrefId.set(entry.id, entry);
+  }
+
+  const promotable: LessonPromotionCandidate[] = [];
+  const blocked: BlockedLessonPromotion[] = [];
+
+  for (const pref of preferences) {
+    const reason = blockedReasonFor(
+      pref,
+      lessonByPrefId.get(pref.id),
+      approvals,
+      opts.enabledScopes,
+    );
+    if (reason === null) {
+      promotable.push({
+        prefId: pref.id,
+        principle: pref.principle,
+        scope: (pref.scope ?? "").trim(),
+        tier: lessonByPrefId.get(pref.id)?.tier ?? LESSON_TIER.preferred,
+        confidence: pref.confidence,
+        contentHash: computeContentHash(pref.principle, pref.scope),
+      });
+    } else {
+      blocked.push({ prefId: pref.id, reason });
+    }
+  }
+
+  return { promotable, blocked };
+}
+
+/** The single pinned blocked reason for `pref`, or null when qualified. */
+function blockedReasonFor(
+  pref: BrainPreference,
+  lesson: LessonEntry | undefined,
+  approvals: ReadonlyArray<LessonApprovalRow>,
+  enabledScopes: ReadonlyArray<string>,
+): LessonPromotionBlocked | null {
+  const approval = currentApprovalFor(approvals, pref.id);
+  if (approval !== null && approval.decision === "denied") {
+    return LESSON_PROMOTION_BLOCKED.denied;
+  }
+  if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) {
+    return LESSON_PROMOTION_BLOCKED.unconfirmed;
+  }
+  const scope = (pref.scope ?? "").trim();
+  if (scope === "" || !enabledScopes.includes(scope)) {
+    return LESSON_PROMOTION_BLOCKED.scopeNotEnabled;
+  }
+  if (pref.confidence !== "high") {
+    return LESSON_PROMOTION_BLOCKED.lowConfidence;
+  }
+  if (lesson === undefined || lesson.tier !== LESSON_TIER.preferred) {
+    return LESSON_PROMOTION_BLOCKED.tierNotPreferred;
+  }
+  if (approval === null) {
+    return LESSON_PROMOTION_BLOCKED.notApproved;
+  }
+  const liveHash = computeContentHash(pref.principle, pref.scope);
+  if (approval.blockId !== RULES_BLOCK_ID.lessons || approval.approvedContentHash !== liveHash) {
+    return LESSON_PROMOTION_BLOCKED.staleApproval;
+  }
+  return null;
+}
+
+// ----- Block body render -----------------------------------------------------
+
+/**
+ * The render order's tier rank: `preferred` first, then the tiers a
+ * future producer could contribute, then the negative classes. Every
+ * promotable lesson is `preferred` today, so this is stability for the
+ * day the qualification changes, not a live ordering.
+ */
+function lessonTierRank(tier: LessonTier): number {
+  return tier === LESSON_TIER.preferred ? 0 : tier === LESSON_TIER.tentative ? 1 : 2;
+}
+
+export interface RenderLessonsBlockBodyOptions {
+  /**
+   * Maximum lessons rendered. The caller resolves the bound from the
+   * `lessons.limit` config (the digest bound promotion inherits); the
+   * render enforces it here so a caller that resolves it cannot forget
+   * to apply it. A positive integer is required - any other value is a
+   * named refusal, never a silent clamp.
+   */
+  readonly limit?: number;
+}
+
+/**
+ * Render the body that goes between the lessons markers in a rules file.
+ * Deterministic: identical inputs produce identical bytes; ordering is
+ * tier, then scope, then id; no timestamp ever appears (a stamped body
+ * would defeat the byte-idempotent write). One line per lesson; principle
+ * text is whitespace-collapsed so the one-line-per-lesson invariant holds.
+ *
+ * An EMPTY qualified set is a named refusal, not an empty fence: removal
+ * of a whole block - markers included - is the shared writer's
+ * `removeRulesBlock`, and a caller holding no promotable lessons must
+ * call that instead.
+ */
+export function renderLessonsBlockBody(
+  promotable: ReadonlyArray<LessonPromotionCandidate>,
+  opts: RenderLessonsBlockBodyOptions = {},
+): string {
+  if (promotable.length === 0) {
+    throw new Error(
+      "renderLessonsBlockBody: nothing to render - an empty qualified set must REMOVE the " +
+        "block through removeRulesBlock, not write an empty fence",
+    );
+  }
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit <= 0)) {
+    throw new RangeError(
+      `renderLessonsBlockBody: limit must be a positive integer, got ${String(opts.limit)}`,
+    );
+  }
+  const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+
+  const ordered = promotable.toSorted((a, b) => {
+    const tierDelta = lessonTierRank(a.tier) - lessonTierRank(b.tier);
+    if (tierDelta !== 0) return tierDelta;
+    const scopeDelta = a.scope.localeCompare(b.scope);
+    if (scopeDelta !== 0) return scopeDelta;
+    return a.prefId.localeCompare(b.prefId);
+  });
+
+  const out: string[] = [
+    "Operator-approved lessons, promoted from the vault's confirmed preferences",
+    "(scope-gated, hash-pinned approvals). Managed by Open Second Brain:",
+    "do not hand-edit - refresh with `o2b brain lessons refresh-blocks`.",
+    "",
+  ];
+  for (const candidate of ordered.slice(0, limit)) {
+    const principle = candidate.principle.replace(/\s+/g, " ").trim();
+    out.push(`- \`${candidate.prefId}\` (scope: ${candidate.scope}) — ${principle}`);
+  }
+  return out.join("\n") + "\n";
+}
+
+/**
+ * The block bound a caller renders under: the `lessons.limit` config, the
+ * same knob that bounds the digest the promotable set derives from.
+ * A config that cannot be read resolves the shared default - config
+ * errors are doctor's surface, and this is a bound, not a veto.
+ */
+export function lessonsBlockLimit(vault: string): number {
+  try {
+    const cfg = loadBrainConfig(vault);
+    return cfg.lessons?.limit ?? LESSONS_LIMIT_DEFAULT;
+  } catch {
+    return LESSONS_LIMIT_DEFAULT;
+  }
+}
+
+// ----- Approvals ledger --------------------------------------------------------
+
+/** Only ledger schema this build understands. Anything else is refused. */
+export const LESSONS_APPROVALS_SCHEMA_VERSION = 1 as const;
+
+/** Basename of the approvals ledger inside the derived store. */
+export const LESSONS_APPROVALS_FILE = "lessons-approvals.json";
+
+/** Absolute path of the approvals ledger for a vault. */
+export function lessonsApprovalsPath(vault: string): string {
+  return join(vault, DERIVED_STORE_DIR, LESSONS_APPROVALS_FILE);
+}
+
+/**
+ * How the operator consented, in the shared consent vocabulary the
+ * install ladder and the protect lane record. The lessons verbs are
+ * operator-only, so a ledger row always carries one of these two.
+ */
+export const LESSON_DECISION_BY = Object.freeze({
+  yesFlag: "yes-flag",
+  interactiveYes: "interactive-yes",
+} as const);
+export type LessonDecisionBy = (typeof LESSON_DECISION_BY)[keyof typeof LESSON_DECISION_BY];
+
+/** One approval state row: the decision currently in force for one id. */
+export interface LessonApprovalRow {
+  readonly prefId: string;
+  readonly decision: "approved" | "denied";
+  /** When the operator decided, ISO-8601. */
+  readonly decidedAt: string;
+  /** How the operator consented, from {@link LESSON_DECISION_BY}. */
+  readonly decidedBy: LessonDecisionBy;
+  /**
+   * Hash the decision pinned, in the shared `content-hash.ts` vocabulary.
+   * For an approval this is the text the operator saw; freshness is the
+   * match of this hash against the live preference text.
+   */
+  readonly approvedContentHash: string;
+  /** The rules files the decision covers (basenames). Empty on a denial. */
+  readonly targets: ReadonlyArray<string>;
+  /** The rules block the approval is for; always the lessons block today. */
+  readonly blockId: RulesBlockId;
+  /** When the block last received this lesson's content, or null. */
+  readonly lastPromotedAt: string | null;
+}
+
+/** Shape of the ledger on disk: one row per decided preference id. */
+interface LessonsApprovalsFileShape {
+  readonly schema_version: typeof LESSONS_APPROVALS_SCHEMA_VERSION;
+  readonly rows: ReadonlyArray<LessonApprovalRow>;
+}
+
+/** The remedy every file-level refusal names, in the mining-ledger style. */
+const CORRUPT_LEDGER_REMEDY =
+  "; to recover, move the file aside or delete it - every approval is then lifted " +
+  "and every lesson needs approving again, which is the fail-closed direction";
+
+/**
+ * Read the approval ledger. A missing file is an empty ledger (nothing is
+ * approved, nothing is denied). ANY damage - corrupt JSON, an unknown
+ * schema version, a container that is not an object, a damaged row - is a
+ * hard named refusal: a silently dropped approval would block a lesson
+ * the operator approved, and a silently dropped denial would re-open one
+ * they refused, so no partial read is honest here. Never reads `Brain/`:
+ * the ledger lives in the derived store and stays there.
+ */
+export function readLessonApprovals(vault: string): ReadonlyArray<LessonApprovalRow> {
+  const path = lessonsApprovalsPath(vault);
+  if (!existsSync(path)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    throw new Error(`lessons approvals ledger is corrupted JSON: ${path}${CORRUPT_LEDGER_REMEDY}`, {
+      cause: err,
+    });
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`lessons approvals ledger is not an object: ${path}${CORRUPT_LEDGER_REMEDY}`);
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj["schema_version"] !== LESSONS_APPROVALS_SCHEMA_VERSION) {
+    throw new Error(
+      `lessons approvals ledger schema_version ${String(obj["schema_version"])} not supported ` +
+        `(expected ${LESSONS_APPROVALS_SCHEMA_VERSION}): ${path}${CORRUPT_LEDGER_REMEDY}`,
+    );
+  }
+  const raw = obj["rows"];
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      `lessons approvals ledger rows is not an array: ${path}${CORRUPT_LEDGER_REMEDY}`,
+    );
+  }
+  const rows: LessonApprovalRow[] = [];
+  for (const entry of raw) {
+    rows.push(readRow(entry, path));
+  }
+  return rows.toSorted((a, b) => a.prefId.localeCompare(b.prefId));
+}
+
+/** One row, or a named refusal when the shape is not one this build reads. */
+function readRow(value: unknown, path: string): LessonApprovalRow {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`lessons approvals ledger holds a row that is not an object: ${path}`);
+  }
+  const row = value as Record<string, unknown>;
+  const prefId = row["prefId"];
+  const decision = row["decision"];
+  const decidedAt = row["decidedAt"];
+  const decidedBy = row["decidedBy"];
+  const approvedContentHash = row["approvedContentHash"];
+  const targets = row["targets"];
+  const blockId = row["blockId"];
+  const lastPromotedAt = row["lastPromotedAt"];
+  if (typeof prefId !== "string" || prefId.length === 0) {
+    throw new Error(`lessons approvals ledger holds a row without a prefId: ${path}`);
+  }
+  if (decision !== "approved" && decision !== "denied") {
+    throw new Error(
+      `lessons approvals ledger row ${prefId} carries decision ${String(decision)}: ${path}`,
+    );
+  }
+  if (typeof decidedAt !== "string" || decidedAt.length === 0) {
+    throw new Error(`lessons approvals ledger row ${prefId} carries no decidedAt: ${path}`);
+  }
+  if (decidedBy !== LESSON_DECISION_BY.yesFlag && decidedBy !== LESSON_DECISION_BY.interactiveYes) {
+    throw new Error(
+      `lessons approvals ledger row ${prefId} carries decidedBy ${String(decidedBy)}: ${path}`,
+    );
+  }
+  if (typeof approvedContentHash !== "string" || approvedContentHash.length === 0) {
+    throw new Error(`lessons approvals ledger row ${prefId} carries no approved hash: ${path}`);
+  }
+  if (!Array.isArray(targets) || targets.some((t) => typeof t !== "string" || t.length === 0)) {
+    throw new Error(`lessons approvals ledger row ${prefId} carries malformed targets: ${path}`);
+  }
+  if (blockId !== RULES_BLOCK_ID.usage && blockId !== RULES_BLOCK_ID.lessons) {
+    throw new Error(
+      `lessons approvals ledger row ${prefId} carries blockId ${String(blockId)}: ${path}`,
+    );
+  }
+  if (lastPromotedAt !== null && typeof lastPromotedAt !== "string") {
+    throw new Error(
+      `lessons approvals ledger row ${prefId} carries malformed lastPromotedAt: ${path}`,
+    );
+  }
+  return {
+    prefId,
+    decision,
+    decidedAt,
+    decidedBy,
+    approvedContentHash,
+    targets: Object.freeze(targets as ReadonlyArray<string>),
+    blockId,
+    lastPromotedAt,
+  };
+}
+
+/** Canonical ledger bytes: rows sorted by pref id, two-space JSON, trailing newline. */
+function serializeLedger(rows: ReadonlyArray<LessonApprovalRow>): string {
+  const sorted = rows.toSorted((a, b) => a.prefId.localeCompare(b.prefId));
+  const shape: LessonsApprovalsFileShape = {
+    schema_version: LESSONS_APPROVALS_SCHEMA_VERSION,
+    rows: sorted,
+  };
+  return JSON.stringify(shape, null, 2) + "\n";
+}
+
+/**
+ * Record (or supersede) one approval decision: the row keyed by `prefId`
+ * is replaced, so the ledger stays the state table of decisions currently
+ * in force. The read, merge and write are one critical section under the
+ * same file lock every other Brain read-modify-write takes; the write is
+ * atomic and a byte-identical no-op leaves the file untouched.
+ */
+export function recordLessonApproval(vault: string, row: LessonApprovalRow): void {
+  assertVaultIdentityForWrite(vault);
+  validateRow(row);
+  const path = lessonsApprovalsPath(vault);
+  const handle = acquireLockSyncWithRetry(path, undefined, { remedy: ingestLockRemedy });
+  try {
+    const existing = readLessonApprovals(vault).filter((r) => r.prefId !== row.prefId);
+    const next = serializeLedger([...existing, row]);
+    if (existsSync(path) && readFileSync(path, "utf8") === next) return;
+    atomicWriteFileSync(path, next);
+  } finally {
+    handle.release();
+  }
+}
+
+/**
+ * Stamp the moment the managed block last received a lesson's content.
+ * Only an approved row can be promoted; a missing or denied row is a
+ * named refusal - stamping a denial would dress suppression up as
+ * delivery.
+ */
+export function markLessonPromoted(vault: string, prefId: string, promotedAt: Date): void {
+  assertVaultIdentityForWrite(vault);
+  const path = lessonsApprovalsPath(vault);
+  const handle = acquireLockSyncWithRetry(path, undefined, { remedy: ingestLockRemedy });
+  try {
+    const rows = readLessonApprovals(vault);
+    const row = rows.find((r) => r.prefId === prefId);
+    if (row === undefined) {
+      throw new Error(`markLessonPromoted: no approval row on record for ${prefId}`);
+    }
+    if (row.decision !== "approved") {
+      throw new Error(
+        `markLessonPromoted: ${prefId} holds a ${row.decision} decision and cannot be stamped promoted`,
+      );
+    }
+    const next = serializeLedger(
+      rows.map((r) => (r.prefId === prefId ? { ...r, lastPromotedAt: isoSecond(promotedAt) } : r)),
+    );
+    if (existsSync(path) && readFileSync(path, "utf8") === next) return;
+    atomicWriteFileSync(path, next);
+  } finally {
+    handle.release();
+  }
+}
+
+/** Validate a row at the write boundary, so a half-formed row never lands. */
+function validateRow(row: LessonApprovalRow): void {
+  if (typeof row.prefId !== "string" || row.prefId.length === 0) {
+    throw new Error("recordLessonApproval: row carries no prefId");
+  }
+  if (row.decision !== "approved" && row.decision !== "denied") {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries decision ${String(row.decision)}`);
+  }
+  if (
+    row.decidedBy !== LESSON_DECISION_BY.yesFlag &&
+    row.decidedBy !== LESSON_DECISION_BY.interactiveYes
+  ) {
+    throw new Error(
+      `recordLessonApproval: ${row.prefId} carries decidedBy ${String(row.decidedBy)}`,
+    );
+  }
+  if (typeof row.decidedAt !== "string" || Number.isNaN(Date.parse(row.decidedAt))) {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries a non-ISO decidedAt`);
+  }
+  if (typeof row.approvedContentHash !== "string" || row.approvedContentHash.length === 0) {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries no approved content hash`);
+  }
+  if (!Array.isArray(row.targets) || row.targets.some((t) => typeof t !== "string" || t === "")) {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries malformed targets`);
+  }
+  if (row.blockId !== RULES_BLOCK_ID.usage && row.blockId !== RULES_BLOCK_ID.lessons) {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries blockId ${String(row.blockId)}`);
+  }
+  if (row.lastPromotedAt !== null && typeof row.lastPromotedAt !== "string") {
+    throw new Error(`recordLessonApproval: ${row.prefId} carries a malformed lastPromotedAt`);
+  }
+}

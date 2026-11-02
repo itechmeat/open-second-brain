@@ -1549,8 +1549,17 @@ const DIRECT_WRITE_ROWS = 86;
  * (`src/core/brain/attestation/signing.ts`) writes the keypair halves the
  * same way - both committed through the shared writer, so both join the
  * shared-helper population.
+ *
+ * 135 -> 136, from the operator-approved lesson promotion lane
+ * (t_1e952e43) and nothing else: the approvals ledger writer
+ * (`src/core/brain/lessons-promotion.ts`) commits
+ * `.open-second-brain/lessons-approvals.json` through the shared atomic
+ * writer under the file's own lock - derived-store machine state, not a
+ * note, so it joins the shared class needing no exclusion. The lane's
+ * rules-file writes ride the shared rules-block writer
+ * (`src/core/install/rules-block.ts`), which carries its own row.
  */
-const SHARED_HELPER_ROWS = 135;
+const SHARED_HELPER_ROWS = 136;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1732,8 +1741,13 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * 131 -> 130 is the same wave's mutation channel stamp: the shared
  * write-batch seam moved from the unstamped to the stamped shared class
  * when note mutations began stamping the writing process's channel.
+ * 130 -> 131, from the operator-approved lesson promotion lane
+ * (t_1e952e43) and nothing else: the approvals ledger writer
+ * (`src/core/brain/lessons-promotion.ts`) commits the
+ * `lessons-approvals.json` state table through the shared atomic writer -
+ * machine state in the derived store, carrying no origin channel.
  */
-const UNSTAMPED_SHARED_ROWS = 130;
+const UNSTAMPED_SHARED_ROWS = 131;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

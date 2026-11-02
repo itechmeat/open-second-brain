@@ -165,6 +165,11 @@ import {
   OPEN_DECISION_STATUSES,
 } from "../../../src/core/brain/decisions/open-store.ts";
 import {
+  isLessonPromotionBlocked,
+  LESSON_PROMOTION_BLOCKED,
+  LESSON_PROMOTION_BLOCKED_MEMBERS,
+} from "../../../src/core/brain/lessons-promotion.ts";
+import {
   BRAIN_SNAPSHOT_REASON,
   BRAIN_SNAPSHOT_REASONS,
   isBrainSnapshotReason,
@@ -684,6 +689,16 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: OPEN_DECISION_STATUS,
     members: OPEN_DECISION_STATUSES,
     guard: isOpenDecisionStatus,
+  },
+  {
+    // Operator-approved lesson promotion (t_1e952e43). Why a lesson is not
+    // promotable: the reason rides the CLI candidates listing and the JSON
+    // surfaces, so a reader can tell a scope that was never enabled from an
+    // approval that went stale on content drift.
+    name: "LESSON_PROMOTION_BLOCKED",
+    values: LESSON_PROMOTION_BLOCKED,
+    members: LESSON_PROMOTION_BLOCKED_MEMBERS,
+    guard: isLessonPromotionBlocked,
   },
   {
     // U2. Three vocabularies, because a corpus verdict, the reason it
@@ -2050,7 +2065,10 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 107/108: RECEIPT_VERIFY_VERDICT and RECEIPT_VERIFY_UNAVAILABLE_REASON
 // (delivery-trust fix wave 1) - lane B's closed verify vocabularies ship
 // their membership lists and guards so the scanner can see them.
-const VOCABULARY_POPULATION = 108;
+// 109: LESSON_PROMOTION_BLOCKED (operator-approved lesson promotion,
+// t_1e952e43) - the named reason a lesson fails the promotion gate,
+// rendered by the candidates listing and the JSON surfaces.
+const VOCABULARY_POPULATION = 109;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

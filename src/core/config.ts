@@ -1012,6 +1012,18 @@ export const DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY =
   "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS";
 
 /**
+ * Environment twin of the lessons promotion scope list (operator-approved
+ * lesson promotion, t_1e952e43). The flat machine-config key itself is
+ * `lessons.promotion.scopes`, declared beside its resolver in
+ * `src/core/brain/policy/blocks/lessons.ts` so the brain module owns its
+ * own key vocabulary. Comma-separated scope names; the same parsing rules
+ * as `resolveCounterpartyBriefTriggers` apply (entries NFC-normalized and
+ * trimmed, empty entries dropped, bracket-shaped values malformed). Absent
+ * or empty disables promotion entirely.
+ */
+export const LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES";
+
+/**
  * Shared body for a non-negative-integer config value: env var (trimmed)
  * wins, falling back to the config key (trimmed). Returns `null` when
  * unset, blank, or not a non-negative integer, so an unconfigured value
