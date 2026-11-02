@@ -63,17 +63,23 @@ test("isPathOwnerVisible inherits the refusal for an escaping rel", () => {
   expect(isPathOwnerVisible(vault, rel, "agent-b", cache)).toBe(false);
 });
 
-test("a rel whose folded spelling climbs out of the vault is refused too", () => {
-  // Only meaningful where backslash folds to the separator; where it is
-  // a filename character the spelling names an absent in-vault file and
-  // fails closed through the ordinary unreadable path instead.
+test("a backslash spelling is judged by what it names on each platform", () => {
   const rel = escapeRel().replaceAll("/", "\\");
+  // The literal backslash-named file INSIDE the vault, carrying a stamp
+  // that differs from the outside file's: whichever file the probe
+  // reads, the entry names it.
+  writeFileSync(join(vault, rel), "---\nowner: agent-a\n---\n\nliteral\n");
   const entry = readCachedFrontmatterEntry(cache, vault, rel);
   if (process.platform === "win32") {
+    // The spelling folds into the escape, so the probe is refused
+    // before any read and the literal file is never consulted.
     expect(entry).toEqual({ meta: {}, unreadable: true });
   } else {
-    expect(entry.unreadable).toBe(true);
-    expect(entry.meta).toEqual({});
+    // Backslash is a filename character: the probe read the LITERAL
+    // in-vault file (the folded spelling would have surfaced the
+    // outside file's `owner: agent-b` instead).
+    expect(entry.unreadable).toBe(false);
+    expect(entry.meta["owner"]).toBe("agent-a");
   }
 });
 

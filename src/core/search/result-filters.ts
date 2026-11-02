@@ -77,11 +77,13 @@ export function readCachedFrontmatterEntry(
   const rel = posixRel(path);
   // Containment of the JOINED path inside the vault, before cache or
   // read: a rel that climbs out of the vault names no page, and probing
-  // it would open - and parse - a file BESIDE the vault. Resolving both
-  // sides collapses `..` segments before the comparison, and the
-  // platform-relative suffix check keeps the boundary on the host's own
-  // separator. The refusal is the unreadable verdict every caller of
-  // this helper already fails closed on.
+  // it would open - and parse - a file BESIDE the vault. The check is
+  // lexical, against traversal only: both sides are resolved (collapsing
+  // `..` segments) and compared on the host's own separator, so a
+  // symlink inside the vault is judged by its spelled place, exactly as
+  // the vault walk that produced the rel saw it. The refusal is the
+  // unreadable verdict every caller of this helper already fails closed
+  // on.
   if (!pathIsInside(join(vault, rel), vault)) {
     const refusal: CachedFrontmatter = Object.freeze({ meta: {}, unreadable: true });
     cache.set(rel, refusal);
