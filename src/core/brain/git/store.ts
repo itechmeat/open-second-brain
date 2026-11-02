@@ -28,10 +28,12 @@ import {
   interleaveShardRows,
   JSONL_LEDGER_EXT,
   jsonlLedgerGrammar,
+  literalBase,
   readShardLinesByShard,
   resolveAppendShardId,
   shardedFileName,
 } from "../ledger-shards.ts";
+import type { LedgerShardGrammar } from "../ledger-shards.ts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -97,8 +99,34 @@ export interface AppendGitRecordsResult {
 /** The commits ledger's shard stem: `commits[.<deviceId>].jsonl`. */
 const COMMITS_STEM = "commits";
 
+/** The ingest watermark's stem and extension at the store root. */
+const STATE_STEM = "state";
+const STATE_EXT = "json";
+
+/** The rendered digest's stem and extension at the store root. */
+const DIGEST_STEM = "digest";
+const DIGEST_EXT = "md";
+
 /** The commits ledger's file-name layout, handed to the shared shard grammar. */
 export const COMMITS_GRAMMAR = jsonlLedgerGrammar(COMMITS_STEM);
+
+/**
+ * The store directory's complete file-name layout: the commits shards
+ * plus the two exact-name root files the ingest writer creates beside
+ * them. Importing grammars are bound to these stems, so the verifier
+ * and the writer cannot disagree on what a lawful store entry is.
+ */
+export const STORE_LAYOUT_GRAMMARS: ReadonlyArray<LedgerShardGrammar> = Object.freeze([
+  { base: literalBase(STATE_STEM), extensions: Object.freeze([STATE_EXT]) },
+  { base: literalBase(DIGEST_STEM), extensions: Object.freeze([DIGEST_EXT]) },
+  COMMITS_GRAMMAR,
+]);
+
+/** The ingest watermark's file name, shared with the ingest writer. */
+export const STATE_FILE_NAME = shardedFileName(STATE_STEM, "", STATE_EXT);
+
+/** The rendered digest's file name, shared with the ingest writer. */
+export const DIGEST_FILE_NAME = shardedFileName(DIGEST_STEM, "", DIGEST_EXT);
 
 /** `Brain/projects/git/`: the root that holds one store directory per repository. */
 export function gitStoreRootDir(vault: string): string {
@@ -120,7 +148,7 @@ function commitsPath(vault: string, repoKey: string): string {
 }
 
 function statePath(vault: string, repoKey: string): string {
-  return join(gitStoreDir(vault, repoKey), "state.json");
+  return join(gitStoreDir(vault, repoKey), shardedFileName(STATE_STEM, "", STATE_EXT));
 }
 
 function serializeRecord(record: GitRecord): string {

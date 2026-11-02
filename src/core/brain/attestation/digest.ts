@@ -36,7 +36,7 @@ import { AUDIT_WEEK_SHARD_GRAMMAR } from "../../reliability/audit.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
 import { parseShardedName, type LedgerShardGrammar } from "../ledger-shards.ts";
 import { CONTINUITY_GRAMMAR, continuityLogDir } from "../continuity/store.ts";
-import { COMMITS_GRAMMAR, gitStoreRootDir } from "../git/store.ts";
+import { gitStoreRootDir, STORE_LAYOUT_GRAMMARS } from "../git/store.ts";
 import { IDEMPOTENCY_GRAMMAR, idempotencyLogDir } from "../idempotency-ledger.ts";
 import { LINEAGE_STATE_GRAMMARS, brainStateDirPath } from "../lineage/ledger.ts";
 import { ANY_SURFACE_GRAMMAR, metricsDir } from "../metrics.ts";
@@ -203,12 +203,15 @@ export function ledgerGrowthGrammars(
   put(metricsDir(vault), [ANY_SURFACE_GRAMMAR]);
   put(brainStateDirPath(vault), LINEAGE_STATE_GRAMMARS);
   // One shard directory per preference and per repository, the same
-  // one-level descent the sweep performs.
+  // one-level descent the sweep performs. A store's layout is the whole
+  // writer: the commits shards AND the exact-name watermark and digest
+  // files beside them, so a first store verifies against its complete
+  // legitimate shape.
   const prefRoot = prefAuditDir(vault);
   const gitRoot = gitStoreRootDir(vault);
   for (const [parent, layout] of [
     [prefRoot, [PREF_AUDIT_GRAMMAR]],
-    [gitRoot, [COMMITS_GRAMMAR]],
+    [gitRoot, STORE_LAYOUT_GRAMMARS],
   ] as const) {
     if (!existsSync(parent)) continue;
     for (const entry of readdirSync(parent, { withFileTypes: true })) {

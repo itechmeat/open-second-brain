@@ -49,7 +49,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import {
   attestationStoreDigest,
@@ -65,6 +65,7 @@ import type { AttestationRecord } from "./record.ts";
 import { LOG_CHAIN_FIELDS, logChainHash } from "../log.ts";
 import { scanJsonlRows } from "../log-jsonl.ts";
 import { BRAIN_LOG_REL } from "../path-constants.ts";
+import { gitStoreRootDir } from "../git/store.ts";
 import { brainDirs } from "../paths.ts";
 import { SafeguardAbortError, type Safeguard } from "../safeguard.ts";
 import type { ProgressSink } from "../progress.ts";
@@ -385,9 +386,11 @@ function unexplainedManifestDrift(
     if (dir in attested.ledgerInventories) continue;
     // A directory that gained ledger status since signing is only
     // explained when it is the log directory filling with the new
-    // shards and known ledger subdirectories, or one of those known
+    // shards and known ledger subdirectories, one of those known
     // subdirectories itself (a first continuity month, a first audit
-    // week) whose every file parses under its producer's grammar.
+    // week), or a first repository store directory - each judged against
+    // its producer's grammar, so every name it brings must parse and an
+    // unrelated file stays drift.
     if (
       dir === logDirKey &&
       explainedLogGrowth(
@@ -401,7 +404,7 @@ function unexplainedManifestDrift(
       continue;
     }
     if (
-      dir.startsWith(`${BRAIN_LOG_REL}/`) &&
+      (dir.startsWith(`${BRAIN_LOG_REL}/`) || isFirstRepoStoreDir(vault, dir)) &&
       ledgerGrowthExplained(grammars, dir, [], recomputed.ledgerInventories[dir] ?? [])
     ) {
       continue;
@@ -409,6 +412,19 @@ function unexplainedManifestDrift(
     return true;
   }
   return false;
+}
+
+/**
+ * Whether `dir` (an inventory key) is one repository store directory
+ * directly under the store root: the shape a repository's first link
+ * creates, which may happen entirely after signing. One level only -
+ * the sweep inventories exactly these directories, and the layout rule
+ * (watermark, digest, commits shards) belongs to the store, not to
+ * anything nested deeper.
+ */
+function isFirstRepoStoreDir(vault: string, dir: string): boolean {
+  const rootRel = relative(vault, gitStoreRootDir(vault)).split(sep).join("/");
+  return dir.startsWith(`${rootRel}/`) && !dir.slice(rootRel.length + 1).includes("/");
 }
 
 /**

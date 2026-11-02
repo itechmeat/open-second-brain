@@ -35,6 +35,7 @@ import { brainDirs, hookAuditDir, logShardJsonlPath } from "../../../../src/core
 import { appendAuditRecord } from "../../../../src/core/reliability/audit.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
 import { noopSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
+import { gitStoreDir } from "../../../../src/core/brain/git/store.ts";
 
 const DATE = "2026-06-03";
 
@@ -329,6 +330,44 @@ describe("verifyAttestation", () => {
     expect(result.signatureValid).toBe(true);
     expect(result.unexplainedDrift).toBe(false);
     expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("a first repository store created after signing is growth, not unexplained drift", () => {
+    // The git record store may not exist at all when the vault is
+    // signed; its first link creates the store directory with exactly
+    // the writer's initial layout - the ingest watermark, the rendered
+    // digest, and the commits shard - which is growth the ledger rule
+    // can name, never damage.
+    const record = signedRecord();
+    const store = gitStoreDir(vault, "some-repo");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(
+      join(store, "state.json"),
+      `${JSON.stringify({
+        repoPath: "/tmp/some-repo",
+        lastSha: "0".repeat(40),
+        lastIngestedAt: `${DATE}T10:30:00Z`,
+      })}\n`,
+      "utf8",
+    );
+    writeFileSync(join(store, "digest.md"), "# some-repo\n\nthe digest projection\n", "utf8");
+    writeFileSync(join(store, "commits.jsonl"), "", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("an unrelated file in a new repository store is still drift", () => {
+    const record = signedRecord();
+    const store = gitStoreDir(vault, "some-repo");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "state.json"), "{}\n", "utf8");
+    writeFileSync(join(store, "digest.md"), "# some-repo\n", "utf8");
+    writeFileSync(join(store, "commits.jsonl"), "", "utf8");
+    writeFileSync(join(store, "notes.txt"), "planted\n", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
   });
 
   test("an addition to Brain/preferences stays drift: those files are authored state", () => {
