@@ -213,6 +213,54 @@ describe("o2b install --target <host> --apply: one consent verdict, both writes"
     expect(current.stdout).toContain("already carries the current write-gate block");
   });
 
+  test("the --apply --json payload carries the instruction-block outcome", async () => {
+    // A headless consumer consented to a plan whose JSON showed the
+    // managed-block step, so the apply receipt on the same stream must
+    // say what that step did - the same outcome the uninstall payload
+    // carries as `instruction_block` (mirrored shape, mirrored skip).
+    const created = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--json"], {
+      env: envBase(),
+    });
+    expect(created.returncode).toBe(0);
+    const payload = JSON.parse(created.stdout) as {
+      instruction_block: {
+        file: string | null;
+        created: boolean;
+        changed: boolean;
+        backup_path: string | null;
+        skipped_reason: string | null;
+      };
+    };
+    expect(payload.instruction_block.file).toBe(join(vault, "AGENTS.md"));
+    expect(payload.instruction_block.created).toBe(true);
+    expect(payload.instruction_block.changed).toBe(true);
+    expect(payload.instruction_block.skipped_reason).toBeNull();
+
+    // A re-apply reports the no-op honestly: nothing changed, no backup.
+    const again = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--json"], {
+      env: envBase(),
+    });
+    expect(again.returncode).toBe(0);
+    const second = JSON.parse(again.stdout) as {
+      instruction_block: { created: boolean; changed: boolean; backup_path: string | null };
+    };
+    expect(second.instruction_block.created).toBe(false);
+    expect(second.instruction_block.changed).toBe(false);
+    expect(second.instruction_block.backup_path).toBeNull();
+  });
+
+  test("the --apply --json payload names the skip for a target with no precedence entry", async () => {
+    const r = await runCli(["install", "--target", "copilot-cli", "--apply", "--yes", "--json"], {
+      env: envBase(),
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      instruction_block: { file: string | null; skipped_reason: string | null };
+    };
+    expect(payload.instruction_block.file).toBeNull();
+    expect(payload.instruction_block.skipped_reason).toContain("copilot-cli");
+  });
+
   test("apply with --yes --dry-run writes nothing on either lane", async () => {
     const r = await runCli(["install", "--target", "cursor", "--apply", "--yes", "--dry-run"], {
       env: envBase(),

@@ -86,6 +86,17 @@ export function instructionBlockTargetFor(target: InstallTargetId): string | nul
   return files?.[0] ?? null;
 }
 
+/**
+ * The named skip both install lanes record when `target` maps no
+ * agent-instruction file in `HOST_INSTRUCTION_PRECEDENCE`: one owner for
+ * the sentence the plan's post note, the uninstall payload's
+ * `skipped_reason` and the apply payload's `instruction_block` skip all
+ * carry, so the two JSON receipts cannot drift apart.
+ */
+export function instructionStepNoPrecedenceReason(target: InstallTargetId): string {
+  return `${target} reads no agent-instruction file in HOST_INSTRUCTION_PRECEDENCE`;
+}
+
 // ----- Plan -----------------------------------------------------------------
 
 export interface InstructionBlockPlan {

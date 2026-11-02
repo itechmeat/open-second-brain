@@ -57,12 +57,14 @@ import type { ApplyOpts, InstallEnv, VerifyResult } from "../../core/install/typ
 import {
   applyInstructionBlock,
   instructionBlockTargetFor,
+  instructionStepNoPrecedenceReason,
   planInstructionBlock,
 } from "../../core/install/instruction-block.ts";
 import type { InstructionBlockPlan } from "../../core/install/instruction-block.ts";
 import { RULES_BLOCK_ERROR_KIND, RulesBlockError } from "../../core/install/rules-block.ts";
 import {
   renderApplyJson,
+  type ApplyInstructionBlockOutcome,
   renderApplyResult,
   renderDetectJson,
   renderDetectTable,
@@ -564,7 +566,28 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     // runtime nobody installed.
     const ownership = ownershipFor(env, args.config);
     if (args.json) {
-      process.stdout.write(renderApplyJson(result, ownership, consent));
+      // The instruction-block outcome rides the apply payload (the
+      // uninstall payload has carried the same-named field since its step
+      // shipped): a headless consumer that consented to a plan whose JSON
+      // showed the managed-block step reads what that step did from the
+      // receipt on the stream it parses, not only from the human line.
+      const instructionBlock: ApplyInstructionBlockOutcome =
+        instruction === null
+          ? {
+              file: null,
+              created: false,
+              changed: false,
+              backup_path: null,
+              skipped_reason: instructionStepNoPrecedenceReason(args.target as InstallTargetId),
+            }
+          : {
+              file: instruction.plan.path,
+              created: instructionApply?.created ?? false,
+              changed: instructionApply?.changed ?? false,
+              backup_path: instructionApply?.backupPath ?? null,
+              skipped_reason: null,
+            };
+      process.stdout.write(renderApplyJson(result, ownership, consent, instructionBlock));
     } else {
       process.stdout.write(renderApplyResult(result, consent));
       // The instruction write is invisible in the adapter's own summary

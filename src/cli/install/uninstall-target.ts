@@ -24,9 +24,10 @@ import "../../core/install/adapters/kiro.ts";
 import "../../core/install/adapters/opencode.ts";
 import "../../core/install/adapters/pi.ts";
 import { InstallError, type InstallEnv } from "../../core/install/types.ts";
-import { isInstallTargetId } from "../../core/runtime/host-facts.ts";
+import { isInstallTargetId, type InstallTargetId } from "../../core/runtime/host-facts.ts";
 import {
   instructionBlockTargetFor,
+  instructionStepNoPrecedenceReason,
   readInstructionBlockLock,
   uninstallInstructionBlock,
 } from "../../core/install/instruction-block.ts";
@@ -49,7 +50,7 @@ function uninstallInstructionStep(
     return {
       file: null,
       removed: false,
-      skipped_reason: `${target} reads no agent-instruction file in HOST_INSTRUCTION_PRECEDENCE`,
+      skipped_reason: instructionStepNoPrecedenceReason(target as InstallTargetId),
     };
   }
   const recorded = readInstructionBlockLock(env.vault).files[mapped] !== undefined;
