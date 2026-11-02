@@ -1,0 +1,11 @@
+{
+  "schema_version": "o2b.skill-rewrite.v1",
+  "skill_name": "example-skill",
+  "tasks_hash": "a75f5dcc872f6d3366310dfc6c2fca60e0d328795bca39826bad125c3e169d52",
+  "seed": 0,
+  "split_rule": "hash-order-70-30",
+  "dev_task_ids": ["t-03", "t-04", "t-06", "t-07", "t-08", "t-09", "t-10"],
+  "held_out_task_ids": ["t-01", "t-02", "t-05"],
+  "required_margin": 0.1,
+  "min_dev_tasks": 2
+}
