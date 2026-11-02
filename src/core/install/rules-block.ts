@@ -89,6 +89,13 @@ export const RULES_BLOCK_ERROR_KIND = Object.freeze({
    * preview at apply time and must refuse a write of anything else.
    */
   previewDrift: "preview-drift",
+  /**
+   * The approved preview does not name a file this installer could have
+   * derived: a path off the vault root, or not an agent-instruction file
+   * at all. A plan that was not produced against this vault must never
+   * be applied to it.
+   */
+  invalidPlan: "invalid-plan",
 } as const);
 
 /** Closed union over {@link RULES_BLOCK_ERROR_KIND}. */
