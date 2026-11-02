@@ -67,6 +67,19 @@ export const SKILL_REWRITE_ROUND_ARMS: ReadonlyArray<SkillRewriteRoundArm> = Obj
   Object.values(SKILL_REWRITE_ROUND_ARM),
 );
 
+/**
+ * One rewrite round envelope: the needs-llm-step spine plus the two fields
+ * that tie the generated transcript back to the task it answers and the
+ * arm that asked for it. The submission scorer reads `task_id` off the
+ * TRANSCRIPT, not the envelope; these fields exist so a caller can
+ * correlate an envelope with its task, and so the dev-only containment
+ * assertion in the builder has a typed handle.
+ */
+export type RewriteTaskEnvelope = NeedsLlmStep & {
+  readonly task_id: string;
+  readonly round: SkillRewriteRoundArm;
+};
+
 export function isSkillRewriteRoundArm(value: unknown): value is SkillRewriteRoundArm {
   return (
     typeof value === "string" && (SKILL_REWRITE_ROUND_ARMS as ReadonlyArray<string>).includes(value)
@@ -167,7 +180,7 @@ export function buildRewriteEnvelopes(
   spec: SkillRewriteSpec,
   tasks: SkillBenchmarkTaskSet,
   opts: { readonly round?: DevRound } = {},
-): ReadonlyArray<NeedsLlmStep> {
+): ReadonlyArray<RewriteTaskEnvelope> {
   const round = opts.round ?? SKILL_REWRITE_ROUND_ARM.candidate;
   return buildRoundEnvelopes(candidateBody, spec, tasks, spec.devTaskIds, round);
 }
@@ -181,7 +194,7 @@ export function buildRewriteHeldoutEnvelopes(
   candidateBody: string,
   spec: SkillRewriteSpec,
   tasks: SkillBenchmarkTaskSet,
-): ReadonlyArray<NeedsLlmStep> {
+): ReadonlyArray<RewriteTaskEnvelope> {
   return buildRoundEnvelopes(
     candidateBody,
     spec,
@@ -197,7 +210,7 @@ function buildRoundEnvelopes(
   tasks: SkillBenchmarkTaskSet,
   memberIds: ReadonlyArray<string>,
   round: SkillRewriteRoundArm,
-): ReadonlyArray<NeedsLlmStep> {
+): ReadonlyArray<RewriteTaskEnvelope> {
   if (tasks.hash !== spec.tasksHash) {
     throw new SkillRewriteError(
       `skill rewrite: task set hash ${tasks.hash} does not match the receipt's frozen hash ` +

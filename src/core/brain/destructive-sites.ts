@@ -273,9 +273,13 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "removes the accept-journal marker once the accept committed. The journal is a " +
-        "crash-recovery record for the accept it describes, so keeping it past the " +
-        "commit would make the NEXT run try to roll back finished work.",
+        "removes the accept-journal marker once the accept committed, and the " +
+        "prior-content copy beside it when a scored rewrite captured one - both " +
+        "forced, so clearing a journal that never captured anything is not an " +
+        "error. The journal is a crash-recovery record for the accept it " +
+        "describes, so keeping it past the commit would make the NEXT run try " +
+        "to roll back finished work; the same holds for the copy, whose only " +
+        "reader is the rollback the completed accept has just made moot.",
     },
     "src/core/brain/lineage/identity.ts": {
       calls: ["unlinkSync"],
@@ -434,7 +438,14 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "artifact the accept materialised only when the journal recorded that neither " +
         "existed beforehand. The `rmdirSync` finishes that rollback for a `mature_page` " +
         "accept, which creates a directory to hold its SKILL.md: `rmdirSync` refuses a " +
-        "non-empty directory, so only the empty shell this sequence made is removed.",
+        "non-empty directory, so only the empty shell this sequence made is removed. " +
+        "A `scored_rewrite` accept OVERWRITES an incumbent, so when the journal " +
+        "recorded that the artifact DID exist and carries a prior-content copy, the " +
+        "same rollback restores the incumbent bytes through `atomicWriteFileSync` " +
+        "instead of removing anything; a missing copy is a named refusal that keeps " +
+        "the journal on disk, because silently leaving the candidate body on an " +
+        "incumbent's path is the one outcome worse than the crash being recovered " +
+        "from.",
     },
 
     // --- Repair under an explicit apply ----------------------------------

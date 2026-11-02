@@ -55,7 +55,11 @@ import { dirname, join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { requireNextStep } from "./next-step.ts";
-import { BRAIN_SKILL_ACCEPT_JOURNAL_REL, skillAcceptJournalPath } from "./paths.ts";
+import {
+  BRAIN_SKILL_ACCEPT_JOURNAL_REL,
+  skillAcceptJournalPath,
+  skillAcceptPriorContentPath,
+} from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Step the accept sequence was about to perform when the journal was stamped. */
@@ -76,6 +80,15 @@ export interface SkillAcceptJournalEntry {
    * slug derives.
    */
   readonly materializedPath?: string;
+  /**
+   * Vault-side copy of the incumbent bytes, captured before a scored
+   * rewrite's materialize step OVERWRITES an existing SKILL.md. Present
+   * only when the sequence was about to displace content; the rollback
+   * restores the incumbent BODY from it, not just its existence. Absent
+   * on markers written before rewrites existed, and on sequences whose
+   * materialize target did not exist.
+   */
+  readonly priorContentPath?: string;
 }
 
 const JOURNAL_SCHEMA_VERSION = 1;
@@ -99,6 +112,7 @@ export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournal
     // is still readable by the build that shipped the key.
     procedure_existed: entry.materializedExisted,
     ...(entry.materializedPath !== undefined ? { materialized_path: entry.materializedPath } : {}),
+    ...(entry.priorContentPath !== undefined ? { prior_content_path: entry.priorContentPath } : {}),
   };
   atomicWriteFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -114,11 +128,16 @@ export function removeSkillAcceptJournalFile(vault: string, path: string): void 
   rmSync(ensureInsideVault(path, vault), { force: true });
 }
 
-/** Remove the journal for `slug`. Idempotent. */
+/**
+ * Remove the journal for `slug`, and the prior-content copy beside it
+ * when a rewrite captured one. Idempotent: both removals are forced, so
+ * clearing a journal that never captured anything is not an error.
+ */
 export function clearSkillAcceptJournal(vault: string, slug: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   rmSync(skillAcceptJournalPath(vault, slug), { force: true });
+  rmSync(skillAcceptPriorContentPath(vault, slug), { force: true });
 }
 
 /** Registry code for a marker file this module cannot parse. */
@@ -229,6 +248,7 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
     return Object.freeze({ path, detail: "a required field is missing or of the wrong type" });
   }
   const materializedPath = raw["materialized_path"];
+  const priorContentPath = raw["prior_content_path"];
   return Object.freeze({
     slug,
     id,
@@ -238,6 +258,9 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
     materializedExisted: raw["procedure_existed"] === true,
     ...(typeof materializedPath === "string" && materializedPath.length > 0
       ? { materializedPath }
+      : {}),
+    ...(typeof priorContentPath === "string" && priorContentPath.length > 0
+      ? { priorContentPath }
       : {}),
   });
 }

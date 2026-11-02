@@ -215,7 +215,7 @@ describe("parseSkillRewriteSpec", () => {
     refusing((draft) => {
       draft["dev_task_ids"] = [
         ...(draft["dev_task_ids"] as string[]),
-        draft["held_out_task_ids"][0],
+        (draft["held_out_task_ids"] as string[])[0],
       ];
     }, "disjoint");
     refusing((draft) => (draft["dev_task_ids"] = []), "dev_task_ids must be a non-empty array");

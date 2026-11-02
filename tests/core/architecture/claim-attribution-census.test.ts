@@ -122,6 +122,13 @@ const PINNED_CONTINUITY_KINDS: ReadonlyArray<string> = Object.freeze([
   // verdicts, session-keyed so the receipt read can join it. Written by
   // the hook only; the join reads it, no truth module appends it.
   "reply_presence",
+  // The agent-presence wave's additive kind (t_635e3e72, Lane A): one
+  // completed benchmark-gated skill rewrite gate run, written by
+  // `recordSkillRewriteGrade` in `skill-proposals.ts` after the gates
+  // finished. Review evidence only - identifiers, scores and per-check
+  // verdicts with the spec hash, never task or transcript text - and the
+  // human accept, not this record, is what moves a skill.
+  "skill_rewrite_eval_grade",
 ]);
 
 function truthModulePaths(): ReadonlyArray<string> {

@@ -19,6 +19,13 @@ import { ensureInsideVault } from "../path-safety.ts";
 import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
+import type { RewriteGradeRecordPayload } from "./skill-rewrite.ts";
+import {
+  isSkillRewriteVerdict,
+  SKILL_REWRITE_METRIC,
+  type SkillRewriteSpec,
+} from "./skill-rewrite-spec.ts";
+import { SKILL_BENCHMARK_SPEC_FILE, skillBenchmarkRelPath } from "./skill-rewrite-tasks.ts";
 import {
   listProceduralMemory,
   proceduralEntryId,
@@ -40,13 +47,19 @@ import {
   procedurePath,
   proposalWatermarkPath,
   skillAcceptJournalPath,
+  skillAcceptPriorContentPath,
   skillProposalAcceptedPath,
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
 import { JSONL_LEDGER_EXT, resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
+import {
+  appendContinuityRecord,
+  listContinuityRecords,
+  type ContinuityRecord,
+} from "./continuity/store.ts";
+import type { ContinuityPayload } from "./continuity/types.ts";
 
 /**
  * Pattern kind stamped on a proposal an author DECLARED through an
@@ -87,13 +100,36 @@ export const DECLARED_MARKER_PATTERN_KIND = "declared_marker";
  */
 export const MATURE_PAGE_PATTERN_KIND = "mature_page";
 
+/**
+ * Pattern kind stamped on a proposal a benchmark-gated rewrite staged
+ * (agent-presence, Lane A) after the candidate won the selection gate
+ * and passed the held-out check.
+ *
+ * Like the declared and mature-page kinds it sits outside the mining
+ * verifier: its evidence is the preregistered benchmark receipt - the
+ * frozen spec hash and the three scores the gate decided on, carried in
+ * the frontmatter - not a continuity pattern, so a record-counting gate
+ * over it would reject every rewrite and make the lane a silent no-op.
+ * The gates that DO apply are the mechanical ones upstream of staging
+ * (the task-set receipt, the dev selection margin, the single held-out
+ * check) and the human one downstream: nothing lands on an incumbent
+ * skill until `acceptSkillProposal`.
+ *
+ * This is the one pattern kind whose acceptance OVERWRITES: it
+ * materializes a `SKILL.md` over the incumbent, so the accept journal
+ * captures the prior bytes first ({@link SkillAcceptJournalEntry.priorContentPath})
+ * and the rollback restores content, not just existence.
+ */
+export const SCORED_REWRITE_PATTERN_KIND = "scored_rewrite";
+
 export type SkillProposalPatternKind =
   | "repeated_action"
   | "structural_similarity"
   | "co_occurrence"
   | "temporal_routine"
   | typeof DECLARED_MARKER_PATTERN_KIND
-  | typeof MATURE_PAGE_PATTERN_KIND;
+  | typeof MATURE_PAGE_PATTERN_KIND
+  | typeof SCORED_REWRITE_PATTERN_KIND;
 
 /** The three phases a proposal file can live in, most terminal first. */
 const PROPOSAL_PHASES = ["accepted", "rejected", "pending"] as const;
@@ -552,6 +588,24 @@ const SKILL_DRAFT_DESCRIPTION_KEY = "skill_description";
 const SKILL_DRAFT_TRIGGERS_KEY = "skill_triggers";
 
 /**
+ * Scored-contract keys a `scored_rewrite` proposal carries beside the
+ * SKILL.md draft fields: which skill it rewrites, the spec hash the gate
+ * verified against, and the three rates the gate decided on. The writer
+ * and the accept-time validation are the only readers, so a second
+ * spelling would put an unreviewable claim on a working skill.
+ */
+const SKILL_REWRITES_SKILL_KEY = "rewrites_skill";
+const SKILL_SPEC_HASH_KEY = "spec_hash";
+const SKILL_BASELINE_SCORE_KEY = "baseline_score";
+const SKILL_CANDIDATE_SCORE_KEY = "candidate_score";
+const SKILL_HELDOUT_SCORE_KEY = "heldout_score";
+
+/** The fixed three-decimal spelling a gate rate carries in frontmatter. */
+function formatRewriteScore(score: number): string {
+  return score.toFixed(3);
+}
+
+/**
  * A skill's `name` becomes a DIRECTORY under the skills root, so it is
  * not free text. Declared here rather than beside the drafting check in
  * `skill-page-drafts.ts` because BOTH ends need it and this module is the
@@ -642,6 +696,180 @@ export function draftMaturePageSkillProposal(
   return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
 }
 
+/** One rewritten skill draft, as a won gate round submits it for staging. */
+export interface ScoredRewriteSkillDraft {
+  /** Skill directory name; validated as such before anything is written. */
+  readonly name: string;
+  /** One-line description, carried verbatim into the SKILL.md frontmatter. */
+  readonly description: string;
+  /** Trigger keywords, carried verbatim into the SKILL.md frontmatter. */
+  readonly triggers: ReadonlyArray<string>;
+  /** The candidate SKILL.md body the gate round scored. */
+  readonly body: string;
+}
+
+export interface ScoredRewriteProposalInput {
+  /** The candidate the selection and held-out gates just promoted. */
+  readonly skill: ScoredRewriteSkillDraft;
+  /** The preregistration this round verified against (`verifyRewriteTake`). */
+  readonly spec: SkillRewriteSpec;
+  /** The spec hash stamped on the proposal, the grade record and the accept. */
+  readonly specHash: string;
+  readonly baselineScore: number;
+  readonly candidateScore: number;
+  readonly heldoutScore: number;
+  /**
+   * The incumbent SKILL.md's current `version`. The staged proposal carries
+   * one more, so the accept-time materialize lands the bumped version the
+   * evolve precedent expects - the version is decided at the gate, not at
+   * the accept, because the receipt that pinned it is the gate's.
+   */
+  readonly incumbentVersion: number;
+  readonly now?: Date;
+}
+
+/**
+ * Stage a PENDING proposal from a benchmark-gated rewrite round that WON
+ * (agent-presence, Lane A).
+ *
+ * The write lands in `pending` and nowhere else, exactly like every other
+ * producer in this module: the skills root may sit outside the vault, and
+ * nothing automatic writes there - only {@link acceptSkillProposal}, on an
+ * explicit human accept, through the write-ahead journal. Because a
+ * `scored_rewrite` accept OVERWRITES an incumbent SKILL.md, the accept
+ * captures the incumbent bytes first ({@link SkillAcceptJournalEntry.priorContentPath})
+ * and its rollback restores content, not just existence.
+ *
+ * Identity is the declared path's, with one extension: the payload hash
+ * mixes in the spec hash and the three scores, so re-running the same
+ * gate on a changed receipt or a different result is a DIFFERENT proposal
+ * (a fresh reviewable artifact), while an identical re-stage dedupes to
+ * the one already pending. A sticky human rejection of the name still
+ * suppresses the whole family.
+ *
+ * The scores are written as fixed three-decimal strings: they are the
+ * frozen claims of a completed gate run, and a human reviewing the pending
+ * file reads them against the grade record, never recomputes them.
+ */
+export function stageScoredRewriteProposal(
+  vault: string,
+  input: ScoredRewriteProposalInput,
+): DeclaredSkillProposalResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const name = input.skill.name.trim();
+  if (!name) {
+    throw new DeclaredSkillProposalError("scored rewrite proposal requires a skill name");
+  }
+  if (!SKILL_NAME_RE.test(name)) {
+    throw new DeclaredSkillProposalError(
+      `scored rewrite proposal '${name}' is not a skill directory name ` +
+        "(lowercase letters, digits and single hyphens)",
+    );
+  }
+  const body = input.skill.body.trim();
+  if (!body) {
+    throw new DeclaredSkillProposalError(`scored rewrite proposal '${name}' has no candidate body`);
+  }
+  const description = input.skill.description.trim();
+  if (!description) {
+    throw new DeclaredSkillProposalError(`scored rewrite proposal '${name}' has no description`);
+  }
+  if (typeof input.specHash !== "string" || input.specHash.length === 0) {
+    // The receipt location is named because the fix is re-reading it, not
+    // re-typing it: the hash must be the one `skillRewriteSpecHash` stamped.
+    throw new DeclaredSkillProposalError(
+      `scored rewrite proposal '${name}' requires the spec hash of the frozen receipt at ` +
+        skillBenchmarkRelPath(name, SKILL_BENCHMARK_SPEC_FILE),
+    );
+  }
+  for (const [label, score] of [
+    ["baseline", input.baselineScore],
+    ["candidate", input.candidateScore],
+    ["held-out", input.heldoutScore],
+  ] as const) {
+    if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1) {
+      throw new DeclaredSkillProposalError(
+        `scored rewrite proposal '${name}' has a ${label} score that is not a number in [0, 1]: ` +
+          JSON.stringify(score),
+      );
+    }
+  }
+  if (
+    typeof input.incumbentVersion !== "number" ||
+    !Number.isInteger(input.incumbentVersion) ||
+    input.incumbentVersion < 1
+  ) {
+    throw new DeclaredSkillProposalError(
+      `scored rewrite proposal '${name}' has an incumbent version that is not a positive integer: ` +
+        JSON.stringify(input.incumbentVersion),
+    );
+  }
+
+  const salt = JSON.stringify({
+    specHash: input.specHash,
+    baseline: input.baselineScore,
+    candidate: input.candidateScore,
+    heldout: input.heldoutScore,
+  });
+  const planned = planDeclaredSkillProposal(
+    vault,
+    { name, body, sourceRefs: [] },
+    SCORED_REWRITE_PATTERN_KIND,
+    { payloadSalt: salt },
+  );
+  if ("declined" in planned) return planned.declined;
+  const plan = planned.plan;
+
+  const now = (input.now ?? new Date()).toISOString();
+  const triggers = input.skill.triggers.map((t) => t.trim()).filter((t) => t.length > 0);
+  const fmt = formatRewriteScore;
+
+  writeFrontmatterAtomic(
+    plan.path,
+    {
+      schema_version: 1,
+      kind: "brain-skill-proposal",
+      id: plan.id,
+      slug: plan.slug,
+      status: "pending",
+      pattern_kind: SCORED_REWRITE_PATTERN_KIND,
+      name_key: plan.nameKey,
+      version: input.incumbentVersion + 1,
+      payload_hash: plan.payloadHash,
+      created_at: now,
+      updated_at: now,
+      evidence_count: "2",
+      [SKILL_DRAFT_NAME_KEY]: plan.name,
+      [SKILL_DRAFT_DESCRIPTION_KEY]: description,
+      [SKILL_DRAFT_TRIGGERS_KEY]: triggers,
+      [SKILL_REWRITES_SKILL_KEY]: plan.name,
+      [SKILL_SPEC_HASH_KEY]: input.specHash,
+      [SKILL_BASELINE_SCORE_KEY]: fmt(input.baselineScore),
+      [SKILL_CANDIDATE_SCORE_KEY]: fmt(input.candidateScore),
+      [SKILL_HELDOUT_SCORE_KEY]: fmt(input.heldoutScore),
+    },
+    renderProposalDocument({
+      title: plan.name,
+      patternKind: SCORED_REWRITE_PATTERN_KIND,
+      key: plan.key,
+      suggestedBody: body.split("\n"),
+      evidence: [
+        `- spec ${input.specHash} (seed ${input.spec.seed}, ${input.spec.splitRule})`,
+        `- baseline ${fmt(input.baselineScore)} / candidate ${fmt(input.candidateScore)} / ` +
+          `held-out ${fmt(input.heldoutScore)}`,
+      ],
+    }),
+    {
+      overwrite: false,
+      existsErrorKind: "skill proposal",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
+}
+
 /**
  * What {@link draftDeclaredSkillProposal} would do, without writing.
  *
@@ -685,6 +913,7 @@ function planDeclaredSkillProposal(
   vault: string,
   input: DeclaredSkillProposalInput,
   patternKind: SkillProposalPatternKind = DECLARED_MARKER_PATTERN_KIND,
+  opts: { readonly payloadSalt?: string } = {},
 ):
   | { readonly plan: DeclaredSkillProposalPlan }
   | { readonly declined: DeclaredSkillProposalResult } {
@@ -711,8 +940,18 @@ function planDeclaredSkillProposal(
     };
   }
 
+  // The salt joins the hashed payload ONLY when a producer supplies one,
+  // so the declared and mature-page hashes stay byte-identical to the
+  // pre-rewrite spellings.
   const payloadHash = createHash("sha256")
-    .update(JSON.stringify({ patternKind, key, body }), "utf8")
+    .update(
+      JSON.stringify(
+        opts.payloadSalt !== undefined
+          ? { patternKind, key, body, salt: opts.payloadSalt }
+          : { patternKind, key, body },
+      ),
+      "utf8",
+    )
     .digest("hex");
   const slug = composeProposalSlug(patternKind, key, payloadHash);
   const id = `prop-${slug}`;
@@ -788,6 +1027,11 @@ export function acceptSkillProposal(
     if (fm["kind"] !== "brain-skill-proposal") {
       throw new Error(`invalid skill proposal file: ${pendingPath}`);
     }
+    // A scored rewrite is the one pattern kind whose acceptance OVERWRITES
+    // an incumbent: its scored contract is validated before the journal is
+    // stamped, so a corrupted draft cannot half-accept.
+    const isRewrite = fm["pattern_kind"] === SCORED_REWRITE_PATTERN_KIND;
+    if (isRewrite) validateScoredRewriteContract(fm);
     const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
     const version = parseVersion(fm["version"]);
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
@@ -833,6 +1077,21 @@ export function acceptSkillProposal(
         },
       );
 
+      // Rewrite overwrite discipline: while the incumbent still exists,
+      // capture its bytes vault-side and stamp the journal with the copy's
+      // path BEFORE the overwrite - so a crash after the overwrite rolls
+      // back to the incumbent BODY, not just to its existence. The capture
+      // precedes the stamp deliberately: a crash in between leaves an
+      // orphan copy and an overwrite that never happened, which the next
+      // pass clears; the reverse order would leave a journal promising a
+      // copy that is not there.
+      if (isRewrite && journal.materializedExisted) {
+        const priorPath = skillAcceptPriorContentPath(vault, slug);
+        mkdirSync(dirname(priorPath), { recursive: true });
+        atomicWriteFileSync(priorPath, readFileSync(materializedPath, "utf8"));
+        journal = { ...journal, priorContentPath: priorPath };
+      }
+
       journal = { ...journal, phase: "materialize" };
       writeSkillAcceptJournal(vault, journal);
       if (skillDraft === null) {
@@ -864,6 +1123,11 @@ export function acceptSkillProposal(
         // still not free-form: `skillDraft.name` was validated as a skill
         // directory name before the proposal was staged, and the root comes
         // from config, never from the payload.
+        //
+        // A scored_rewrite is the ONE overwrite in this module: it replaces
+        // an incumbent SKILL.md, and only after the journal captured the
+        // incumbent bytes above. Every other producer here is still
+        // exclusive-create.
         mkdirSync(dirname(materializedPath), { recursive: true });
         writeFrontmatterAtomic(
           materializedPath,
@@ -878,7 +1142,7 @@ export function acceptSkillProposal(
             ...contract,
           },
           renderAcceptedSkillBody(id, skillDraft.name, body),
-          { overwrite: false, existsErrorKind: "skill" },
+          { overwrite: isRewrite, existsErrorKind: "skill" },
         );
       }
 
@@ -1054,6 +1318,13 @@ function resolveSkillAccept(
           // Non-empty or already gone; either way nothing more to undo.
         }
       }
+    } else if (journal.priorContentPath !== undefined) {
+      // The incumbent EXISTED and a scored rewrite may have replaced its
+      // bytes mid-sequence: restore the captured incumbent body. This is
+      // the one rollback in the module that restores CONTENT, not just
+      // existence - a rewrite that could only be undone by deleting the
+      // incumbent would be worse than the crash it recovers from.
+      restorePriorSkillContent(vault, journal);
     }
     clearSkillAcceptJournal(vault, journal.slug);
     return "rolled_back";
@@ -1062,6 +1333,48 @@ function resolveSkillAccept(
   rebuildProceduralProjections(vault);
   clearSkillAcceptJournal(vault, journal.slug);
   return "completed";
+}
+
+/**
+ * Restore an incumbent SKILL.md's bytes from the journal's prior-content
+ * copy. Caller must already hold the accept lock and know
+ * `journal.priorContentPath` is set.
+ *
+ * A missing or unreadable copy is NOT papered over: the rollback would
+ * otherwise silently leave the CANDIDATE body on an incumbent's path,
+ * which is the one outcome worse than the crash being recovered from.
+ * Throwing keeps the journal on disk (the resolver's callers retain it),
+ * so the operator decides with the copy gone - the same named refusal
+ * posture as an unreadable journal marker.
+ */
+function restorePriorSkillContent(vault: string, journal: SkillAcceptJournalEntry): void {
+  const priorPath = journal.priorContentPath;
+  if (priorPath === undefined) return;
+  // The copy is a vault artifact the accept sequence wrote; a path that
+  // escapes the vault is a hand-edited journal, not a recovery input.
+  const source = ensureInsideVault(priorPath, vault);
+  let prior: string;
+  try {
+    prior = readFileSync(source, "utf8");
+  } catch (error) {
+    throw new Error(
+      `skill proposal accept rollback for '${journal.slug}' cannot restore the incumbent body: ` +
+        `the prior-content copy is missing or unreadable (${errorMessage(error)}); ` +
+        `journal retained for recovery: ${skillAcceptJournalPath(vault, journal.slug)}`,
+      { cause: error },
+    );
+  }
+  const target = journal.materializedPath;
+  if (target === undefined) {
+    throw new Error(
+      `skill proposal accept rollback for '${journal.slug}' cannot restore the incumbent body: ` +
+        `the journal records no materialized path; journal retained for recovery: ` +
+        skillAcceptJournalPath(vault, journal.slug),
+    );
+  }
+  // The restore rides the shared atomic writer: an interrupted rollback
+  // leaves either the incumbent or the candidate, never a hybrid.
+  atomicWriteFileSync(target, prior);
 }
 
 /**
@@ -1157,6 +1470,132 @@ export function resolveSkillProposalEvidence(vault: string, slug: string): Skill
     recordedFailures: entry?.failureCount ?? null,
     recordedSuccessRate: entry === null ? null : proceduralSuccessRate(entry),
     outcomeState: outcomeState(entry?.successCount ?? 0, entry?.failureCount ?? 0),
+  });
+}
+
+export interface SkillRewriteGradeRecordInput {
+  /** The assembled gate-run payload from `buildRewriteGradeRecord`. */
+  readonly payload: RewriteGradeRecordPayload;
+  readonly now?: Date;
+}
+
+/**
+ * Append one `skill_rewrite_eval_grade` continuity record for a completed
+ * gate run (agent-presence, Lane A).
+ *
+ * This is the ONLY thing a failed gate round writes: a `hold` or a short
+ * `not_enough_evidence` stages nothing - the pending-proposal tree is
+ * untouched - so an operator can audit why a rewrite did not land by
+ * reading the record alone.
+ *
+ * The payload is REBUILT field by field from a validated input, never
+ * spread: the record carries identifiers, numbers, booleans and check ids
+ * with the spec hash, and anything else in the caller's object - task
+ * text, transcript text, an extra diagnostic blob - is dropped by
+ * construction rather than filtered after the fact. A malformed field is
+ * a named error, because a grade record with a junk rate in it is worse
+ * than no record: it is the evidence a human accept reads.
+ */
+export function recordSkillRewriteGrade(
+  vault: string,
+  input: SkillRewriteGradeRecordInput,
+): ContinuityRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const payload = validateRewriteGradePayload(input.payload);
+  return appendContinuityRecord(vault, {
+    kind: "skill_rewrite_eval_grade",
+    createdAt: (input.now ?? new Date()).toISOString(),
+    payload,
+  });
+}
+
+/** One rebuilt per-task grade row: ids and check verdicts only. */
+function rebuildGradeTaskRow(
+  row: unknown,
+  arm: string,
+): {
+  readonly task_id: string;
+  readonly passed: boolean;
+  readonly failed_checks: ReadonlyArray<string>;
+} {
+  const raw = (row ?? {}) as Record<string, unknown>;
+  const taskId = raw["task_id"];
+  if (typeof taskId !== "string" || taskId.trim().length === 0) {
+    throw new Error(`skill rewrite grade record has a ${arm} row without a task id`);
+  }
+  const passed = raw["passed"];
+  if (typeof passed !== "boolean") {
+    throw new Error(
+      `skill rewrite grade record has a ${arm} row for '${taskId}' without a boolean 'passed'`,
+    );
+  }
+  const failedChecks = raw["failed_checks"];
+  if (
+    !Array.isArray(failedChecks) ||
+    failedChecks.some((check) => typeof check !== "string" || check.trim().length === 0)
+  ) {
+    throw new Error(
+      `skill rewrite grade record has a ${arm} row for '${taskId}' whose failed checks are not check-id strings`,
+    );
+  }
+  return { task_id: taskId, passed, failed_checks: [...failedChecks] };
+}
+
+function validateRewriteGradePayload(payload: RewriteGradeRecordPayload): ContinuityPayload {
+  if (typeof payload.skill !== "string" || !SKILL_NAME_RE.test(payload.skill)) {
+    throw new Error(
+      `skill rewrite grade record has a skill name that is not a skill directory name: ` +
+        JSON.stringify(payload.skill ?? null),
+    );
+  }
+  for (const field of ["spec_hash", "tasks_hash", "split_rule"] as const) {
+    const value = payload[field];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`skill rewrite grade record is missing '${field}'`);
+    }
+  }
+  if (payload.metric !== SKILL_REWRITE_METRIC) {
+    throw new Error(
+      `skill rewrite grade record has a metric other than '${SKILL_REWRITE_METRIC}': ` +
+        JSON.stringify(payload.metric ?? null),
+    );
+  }
+  if (typeof payload.seed !== "number" || !Number.isInteger(payload.seed) || payload.seed < 0) {
+    throw new Error(
+      `skill rewrite grade record has a seed that is not a non-negative integer: ` +
+        JSON.stringify(payload.seed ?? null),
+    );
+  }
+  if (!isSkillRewriteVerdict(payload.verdict)) {
+    throw new Error(
+      `skill rewrite grade record has an unknown verdict: ${JSON.stringify(payload.verdict ?? null)}`,
+    );
+  }
+  for (const field of ["baseline_rate", "candidate_rate"] as const) {
+    const rate = payload[field];
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 1) {
+      throw new Error(
+        `skill rewrite grade record has a '${field}' that is not a number in [0, 1]: ` +
+          JSON.stringify(rate ?? null),
+      );
+    }
+  }
+  if (!Array.isArray(payload.dev) || !Array.isArray(payload.held_out)) {
+    throw new Error("skill rewrite grade record is missing its dev or held-out task rows");
+  }
+  return Object.freeze({
+    skill: payload.skill,
+    spec_hash: payload.spec_hash,
+    tasks_hash: payload.tasks_hash,
+    metric: payload.metric,
+    seed: payload.seed,
+    split_rule: payload.split_rule,
+    verdict: payload.verdict,
+    baseline_rate: payload.baseline_rate,
+    candidate_rate: payload.candidate_rate,
+    dev: Object.freeze(payload.dev.map((row) => rebuildGradeTaskRow(row, "dev"))),
+    held_out: Object.freeze(payload.held_out.map((row) => rebuildGradeTaskRow(row, "held-out"))),
   });
 }
 
@@ -1664,13 +2103,14 @@ function candidateHash(candidate: ProposalCandidate): string {
 }
 
 /**
- * The SKILL.md contract a `mature_page` proposal carries, or null when the
- * proposal is not one - which is how the accept path chooses its
- * materializer. A proposal stamped `mature_page` but missing either
- * required field is a corrupted draft, not a procedure: it is refused by
- * name rather than materialized into the wrong tree.
+ * The SKILL.md contract a `mature_page` or `scored_rewrite` proposal
+ * carries, or null when the proposal is not one - which is how the accept
+ * path chooses its materializer. A proposal stamped with either skill
+ * kind but missing a required field is a corrupted draft, not a
+ * procedure: it is refused by name rather than materialized into the
+ * wrong tree.
  *
- * The name's charset is re-checked here even though the draft path
+ * The name's charset is re-checked here even though the draft paths
  * already refused anything else. This is the one write in the accept
  * sequence that passes no `vaultForRelativePath` - the skills root may
  * legitimately sit outside the vault - so the confinement check every
@@ -1681,7 +2121,12 @@ function candidateHash(candidate: ProposalCandidate): string {
 function readSkillDraft(
   fm: Readonly<Record<string, unknown>>,
 ): { name: string; description: string; triggers: string[] } | null {
-  if (fm["pattern_kind"] !== MATURE_PAGE_PATTERN_KIND) return null;
+  if (
+    fm["pattern_kind"] !== MATURE_PAGE_PATTERN_KIND &&
+    fm["pattern_kind"] !== SCORED_REWRITE_PATTERN_KIND
+  ) {
+    return null;
+  }
   const name = fm[SKILL_DRAFT_NAME_KEY];
   const description = fm[SKILL_DRAFT_DESCRIPTION_KEY];
   if (typeof name !== "string" || name.trim().length === 0) {
@@ -1704,6 +2149,39 @@ function readSkillDraft(
       ? [raw.trim()]
       : [];
   return { name: trimmedName, description: description.trim(), triggers };
+}
+
+/**
+ * The scored contract a `scored_rewrite` proposal must carry at accept:
+ * which skill it rewrites, the spec hash it was gated against, and the
+ * three rates the gate decided on. Validated BEFORE the accept journal is
+ * stamped - a pending file missing any field is a corrupted draft, and
+ * the human accept must refuse it by name rather than overwrite an
+ * incumbent skill on an unverifiable claim.
+ */
+function validateScoredRewriteContract(fm: Readonly<Record<string, unknown>>): void {
+  const rewrites = fm[SKILL_REWRITES_SKILL_KEY];
+  if (typeof rewrites !== "string" || rewrites.trim().length === 0) {
+    throw new Error(`scored rewrite proposal is missing '${SKILL_REWRITES_SKILL_KEY}'`);
+  }
+  const specHash = fm[SKILL_SPEC_HASH_KEY];
+  if (typeof specHash !== "string" || specHash.trim().length === 0) {
+    throw new Error(`scored rewrite proposal is missing '${SKILL_SPEC_HASH_KEY}'`);
+  }
+  for (const key of [
+    SKILL_BASELINE_SCORE_KEY,
+    SKILL_CANDIDATE_SCORE_KEY,
+    SKILL_HELDOUT_SCORE_KEY,
+  ]) {
+    const value = fm[key];
+    const score = typeof value === "string" ? Number(value) : value;
+    if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1) {
+      throw new Error(
+        `scored rewrite proposal has a '${key}' that is not a number in [0, 1]: ` +
+          JSON.stringify(value ?? null),
+      );
+    }
+  }
 }
 
 /**
