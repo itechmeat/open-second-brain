@@ -154,6 +154,17 @@ const LESSONS_COUNTS_ABSENT: LessonApprovalCounts = Object.freeze({
 });
 
 /**
+ * The fail-soft read_error the snapshot carries when the approvals
+ * ledger cannot be read. Deliberately a fixed, generalized sentence:
+ * the ledger reader's error messages embed the ledger's absolute path,
+ * and machine paths stay out of MCP output - doctor is the surface that
+ * names the cause and the recovery in operator-facing output.
+ */
+const LESSONS_LEDGER_READ_ERROR =
+  "lessons-approvals.json could not be read (the ledger is damaged or unusable); " +
+  "o2b doctor names the cause and the recovery";
+
+/**
  * Read the lessons counts fail-soft: the doctor is the surface for a
  * damaged ledger, the status snapshot answers with zeros and names
  * itself, because an MCP consumer must not lose the whole brain block
@@ -164,8 +175,8 @@ function lessonsCountsSafe(vault: string): LessonApprovalCounts & {
 } {
   try {
     return lessonApprovalCounts(vault);
-  } catch (err) {
-    return { ...LESSONS_COUNTS_ABSENT, read_error: (err as Error).message };
+  } catch {
+    return { ...LESSONS_COUNTS_ABSENT, read_error: LESSONS_LEDGER_READ_ERROR };
   }
 }
 

@@ -50,9 +50,10 @@ import {
   markLessonPromoted,
   readLessonApprovals,
   recordLessonApproval,
-  renderLessonsBlockBody,
+  renderLessonsBlockWithDrops,
   type LessonApprovalRow,
   type LessonPromotionCandidate,
+  type RenderedLessonsBlock,
 } from "../../../core/brain/lessons-promotion.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
@@ -111,6 +112,8 @@ interface RefreshAction {
   readonly body: string;
   /** The ownership stamp the writer's hand-edit gate compares against. */
   readonly installedAtMs: number | null;
+  /** Qualified lessons the `lessons.limit` cut dropped from this render. */
+  readonly droppedIds: ReadonlyArray<string>;
 }
 
 /** A target that carries no block refresh may touch, reported by name. */
@@ -203,6 +206,23 @@ function qualifiedForFile(
   });
 }
 
+/**
+ * Canonical block render for one target file, or null when nothing
+ * qualifies. The full render (body plus the cap's named drops) so every
+ * verb can report a lesson the `lessons.limit` cut instead of letting it
+ * leave the block silently.
+ */
+function canonicalRenderFor(
+  promotable: ReadonlyArray<LessonPromotionCandidate>,
+  approvals: ReadonlyArray<LessonApprovalRow>,
+  file: string,
+  vault: string,
+): RenderedLessonsBlock | null {
+  const qualified = qualifiedForFile(promotable, approvals, file);
+  if (qualified.length === 0) return null;
+  return renderLessonsBlockWithDrops(qualified, { limit: lessonsBlockLimit(vault) });
+}
+
 /** Canonical block body for one target file, or null when nothing qualifies. */
 function canonicalBodyFor(
   promotable: ReadonlyArray<LessonPromotionCandidate>,
@@ -210,9 +230,7 @@ function canonicalBodyFor(
   file: string,
   vault: string,
 ): string | null {
-  const qualified = qualifiedForFile(promotable, approvals, file);
-  if (qualified.length === 0) return null;
-  return renderLessonsBlockBody(qualified, { limit: lessonsBlockLimit(vault) });
+  return canonicalRenderFor(promotable, approvals, file, vault)?.body ?? null;
 }
 
 /** The consent verdict this invocation will record, in the shared vocabulary. */
@@ -403,7 +421,16 @@ function lessonsCandidates(argv: string[]): number {
   const { config, vault } = brainVerbContext(flags);
   const json = flags["json"] === true;
   const ledger = readLessonApprovals(vault);
-  const { inputs, promotable, blocked } = qualify(vault, config, ledger);
+  // A malformed promotion scopes value is a named refusal, never a
+  // silent "disabled": the operator must tell configured-wrong from
+  // never-configured.
+  let split: Qualification;
+  try {
+    split = qualify(vault, config, ledger);
+  } catch (err) {
+    return fail(rulesBlockErrorLine(err));
+  }
+  const { inputs, promotable, blocked } = split;
   if (json) {
     okJson({
       command: "brain lessons candidates",
@@ -465,7 +492,14 @@ async function lessonsApprove(argv: string[]): Promise<number> {
 
   const ledger = readLessonApprovals(vault);
   const previous = currentApprovalFor(ledger, prefId);
-  const inputs = gatherLessonsPromotionInputs(vault, { configPath: config });
+  // A malformed promotion scopes value refuses the verb by name, before
+  // any simulation, write or ledger row (see resolvePromotionScopesStrict).
+  let inputs: ReturnType<typeof gatherLessonsPromotionInputs>;
+  try {
+    inputs = gatherLessonsPromotionInputs(vault, { configPath: config });
+  } catch (err) {
+    return fail(rulesBlockErrorLine(err));
+  }
   const pref = inputs.preferences.find((entry) => entry.id === prefId);
   if (pref === undefined) {
     process.stderr.write(
@@ -618,6 +652,23 @@ async function lessonsApprove(argv: string[]): Promise<number> {
     });
   }
 
+  // Name the cap's shortfall: a just-approved lesson that sorts past the
+  // `lessons.limit` cut stays approved and recorded, and the result says
+  // so by name instead of going quiet while the block omits it.
+  const limit = lessonsBlockLimit(vault);
+  const dropped: string[] = [];
+  for (const target of targets.targets) {
+    for (const id of canonicalRenderFor(sim.promotable, simulated, target, vault)?.droppedIds ??
+      []) {
+      if (!dropped.includes(id)) dropped.push(id);
+    }
+  }
+  const droppedLines = dropped.map(
+    (id) =>
+      `capped: ${id} did not fit the lessons block (lessons.limit ${limit}); it stays ` +
+      "approved and rides the block when the limit widens or an earlier lesson drops",
+  );
+
   if (json) {
     okJson({
       command: "brain lessons approve",
@@ -627,11 +678,13 @@ async function lessonsApprove(argv: string[]): Promise<number> {
       written: written.length > 0,
       targets: targets.targets,
       changed: written,
+      dropped,
     });
   } else {
     ok(
       `approved: ${prefId} (targets: ${targets.targets.join(", ")}; ` +
-        `${written.length > 0 ? `wrote ${written.join(", ")}` : "block already current"})`,
+        `${written.length > 0 ? `wrote ${written.join(", ")}` : "block already current"})` +
+        (droppedLines.length > 0 ? `\n${droppedLines.join("\n")}` : ""),
     );
   }
   return LESSONS_EXIT.ok;
@@ -657,7 +710,14 @@ async function lessonsDeny(argv: string[]): Promise<number> {
   const agent = resolveBrainAgent(flags, config);
   const prefId = rawId.startsWith("pref-") ? rawId : `pref-${rawId}`;
 
-  const inputs = gatherLessonsPromotionInputs(vault, { configPath: config });
+  // A malformed promotion scopes value refuses the verb by name, before
+  // anything is recorded (see resolvePromotionScopesStrict).
+  let inputs: ReturnType<typeof gatherLessonsPromotionInputs>;
+  try {
+    inputs = gatherLessonsPromotionInputs(vault, { configPath: config });
+  } catch (err) {
+    return fail(rulesBlockErrorLine(err));
+  }
   const pref = inputs.preferences.find((entry) => entry.id === prefId);
   if (pref === undefined) {
     process.stderr.write(
@@ -742,7 +802,15 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
   const agent = resolveBrainAgent(flags, config);
 
   const ledger = readLessonApprovals(vault);
-  const { promotable, blocked } = qualify(vault, config, ledger);
+  // A malformed promotion scopes value refuses the verb by name, before
+  // any plan or write (see resolvePromotionScopesStrict).
+  let split: Qualification;
+  try {
+    split = qualify(vault, config, ledger);
+  } catch (err) {
+    return fail(rulesBlockErrorLine(err));
+  }
+  const { promotable, blocked } = split;
   const stale = blocked
     .filter((entry) => entry.reason === LESSON_PROMOTION_BLOCKED.staleApproval)
     .map((entry) => entry.prefId);
@@ -773,15 +841,16 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
       skips.push({ target, reason: "no managed lessons block (refresh never creates one)" });
       continue;
     }
-    let body: string | null;
+    let render: RenderedLessonsBlock | null;
     try {
-      body = canonicalBodyFor(promotable, ledger, target, vault);
+      render = canonicalRenderFor(promotable, ledger, target, vault);
     } catch (err) {
       // A canonical body that cannot render (a lesson whose scope could
       // forge a marker line) is a named per-target error, not a crash.
       errors.push(`${target}: ${rulesBlockErrorLine(err)}`);
       continue;
     }
+    const body = render === null ? null : render.body;
     const installedAtMs = installedAtMsFor(ledger, target);
     if (body === null) {
       // Removal is the empty qualified set's only honest render. The
@@ -794,10 +863,16 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
         );
         continue;
       }
-      actions.push({ target, kind: "remove", body: "", installedAtMs });
+      actions.push({ target, kind: "remove", body: "", installedAtMs, droppedIds: [] });
       continue;
     }
-    actions.push({ target, kind: "write", body, installedAtMs });
+    actions.push({
+      target,
+      kind: "write",
+      body,
+      installedAtMs,
+      droppedIds: render === null ? [] : render.droppedIds,
+    });
   }
   if (errors.length > 0) {
     process.stderr.write(errors.map((line) => `error: ${line}`).join("\n") + "\n");
@@ -806,6 +881,15 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
 
   const staleLines = stale.map(
     (id) => `stale approval: ${id} - the approved text moved; approve again to re-pin it`,
+  );
+
+  // The cap's shortfall, named per target: a qualified lesson past the
+  // `lessons.limit` cut is reported, never silently truncated.
+  const droppedByTarget = actions
+    .filter((action) => action.kind === "write" && action.droppedIds.length > 0)
+    .map((action) => ({ target: action.target, ids: action.droppedIds }));
+  const dropLines = droppedByTarget.flatMap((entry) =>
+    entry.ids.map((id) => `capped: ${id} past the lessons.limit cut on ${entry.target}`),
   );
 
   if (actions.length === 0) {
@@ -822,6 +906,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
         removed: [],
         skips,
         stale,
+        dropped: [],
       });
     } else {
       ok(lines.join("\n"));
@@ -847,6 +932,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
     ...dry.removed.map(
       (target) => `  ${target}: would remove the block (no qualified lessons remain)`,
     ),
+    ...dropLines.map((line) => `  ${line}`),
     ...skips.map((skip) => `  ${skip.target}: ${skip.reason}`),
     ...staleLines,
   ];
@@ -860,6 +946,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
         wouldRemove: dry.removed,
         skips,
         stale,
+        dropped: droppedByTarget,
       });
     } else {
       ok(planLines.join("\n"));
@@ -919,6 +1006,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
       current: real.unchanged,
       skips,
       stale,
+      dropped: droppedByTarget,
       stamped: [...stamped],
     });
   } else {
@@ -926,6 +1014,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
       ...real.changed.map((target) => `wrote: ${target}`),
       ...real.removed.map((target) => `removed the lessons block from: ${target}`),
       ...real.unchanged.map((target) => `already current: ${target}`),
+      ...dropLines,
       ...skips.map((skip) => `skipped: ${skip.target} (${skip.reason})`),
       ...staleLines,
       ...(stamped.size > 0 ? [`stamped lastPromotedAt: ${[...stamped].join(", ")}`] : []),

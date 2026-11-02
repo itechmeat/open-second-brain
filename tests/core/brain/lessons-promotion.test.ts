@@ -31,12 +31,15 @@ import {
   LESSON_PROMOTION_BLOCKED,
   LESSONS_PROMOTION_SCOPES_CONFIG_KEY,
   LessonRenderError,
+  LessonsPromotionScopesMalformedError,
   lessonPromotionCandidates,
   lessonsApprovalsPath,
   markLessonPromoted,
   readLessonApprovals,
   recordLessonApproval,
   renderLessonsBlockBody,
+  renderLessonsBlockWithDrops,
+  resolvePromotionScopesStrict,
   lessonIdsInBlockBody,
   type LessonApprovalRow,
   type LessonPromotionCandidate,
@@ -372,6 +375,25 @@ describe("renderLessonsBlockBody", () => {
     }
   });
 
+  test("the drops render names the lessons the limit cut, in render order", () => {
+    const candidates: LessonPromotionCandidate[] = ["a", "b", "c"].map((suffix) => ({
+      prefId: `pref-${suffix}`,
+      principle: `rule ${suffix}`,
+      scope: "backend",
+      tier: LESSON_TIER.preferred,
+      confidence: "high",
+      contentHash: `hash-${suffix}`,
+    }));
+    const rendered = renderLessonsBlockWithDrops(candidates, { limit: 2 });
+    // The body is exactly what the plain render produces.
+    expect(rendered.body).toBe(renderLessonsBlockBody(candidates, { limit: 2 }));
+    // The cut is named, not silent: the lesson past the cap is reported.
+    expect(rendered.droppedIds).toEqual(["pref-c"]);
+    // Under the cap everything renders and nothing is dropped.
+    expect(renderLessonsBlockWithDrops(candidates).droppedIds).toEqual([]);
+    expect(renderLessonsBlockWithDrops(candidates, { limit: 3 }).droppedIds).toEqual([]);
+  });
+
   test("an empty promotable set is a named refusal: removal is the writer's job", () => {
     expect(() => renderLessonsBlockBody([])).toThrow(/remove/i);
   });
@@ -630,6 +652,39 @@ describe("resolveLessonsPromotionScopes", () => {
     const resolution = resolveLessonsPromotionScopes();
     expect(resolution.count).toBe(0);
     expect(resolution.origin).toBe("absent");
+  });
+
+  test("a present-but-malformed scopes value is a named refusal at the kernel boundary", () => {
+    // The policy block's resolver keeps its documented fallback; the
+    // kernel wrapper - which every promotion caller reads - refuses a
+    // value that is PRESENT but malformed, so an operator can tell
+    // "configured wrong" from "never configured".
+    process.env[ENV_KEY] = "[backend, testing]";
+    let thrown: unknown = null;
+    try {
+      resolvePromotionScopesStrict();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(LessonsPromotionScopesMalformedError);
+    const err = thrown as InstanceType<typeof LessonsPromotionScopesMalformedError>;
+    expect(err.source).toBe("env");
+    expect(err.message).toContain(ENV_KEY);
+    expect(err.message).toContain("malformed");
+    expect(err.message).toContain("promotion stays disabled");
+    expect(err.message).not.toMatch(/\n/);
+    // The config layer refuses by name the same way.
+    delete process.env[ENV_KEY];
+    let configThrown: unknown = null;
+    try {
+      resolvePromotionScopesStrict(join(tmp, "missing-config.yaml"));
+    } catch (configError) {
+      configThrown = configError;
+    }
+    // No config file exists here, so the config arm stays silent and the
+    // resolution is the plain disabled one - the refusal above is the
+    // malformed case, not a missing-file case.
+    expect(configThrown).toBeNull();
   });
 });
 

@@ -48,6 +48,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { discoverConfig, LESSONS_PROMOTION_SCOPES_ENV_KEY } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { RULES_BLOCK_ID, RULES_BLOCK_MARKERS, type RulesBlockId } from "../install/rules-block.ts";
 import { computeContentHash } from "./content-hash.ts";
@@ -77,6 +78,71 @@ export {
   type LessonsPromotionScopesOrigin,
   type LessonsPromotionScopesResolution,
 } from "./policy/blocks/lessons.ts";
+
+// ----- Promotion scope resolution (malformed values refuse by name) ---------
+
+/**
+ * A promotion scopes value that is PRESENT but malformed (the
+ * bracket-shaped list syntax the flat config key cannot represent). The
+ * policy block's resolver keeps its documented fallback (such a value
+ * resolves disabled with origin `absent`); this kernel boundary refuses
+ * instead, because an operator must be able to tell "configured wrong"
+ * from "never configured" - promotion is consent-bearing, and a mistyped
+ * key must not silently read as a decision to disable it.
+ */
+export class LessonsPromotionScopesMalformedError extends Error {
+  constructor(
+    message: string,
+    public readonly source: "env" | "config",
+    public readonly rawValue: string,
+  ) {
+    super(message);
+    this.name = "LessonsPromotionScopesMalformedError";
+  }
+}
+
+/**
+ * Same shape test as the policy resolver's private `isBracketShapedList`;
+ * the two must stay in step, and the pin is
+ * `tests/core/brain/lessons-promotion.test.ts` (the strict refusal test
+ * exercises both layers over one value).
+ */
+function isBracketShapedListValue(raw: string): boolean {
+  return raw.startsWith("[") && raw.endsWith("]");
+}
+
+/**
+ * Resolve the promotion scopes for promotion: the policy resolver's
+ * answer, unless a present value is malformed - then a named refusal.
+ * The environment twin is checked first (it wins precedence, so its
+ * malformed value must not hide behind a valid config value either).
+ */
+export function resolvePromotionScopesStrict(
+  configPath?: string,
+): LessonsPromotionScopesResolution {
+  const remedy =
+    'set a comma-separated list (for example "backend, testing") or remove the key; ' +
+    "promotion stays disabled until then";
+  const env = process.env[LESSONS_PROMOTION_SCOPES_ENV_KEY]?.trim();
+  if (env !== undefined && env !== "" && isBracketShapedListValue(env)) {
+    throw new LessonsPromotionScopesMalformedError(
+      `lessons.promotion.scopes is malformed: ${LESSONS_PROMOTION_SCOPES_ENV_KEY} is set to ` +
+        `"${env}", a bracket-shaped list the flat config key cannot represent; ${remedy}`,
+      "env",
+      env,
+    );
+  }
+  const raw = discoverConfig(configPath).data[LESSONS_PROMOTION_SCOPES_CONFIG_KEY]?.trim();
+  if (raw !== undefined && raw !== "" && isBracketShapedListValue(raw)) {
+    throw new LessonsPromotionScopesMalformedError(
+      `lessons.promotion.scopes is malformed: the config value is "${raw}", a bracket-shaped ` +
+        `list the flat config key cannot represent; ${remedy}`,
+      "config",
+      raw,
+    );
+  }
+  return resolveLessonsPromotionScopes(configPath);
+}
 
 // ----- Promotion qualification ----------------------------------------------
 
@@ -338,24 +404,26 @@ function assertRenderableLine(candidate: LessonPromotionCandidate): void {
   }
 }
 
+/** What a render produced: the body and the lessons its limit cut. */
+export interface RenderedLessonsBlock {
+  readonly body: string;
+  /**
+   * The qualified lessons that fell past the limit cut, in render order.
+   * A cap that truncates silently would park a just-approved lesson
+   * outside the block with no named report anywhere; callers surface
+   * this list by name in their results.
+   */
+  readonly droppedIds: ReadonlyArray<string>;
+}
+
 /**
- * Render the body that goes between the lessons markers in a rules file.
- * Deterministic: identical inputs produce identical bytes; ordering is
- * tier, then scope, then id; no timestamp ever appears (a stamped body
- * would defeat the byte-idempotent write). One line per lesson; principle
- * text is whitespace-collapsed so the one-line-per-lesson invariant holds,
- * and a scope or id that could forge a marker line is a named refusal
- * ({@link LessonRenderError}), never a silent rewrite.
- *
- * An EMPTY qualified set is a named refusal, not an empty fence: removal
- * of a whole block - markers included - is the shared writer's
- * `removeRulesBlock`, and a caller holding no promotable lessons must
- * call that instead.
+ * Render the body WITH its cap drops named: the same bytes
+ * {@link renderLessonsBlockBody} produces, plus the ids the limit cut.
  */
-export function renderLessonsBlockBody(
+export function renderLessonsBlockWithDrops(
   promotable: ReadonlyArray<LessonPromotionCandidate>,
   opts: RenderLessonsBlockBodyOptions = {},
-): string {
+): RenderedLessonsBlock {
   if (promotable.length === 0) {
     throw new Error(
       "renderLessonsBlockBody: nothing to render - an empty qualified set must REMOVE the " +
@@ -390,7 +458,31 @@ export function renderLessonsBlockBody(
     const principle = candidate.principle.replace(/\s+/g, " ").trim();
     out.push(`- \`${candidate.prefId}\` (scope: ${candidate.scope}) — ${principle}`);
   }
-  return out.join("\n") + "\n";
+  return {
+    body: out.join("\n") + "\n",
+    droppedIds: ordered.slice(limit).map((candidate) => candidate.prefId),
+  };
+}
+
+/**
+ * Render the body that goes between the lessons markers in a rules file.
+ * Deterministic: identical inputs produce identical bytes; ordering is
+ * tier, then scope, then id; no timestamp ever appears (a stamped body
+ * would defeat the byte-idempotent write). One line per lesson; principle
+ * text is whitespace-collapsed so the one-line-per-lesson invariant holds,
+ * and a scope or id that could forge a marker line is a named refusal
+ * ({@link LessonRenderError}), never a silent rewrite.
+ *
+ * An EMPTY qualified set is a named refusal, not an empty fence: removal
+ * of a whole block - markers included - is the shared writer's
+ * `removeRulesBlock`, and a caller holding no promotable lessons must
+ * call that instead.
+ */
+export function renderLessonsBlockBody(
+  promotable: ReadonlyArray<LessonPromotionCandidate>,
+  opts: RenderLessonsBlockBodyOptions = {},
+): string {
+  return renderLessonsBlockWithDrops(promotable, opts).body;
 }
 
 /**
@@ -718,7 +810,11 @@ export function gatherLessonsPromotionInputs(
     corroborationMin,
     limit,
   });
-  const scopes = resolveLessonsPromotionScopes(opts.configPath ?? undefined);
+  // The strict resolution: a present-but-malformed scopes value refuses
+  // by name here (see resolvePromotionScopesStrict) rather than reading
+  // as an unset key. Callers surface the refusal; the doctor's per-file
+  // catches fold it into their named warnings.
+  const scopes = resolvePromotionScopesStrict(opts.configPath ?? undefined);
   return { preferences, lessons, scopes };
 }
 
@@ -760,6 +856,13 @@ export interface LessonsBlockPlan {
   readonly qualifiedIds: ReadonlyArray<string>;
   /** Approved ids whose pinned hash no longer matches, for this file. */
   readonly staleIds: ReadonlyArray<string>;
+  /**
+   * Qualified ids that fell past the `lessons.limit` cut of the render,
+   * in render order: the cap's shortfall, named so no lesson can leave
+   * the block silently (empty under the shipped wiring, where the digest
+   * and the block read the same bound).
+   */
+  readonly droppedIds: ReadonlyArray<string>;
 }
 
 export interface PlanLessonsBlockOptions {
@@ -800,14 +903,16 @@ export function planLessonsBlock(
     .filter((entry) => entry.reason === LESSON_PROMOTION_BLOCKED.staleApproval)
     .map((entry) => entry.prefId)
     .filter((id) => covers(id));
+  const render =
+    qualified.length === 0
+      ? null
+      : renderLessonsBlockWithDrops(qualified, { limit: lessonsBlockLimit(vault) });
   return {
     file,
-    body:
-      qualified.length === 0
-        ? null
-        : renderLessonsBlockBody(qualified, { limit: lessonsBlockLimit(vault) }),
+    body: render === null ? null : render.body,
     qualifiedIds: qualified.map((candidate) => candidate.prefId),
     staleIds,
+    droppedIds: render === null ? [] : render.droppedIds,
   };
 }
 

@@ -78,6 +78,25 @@ export const LESSONS_LEDGER_UNREADABLE_CODE = "lessons-approvals-unreadable";
 /** The refresh command the drifted and stale findings both name. */
 export const LESSONS_REFRESH_COMMAND = "o2b brain lessons refresh-blocks --apply --yes";
 
+/**
+ * The agent-instruction files a lessons block may be managed in: the
+ * fixed-list guard for the target strings the approvals ledger carries.
+ * Ledger rows are machine state in the derived store, so a target string
+ * is validated against this list BEFORE any path is derived from it - an
+ * off-list target (a traversal, a planted path) never reaches
+ * `join(vault, target)` and is skipped, not graded. The list is restated
+ * here because a static import of `AGENT_INSTRUCTION_FILES` from the
+ * write-back contract would close the doctor import cycle (see the
+ * candidate-universe comment in {@link lessonsBlockStates});
+ * `tests/core/brain/doctor/lessons-block-check.test.ts` pins this copy
+ * to the contract list, so the two cannot drift silently.
+ */
+export const LESSONS_BLOCK_MANAGED_FILES: ReadonlyArray<string> = Object.freeze([
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+]);
+
 export interface LessonsBlockStateRow {
   /** The rules file graded (a basename from the fixed list). */
   readonly file: string;
@@ -114,6 +133,9 @@ function candidateFiles(ledger: ReadonlyArray<LessonApprovalRow>): ReadonlyArray
   for (const row of ledger) {
     if (row.decision !== "approved") continue;
     for (const target of row.targets) {
+      // The fixed-list guard: a ledger-supplied target off the known
+      // instruction-file list is never turned into a path.
+      if (!LESSONS_BLOCK_MANAGED_FILES.includes(target)) continue;
       if (!files.includes(target)) files.push(target);
     }
   }
@@ -126,6 +148,10 @@ function gradeFile(
   ledger: ReadonlyArray<LessonApprovalRow>,
   now: Date,
 ): Grade | null {
+  // Defense in depth beside candidateFiles: any caller handing this
+  // grader a ledger-supplied string gets the same fixed-list guard
+  // before the join below.
+  if (!LESSONS_BLOCK_MANAGED_FILES.includes(file)) return null;
   const covered = ledger.some((row) => row.decision === "approved" && row.targets.includes(file));
   if (!covered) return null;
   const path = join(vault, file);

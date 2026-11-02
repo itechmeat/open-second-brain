@@ -14,11 +14,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { computeContentHash } from "../../src/core/brain/content-hash.ts";
-import { recordLessonApproval } from "../../src/core/brain/lessons-promotion.ts";
+import {
+  lessonsApprovalsPath,
+  recordLessonApproval,
+} from "../../src/core/brain/lessons-promotion.ts";
 import { parsePreference, writePreference } from "../../src/core/brain/preference.ts";
 import { preferencePath } from "../../src/core/brain/paths.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
@@ -135,6 +138,25 @@ describe("lesson promotion counts over the status plumbing", () => {
 
   test("a brain with no ledger answers zero counts", async () => {
     expect(await statusLessonsCounts()).toEqual({ approved: 0, denied: 0, stale: 0 });
+  });
+
+  test("a damaged ledger surfaces a generalized read_error with no machine path", async () => {
+    // The raw error messages embed the ledger's absolute path; the MCP
+    // payload must not. The snapshot names the file and the failure
+    // class; doctor is the surface that names the cause.
+    mkdirSync(dirname(lessonsApprovalsPath(vault)), { recursive: true });
+    writeFileSync(lessonsApprovalsPath(vault), "{ not json at all");
+    const payload = (await statusTool.handler(ctx, {})) as {
+      brain: { lessons: { approved: number; read_error?: string } };
+    };
+    const lessons = payload.brain.lessons;
+    expect(lessons.approved).toBe(0);
+    const readError = lessons.read_error ?? "";
+    expect(readError.length).toBeGreaterThan(0);
+    expect(readError).toContain("lessons-approvals.json");
+    expect(readError.includes(vault)).toBe(false);
+    expect(readError.includes(tmp)).toBe(false);
+    expect(readError.includes("/")).toBe(false);
   });
 
   test("no lessons-shaped tool name is registered anywhere", () => {

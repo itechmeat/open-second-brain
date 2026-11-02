@@ -175,6 +175,28 @@ describe("o2b brain lessons candidates", () => {
     expect(payload.promotable).toEqual([]);
     expect(payload.blocked[0]?.reason).toBe("scope_not_enabled");
   });
+
+  test("a present-but-malformed scopes value is a named refusal, never a silent disabled", async () => {
+    // A bracket-shaped paste (`scopes: [a, b]` into the flat key) used to
+    // resolve exactly like an unset key; the operator could not tell
+    // "configured wrong" from "never configured".
+    seedPreferredLesson("scoped-lesson");
+    const out = await runCli(["brain", "lessons", "candidates", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [SCOPE_ENV]: "[backend, testing]" },
+    });
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("malformed");
+    expect(out.stderr).toContain(SCOPE_ENV);
+    expect(out.stderr).toContain("promotion stays disabled");
+    // The mutating verbs refuse the same way, before any write.
+    const approved = await runCli(
+      ["brain", "lessons", "approve", "pref-scoped-lesson", "--apply", "--yes"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [SCOPE_ENV]: "[backend]" } },
+    );
+    expect(approved.returncode).toBe(1);
+    expect(approved.stderr).toContain("malformed");
+    expect(existsSync(lessonsApprovalsPath(vault))).toBe(false);
+  });
 });
 
 describe("o2b brain lessons approve", () => {
@@ -424,6 +446,42 @@ describe("o2b brain lessons refresh-blocks", () => {
     const rows = readLessonApprovals(vault);
     expect(rows[0]?.lastPromotedAt).not.toBeNull();
     expect(ledgerEvents()).toContain(BRAIN_LOG_EVENT_KIND.lessonsPromoted);
+  });
+
+  test("the refresh result names dropped lessons instead of truncating silently", async () => {
+    // Under the shipped wiring the digest cap and the block cap read the
+    // same `lessons.limit`, so the live renders drop nothing - the field
+    // is the named surface the render reports its cut through
+    // (`renderLessonsBlockWithDrops` pins the non-empty case at the
+    // kernel). The verb output and JSON carry it either way, so a future
+    // divergence between the two bounds can never truncate silently.
+    seedPreferredLesson("named-drop-lesson");
+    writeFileSync(join(vault, "AGENTS.md"), "# rules\n");
+    const approval = await runCli(
+      [
+        "brain",
+        "lessons",
+        "approve",
+        "pref-named-drop-lesson",
+        "--apply",
+        "--yes",
+        "--target",
+        "AGENTS.md",
+      ],
+      { env: env() },
+    );
+    expect(approval.returncode).toBe(0);
+    const refresh = await runCli(
+      ["brain", "lessons", "refresh-blocks", "--apply", "--yes", "--json"],
+      {
+        env: env(),
+      },
+    );
+    expect(refresh.returncode).toBe(0);
+    const payload = JSON.parse(refresh.stdout) as {
+      dropped: ReadonlyArray<{ target: string; ids: ReadonlyArray<string> }>;
+    };
+    expect(payload.dropped).toEqual([]);
   });
 
   test("skips a target whose block is absent by name and never creates it", async () => {

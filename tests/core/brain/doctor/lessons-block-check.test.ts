@@ -31,14 +31,15 @@ import {
   LESSONS_APPROVALS_FILE,
   lessonsApprovalsPath,
   planLessonsBlock,
-  readLessonApprovals,
   recordLessonApproval,
 } from "../../../../src/core/brain/lessons-promotion.ts";
 import {
+  LESSONS_BLOCK_MANAGED_FILES,
   LESSONS_BLOCK_STATE,
   lessonsBlockCheck,
   lessonsBlockStates,
 } from "../../../../src/core/brain/doctor/lessons-block-check.ts";
+import { AGENT_INSTRUCTION_FILES } from "../../../../src/core/brain/writeback-contract.ts";
 import type {
   DoctorCheckContext,
   DoctorFindings,
@@ -255,5 +256,44 @@ describe("lessons-block doctor check", () => {
     expect(stale.find((row) => row.file === "AGENTS.md")?.state).toBe(
       LESSONS_BLOCK_STATE.staleLessons,
     );
+  });
+
+  test("ledger targets off the fixed instruction-file list never touch a path", () => {
+    // The ledger is machine state in the derived store; a planted or
+    // damaged row naming a traversing path must not be joined onto the
+    // vault root and lstat'ed. Off-list targets are skipped, not graded.
+    const prefId = seedLesson("doctor-offlist");
+    recordLessonApproval(vault, {
+      prefId,
+      decision: "approved",
+      decidedAt: "2026-05-15T00:00:00Z",
+      decidedBy: "yes-flag",
+      approvedContentHash: computeContentHash(PRINCIPLE, "backend"),
+      targets: ["../../escape.md"],
+      blockId: RULES_BLOCK_ID.lessons,
+      lastPromotedAt: null,
+    });
+
+    const out = runCheck();
+    expect(out.issues).toEqual([]);
+    expect(out.uncertain).toEqual([]);
+    expect(lessonsBlockStates(vault, { now: NOW })).toEqual([]);
+    // Nothing outside the vault was touched: the escape target resolves
+    // above tmp, where no AGENTS.md-like surface exists to grade.
+    expect(existsSync(join(tmp, "escape.md"))).toBe(false);
+  });
+
+  test("the block plan carries the named-drop surface the verbs report", () => {
+    const prefId = seedLesson("doctor-drops");
+    approveAndWrite(prefId);
+    const plan = planLessonsBlock(vault, "AGENTS.md");
+    expect(plan.droppedIds).toEqual([]);
+  });
+
+  test("the doctor-local instruction-file list stays pinned to the contract list", () => {
+    // The check restates the fixed list because a static import of
+    // AGENT_INSTRUCTION_FILES would close the doctor import cycle; this
+    // pin is what keeps the copy from drifting when the list grows.
+    expect([...LESSONS_BLOCK_MANAGED_FILES]).toEqual([...AGENT_INSTRUCTION_FILES]);
   });
 });
