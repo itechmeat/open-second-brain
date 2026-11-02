@@ -78,6 +78,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 | ------------------ | ------------------------------------------------------------------------ | -------------------------------------------------- |
 | Claude Code        | Marketplace plugin: MCP servers and hooks                                | [`install/claudecode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/claudecode.md)   |
 | OpenAI Codex       | Marketplace plugin, then `o2b install --target codex --apply`            | [`install/codex.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/codex.md)             |
+| ChatGPT desktop    | Reads the shared Codex config: `o2b install --target codex --apply`      | [`install/codex.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/codex.md)             |
 | Hermes Agent       | Plugin and memory provider                                               | [`install/hermes.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/hermes.md)           |
 | OpenClaw           | Native plugin, no MCP                                                    | [`install/openclaw.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/openclaw.md)       |
 | opencode           | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/opencode.md)       |

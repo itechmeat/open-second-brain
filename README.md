@@ -78,6 +78,7 @@ The full router with readiness criteria is [`install.md`](install.md); native Wi
 | ------------------ | ------------------------------------------------------------------------ | -------------------------------------------------- |
 | Claude Code        | Marketplace plugin: MCP servers and hooks                                | [`install/claudecode.md`](install/claudecode.md)   |
 | OpenAI Codex       | Marketplace plugin, then `o2b install --target codex --apply`            | [`install/codex.md`](install/codex.md)             |
+| ChatGPT desktop    | Reads the shared Codex config: `o2b install --target codex --apply`      | [`install/codex.md`](install/codex.md)             |
 | Hermes Agent       | Plugin and memory provider                                               | [`install/hermes.md`](install/hermes.md)           |
 | OpenClaw           | Native plugin, no MCP                                                    | [`install/openclaw.md`](install/openclaw.md)       |
 | opencode           | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](install/opencode.md)       |

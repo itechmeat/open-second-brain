@@ -82,6 +82,30 @@ makes Codex's Brain writes distinguishable per runtime, and in a shared
 multi-device vault also per device - the same derivation the `grok` and
 `opencode` adapters apply.
 
+## ChatGPT desktop
+
+ChatGPT desktop has no MCP registration of its own: it reads the shared
+Codex configuration at `$CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`), the same file the `codex` target writes. One
+registration serves both, so the install command is the codex one from
+step 4 (add `--vault`, `--apply` and `--yes` as there):
+
+```bash
+o2b install --target codex --apply
+```
+
+Install writes the two `[mcp_servers.*]` tables into that shared file -
+through `codex mcp add` when the `codex` binary is on PATH, otherwise
+through the direct TOML merge. In the merge case the detect output of
+`o2b install` names ChatGPT desktop as a reader of the file. ChatGPT
+desktop picks the servers up on its next session start, and `$CODEX_HOME`
+relocates the file for both hosts exactly as documented above.
+
+`o2b uninstall --target codex --apply` removes the shared registration,
+which undoes it for ChatGPT desktop at the same time. Only the two
+Open Second Brain tables are removed; every other table in the file
+stays.
+
 ## 5. Verify
 
 ```bash
