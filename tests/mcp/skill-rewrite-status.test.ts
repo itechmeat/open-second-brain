@@ -21,6 +21,7 @@ import {
   recordSkillRewriteGrade,
   stageScoredRewriteProposal,
 } from "../../src/core/brain/skill-proposals.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import {
   buildSkillRewriteSpec,
   skillRewriteSpecHash,
@@ -126,6 +127,52 @@ describe("brain_skill_rewrite_status", () => {
     expect(result.pending_rewrite_slug).toBe(pending[0]!.slug);
     // Ids and rates only: no task text, no transcript text anywhere.
     expect(JSON.stringify(result)).not.toContain("File the meeting summary");
+  });
+
+  test("a corrupt grade row is counted as unreadable, never rendered as a verdict", async () => {
+    // Only external corruption reaches this read: the writer rebuilds
+    // every payload field by field. A row the writer would have refused
+    // must not surface as a plausible `hold` with zeroed rates on the
+    // surface a human consults before accepting a rewrite - it is
+    // dropped from the rows and counted by name.
+    seedBenchmark();
+    const spec = buildSkillRewriteSpec("example-skill", TASKS);
+    const specHash = skillRewriteSpecHash(spec);
+    recordSkillRewriteGrade(vault, {
+      payload: {
+        skill: "example-skill",
+        spec_hash: specHash,
+        tasks_hash: spec.tasksHash,
+        metric: "tasks_passed_rate",
+        seed: spec.seed,
+        split_rule: spec.splitRule,
+        verdict: SKILL_REWRITE_VERDICT.hold,
+        baseline_rate: 0.5,
+        candidate_rate: 0.5,
+        dev: [{ task_id: "t-03", passed: false, failed_checks: ["tool_used"] }],
+        held_out: [],
+      },
+    });
+    appendContinuityRecord(vault, {
+      kind: "skill_rewrite_eval_grade",
+      createdAt: "2026-05-21T09:00:00Z",
+      sourceRefs: [{ id: "src-corrupt" }],
+      payload: {
+        skill: "example-skill",
+        spec_hash: specHash,
+        verdict: "promte",
+        baseline_rate: "not a number",
+      },
+    });
+
+    const result = (await tool()?.handler(ctx, { skill_name: "example-skill" })) as {
+      grades: ReadonlyArray<{ verdict: string; baseline_rate: number; candidate_rate: number }>;
+      unreadable_grades: number;
+    };
+    expect(result.grades.length).toBe(1);
+    expect(result.grades[0]?.verdict).toBe(SKILL_REWRITE_VERDICT.hold);
+    expect(result.grades[0]?.baseline_rate).toBe(0.5);
+    expect(result.unreadable_grades).toBe(1);
   });
 
   test("a skill with no benchmark is a named empty status, not an error", async () => {

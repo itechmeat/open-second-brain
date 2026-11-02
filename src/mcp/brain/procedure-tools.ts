@@ -324,6 +324,7 @@ async function toolBrainSkillRewriteStatus(
     skill: status.skill,
     receipt: status.receipt,
     grades: status.grades,
+    unreadable_grades: status.unreadable_grades,
     pending_rewrite_slug: status.pending_rewrite_slug,
   };
 }

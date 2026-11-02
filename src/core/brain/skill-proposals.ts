@@ -1834,6 +1834,14 @@ export interface SkillRewriteStatus {
   readonly receipt: SkillRewriteStatusReceipt | null;
   /** Completed gate runs for this skill, oldest first, capped at the last 10. */
   readonly grades: ReadonlyArray<SkillRewriteStatusGrade>;
+  /**
+   * Grade rows for this skill that failed the writer's own payload
+   * validation - external corruption only, since the writer rebuilds
+   * every field. They are dropped from `grades` (never rendered as a
+   * verdict) and counted here; doctor and the continuity reader are the
+   * surfaces that name the cause.
+   */
+  readonly unreadable_grades: number;
   /** The slug of a staged-but-unaccepted scored_rewrite proposal, if any. */
   readonly pending_rewrite_slug: string | null;
 }
@@ -1881,20 +1889,38 @@ export function readSkillRewriteStatus(vault: string, skillName: string): SkillR
     };
   }
 
-  const grades = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" })
-    .filter((record) => (record.payload as Record<string, unknown>)["skill"] === skillName)
-    .map((record) => {
-      const payload = record.payload as Record<string, unknown>;
-      const verdict = payload["verdict"];
-      return {
+  // Every row the status renders is re-validated with the writer's own
+  // boundary (validateRewriteGradePayload): the writer rebuilds each
+  // payload field by field, so a row that fails here is external
+  // corruption, and coercing it to a plausible verdict with zeroed rates
+  // would render corrupted grade history as ordinary gate output on the
+  // exact surface a human consults before accepting a rewrite. Such a
+  // row is dropped from `grades` and counted in `unreadable_grades`
+  // instead; the validator's cause text stays on the operator surfaces.
+  const gradeRows = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).filter(
+    (record) => (record.payload as Record<string, unknown>)["skill"] === skillName,
+  );
+  const grades: SkillRewriteStatusGrade[] = [];
+  let unreadableGrades = 0;
+  for (const record of gradeRows) {
+    try {
+      // The validator's frozen return is the rebuilt payload; the cast
+      // only re-attaches the field types its own checks just proved.
+      const payload = validateRewriteGradePayload(
+        record.payload as unknown as RewriteGradeRecordPayload,
+      ) as unknown as RewriteGradeRecordPayload;
+      grades.push({
         created_at: record.createdAt,
-        verdict: (isSkillRewriteVerdict(verdict) ? verdict : "hold") as SkillRewriteVerdict,
-        baseline_rate: Number(payload["baseline_rate"] ?? 0),
-        candidate_rate: Number(payload["candidate_rate"] ?? 0),
-        spec_hash: String(payload["spec_hash"] ?? ""),
-      };
-    })
-    .slice(-SKILL_REWRITE_STATUS_GRADE_CAP);
+        verdict: payload.verdict,
+        baseline_rate: payload.baseline_rate,
+        candidate_rate: payload.candidate_rate,
+        spec_hash: payload.spec_hash,
+      });
+    } catch {
+      unreadableGrades += 1;
+    }
+  }
+  const cappedGrades = grades.slice(-SKILL_REWRITE_STATUS_GRADE_CAP);
 
   // The pending match reads the proposal's own `rewrites_skill` key: the
   // name key would do, but the frontmatter claim is what the reviewer saw.
@@ -1911,7 +1937,8 @@ export function readSkillRewriteStatus(vault: string, skillName: string): SkillR
   return {
     skill: skillName,
     receipt,
-    grades,
+    grades: cappedGrades,
+    unreadable_grades: unreadableGrades,
     pending_rewrite_slug: pendingSlug,
   };
 }
