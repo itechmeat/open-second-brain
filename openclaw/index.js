@@ -2207,6 +2207,9 @@ var init_path_constants = __esm(() => {
   ]);
 });
 
+// src/core/integrity/digest.ts
+var init_digest = () => {};
+
 // src/core/reliability/command-bridge.ts
 var init_command_bridge = () => {};
 
@@ -2221,9 +2224,6 @@ var init_llm_step = __esm(() => {
     "target_path"
   ]);
 });
-
-// src/core/integrity/digest.ts
-var init_digest = () => {};
 
 // src/core/brain/skill-rewrite-tasks.ts
 import { posix as posix2 } from "node:path";
@@ -2281,6 +2281,7 @@ function resolveSkillRewriteMode(raw) {
 }
 var SKILL_REWRITE_ROUND_ARM, SKILL_REWRITE_ROUND_ARMS, SKILL_REWRITE_MODE, SKILL_REWRITE_MODES, SkillRewriteError, SELF_REPORTED_KEYS, KNOWN_SUBMISSION_KEYS, SUBMISSION_SHAPE_HINT;
 var init_skill_rewrite = __esm(() => {
+  init_digest();
   init_command_bridge();
   init_llm_step();
   init_skill_rewrite_tasks();
@@ -2314,9 +2315,10 @@ var init_skill_rewrite = __esm(() => {
     "steps",
     "tools_used",
     "artifacts",
-    "output"
+    "output",
+    "candidate_sha256"
   ]);
-  SUBMISSION_SHAPE_HINT = "Return one JSON object per task with keys: task_id (string), steps (string array), " + "tools_used (string array), artifacts (string array), output (object). " + "No other top-level keys.";
+  SUBMISSION_SHAPE_HINT = "Return one JSON object per task with keys: task_id (string), steps (string array), " + "tools_used (string array), artifacts (string array), output (object), " + "candidate_sha256 (string, the sha-256 hex digest of the candidate skill body the " + "task was performed against). " + "No other top-level keys.";
 });
 
 // src/core/brain/wikilink.ts
