@@ -168,19 +168,27 @@ describe("pageOriginForDelivery probe", () => {
     expect(second).toEqual(first);
   });
 
-  test("a backslash-spelled rel probes as the same page as the posix spelling", () => {
+  test("a backslash-spelled rel probes by the platform's own separator rule", () => {
     const rel = page("notes/spelled.md", `${ORIGIN_CHANNEL_FIELD}: cli\n`);
     const posix = pageOriginForDelivery(vault, rel, cache);
-    // The same page named with Windows separators probes to the same
-    // origin through the same cache - one entry, one read. Before the
-    // fold this diverged by host: a fail-closed absent-page probe on
-    // POSIX (a backslash cannot appear in a vault-walked rel, and on
-    // Linux it would name a file the vault cannot carry) and a second
-    // cache entry on Windows. Meaningful on every platform; on an
-    // unfixed build it fails here on Linux too.
     const backslash = pageOriginForDelivery(vault, rel.replaceAll("/", "\\"), cache);
-    expect(backslash).toEqual(posix);
-    expect(cache.size).toBe(1);
+    if (process.platform === "win32") {
+      // Windows folds its native separator, so both spellings name the
+      // same page through the same cache entry - one probe, one read.
+      expect(backslash).toEqual(posix);
+      expect(cache.size).toBe(1);
+    } else {
+      // POSIX keeps a literal backslash: it names a different file, the
+      // probe fails closed to a fenced absence, and the slash page's
+      // stamp is never served for it.
+      expect(backslash).toEqual({
+        originChannel: null,
+        contentClass: null,
+        untrustedSource: false,
+      });
+      expect(storedTextTreatment(backslash)).toBe(DELIVERY_TREATMENT.fenced);
+      expect(cache.size).toBe(2);
+    }
   });
 });
 
