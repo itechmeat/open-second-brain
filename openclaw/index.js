@@ -2207,6 +2207,118 @@ var init_path_constants = __esm(() => {
   ]);
 });
 
+// src/core/reliability/command-bridge.ts
+var init_command_bridge = () => {};
+
+// src/core/brain/llm-step.ts
+var NEEDS_LLM_STEP_KEYS;
+var init_llm_step = __esm(() => {
+  NEEDS_LLM_STEP_KEYS = Object.freeze([
+    "status",
+    "step",
+    "prompt",
+    "schema_hints",
+    "target_path"
+  ]);
+});
+
+// src/core/integrity/digest.ts
+var init_digest = () => {};
+
+// src/core/brain/skill-rewrite-tasks.ts
+import { posix as posix2 } from "node:path";
+var SKILL_BENCHMARKS_DIR = "skill-benchmarks", SKILL_BENCHMARKS_ROOT_REL, SKILL_BENCH_TASK_KIND, SKILL_BENCH_TASK_KINDS, SKILL_BENCH_CHECK, SKILL_BENCH_CHECKS, SKILL_BENCH_VALUE_CLASS, SKILL_BENCH_VALUE_CLASSES;
+var init_skill_rewrite_tasks = __esm(() => {
+  init_digest();
+  init_path_constants();
+  SKILL_BENCHMARKS_ROOT_REL = posix2.join(BRAIN_ROOT_REL, SKILL_BENCHMARKS_DIR);
+  SKILL_BENCH_TASK_KIND = Object.freeze({
+    invocation_transcript: "invocation_transcript"
+  });
+  SKILL_BENCH_TASK_KINDS = Object.freeze(Object.values(SKILL_BENCH_TASK_KIND));
+  SKILL_BENCH_CHECK = Object.freeze({
+    tool_used: "tool_used",
+    artifact_created: "artifact_created",
+    step_order: "step_order",
+    forbidden_step: "forbidden_step",
+    output_field: "output_field"
+  });
+  SKILL_BENCH_CHECKS = Object.freeze(Object.values(SKILL_BENCH_CHECK));
+  SKILL_BENCH_VALUE_CLASS = Object.freeze({
+    non_empty_string: "non_empty_string",
+    number: "number",
+    boolean: "boolean",
+    non_empty_array: "non_empty_array"
+  });
+  SKILL_BENCH_VALUE_CLASSES = Object.freeze(Object.values(SKILL_BENCH_VALUE_CLASS));
+});
+
+// src/core/brain/skill-rewrite-spec.ts
+var SKILL_REWRITE_VERDICT, SKILL_REWRITE_VERDICTS, HASH_HEX_LENGTH = 64, HASH_HEX_RE;
+var init_skill_rewrite_spec = __esm(() => {
+  init_digest();
+  init_skill_rewrite_tasks();
+  SKILL_REWRITE_VERDICT = Object.freeze({
+    promote: "promote",
+    hold: "hold",
+    not_enough_evidence: "not_enough_evidence"
+  });
+  SKILL_REWRITE_VERDICTS = Object.freeze(Object.values(SKILL_REWRITE_VERDICT));
+  HASH_HEX_RE = new RegExp(`^[0-9a-f]{${HASH_HEX_LENGTH}}$`);
+});
+
+// src/core/brain/skill-rewrite.ts
+function isSkillRewriteMode(value) {
+  return typeof value === "string" && SKILL_REWRITE_MODES.includes(value);
+}
+function resolveSkillRewriteMode(raw) {
+  const value = raw?.trim() ?? "";
+  if (value === "")
+    return SKILL_REWRITE_MODE.gated;
+  if (isSkillRewriteMode(value))
+    return value;
+  throw new SkillRewriteError(`skill rewrite mode '${value}' is unknown (expected one of ${SKILL_REWRITE_MODES.join(", ")})`);
+}
+var SKILL_REWRITE_ROUND_ARM, SKILL_REWRITE_ROUND_ARMS, SKILL_REWRITE_MODE, SKILL_REWRITE_MODES, SkillRewriteError, SELF_REPORTED_KEYS, KNOWN_SUBMISSION_KEYS, SUBMISSION_SHAPE_HINT;
+var init_skill_rewrite = __esm(() => {
+  init_command_bridge();
+  init_llm_step();
+  init_skill_rewrite_tasks();
+  init_skill_rewrite_spec();
+  init_skill_rewrite_spec();
+  SKILL_REWRITE_ROUND_ARM = Object.freeze({
+    baseline: "baseline",
+    candidate: "candidate",
+    heldout: "heldout"
+  });
+  SKILL_REWRITE_ROUND_ARMS = Object.freeze(Object.values(SKILL_REWRITE_ROUND_ARM));
+  SKILL_REWRITE_MODE = Object.freeze({
+    gated: "gated",
+    iterative: "iterative"
+  });
+  SKILL_REWRITE_MODES = Object.freeze(Object.values(SKILL_REWRITE_MODE));
+  SkillRewriteError = class SkillRewriteError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "SkillRewriteError";
+    }
+  };
+  SELF_REPORTED_KEYS = Object.freeze([
+    "success",
+    "passed",
+    "succeeded",
+    "ok"
+  ]);
+  KNOWN_SUBMISSION_KEYS = Object.freeze([
+    "task_id",
+    "steps",
+    "tools_used",
+    "artifacts",
+    "output"
+  ]);
+  SUBMISSION_SHAPE_HINT = "Return one JSON object per task with keys: task_id (string), steps (string array), " + "tools_used (string array), artifacts (string array), output (object). " + "No other top-level keys.";
+});
+
 // src/core/brain/wikilink.ts
 var init_wikilink = () => {};
 
@@ -2239,6 +2351,7 @@ __export(exports_config, {
   INSTALLATION_SECRET_CONFIG_KEY: () => INSTALLATION_SECRET_CONFIG_KEY,
   INSTALLATION_SECRET_ENV_KEY: () => INSTALLATION_SECRET_ENV_KEY,
   INSTALLATION_SECRET_RE: () => INSTALLATION_SECRET_RE,
+  LESSONS_PROMOTION_SCOPES_ENV_KEY: () => LESSONS_PROMOTION_SCOPES_ENV_KEY,
   MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY: () => MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
   MAINTENANCE_CUSTOM_TASKS_ENV: () => MAINTENANCE_CUSTOM_TASKS_ENV,
   MAINTENANCE_EMBEDDINGS_CONFIG_KEY: () => MAINTENANCE_EMBEDDINGS_CONFIG_KEY,
@@ -2248,6 +2361,10 @@ __export(exports_config, {
   PARTNER_CODEGRAPH_DISABLED_ENV: () => PARTNER_CODEGRAPH_DISABLED_ENV,
   REGROUND_PART_CHARS_DEFAULT: () => REGROUND_PART_CHARS_DEFAULT,
   SESSION_CAPTURE_ROLES: () => SESSION_CAPTURE_ROLES,
+  SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY: () => SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY,
+  SKILL_REWRITE_JUDGE_CMD_ENV_KEY: () => SKILL_REWRITE_JUDGE_CMD_ENV_KEY,
+  SKILL_REWRITE_MODE_CONFIG_KEY: () => SKILL_REWRITE_MODE_CONFIG_KEY,
+  SKILL_REWRITE_MODE_ENV_KEY: () => SKILL_REWRITE_MODE_ENV_KEY,
   UNCONFIGURED_AGENT_NAME: () => UNCONFIGURED_AGENT_NAME,
   UnsupportedPlatformError: () => UnsupportedPlatformError,
   VAULT_STORE_REF_PREFIX: () => VAULT_STORE_REF_PREFIX,
@@ -2308,6 +2425,8 @@ __export(exports_config, {
   resolveSessionHandoff: () => resolveSessionHandoff,
   resolveSharedNamespace: () => resolveSharedNamespace,
   resolveSkillAutoAttach: () => resolveSkillAutoAttach,
+  resolveSkillRewriteJudgeCmd: () => resolveSkillRewriteJudgeCmd,
+  resolveSkillRewriteModeConfig: () => resolveSkillRewriteModeConfig,
   resolveSkillsAttachTriggers: () => resolveSkillsAttachTriggers,
   resolveSkillsAttachUsageOrdering: () => resolveSkillsAttachUsageOrdering,
   resolveSkillsDir: () => resolveSkillsDir,
@@ -2986,6 +3105,16 @@ function resolveTelegramCaptureAllowlist(configPath) {
   }
   return ids;
 }
+function resolveSkillRewriteModeConfig(configPath) {
+  const env = process.env[SKILL_REWRITE_MODE_ENV_KEY]?.trim();
+  const raw = env || discoverConfig(configPath).data[SKILL_REWRITE_MODE_CONFIG_KEY]?.trim();
+  return resolveSkillRewriteMode(raw);
+}
+function resolveSkillRewriteJudgeCmd(configPath) {
+  const env = process.env[SKILL_REWRITE_JUDGE_CMD_ENV_KEY]?.trim();
+  const raw = env || discoverConfig(configPath).data[SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY]?.trim();
+  return raw !== undefined && raw !== "" ? raw : undefined;
+}
 function expandTilde(p, platform = process.platform, home = homedir2()) {
   if (p === "~")
     return home;
@@ -2995,7 +3124,7 @@ function expandTilde(p, platform = process.platform, home = homedir2()) {
     return join5(home, p.slice(2));
   return p;
 }
-var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES;
+var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES, SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode", SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE", SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd", SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_ref();
@@ -3004,6 +3133,7 @@ var init_config = __esm(() => {
   init_pointer();
   init_errors();
   init_path_constants();
+  init_skill_rewrite();
   init_format_wikilink();
   import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
   CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
@@ -3944,6 +4074,8 @@ var init_paths = __esm(() => {
   init_ledger_shards();
   init_path_constants();
   init_vault_identity();
+  init_skill_rewrite_tasks();
+  init_skill_rewrite();
   init_path_safety();
   init_freeze_marker();
   init_path_constants();
