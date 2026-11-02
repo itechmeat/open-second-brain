@@ -137,6 +137,11 @@ import {
   SKILL_REWRITE_VERDICTS,
 } from "../../../src/core/brain/skill-rewrite.ts";
 import {
+  isLessonsBlockState,
+  LESSONS_BLOCK_STATE,
+  LESSONS_BLOCK_STATES,
+} from "../../../src/core/brain/doctor/lessons-block-check.ts";
+import {
   isNegativeRecallState,
   isNegativeRecallUnknownReason,
   isRetractionEvidenceKind,
@@ -1832,6 +1837,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isSkillBenchCheck,
   },
   {
+    // agent-presence, Lane C (t_1e952e43): the four states a managed
+    // lessons block grades to in the doctor readiness check - the shared
+    // writer's drift vocabulary plus the named stale-lessons extension.
+    // Leaves TypeScript in doctor findings and the per-file readiness
+    // rows, both of which the refresh verb's own surfaces read back.
+    name: "LESSONS_BLOCK_STATE",
+    values: LESSONS_BLOCK_STATE,
+    members: LESSONS_BLOCK_STATES,
+    guard: isLessonsBlockState,
+  },
+  {
     // The closed value-class vocabulary an output_field expectation
     // asserts over; leaves TypeScript in the fixtures and their named
     // parse errors.
@@ -2277,7 +2293,9 @@ describe("the census reads the tree", () => {
     // Adding a vocabulary therefore means bumping this number, which is
     // the point: the count is the measurement, and a measurement nobody
     // has to keep true is not one.
-    expect(SCANNED.length).toBe(VOCABULARY_POPULATION);
+    // 115 -> 116: the lessons-block state vocabulary (LESSONS_BLOCK_STATE) joins the
+    // population with the lessons lane's final commit (t_1e952e43).
+    expect(SCANNED.length).toBe(VOCABULARY_POPULATION + 1);
     expect(SOURCE_TREE.length).toBeGreaterThan(500);
   });
 

@@ -166,6 +166,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   decisionLedger: "decision_ledger",
   sourceArchives: "source_archives",
   instructionBlockLock: "instruction_block_lock",
+  lessonApprovals: "lesson_approvals",
   skillBenchmarks: "skill_benchmarks",
 } as const);
 
@@ -300,6 +301,7 @@ const SESSION_MINING_SURVEYS_FILE = "session-mining-surveys.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
 const INSTRUCTION_BLOCK_LOCK_FILE = "instruction-block.lock.json";
+const LESSONS_APPROVALS_LEDGER_FILE = "lessons-approvals.json";
 const BOOTSTRAP_RECEIPT_FILE = "bootstrap.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
@@ -1193,6 +1195,28 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "makes the installer refuse a hand-edited block; without it the installer cannot prove " +
       "a block is its own and refuses to rewrite any diverged one.",
     sources: ["src/core/install/instruction-block.ts"],
+  },
+  {
+    // K5 append-only placement: rides the same tail the three lanes
+    // share; the integrator re-freezes the by-root order.
+    id: STATE_SURFACE_ID.lessonApprovals,
+    label: "lesson approvals ledger",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(LESSONS_APPROVALS_LEDGER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "One JSON table of the lesson-promotion decisions currently in force, keyed by preference " +
+      "id: which lessons the operator approved for promotion into agent rules files, which they " +
+      "refused, and the content hash each approval pinned. It lives in the derived store rather " +
+      "than under Brain/ so an agent cannot read its own approval state as a note surface. " +
+      "Nothing rebuilds it: deleting it lifts every approval and refusal at once - the " +
+      "fail-closed direction, since a lifted approval blocks a lesson rather than promoting it.",
+    sources: [
+      "src/core/brain/lessons-promotion.ts",
+      "src/core/brain/doctor/lessons-block-check.ts",
+    ],
   },
   {
     id: STATE_SURFACE_ID.skillBenchmarks,

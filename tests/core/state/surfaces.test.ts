@@ -79,6 +79,7 @@ import { sessionMiningSurveysPath } from "../../../src/core/brain/session-mining
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
 import { manifestPath as installManifestPath } from "../../../src/core/install/manifest.ts";
 import { instructionBlockLockPath } from "../../../src/core/install/instruction-block.ts";
+import { lessonsApprovalsPath } from "../../../src/core/brain/lessons-promotion.ts";
 import { skillBenchmarkTasksPath } from "../../../src/core/brain/paths.ts";
 import { bootstrapReceiptPath } from "../../../src/cli/bootstrap/receipt.ts";
 import { receiptsDir } from "../../../src/core/brain/decisions/receipts.ts";
@@ -287,6 +288,12 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["attestation_keys", (v) => attestationKeysDir(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["instruction_block_lock", (v) => instructionBlockLockPath(v)],
+    [
+      "lesson_approvals",
+      // t_1e952e43: the approval ledger lives in the derived store beside
+      // the install manifest; the kernel owns the one path spelling.
+      (v) => lessonsApprovalsPath(v),
+    ],
     [
       "skill_benchmarks",
       // The tasks file is what an operator authors and the receipt

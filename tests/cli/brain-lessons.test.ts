@@ -468,6 +468,32 @@ describe("o2b brain lessons usage", () => {
   });
 });
 
+describe("the docs name the lane (docs drift fails a test)", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+  const read = (rel: string): string => readFileSync(join(repoRoot, rel), "utf8");
+
+  test("the cli reference names the verb family, the approval tier and the trust boundary", () => {
+    const cli = read("docs/cli-reference.md");
+    expect(cli).toContain("o2b brain lessons");
+    for (const verb of ["candidates", "approve", "deny", "refresh-blocks"]) {
+      expect(`${verb} documented: ${cli.includes(verb)}`).toBe(`${verb} documented: true`);
+    }
+    expect(cli).toContain("operator-approved lesson promotion");
+    // The trust boundary is stated in the docs, not only in the docblocks.
+    expect(cli).toContain("no MCP tool exposes this verb family");
+  });
+
+  test("the observability guide names the audit events and the trust boundary", () => {
+    const obs = read("docs/observability.md");
+    for (const kind of ["lessons-approved", "lessons-denied", "lessons-promoted"]) {
+      expect(`${kind} documented: ${obs.includes(kind)}`).toBe(`${kind} documented: true`);
+    }
+    expect(obs).toContain("Operator CLI only");
+    expect(obs).toContain("no agent-facing surface can mint these events");
+    expect(obs).toContain("stale-lessons");
+  });
+});
+
 describe("surface registrations", () => {
   test("the ledger fixture name and the NOW fixture stay honest", () => {
     expect(LESSONS_APPROVALS_FILE).toBe("lessons-approvals.json");

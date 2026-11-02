@@ -55,6 +55,16 @@ export const LESSONS_BLOCK_STATE = Object.freeze({
 } as const);
 
 export type LessonsBlockState = (typeof LESSONS_BLOCK_STATE)[keyof typeof LESSONS_BLOCK_STATE];
+export const LESSONS_BLOCK_STATES: ReadonlyArray<LessonsBlockState> = Object.freeze(
+  Object.values(LESSONS_BLOCK_STATE),
+);
+
+/** True when `value` (read back off disk or wire) is a block state. */
+export function isLessonsBlockState(value: unknown): value is LessonsBlockState {
+  return (
+    typeof value === "string" && (LESSONS_BLOCK_STATES as ReadonlyArray<string>).includes(value)
+  );
+}
 
 /**
  * The finding codes this check emits, one constant each so every `code:`

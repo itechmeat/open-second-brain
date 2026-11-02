@@ -61,6 +61,7 @@ import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import {
   STATE_SURFACE_SWEEP_EXCLUSIONS,
   STATE_SURFACES,
+  STATE_SURFACE_ID,
 } from "../../../src/core/state/surfaces.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
 
@@ -128,7 +129,9 @@ const SWEPT_POPULATION_SIZE = 33;
 // 55 -> 56: the instruction-block lock row (t_ba41a78a Task B4) joins the
 // catalogue - the ownership record uninstall reads to remove exactly the
 // recorded pair, the same derived-store join the install manifest made.
-const DECLARED_SURFACE_COUNT = 57;
+// 57 -> 58: the lesson_approvals row joins the catalogue with the lessons lane's final
+// commit (t_1e952e43), the same join the session-mining ledger made.
+const DECLARED_SURFACE_COUNT = 58;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;
@@ -268,6 +271,13 @@ describe("state surface census", () => {
     expect(unseen.toSorted().join("\n")).toBe("");
     // …and it has to have found something, or it is no alarm at all.
     expect(naivePathBuilders().length).toBeGreaterThan(5);
+  });
+  test("the lesson approvals row attributes the ledger writer (t_1e952e43)", () => {
+    const row = STATE_SURFACES.find((r) => r.id === STATE_SURFACE_ID.lessonApprovals);
+    expect(row).toBeDefined();
+    expect(row?.sources).toContain("src/core/brain/lessons-promotion.ts");
+    // ...and the writer sits inside the swept population it answers.
+    expect(sweepPopulation()).toContain("src/core/brain/lessons-promotion.ts");
   });
 
   test("the census is not vacuous", () => {
