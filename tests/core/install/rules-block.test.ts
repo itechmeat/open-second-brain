@@ -31,6 +31,7 @@ import {
   DEFAULT_END_MARKER,
   ManagedBlockError,
 } from "../../../src/core/install/managed-block.ts";
+import { fileMatchesExpected } from "../../../src/core/fs-atomic.ts";
 import {
   RulesBlockError,
   RULES_BLOCK_ERROR_KIND,
@@ -348,6 +349,85 @@ describe("writeRulesBlock", () => {
     expect(readRulesBlock(file, RULES_BLOCK_ID.usage)).toBe(USAGE_BODY);
   });
 
+  test("bytes that change between the pre-check and the rename refuse through the writer's re-check", () => {
+    // Review MG-2: the seam above models drift the PRE-check sees. This
+    // test stages the other window - the pre-check passes on bytes that
+    // are still current, and the concurrent edit lands while the write is
+    // in flight. Only the writer's own re-check (the `expectBefore`
+    // forwarding into the atomic writer) can refuse it; if that
+    // forwarding regressed, this write would silently clobber the
+    // concurrent edit with the whole suite otherwise green.
+    const file = join(tmp, "AGENTS.md");
+    const concurrent = `${OPERATOR}A line a concurrent editor added while the write ran.\n`;
+    let preChecks = 0;
+    let thrown: unknown = null;
+    try {
+      writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, {
+        seams: {
+          currentBytesMatch: (target, expected) => {
+            preChecks += 1;
+            if (preChecks === 1) {
+              // The pre-check passes - and the edit lands immediately
+              // after it, inside the window the rename-time re-check
+              // covers.
+              writeFileSync(target, concurrent);
+              return true;
+            }
+            return fileMatchesExpected(target, expected);
+          },
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(preChecks).toBe(1);
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    const err = thrown as Error & { kind?: string };
+    expect(err.kind).toBe(RULES_BLOCK_ERROR_KIND.concurrentModification);
+    // The concurrent editor's bytes are intact: the refused write did not
+    // clobber them, and an absent-file create takes no backup.
+    expect(readFileSync(file, "utf8")).toBe(concurrent);
+    expect(backupsOf("AGENTS.md").length).toBe(0);
+  });
+
+  test("bytes that change between the pre-check and the rename refuse an UPDATE the same way", () => {
+    // The same window over the update arm of the same call site, where
+    // the writer's expectation is the read bytes rather than absence.
+    // The trusted install anchor keeps the hand-edit gate out of the way
+    // so the drift pre-check is the layer under test.
+    const file = join(tmp, "AGENTS.md");
+    const installedAtMs = 1_700_000_000_000;
+    writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY, { installedAtMs });
+    setMtime(file, installedAtMs);
+    const withBlock = readFileSync(file, "utf8");
+    const concurrent = `${withBlock}A concurrent edit landed mid-write.\n`;
+    let preChecks = 0;
+    let thrown: unknown = null;
+    try {
+      writeRulesBlock(file, RULES_BLOCK_ID.usage, `${USAGE_BODY}\nAn updated line.\n`, {
+        installedAtMs,
+        seams: {
+          currentBytesMatch: (target, expected) => {
+            preChecks += 1;
+            if (preChecks === 1) {
+              writeFileSync(target, concurrent);
+              return true;
+            }
+            return fileMatchesExpected(target, expected);
+          },
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(preChecks).toBe(1);
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    expect((thrown as Error & { kind?: string }).kind).toBe(
+      RULES_BLOCK_ERROR_KIND.concurrentModification,
+    );
+    expect(readFileSync(file, "utf8")).toBe(concurrent);
+  });
+
   test("refuses multiple begin markers of the block's own spelling, wrapping ManagedBlockError", () => {
     const file = join(tmp, "AGENTS.md");
     writeFileSync(
@@ -609,6 +689,45 @@ describe("removeRulesBlock", () => {
       RULES_BLOCK_ERROR_KIND.concurrentModification,
     );
     // The removal was refused before any rewrite.
+    expect(readRulesBlock(file, RULES_BLOCK_ID.usage)).toBe(USAGE_BODY);
+  });
+
+  test("bytes that change between the pre-check and the rename refuse the removal through the writer's re-check", () => {
+    // The removal twin of the MG-2 pin: the pre-check sees current bytes,
+    // the concurrent edit lands while the rewrite is in flight, and only
+    // the forwarded `expectBefore` re-check stands between the rename and
+    // the concurrent editor's bytes. Removing the forwarding would let
+    // this removal clobber them with every other test still green.
+    const file = join(tmp, "AGENTS.md");
+    writeFileSync(file, OPERATOR);
+    writeRulesBlock(file, RULES_BLOCK_ID.usage, USAGE_BODY);
+    const withBlock = readFileSync(file, "utf8");
+    const concurrent = `${withBlock}A concurrent edit landed mid-removal.\n`;
+    let preChecks = 0;
+    let thrown: unknown = null;
+    try {
+      removeRulesBlock(file, RULES_BLOCK_ID.usage, {
+        seams: {
+          currentBytesMatch: (target, expected) => {
+            preChecks += 1;
+            if (preChecks === 1) {
+              writeFileSync(target, concurrent);
+              return true;
+            }
+            return fileMatchesExpected(target, expected);
+          },
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(preChecks).toBe(1);
+    expect(thrown).toBeInstanceOf(RulesBlockError);
+    expect((thrown as Error & { kind?: string }).kind).toBe(
+      RULES_BLOCK_ERROR_KIND.concurrentModification,
+    );
+    // The concurrent edit survives and the block was not removed.
+    expect(readFileSync(file, "utf8")).toBe(concurrent);
     expect(readRulesBlock(file, RULES_BLOCK_ID.usage)).toBe(USAGE_BODY);
   });
 });
