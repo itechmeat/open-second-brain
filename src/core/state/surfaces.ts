@@ -164,6 +164,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   captureWatermark: "capture_watermark",
   decisionLedger: "decision_ledger",
   sourceArchives: "source_archives",
+  instructionBlockLock: "instruction_block_lock",
 } as const);
 
 export type StateSurfaceId = (typeof STATE_SURFACE_ID)[keyof typeof STATE_SURFACE_ID];
@@ -296,6 +297,7 @@ const SESSION_MINING_LEDGER_FILE = "session-mining-ledger.json";
 const SESSION_MINING_SURVEYS_FILE = "session-mining-surveys.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
+const INSTRUCTION_BLOCK_LOCK_FILE = "instruction-block.lock.json";
 const BOOTSTRAP_RECEIPT_FILE = "bootstrap.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
@@ -1170,6 +1172,25 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "is untouched, which is exactly what separates it from a rebuildable derived store, and " +
       "there is no TTL to bring it back.",
     sources: ["src/core/brain/provenance/source-archive.ts"],
+  },
+  {
+    // K5 append-only placement: this row joins at the end of the
+    // catalogue because three lanes share this array this wave and the
+    // integrator re-freezes the by-root order.
+    id: STATE_SURFACE_ID.instructionBlockLock,
+    label: "instruction block lock",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(INSTRUCTION_BLOCK_LOCK_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Which vault-root agent instruction files carry an Open Second Brain write-gate block " +
+      "this tool wrote: per file, the block id, the begin marker and the applied time. " +
+      "Uninstall reads it to remove exactly the recorded pair, and the applied time is what " +
+      "makes the installer refuse a hand-edited block; without it the installer cannot prove " +
+      "a block is its own and refuses to rewrite any diverged one.",
+    sources: ["src/core/install/instruction-block.ts"],
   },
 ]);
 

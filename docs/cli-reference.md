@@ -10,7 +10,7 @@ Most verbs accept `--vault <path>` and `--config <path>`; the values default to 
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
-o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes (consent-gated), --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one
+o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes (consent-gated), --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one; --apply for a target whose host reads an agent-instruction file also writes the Open Second Brain write-gate managed block into that file at the vault root under the same consent verdict (codex, cursor, opencode and aider read AGENTS.md; gemini-cli reads GEMINI.md, name-implied only; copilot-cli, grok, kiro, pi and generic install no instruction step and the plan says so), preserving every byte outside the block, refusing a hand-edited block with exit 4 unless --force, and recording the ownership entry at <vault>/.open-second-brain/instruction-block.lock.json
 o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
 o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
@@ -24,7 +24,7 @@ o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b version                   Print the installed Open Second Brain version; --version is a synonym
 o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
-o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
+o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks; --target <name> --apply also removes the instruction block this tool recorded for that host (only a lock-recorded pair is removed, an absent pair is a named skip, and the ownership entry at <vault>/.open-second-brain/instruction-block.lock.json is cleared either way)
 o2b update                    Update Open Second Brain across all detected runtimes; --target <name> / --dry-run / --force / --json
 o2b bootstrap                 One-command harness provisioning for --target <name> (codex, grok, opencode run the adapter's idempotent apply; generic prints the payload plus manual steps; claude-code and zcode are plugin verify-only). --token mints mcp_token_<target> and prints the material exactly once - never on argv, never in a harness config; a second identical run is a byte-identical no-op; --rotate re-mints under the same name (effective on the next request, no restart); --check verifies drift; receipt at <vault>/.open-second-brain/bootstrap.lock.json
 o2b mcp token                 Per-agent MCP token management over the vault's hash-at-rest store: mint (derives mcp_token_<agent> unless --name), rotate, revoke, list; mint and rotate print the material exactly once with a shown-once notice, list shows metadata only

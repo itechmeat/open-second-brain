@@ -16,9 +16,16 @@ reads on startup. Common targets:
 - `AGENTS.md` — Codex, Cursor, Aider, and other tools that follow the
   `agents.md` convention.
 
-Pick one location per project. The managed-block fences let a future
-`o2b brain bootstrap` command rewrite the snippet idempotently; manual
-edits inside the fences are preserved on subsequent runs.
+Pick one location per project. You can have Open Second Brain write
+and maintain this block for you instead of pasting it by hand:
+`o2b install --target <host> --apply` writes the managed block into the
+agent-instruction file your host reads at the vault root (AGENTS.md for
+codex, cursor, opencode and aider; GEMINI.md for gemini-cli), under an
+explicit consent prompt, keeping every byte outside the block intact on
+every re-run. The installed block merges the usage content below with
+the memory write gate, and a later uninstall removes exactly the pair
+the tool wrote. The manual snippet stays for hosts you provision by
+hand; hand edits inside the fences are preserved on subsequent runs.
 
 Replace `<absolute-vault-path>` with the absolute path of your
 Obsidian-compatible vault before pasting.

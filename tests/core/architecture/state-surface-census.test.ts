@@ -93,7 +93,14 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // verb LEFT the population - its runs dir was hoisted to `BENCH_RUNS_REL` in
 // `path-constants.ts`, so it no longer spells the directory - taking its now
 // stale exclusion with it.
-const SWEPT_POPULATION_SIZE = 30;
+// 28 -> 30, net, from the agent-presence wave: the approvals ledger writer
+// (`src/core/brain/lessons-promotion.ts`, t_1e952e43) spells the directory
+// for `lessons-approvals.json` and is answered by that surface's row (its
+// attribution lands with the lessons lane's final task), and the
+// instruction-block installer (`src/core/install/instruction-block.ts`,
+// t_ba41a78a) spells it for `instruction-block.lock.json` and is answered
+// by the `instruction_block_lock` row's `sources`.
+const SWEPT_POPULATION_SIZE = 32;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,
@@ -107,7 +114,10 @@ const SWEPT_POPULATION_SIZE = 30;
 // population with two rows - the signed attestation records (attestations)
 // and the operator's Ed25519 signing keypair (attestation_keys), the same
 // derived-store join the ingest checkpoints row made.
-const DECLARED_SURFACE_COUNT = 55;
+// 55 -> 56: the instruction-block lock row (t_ba41a78a Task B4) joins the
+// catalogue - the ownership record uninstall reads to remove exactly the
+// recorded pair, the same derived-store join the install manifest made.
+const DECLARED_SURFACE_COUNT = 56;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;
