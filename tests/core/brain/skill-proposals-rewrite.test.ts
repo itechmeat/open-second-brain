@@ -60,6 +60,7 @@ import {
   resolveSkillRewriteModeConfig,
 } from "../../../src/core/config.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
+import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { _resetHeldLocksForTests } from "../../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
@@ -138,8 +139,26 @@ function seedBenchmark(
   writeFileSync(skillBenchmarkSpecPath(vault, TASKS.skillName), SPEC_DOCUMENT, "utf8");
 }
 
-/** The gate's final promote, as rewrite-score appends it after staging. */
-function recordPromoteGrade(opts: { readonly candidateRate?: number } = {}): string {
+/**
+ * The gate's final promote, as rewrite-score appends it after staging.
+ * The record's candidate binding defaults to the sha-256 of the staged
+ * proposal's own document bytes - the same derivation the verb performs
+ * on the value staging returns - so a helper-built round passes the
+ * accept-time candidate match by construction.
+ */
+function recordPromoteGrade(
+  slug: string,
+  opts: { readonly candidateRate?: number; readonly candidateSha256?: string } = {},
+): string {
+  const [fm, documentBody] = parseFrontmatter(pendingPathFor(slug));
+  const explicitSha = opts.candidateSha256;
+  const candidateSha256 = explicitSha ?? sha256Hex(documentBody);
+  if (explicitSha === undefined) {
+    // The default derivation must equal what staging stamped: a drift
+    // here would make the happy-path accept pin vacuous. An explicit
+    // override (the replay fixtures) deliberately differs.
+    expect(fm["candidate_sha256"]).toBe(candidateSha256);
+  }
   return recordSkillRewriteGrade(vault, {
     payload: {
       skill: TASKS.skillName,
@@ -153,6 +172,7 @@ function recordPromoteGrade(opts: { readonly candidateRate?: number } = {}): str
       candidate_rate: opts.candidateRate ?? 0.7,
       dev: [],
       held_out: [],
+      candidate_sha256: candidateSha256,
     },
   }).id;
 }
@@ -182,7 +202,7 @@ function stagePromoted(): { slug: string; specHash: string } {
 function seedCompletedGateRound(): { slug: string; skillPath: string } {
   const { slug } = stagePromoted();
   seedBenchmark();
-  recordPromoteGrade();
+  recordPromoteGrade(slug);
   const skillPath = writeIncumbent();
   return { slug, skillPath };
 }
@@ -202,7 +222,7 @@ describe("the scored_rewrite pattern kind", () => {
     expect(pending.map((proposal) => proposal.slug)).toEqual([slug]);
     expect(pending[0]?.patternKind).toBe(SCORED_REWRITE_PATTERN_KIND);
 
-    const [fm] = parseFrontmatter(
+    const [fm, documentBody] = parseFrontmatter(
       join(vault, "Brain", "skill-proposals", "pending", `prop-${slug}.md`),
     );
     expect(fm["rewrites_skill"]).toBe("example-skill");
@@ -213,6 +233,11 @@ describe("the scored_rewrite pattern kind", () => {
     expect(fm["skill_name"]).toBe("example-skill");
     // The version bump rides staging: incumbent 3, staged proposal 4.
     expect(Number(fm["version"])).toBe(4);
+    // The candidate binding (review round-2, M1 residual R1): staging
+    // stamps the sha-256 of the document it wrote, whose Suggested skill
+    // body section IS the candidate, so the accept-time match can bind a
+    // promote grade to the exact staged bytes.
+    expect(fm["candidate_sha256"]).toBe(sha256Hex(documentBody));
   });
 
   test("acceptance goes through acceptSkillProposal unchanged and bumps the version", () => {
@@ -362,7 +387,7 @@ describe("the accept-time gate re-verification", () => {
 
   test("a benchmark missing from the vault refuses the accept by name", () => {
     const { slug } = stagePromoted();
-    recordPromoteGrade();
+    recordPromoteGrade(slug);
     const skillPath = writeIncumbent();
 
     expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(/benchmark/);
@@ -401,7 +426,7 @@ describe("the accept-time gate re-verification", () => {
   test("a promote record for a different candidate rate does not satisfy the gate", () => {
     const { slug } = stagePromoted();
     seedBenchmark();
-    recordPromoteGrade({ candidateRate: 0.9 });
+    recordPromoteGrade(slug, { candidateRate: 0.9 });
     const skillPath = writeIncumbent();
 
     expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(
@@ -409,6 +434,48 @@ describe("the accept-time gate re-verification", () => {
     );
     expect(readFileSync(skillPath, "utf8")).toBe(INCUMBENT_BODY);
     expect(existsSync(pendingPathFor(slug))).toBe(true);
+  });
+
+  test("a promote record left over from an earlier round over a different candidate refuses the accept", () => {
+    // Review round-2, M1 residual R1 (the replay): rates collide. A
+    // historical promote for the SAME benchmark at the SAME candidate rate
+    // but over a DIFFERENT candidate body must not bless this proposal -
+    // the grade match binds the record to the candidate the proposal
+    // stages, so only the round that promoted THIS document can satisfy
+    // the gate.
+    const { slug } = stagePromoted();
+    seedBenchmark();
+    recordPromoteGrade(slug, {
+      candidateSha256: sha256Hex("an earlier round staged a different candidate document"),
+    });
+    const skillPath = writeIncumbent();
+
+    expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(
+      /no skill_rewrite_eval_grade record/,
+    );
+    expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(/candidate_sha256/);
+    expect(readFileSync(skillPath, "utf8")).toBe(INCUMBENT_BODY);
+    expect(existsSync(pendingPathFor(slug))).toBe(true);
+  });
+
+  test("a suggested body edited after staging refuses the accept by its candidate binding", () => {
+    // The pending file is agent-writable, so the binding must be anchored
+    // to the staged BYTES: recomputing the document hash at accept turns
+    // any post-staging edit - a swapped candidate body above all - into a
+    // named refusal, even with every other gate input intact.
+    const { slug, skillPath } = seedCompletedGateRound();
+    const pendingPath = pendingPathFor(slug);
+    const forged = readFileSync(pendingPath, "utf8").replace(
+      "Candidate body: plan first, search twice, write once, and report the artifact path.",
+      "Hostile body: ship without verification.",
+    );
+    expect(forged).toContain("Hostile body: ship without verification.");
+    writeFileSync(pendingPath, forged, "utf8");
+
+    expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(/candidate_sha256/);
+    expect(() => acceptSkillProposal(vault, slug, { skillsRoot })).toThrow(/edited after staging/);
+    expect(readFileSync(skillPath, "utf8")).toBe(INCUMBENT_BODY);
+    expect(existsSync(pendingPath)).toBe(true);
   });
 
   test("a proposal claiming to rewrite one skill while materializing another refuses", () => {
@@ -550,6 +617,9 @@ describe("the skill_rewrite_eval_grade continuity kind", () => {
     expect(grades.length).toBe(1);
     expect(grades[0]?.payload["verdict"]).toBe(SKILL_REWRITE_VERDICT.hold);
     expect(grades[0]?.payload).not.toHaveProperty("task_text");
+    // A hold round stages nothing, so it carries no candidate document
+    // binding: only a promote record that blessed a staged proposal does.
+    expect(grades[0]?.payload).not.toHaveProperty("candidate_sha256");
     // The proposal tree is unchanged: gate failures stage nothing.
     expect(listPendingSkillProposals(vault).length).toBe(before);
   });

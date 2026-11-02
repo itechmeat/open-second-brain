@@ -624,6 +624,8 @@ export interface RewriteGradeTaskRow {
  * and check ids, stamped with the spec hash. NEVER task text and NEVER
  * transcript text - the payload is assembled from score rows, which carry
  * no text by construction, and tests pin that over the serialized form.
+ * The one digest it may carry (`candidate_sha256`) binds the record to
+ * the staged proposal's bytes; a sha-256 is an identifier, not content.
  */
 export interface RewriteGradeRecordPayload {
   readonly skill: string;
@@ -638,6 +640,15 @@ export interface RewriteGradeRecordPayload {
   readonly candidate_rate: number;
   readonly dev: ReadonlyArray<RewriteGradeTaskRow>;
   readonly held_out: ReadonlyArray<RewriteGradeTaskRow>;
+  /**
+   * The candidate binding (review round-2, M1 residual R1): the sha-256
+   * of the staged proposal document the final promote blessed, present
+   * ONLY when this record rode a staging - a hold round stages nothing
+   * and binds nothing. The accept-time grade match requires it, so a
+   * historical promote over a different candidate cannot bless a new
+   * proposal: rates collide, document digests do not.
+   */
+  readonly candidate_sha256?: string;
 }
 
 export interface RewriteGradeRecordInput {
@@ -650,6 +661,14 @@ export interface RewriteGradeRecordInput {
   readonly heldoutVerdict: SkillRewriteVerdict;
   readonly devScores: ReadonlyArray<RewriteTaskScore>;
   readonly heldoutScores: ReadonlyArray<RewriteTaskScore>;
+  /**
+   * The staged proposal's document sha-256 - exactly what staging stamped
+   * and returned; omit on a hold round, which staged nothing. The accept
+   * match refuses a promote record without the binding, so a final
+   * promote whose caller drops this field fails CLOSED at the accept,
+   * never open.
+   */
+  readonly candidateSha256?: string;
 }
 
 /**
@@ -675,6 +694,7 @@ export function buildRewriteGradeRecord(input: RewriteGradeRecordInput): Rewrite
     candidate_rate: input.selection.candidateRate,
     dev: input.devScores.map(toGradeRow),
     held_out: input.heldoutScores.map(toGradeRow),
+    ...(input.candidateSha256 !== undefined ? { candidate_sha256: input.candidateSha256 } : {}),
   });
 }
 

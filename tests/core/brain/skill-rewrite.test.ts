@@ -615,6 +615,11 @@ describe("buildRewriteGradeRecord", () => {
       spec: SPEC,
     });
     const verdict = checkRewriteHeldout(heldout, SPEC);
+    // The candidate binding (review round-2, M1 residual R1): the final
+    // promote rides a staging, and the record carries the sha-256 the
+    // staged proposal stamps, so a promote grade can only bless the exact
+    // document it was earned against.
+    const candidateSha256 = sha256Hex(CANDIDATE_BODY);
     const record = buildRewriteGradeRecord({
       skill: TASKS.skillName,
       spec: SPEC,
@@ -623,12 +628,14 @@ describe("buildRewriteGradeRecord", () => {
       heldoutVerdict: verdict,
       devScores: candidate,
       heldoutScores: heldout,
+      candidateSha256,
     });
     expect(record.skill).toBe(TASKS.skillName);
     expect(record.spec_hash).toBe("spec-hash-value");
     expect(record.metric).toBe(SKILL_REWRITE_METRIC);
     expect(record.verdict).toBe(SKILL_REWRITE_VERDICT.promote);
     expect(record.tasks_hash).toBe(SPEC.tasksHash);
+    expect(record.candidate_sha256).toBe(candidateSha256);
     expect(record.dev.map((row) => row.task_id).toSorted()).toEqual(
       [...SPEC.devTaskIds].toSorted(),
     );
@@ -655,6 +662,7 @@ describe("buildRewriteGradeRecord", () => {
       heldoutVerdict: SKILL_REWRITE_VERDICT.hold,
       devScores: candidate,
       heldoutScores: [],
+      candidateSha256: sha256Hex(CANDIDATE_BODY),
     });
     const serialized = JSON.stringify(record);
     for (const task of TASKS.tasks) {
@@ -666,5 +674,13 @@ describe("buildRewriteGradeRecord", () => {
     // check ids, the boolean verdicts and the rates travel.
     expect(serialized).not.toContain("note_write");
     expect(serialized).not.toContain("bulk_delete");
+    // The candidate binding is a sha-256, not content: adding the hash to
+    // the payload must not smuggle the candidate body in beside it. A
+    // hold round (this one) stages nothing, but the field rides the same
+    // assembly, so the no-text invariant is pinned over the extended
+    // payload shape.
+    expect(record.candidate_sha256).toBe(sha256Hex(CANDIDATE_BODY));
+    expect(record.candidate_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(serialized).not.toContain(CANDIDATE_BODY.slice(0, 24));
   });
 });

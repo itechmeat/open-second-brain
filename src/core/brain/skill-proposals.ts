@@ -16,6 +16,7 @@ import { resolveSkillsDir } from "../config.ts";
 import { SKILL_FILE_NAME } from "../surface/skills.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
@@ -55,6 +56,7 @@ import {
   BRAIN_SKILL_PROPOSALS_REL,
   procedurePath,
   proposalWatermarkPath,
+  SHA256_HEX_RE,
   skillAcceptJournalPath,
   skillAcceptPriorContentPath,
   skillBenchmarkSpecPath,
@@ -601,15 +603,29 @@ const SKILL_DRAFT_TRIGGERS_KEY = "skill_triggers";
 /**
  * Scored-contract keys a `scored_rewrite` proposal carries beside the
  * SKILL.md draft fields: which skill it rewrites, the spec hash the gate
- * verified against, and the three rates the gate decided on. The writer
- * and the accept-time validation are the only readers, so a second
- * spelling would put an unreviewable claim on a working skill.
+ * verified against, the three rates the gate decided on, and the sha-256
+ * of the staged document itself (the candidate binding - see
+ * {@link SKILL_CANDIDATE_SHA_KEY}). The writer and the accept-time
+ * validation are the only readers, so a second spelling would put an
+ * unreviewable claim on a working skill.
  */
 const SKILL_REWRITES_SKILL_KEY = "rewrites_skill";
 const SKILL_SPEC_HASH_KEY = "spec_hash";
 const SKILL_BASELINE_SCORE_KEY = "baseline_score";
 const SKILL_CANDIDATE_SCORE_KEY = "candidate_score";
 const SKILL_HELDOUT_SCORE_KEY = "heldout_score";
+
+/**
+ * The candidate binding a `scored_rewrite` proposal stamps at staging:
+ * the sha-256 of the proposal document's body as written, whose
+ * `Suggested skill body` section IS the candidate the gate promoted.
+ * The accept-time gate recomputes it over the pending file's current
+ * bytes (so a post-staging edit is refused by name) and requires the
+ * matched promote grade record to carry the same value (so an older
+ * round's promote over a different candidate cannot bless this one).
+ * A digest is not content: it binds the candidate without carrying it.
+ */
+const SKILL_CANDIDATE_SHA_KEY = "candidate_sha256";
 
 /** The fixed three-decimal spelling a gate rate carries in frontmatter. */
 function formatRewriteScore(score: number): string {
@@ -740,6 +756,20 @@ export interface ScoredRewriteProposalInput {
 }
 
 /**
+ * What staging a scored rewrite produced. A `created` outcome carries the
+ * candidate binding (`documentSha256`) the staged proposal was stamped
+ * with: the gate round hands it to the grade record it appends next, so
+ * the promote record and the pending proposal name the same bytes.
+ */
+export type ScoredRewriteStagingResult = DeclaredSkillProposalResultBase &
+  (
+    | { readonly outcome: "created"; readonly documentSha256: string }
+    | { readonly outcome: "deduped" }
+    /** `reason` is required here: a decline the caller cannot explain is a silent drop. */
+    | { readonly outcome: "suppressed"; readonly reason: string }
+  );
+
+/**
  * Stage a PENDING proposal from a benchmark-gated rewrite round that WON
  * (agent-presence, Lane A).
  *
@@ -761,11 +791,18 @@ export interface ScoredRewriteProposalInput {
  * The scores are written as fixed three-decimal strings: they are the
  * frozen claims of a completed gate run, and a human reviewing the pending
  * file reads them against the grade record, never recomputes them.
+ *
+ * The staged document is stamped with its own sha-256
+ * ({@link SKILL_CANDIDATE_SHA_KEY}) and the digest is returned beside the
+ * usual fields: the accept-time gate recomputes it over the pending bytes
+ * and requires the promote grade record to carry the same value, which is
+ * what stops an older round's promote from blessing a different candidate
+ * (review round-2, M1 residual R1).
  */
 export function stageScoredRewriteProposal(
   vault: string,
   input: ScoredRewriteProposalInput,
-): DeclaredSkillProposalResult {
+): ScoredRewriteStagingResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const name = input.skill.name.trim();
@@ -829,12 +866,47 @@ export function stageScoredRewriteProposal(
     SCORED_REWRITE_PATTERN_KIND,
     { payloadSalt: salt },
   );
-  if ("declined" in planned) return planned.declined;
+  if ("declined" in planned) {
+    const declined = planned.declined;
+    // A re-stage declines only as a suppressed family or as a dedupe (an
+    // identical pending copy already there). The explicit reconstruction
+    // keeps the returned shape honest: a "created" decline would mean a
+    // freshly planned proposal was never written, which no caller could
+    // act on, so it refuses instead of wearing a borrowed shape.
+    if (declined.outcome === "suppressed") return declined;
+    if (declined.outcome !== "deduped") {
+      throw new DeclaredSkillProposalError(
+        `scored rewrite proposal '${name}' could not be staged: the planner declined a ` +
+          "freshly planned proposal",
+      );
+    }
+    return { id: declined.id, slug: declined.slug, path: declined.path, outcome: "deduped" };
+  }
   const plan = planned.plan;
 
   const now = (input.now ?? new Date()).toISOString();
   const triggers = input.skill.triggers.map((t) => t.trim()).filter((t) => t.length > 0);
   const fmt = formatRewriteScore;
+
+  // The candidate binding is computed over the EXACT document body this
+  // call writes: the parse round-trip (`formatFrontmatter` out,
+  // `parseFrontmatter` back) is byte-exact for this shape, so the accept
+  // gate can recompute the same digest over the pending file and refuse
+  // any post-staging edit. The document's Suggested skill body section is
+  // the candidate verbatim, so this binds the grade history to the
+  // candidate bytes without carrying them.
+  const document = renderProposalDocument({
+    title: plan.name,
+    patternKind: SCORED_REWRITE_PATTERN_KIND,
+    key: plan.key,
+    suggestedBody: body.split("\n"),
+    evidence: [
+      `- spec ${input.specHash} (seed ${input.spec.seed}, ${input.spec.splitRule})`,
+      `- baseline ${fmt(input.baselineScore)} / candidate ${fmt(input.candidateScore)} / ` +
+        `held-out ${fmt(input.heldoutScore)}`,
+    ],
+  });
+  const documentSha256 = sha256Hex(document);
 
   writeFrontmatterAtomic(
     plan.path,
@@ -859,18 +931,9 @@ export function stageScoredRewriteProposal(
       [SKILL_BASELINE_SCORE_KEY]: fmt(input.baselineScore),
       [SKILL_CANDIDATE_SCORE_KEY]: fmt(input.candidateScore),
       [SKILL_HELDOUT_SCORE_KEY]: fmt(input.heldoutScore),
+      [SKILL_CANDIDATE_SHA_KEY]: documentSha256,
     },
-    renderProposalDocument({
-      title: plan.name,
-      patternKind: SCORED_REWRITE_PATTERN_KIND,
-      key: plan.key,
-      suggestedBody: body.split("\n"),
-      evidence: [
-        `- spec ${input.specHash} (seed ${input.spec.seed}, ${input.spec.splitRule})`,
-        `- baseline ${fmt(input.baselineScore)} / candidate ${fmt(input.candidateScore)} / ` +
-          `held-out ${fmt(input.heldoutScore)}`,
-      ],
-    }),
+    document,
     {
       overwrite: false,
       existsErrorKind: "skill proposal",
@@ -878,7 +941,7 @@ export function stageScoredRewriteProposal(
     },
   );
 
-  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
+  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created", documentSha256 };
 }
 
 /**
@@ -1056,7 +1119,7 @@ export function acceptSkillProposal(
     // or stale scored_rewrite is refused here by name, with nothing
     // written and the draft left pending for the operator.
     if (isRewrite && skillDraft !== null) {
-      verifyScoredRewriteGate(vault, fm, skillDraft.name);
+      verifyScoredRewriteGate(vault, fm, skillDraft.name, body);
     }
     const materializedPath =
       skillDraft === null
@@ -1633,6 +1696,22 @@ function validateRewriteGradePayload(payload: RewriteGradeRecordPayload): Contin
   if (!Array.isArray(payload.dev) || !Array.isArray(payload.held_out)) {
     throw new Error("skill rewrite grade record is missing its dev or held-out task rows");
   }
+  // The candidate binding (review round-2, M1 residual R1): present only
+  // on the record a final promote wrote beside its staged proposal - hold
+  // rounds stage nothing and bind nothing. The accept-time grade match
+  // requires it, so a promote record without one can never satisfy an
+  // accept (fail-closed), and a malformed value refuses here at write
+  // time rather than failing a match later.
+  const candidateSha = payload.candidate_sha256;
+  if (
+    candidateSha !== undefined &&
+    (typeof candidateSha !== "string" || !SHA256_HEX_RE.test(candidateSha))
+  ) {
+    throw new Error(
+      `skill rewrite grade record has a 'candidate_sha256' that is not a sha-256 hex digest: ` +
+        JSON.stringify(candidateSha),
+    );
+  }
   return Object.freeze({
     skill: payload.skill,
     spec_hash: payload.spec_hash,
@@ -1645,6 +1724,7 @@ function validateRewriteGradePayload(payload: RewriteGradeRecordPayload): Contin
     candidate_rate: payload.candidate_rate,
     dev: Object.freeze(payload.dev.map((row) => rebuildGradeTaskRow(row, "dev"))),
     held_out: Object.freeze(payload.held_out.map((row) => rebuildGradeTaskRow(row, "held-out"))),
+    ...(candidateSha !== undefined ? { candidate_sha256: candidateSha } : {}),
   });
 }
 
@@ -2411,6 +2491,15 @@ function validateScoredRewriteContract(fm: Readonly<Record<string, unknown>>): v
   if (typeof specHash !== "string" || specHash.trim().length === 0) {
     throw new Error(`scored rewrite proposal is missing '${SKILL_SPEC_HASH_KEY}'`);
   }
+  const candidateSha = fm[SKILL_CANDIDATE_SHA_KEY];
+  if (typeof candidateSha !== "string" || !SHA256_HEX_RE.test(candidateSha)) {
+    throw new Error(
+      `scored rewrite proposal is missing or malformed '${SKILL_CANDIDATE_SHA_KEY}'; the ` +
+        "candidate binding is what stops an older promote from blessing a different " +
+        "candidate, so a proposal without it predates the binding and its gate round " +
+        "must be re-run before this skill can be accepted",
+    );
+  }
   const draftName = fm[SKILL_DRAFT_NAME_KEY];
   if (rewrites !== draftName) {
     throw new Error(
@@ -2456,11 +2545,19 @@ const SCORE_MATCH_TOLERANCE = 0.0005 + Number.EPSILON;
  *      `spec_hash` - a swapped task set or an edited spec invalidates the
  *      proposal instead of quietly re-scoping its claim - and the take
  *      must still verify against the live task set;
- *   2. the grade history must hold the gate's final promote for THIS
+ *   2. the pending document must still be the bytes staging stamped: the
+ *      recomputed sha-256 of the proposal body must equal the frontmatter
+ *      `candidate_sha256`, so a candidate body swapped in after staging
+ *      (the pending file is agent-writable) is refused by name;
+ *   3. the grade history must hold the gate's final promote for THIS
  *      proposal: a `skill_rewrite_eval_grade` record with verdict
- *      `promote`, the same spec hash and skill, and a candidate rate that
- *      matches the proposal's candidate score. No promote record, no
- *      accept.
+ *      `promote`, the same spec hash and skill, a candidate rate that
+ *      matches the proposal's candidate score, AND the same
+ *      `candidate_sha256` binding. Rates collide - a historical promote
+ *      over a different candidate at the same rate must not bless this
+ *      one (review round-2, M1 residual R1) - but a document digest can
+ *      only match the round that promoted these exact bytes. No promote
+ *      record with this binding, no accept.
  *
  * Every refusal fires BEFORE the accept journal is stamped, so a refused
  * accept writes nothing: the incumbent is untouched and the draft stays
@@ -2473,6 +2570,7 @@ function verifyScoredRewriteGate(
   vault: string,
   fm: Readonly<Record<string, unknown>>,
   skillName: string,
+  proposalBody: string,
 ): void {
   const specHash = String(fm[SKILL_SPEC_HASH_KEY]);
   const tasksPath = skillBenchmarkTasksPath(vault, skillName);
@@ -2505,6 +2603,21 @@ function verifyScoredRewriteGate(
         `(${take.reason ?? "receipt mismatch"}); the accept is refused`,
     );
   }
+  // The candidate binding, recomputed over the pending file's CURRENT
+  // bytes: `parseFrontmatter` trims, and `formatFrontmatter` round-trips
+  // this document shape byte-exactly, so an unedited proposal recomputes
+  // the value staging stamped, and any post-staging edit - a swapped
+  // candidate body above all - breaks it.
+  const liveCandidateSha = sha256Hex(proposalBody);
+  const stagedCandidateSha = fm[SKILL_CANDIDATE_SHA_KEY];
+  if (stagedCandidateSha !== liveCandidateSha) {
+    throw new Error(
+      `scored rewrite gate for '${skillName}': the proposal's '${SKILL_CANDIDATE_SHA_KEY}' ` +
+        `(${String(stagedCandidateSha)}) does not match the pending document's bytes ` +
+        `(${liveCandidateSha}); the document was edited after staging, so the accept is ` +
+        "refused and the operator should re-run the gate round",
+    );
+  }
   const candidateScore = Number(fm[SKILL_CANDIDATE_SCORE_KEY]);
   const hasPromote = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).some(
     (record) => {
@@ -2514,16 +2627,21 @@ function verifyScoredRewriteGate(
         payload["spec_hash"] === specHash &&
         payload["verdict"] === SKILL_REWRITE_VERDICT.promote &&
         typeof payload["candidate_rate"] === "number" &&
-        Math.abs(payload["candidate_rate"] - candidateScore) <= SCORE_MATCH_TOLERANCE
+        Math.abs(payload["candidate_rate"] - candidateScore) <= SCORE_MATCH_TOLERANCE &&
+        // The binding: a promote record from an earlier round over a
+        // DIFFERENT candidate body with the same rate satisfies every
+        // check above - rates collide, document digests do not.
+        payload[SKILL_CANDIDATE_SHA_KEY] === liveCandidateSha
       );
     },
   );
   if (!hasPromote) {
     throw new Error(
       `scored rewrite gate for '${skillName}': no skill_rewrite_eval_grade record with verdict ` +
-        `'${SKILL_REWRITE_VERDICT.promote}' matches this proposal's spec hash ${specHash} and ` +
-        `candidate rate ${candidateScore}; the gate's final promote is missing from the grade ` +
-        "history, so the accept is refused",
+        `'${SKILL_REWRITE_VERDICT.promote}' matches this proposal's spec hash ${specHash}, ` +
+        `candidate rate ${candidateScore} and candidate_sha256 ${liveCandidateSha}; the gate's ` +
+        "final promote is missing from the grade history - or it was earned over a different " +
+        "candidate - so the accept is refused",
     );
   }
 }

@@ -16,10 +16,12 @@ import {
   discardUnreadableSkillAcceptJournals,
   learnSkillProposals,
   listPendingSkillProposals,
+  pendingSkillProposalPatternKind,
   recoverSkillProposalAccepts,
   rejectSkillProposal,
   readRewriteIncumbent,
   recordSkillRewriteGrade,
+  SCORED_REWRITE_PATTERN_KIND,
   stageScoredRewriteProposal,
   DeclaredSkillProposalError,
   type RewriteIncumbent,
@@ -62,7 +64,15 @@ import {
   type PayloadStrip,
 } from "../../../core/brain/payload-json.ts";
 import { canonicalNotePath } from "../../../core/path-safety.ts";
-import { CliError, brainVerbContext, failWith, parse } from "../helpers.ts";
+import { CliError, brainVerbContext, failWith, parse, writeJson } from "../helpers.ts";
+
+/**
+ * The consent verdict this verb answers with when a `scored_rewrite`
+ * accept is refused for want of the explicit flag: 6, the install
+ * consent ladder's reserved `consentRefused` number, so every
+ * consent-bearing surface in the tool exits the same way.
+ */
+const SKILL_PROPOSALS_EXIT = { consentRefused: 6 } as const;
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -349,11 +359,39 @@ function accept(argv: string[]): number {
     vault: { type: "string" },
     json: { type: "boolean" },
     note: { type: "string" },
+    yes: { type: "boolean" },
   });
   const slug = trim(positional[0]);
   if (!slug) throw new CliError("brain skill-proposals accept: slug is required");
   const { config, vault } = brainVerbContext(flags);
   const note = trim(flags["note"]);
+  // The human accept is the consent boundary (review security M1, round-2
+  // residual R2): a `scored_rewrite` accept OVERWRITES an incumbent
+  // SKILL.md, and the agent that staged the proposal runs shell commands,
+  // so the MCP accept refusal alone does not keep the overwrite out of
+  // its reach. The explicit flag is the same consent every other
+  // irreversible verb in the tree gates on (`install --apply`,
+  // `brain lessons approve --apply`), and without it the accept is a
+  // named refusal BEFORE anything is written - the exact command to
+  // re-run is printed, the incumbent keeps its bytes, and the draft stays
+  // pending. Ordinary proposals create or fill vault pages and never
+  // overwrite; they accept exactly as before.
+  if (
+    pendingSkillProposalPatternKind(vault, slug) === SCORED_REWRITE_PATTERN_KIND &&
+    flags["yes"] !== true
+  ) {
+    const refusal =
+      `'${slug}' is a ${SCORED_REWRITE_PATTERN_KIND} proposal whose accept OVERWRITES an ` +
+      "incumbent skill, so the human accept requires explicit consent: re-run with --yes. " +
+      "Nothing was written. The exact command: " +
+      `o2b brain skill-proposals accept ${slug} --yes`;
+    if (flags["json"]) {
+      writeJson({ consent: "consent-refused", written: false, error: refusal });
+    } else {
+      process.stderr.write(`error: ${refusal}\n`);
+    }
+    return SKILL_PROPOSALS_EXIT.consentRefused;
+  }
   // Resolved HERE rather than inside the core: the surface knows which
   // config chain this invocation is running against, and a `mature_page`
   // accept materializes into whichever skills root that chain names.
@@ -632,7 +670,7 @@ function rewriteScore(argv: string[]): number {
   let heldoutScores: ReadonlyArray<RewriteTaskScore> = [];
   let heldoutVerdict: string | null = null;
   let heldoutEnvelopes: ReturnType<typeof buildRewriteHeldoutEnvelopes> | null = null;
-  let staged: { id: string; slug: string } | null = null;
+  let staged: { id: string; slug: string; documentSha256: string } | null = null;
 
   if (selection.verdict === SKILL_REWRITE_VERDICT.promote) {
     const heldoutDir = join(roundsDir, "heldout");
@@ -668,7 +706,7 @@ function rewriteScore(argv: string[]): number {
             })`,
           );
         }
-        staged = { id: result.id, slug: result.slug };
+        staged = { id: result.id, slug: result.slug, documentSha256: result.documentSha256 };
       }
     } else {
       // The one moment held-out text may enter an envelope: the selection
@@ -694,6 +732,12 @@ function rewriteScore(argv: string[]): number {
                 : SKILL_REWRITE_VERDICT.hold,
             devScores: candidate,
             heldoutScores,
+            // The candidate binding (review round-2, M1 residual R1):
+            // the promote record carries the sha-256 staging stamped on
+            // the pending proposal, so the accept-time match can refuse
+            // a promote earned over a different candidate. A hold round
+            // stages nothing and binds nothing.
+            candidateSha256: staged?.documentSha256,
           }),
         }).id
       : null;

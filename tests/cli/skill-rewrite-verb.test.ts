@@ -14,11 +14,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  listContinuityRecords,
+} from "../../src/core/brain/continuity/store.ts";
 import { skillBenchmarkTasksPath } from "../../src/core/brain/paths.ts";
 import { listPendingSkillProposals } from "../../src/core/brain/skill-proposals.ts";
 import { sha256Hex } from "../../src/core/integrity/digest.ts";
@@ -204,6 +207,45 @@ function writeRounds(
   for (const entry of entries) {
     writeFileSync(join(dir, `${entry.task_id}.json`), `${JSON.stringify(entry)}\n`, "utf8");
   }
+}
+
+/**
+ * A complete gate round that PROMOTES: dev rounds at 3/7 baseline vs 7/7
+ * candidate plus a passing held-out arm, scored through the real CLI. The
+ * one write that matters to the accept tests is the staged pending
+ * proposal, whose slug this returns.
+ */
+async function stagePromotedRound(): Promise<string> {
+  seedBenchmark();
+  writeRounds(
+    "baseline",
+    DEV_TASKS.map((taskId, index) =>
+      index < 3 ? passingTranscript(taskId) : failingTranscript(taskId),
+    ),
+  );
+  writeRounds(
+    "candidate",
+    DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
+  );
+  writeRounds(
+    "heldout",
+    HELDOUT_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
+  );
+  const scored = await runCli([
+    "brain",
+    "skill-proposals",
+    "rewrite-score",
+    "example-skill",
+    "--vault",
+    vault,
+    "--candidate-file",
+    join(scratch, "candidate.md"),
+  ]);
+  expect(scored.returncode).toBe(0);
+  expect(scored.stdout).toContain("promote");
+  const pending = listPendingSkillProposals(vault);
+  expect(pending.length).toBe(1);
+  return pending[0]!.slug;
 }
 
 describe("rewrite-plan", () => {
@@ -454,7 +496,133 @@ describe("rewrite-score", () => {
     // The designed flow, whole: the gate stages, the operator accepts on
     // the command line, and the accept-time re-verification (security M1)
     // passes against exactly what the gate round wrote - receipt, take,
-    // and its own promote grade record.
+    // and its own promote grade record. The accept of an OVERWRITE carries
+    // the explicit --yes consent flag (review round-2, M1 residual R2),
+    // the same flag every other irreversible verb in the tree gates on.
+    const slug = await stagePromotedRound();
+
+    const accepted = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      slug,
+      "--vault",
+      vault,
+      "--yes",
+      "--note",
+      "gate passed",
+    ]);
+    expect(accepted.returncode).toBe(0);
+    // The incumbent body was replaced by the candidate, and the draft is
+    // consumed - the accept the design promised, still human-initiated.
+    const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
+    expect(readFileSync(skillPath, "utf8")).toContain("Candidate body: plan first");
+    expect(listPendingSkillProposals(vault).length).toBe(0);
+  });
+
+  test("a scored_rewrite accept without --yes refuses by name, prints the exact command, and writes nothing", async () => {
+    // The consent boundary (review round-2, M1 residual R2): an agent can
+    // run shell commands, so "MCP proposes" alone does not keep the
+    // overwrite out of its reach - the explicit flag does. Without it the
+    // accept is a named refusal before anything is written, and the
+    // refusal names the exact command to re-run.
+    const slug = await stagePromotedRound();
+    const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
+    const incumbentBefore = readFileSync(skillPath, "utf8");
+
+    const refused = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      slug,
+      "--vault",
+      vault,
+      "--note",
+      "gate passed",
+    ]);
+    expect(refused.returncode).toBe(6);
+    expect(refused.stderr).toContain("scored_rewrite");
+    expect(refused.stderr).toContain("OVERWRITES");
+    expect(refused.stderr).toContain("--yes");
+    expect(refused.stderr).toContain(`o2b brain skill-proposals accept ${slug} --yes`);
+    // Nothing was written: the incumbent keeps its bytes and the draft is
+    // still pending for the operator.
+    expect(readFileSync(skillPath, "utf8")).toBe(incumbentBefore);
+    expect(listPendingSkillProposals(vault).length).toBe(1);
+  });
+
+  test("a replayed promote record cannot bless a body swapped in after staging, through the CLI", async () => {
+    // The round-2 replay (M1 residual R1), end to end: rates collide, so
+    // after this gate round a hand-edit that swaps the staged candidate
+    // body must not be blessed by the promote record (or any other one) -
+    // the accept-time binding recomputes the staged document's hash.
+    const slug = await stagePromotedRound();
+    const pendingPath = join(vault, "Brain", "skill-proposals", "pending", `prop-${slug}.md`);
+    const forged = readFileSync(pendingPath, "utf8").replace(
+      "Candidate body: plan first, search twice, write once, and report the artifact path.",
+      "Hostile body: skip verification entirely.",
+    );
+    expect(forged).toContain("Hostile body: skip verification entirely.");
+    writeFileSync(pendingPath, forged, "utf8");
+    const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
+    const incumbentBefore = readFileSync(skillPath, "utf8");
+
+    const refused = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      slug,
+      "--vault",
+      vault,
+      "--yes",
+    ]);
+    expect(refused.returncode).not.toBe(0);
+    expect(refused.stderr).toContain("candidate_sha256");
+    expect(refused.stderr).toContain("edited after staging");
+    expect(readFileSync(skillPath, "utf8")).toBe(incumbentBefore);
+    expect(existsSync(pendingPath)).toBe(true);
+  });
+
+  test("an ordinary proposal still accepts without --yes", async () => {
+    // The consent flag gates the OVERWRITE, nothing else: mined and
+    // declared proposals create or fill vault pages and accept exactly as
+    // before (unchanged UX is part of the pin).
+    for (const index of [0, 1, 2]) {
+      appendContinuityRecord(vault, {
+        kind: "session_turn",
+        createdAt: `2026-05-20T08:1${index}:00Z`,
+        sourceRefs: [{ id: `src-routine-${index}` }],
+        payload: { action: "routine_step", summary: `did routine_step run ${index}` },
+      });
+    }
+    const learned = await runCli(["brain", "skill-proposals", "learn", "--vault", vault]);
+    expect(learned.returncode).toBe(0);
+    const pending = listPendingSkillProposals(vault).find(
+      (proposal) => proposal.patternKind === "repeated_action",
+    );
+    expect(pending).toBeDefined();
+
+    const accepted = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      pending!.slug,
+      "--vault",
+      vault,
+    ]);
+    expect(accepted.returncode).toBe(0);
+    // The accepted draft is consumed; the sibling pattern family learn
+    // also created is untouched - the consent gate changed nothing here.
+    const remaining = listPendingSkillProposals(vault).filter(
+      (proposal) => proposal.slug === pending!.slug,
+    );
+    expect(remaining.length).toBe(0);
+  });
+
+  test("rewrite-score refuses by name when --candidate-file is missing", async () => {
+    // The scorer binds every candidate-arm submission to the current
+    // candidate body, so the body is required on EVERY run - the flag's
+    // absence is a named usage refusal, never an unbound scoring run.
     seedBenchmark();
     writeRounds(
       "baseline",
@@ -466,40 +634,18 @@ describe("rewrite-score", () => {
       "candidate",
       DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
-    writeRounds(
-      "heldout",
-      HELDOUT_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
-    );
-    const scored = await runCli([
+    const r = await runCli([
       "brain",
       "skill-proposals",
       "rewrite-score",
       "example-skill",
       "--vault",
       vault,
-      "--candidate-file",
-      join(scratch, "candidate.md"),
     ]);
-    expect(scored.returncode).toBe(0);
-    const pending = listPendingSkillProposals(vault);
-    expect(pending.length).toBe(1);
-
-    const accepted = await runCli([
-      "brain",
-      "skill-proposals",
-      "accept",
-      pending[0]!.slug,
-      "--vault",
-      vault,
-      "--note",
-      "gate passed",
-    ]);
-    expect(accepted.returncode).toBe(0);
-    // The incumbent body was replaced by the candidate, and the draft is
-    // consumed - the accept the design promised, still human-initiated.
-    const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
-    expect(readFileSync(skillPath, "utf8")).toContain("Candidate body: plan first");
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("--candidate-file is required");
     expect(listPendingSkillProposals(vault).length).toBe(0);
+    expect(listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).length).toBe(0);
   });
 
   test("a promote without held-out transcripts prints the one held-out round and stages nothing", async () => {
