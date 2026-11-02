@@ -17,6 +17,7 @@ import { PACK_TOOLS } from "./brain/pack-tools.ts";
 import { QUERY_TOOLS } from "./brain/query-tools.ts";
 import { ENTITY_TOOLS } from "./brain/entity-tools.ts";
 import { HEALTH_TOOLS } from "./brain/health-tools.ts";
+import { ATTEST_TOOLS } from "./brain/attest-tools.ts";
 import { BRIEF_TOOLS } from "./brain/brief-tools.ts";
 import { ANALYTICS_TOOLS } from "./brain/analytics-tools.ts";
 import { KNOWLEDGE_TOOLS } from "./brain/knowledge-tools.ts";
@@ -58,6 +59,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...QUERY_TOOLS,
   ...ENTITY_TOOLS,
   ...HEALTH_TOOLS,
+  ...ATTEST_TOOLS,
   ...BRIEF_TOOLS,
   ...ANALYTICS_TOOLS,
   ...KNOWLEDGE_TOOLS,

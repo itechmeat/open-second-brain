@@ -9,7 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
-import { pathIsInside } from "../path-safety.ts";
+import { pathIsInside, posixRel } from "../path-safety.ts";
 import { BRAIN_STATE_REL, isBrainLogRel, isCompiledDigestRel } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -68,16 +68,37 @@ export function readCachedFrontmatterEntry(
   vault: string,
   path: string,
 ): CachedFrontmatter {
-  const cached = cache.get(path);
+  // One spelling per (vault, rel): fold Windows separators before the
+  // cache key and the join, so a caller handed `notes\page.md` and one
+  // handed `notes/page.md` share one cached entry - and one read - of
+  // the same logical page where `\` is a separator. Where it is a legal
+  // filename character the rel passes through unchanged, and the
+  // containment check below judges exactly that spelling.
+  const rel = posixRel(path);
+  // Containment of the JOINED path inside the vault, before cache or
+  // read: a rel that climbs out of the vault names no page, and probing
+  // it would open - and parse - a file BESIDE the vault. The check is
+  // lexical, against traversal only: both sides are resolved (collapsing
+  // `..` segments) and compared on the host's own separator, so a
+  // symlink inside the vault is judged by its spelled place, exactly as
+  // the vault walk that produced the rel saw it. The refusal is the
+  // unreadable verdict every caller of this helper already fails closed
+  // on.
+  if (!pathIsInside(join(vault, rel), vault)) {
+    const refusal: CachedFrontmatter = Object.freeze({ meta: {}, unreadable: true });
+    cache.set(rel, refusal);
+    return refusal;
+  }
+  const cached = cache.get(rel);
   if (cached !== undefined) return cached;
-  const [meta, , notices] = parseFrontmatterWithNotices(join(vault, path), {
+  const [meta, , notices] = parseFrontmatterWithNotices(join(vault, rel), {
     site: FRONTMATTER_CACHE_SITE,
   });
   const entry: CachedFrontmatter = Object.freeze({
     meta,
     unreadable: notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable),
   });
-  cache.set(path, entry);
+  cache.set(rel, entry);
   return entry;
 }
 

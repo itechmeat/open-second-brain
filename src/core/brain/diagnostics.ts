@@ -61,6 +61,8 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_CODE,
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
+import { ATTESTATION_CHECK_CODE } from "./doctor/attestation-check.ts";
+import { RECEIPT_CONTENT_DRIFT_CODE } from "./doctor/receipt-content-drift-check.ts";
 import { GIT_TRACKED_DERIVED_STATE_CODE } from "./doctor/git-tracked-state-check.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
@@ -104,6 +106,16 @@ export interface DiagnosticSignal {
  */
 export const SEARCH_INDEX_MISSING_CODE = "search-index-missing";
 export const SEARCH_INDEX_CORRUPT_CODE = "search-index-corrupt";
+
+/**
+ * The two attest-CLI states named here so the verb and the registry
+ * entry cannot drift into two spellings of one code, the same
+ * one-definition shape the search-index pair above uses. Neither is a
+ * doctor check's code: both are stdout forward-pointer states of
+ * `o2b brain attest` itself.
+ */
+export const ATTESTATIONS_ABSENT_CODE = "attestations-absent";
+export const ATTESTATION_STORE_DAMAGED_CODE = "attestation-store-damaged";
 
 /**
  * The state the memory-graph repair lane's holdout gate refuses in: at
@@ -563,6 +575,55 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The attestation liveness check's one code (delivery trust,
+        // t_3bdb82b0): the newest attestation is past its window, the
+        // signing key is gone while signed evidence exists, or a shard
+        // diverged or went missing since it was signed. The exit is the
+        // verifier, the check's damage-first answer, which re-measures the
+        // store against the newest signed point and prints the per-shard
+        // verdicts an operator needs before re-signing - and
+        // `autoRepairable` stays false for the same reason
+        // `log-chain-broken` above does: the verifier reports, nothing
+        // repairs, and the follow-up (keygen, then sign) is the
+        // operator's act. Imported from the check module rather than
+        // spelled as a literal, keeping one definition; the direction of
+        // the import is the safe one (the check never imports this
+        // module), so the exit census reading the check's imports back
+        // sees nothing new.
+        code: ATTESTATION_CHECK_CODE,
+        issueClass: "newest store attestation stale, unkeyed, or diverged from the store",
+        nextCommand: "o2b brain attest verify",
+        autoRepairable: false,
+      },
+      {
+        // The attest CLI's empty-list state (delivery-trust wave): the
+        // vault holds no signed attestation, so `o2b brain attest list`
+        // has nothing to print and the operator's next act is to mint
+        // one - which needs the operator's key, so `autoRepairable`
+        // stays false. Named here beside the constant the verb imports,
+        // the same one-definition shape the search-index codes above
+        // use for their CLI-facing states.
+        code: ATTESTATIONS_ABSENT_CODE,
+        issueClass: "no store attestation on record for this vault",
+        nextCommand: "o2b brain attest sign",
+        autoRepairable: false,
+      },
+      {
+        // The attest CLI's diverged-verify state (delivery-trust wave):
+        // the per-shard verdict found damage - an edited or removed
+        // shard, or an invalid signature - and the verifier's own exit
+        // is the report, not a repair. The forward pointer is the log
+        // chain's verifier rather than `o2b brain attest verify` again:
+        // the operator has just run it, and whether the log chain
+        // itself still links up is the adjacent question the damage
+        // raises. `autoRepairable` stays false: nothing repairs a
+        // diverged store, the operator investigates.
+        code: ATTESTATION_STORE_DAMAGED_CODE,
+        issueClass: "store diverged from the point the newest attestation vouches for",
+        nextCommand: "o2b brain log verify",
+        autoRepairable: false,
+      },
+      {
         // A payload file nothing in the vault references. Spelled as a
         // literal for the same reason `vault-frozen` above is. The exit
         // is the gc verb, which is dry-run by default: the operator
@@ -684,6 +745,16 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "receipt-ledger-growth",
         issueClass: "receipt ledgers holding more foldable records than the growth threshold",
         nextCommand: "o2b brain receipts scan",
+        autoRepairable: false,
+      },
+      {
+        // Receipt content drift (t_4300e5fd): receipts the verify kernel re-hashes
+        // against the vault report changed items. The act this finding asks for is
+        // INSPECTION - which items drifted and whether the edit was legitimate - so
+        // the row points at the per-receipt verify verb.
+        code: RECEIPT_CONTENT_DRIFT_CODE,
+        issueClass: "recent context receipts re-verifying with changed item content",
+        nextCommand: "o2b brain context-receipts verify <receipt-id>",
         autoRepairable: false,
       },
       {

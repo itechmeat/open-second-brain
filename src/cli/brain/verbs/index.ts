@@ -20,6 +20,7 @@ export { cmdBrainWrites } from "./writes.ts";
 export { cmdBrainReject } from "./reject.ts";
 export { cmdBrainFreeze, cmdBrainUnfreeze } from "./freeze.ts";
 export { cmdBrainLogVerify, handleBrainLogSubcommand } from "./log.ts";
+export { cmdBrainAttest } from "./attest.ts";
 export { cmdBrainPin, cmdBrainUnpin } from "./pin.ts";
 export { cmdBrainState } from "./state.ts";
 export { cmdBrainSetPrimary } from "./set-primary.ts";

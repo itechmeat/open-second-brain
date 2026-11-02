@@ -33,6 +33,7 @@ import {
   cmdBrainPin,
   cmdBrainUnfreeze,
   handleBrainLogSubcommand,
+  cmdBrainAttest,
   cmdBrainUnpin,
   cmdBrainState,
   cmdBrainSetPrimary,
@@ -276,6 +277,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainUnfreeze(rest);
       case "log":
         return await handleBrainLogSubcommand(rest);
+      case "attest":
+        return await cmdBrainAttest(rest);
       case "pin":
         return await cmdBrainPin(rest);
       case "unpin":

@@ -23,6 +23,17 @@ function compareStable(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * The delivered text a deduplicated repeated item carries: one
+ * deterministic sentence naming the first copy. Shared with the receipt
+ * verify kernel, whose re-derivation must produce the same bytes the
+ * writer delivered, so the two cannot drift about the replacement's
+ * spelling.
+ */
+export function dedupReplacementText(firstId: string): string {
+  return `Repeated context omitted; see ${firstId}.`;
+}
+
 export function applyContextTransforms<T extends ContextTransformItem>(
   items: ReadonlyArray<T>,
   opts: ContextTransformOptions | undefined,
@@ -57,14 +68,13 @@ export function applyContextTransforms<T extends ContextTransformItem>(
       return base;
     }
 
-    const referenceHint = `see ${firstId}`;
-    const body = `Repeated context omitted; ${referenceHint}.`;
+    const body = dedupReplacementText(firstId);
     return {
       ...base,
       body,
       tokens: estimateTokens(body),
       dedupedFrom: firstId,
-      referenceHint,
+      referenceHint: `see ${firstId}`,
     };
   });
 

@@ -6,6 +6,10 @@ import {
   summarizeContextReceipt,
   type ReceiptReplyPresenceJoin,
 } from "../../../core/brain/context-receipts.ts";
+import {
+  verifyContextReceipt,
+  type ReceiptVerification,
+} from "../../../core/brain/context-receipts-verify.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 export async function cmdBrainContextReceipts(argv: string[]): Promise<number> {
@@ -13,7 +17,8 @@ export async function cmdBrainContextReceipts(argv: string[]): Promise<number> {
   const rest = argv.slice(1);
   if (subcommand === "list") return listReceipts(rest);
   if (subcommand === "show") return showReceipt(rest);
-  throw new CliError("brain context-receipts: expected list or show");
+  if (subcommand === "verify") return verifyReceipt(rest);
+  throw new CliError("brain context-receipts: expected list, show, or verify");
 }
 
 function listReceipts(argv: string[]): number {
@@ -101,6 +106,80 @@ function showReceipt(argv: string[]): number {
   }
   if (summary.reply_presence) printReplyPresence(summary.reply_presence);
   return 0;
+}
+
+/**
+ * Re-hash verification of one receipt (t_4300e5fd), over the same K2
+ * kernel the MCP verify operation serves.
+ *
+ * The CLI is an operator surface at local reach by construction, so the
+ * refusals it performs are the ones that are not about reach: an
+ * unknown id names the id (a usage error), and a receipt the session
+ * fold withholds - `private` or `redacted` - is refused symmetrically,
+ * on stderr, with exit 1. Exit 0 means nothing reported CHANGED; exit 1
+ * means it did, and the offending item ids are named.
+ */
+function verifyReceipt(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const id = trimOrUndefined(positional[0]);
+  if (id === undefined) {
+    throw new CliError("brain context-receipts verify: receipt id is required");
+  }
+  const vault = brainVerbContext(flags).vault;
+  const receipt = getContextReceipt(vault, id);
+  if (receipt === null) {
+    throw new CliError(`brain context-receipts verify: receipt not found: ${id}`);
+  }
+  if (receipt.private || receipt.redacted) {
+    const why = receipt.private ? "private" : "redacted";
+    process.stderr.write(
+      `brain context-receipts verify: receipt ${id} is flagged ${why} and is refused ` +
+        "symmetrically with the session fold, which withholds it whole\n",
+    );
+    return 1;
+  }
+  const verification = verifyContextReceipt(vault, receipt);
+
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(verification, null, 2) + "\n");
+    return verification.counts.changed > 0 ? 1 : 0;
+  }
+
+  printVerification(verification);
+  return verification.counts.changed > 0 ? 1 : 0;
+}
+
+/** The per-item verdict lines and the summary; a CHANGED verdict names its ids. */
+function printVerification(verification: ReceiptVerification): void {
+  process.stdout.write(`id: ${verification.receiptId}\n`);
+  process.stdout.write(`created_at: ${verification.createdAt}\n`);
+  process.stdout.write(`trigger: ${verification.trigger}\n`);
+  if (verification.sessionInjected) {
+    process.stdout.write(
+      "session_inject: this receipt records no delivered text, so no item is " +
+        "verifiable by construction\n",
+    );
+  }
+  process.stdout.write(`items:\n`);
+  for (const item of verification.items) {
+    const reason = item.unavailableReason === null ? "" : ` (${item.unavailableReason})`;
+    process.stdout.write(`  ${item.verdict.padEnd(12)}${item.id}  ${item.path ?? "-"}${reason}\n`);
+    if (item.note !== null) process.stdout.write(`    ${item.note}\n`);
+  }
+  const { match, changed, unavailable } = verification.counts;
+  process.stdout.write(
+    `verified ${verification.items.length} item(s): ${match} match, ${changed} changed, ` +
+      `${unavailable} unavailable\n`,
+  );
+  if (changed > 0) {
+    const offending = verification.items
+      .filter((item) => item.verdict === "changed")
+      .map((item) => item.id);
+    process.stdout.write(`changed item(s): ${offending.join(", ")}\n`);
+  }
 }
 
 /** Render the reply-presence join; the unjoined outcome names why, never a blank. */

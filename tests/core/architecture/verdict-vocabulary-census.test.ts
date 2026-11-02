@@ -509,6 +509,19 @@ import {
   isAnswerQuoteVerdict,
 } from "../../../src/core/brain/answer-quotes/check.ts";
 import {
+  DELIVERY_TREATMENT,
+  DELIVERY_TREATMENTS,
+  isDeliveryTreatment,
+} from "../../../src/core/brain/delivery-shaping.ts";
+import {
+  isReceiptVerifyUnavailableReason,
+  isReceiptVerifyVerdict,
+  RECEIPT_VERIFY_UNAVAILABLE_REASON,
+  RECEIPT_VERIFY_UNAVAILABLE_REASONS,
+  RECEIPT_VERIFY_VERDICT,
+  RECEIPT_VERIFY_VERDICTS,
+} from "../../../src/core/brain/context-receipts-verify.ts";
+import {
   ARCHIVE_VERIFICATION,
   ARCHIVE_VERIFICATIONS,
   isArchiveVerification,
@@ -1625,6 +1638,40 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isAnswerQuoteVerdict,
   },
   {
+    // What a delivery does with one stored record's text on its way out
+    // (delivery-trust wave, Lane A). The pair is closed because there are
+    // exactly two things a read face can do: hand the stored bytes over
+    // (`plain`, earned only by a page stamped origin_channel: cli with no
+    // other marker) or fence them (`fenced`, the fail-closed answer every
+    // absence resolves to). A third member would be a new delivery
+    // contract and has to register here.
+    name: "DELIVERY_TREATMENT",
+    values: DELIVERY_TREATMENT,
+    members: DELIVERY_TREATMENTS,
+    guard: isDeliveryTreatment,
+  },
+  {
+    // What re-hashing one context-receipt item concluded (delivery-trust
+    // wave, Lane B). The verdict rides the MCP and CLI verify faces and
+    // the drift doctor's counts, so every member must survive the round
+    // trip through a string; a fourth member would be a new verify
+    // contract and has to register here.
+    name: "RECEIPT_VERIFY_VERDICT",
+    values: RECEIPT_VERIFY_VERDICT,
+    members: RECEIPT_VERIFY_VERDICTS,
+    guard: isReceiptVerifyVerdict,
+  },
+  {
+    // Why a receipt item could not be re-verified at all (delivery-trust
+    // wave, Lane B). It rides the same faces as the verdict beside it, so
+    // a reason added to the object and forgotten in the list is one no
+    // caller can narrow.
+    name: "RECEIPT_VERIFY_UNAVAILABLE_REASON",
+    values: RECEIPT_VERIFY_UNAVAILABLE_REASON,
+    members: RECEIPT_VERIFY_UNAVAILABLE_REASONS,
+    guard: isReceiptVerifyUnavailableReason,
+  },
+  {
     // What comparing a stamped archive digest against the entry it names
     // concluded (answer-trust wave, Lane C). It rides the capture-scope
     // detector's finding evidence and the archive read op, and the pair it
@@ -2000,7 +2047,10 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // the content-class stamp's one-member vocabulary, complete with its
 // membership list and `unknown` guard from the start, enrolled here when
 // the egress census that reads it landed (task E4).
-const VOCABULARY_POPULATION = 105;
+// 107/108: RECEIPT_VERIFY_VERDICT and RECEIPT_VERIFY_UNAVAILABLE_REASON
+// (delivery-trust fix wave 1) - lane B's closed verify vocabularies ship
+// their membership lists and guards so the scanner can see them.
+const VOCABULARY_POPULATION = 108;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

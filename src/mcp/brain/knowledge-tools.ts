@@ -42,6 +42,7 @@ import { everyArtifactRefView, type ArtifactRefView } from "../../core/brain/art
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
+import { deliveryView } from "./reach-events.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { normalizeEntityName } from "../../core/brain/entities/canonical.ts";
@@ -945,12 +946,19 @@ function toolBrainCodegraphReport(
 
 // ----- brain_claims (Belief lifecycle suite, A3) -----------------------------
 
-function renderClaimNode(n: ClaimNode): Record<string, unknown> {
+function renderClaimNode(
+  delivery: ReturnType<typeof deliveryView>,
+  n: ClaimNode,
+): Record<string, unknown> {
   return {
     id: n.id,
     path: n.path,
     topic: n.topic,
-    principle: n.principle,
+    // The principle is the record's own stored text (delivery-trust,
+    // lane A): shaped through the request's delivery binding at the
+    // claim's own page - the same text brain_query fences inside the
+    // preference payloads - so the graph view is not the unfenced copy.
+    principle: delivery.shape(n.principle, n.path),
     valid_from: n.valid_from,
     valid_until: n.valid_until,
     superseded_by: n.superseded_by,
@@ -986,6 +994,9 @@ function toolBrainClaims(
   // superseded or contest it.
   const owner = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   const reach = reachView(ctx.vault, contextReach(ctx));
+  // The delivery binding (delivery-trust, lane A): one reach resolution
+  // and one frontmatter cache for every principle this tool returns.
+  const delivery = deliveryView(ctx);
   const shown = (n: ClaimNode): boolean =>
     owner.row(n.path, n.id) &&
     reach.row(
@@ -1008,12 +1019,16 @@ function toolBrainClaims(
     case "replaced": {
       const id = coerceStr(args, "id", true)!;
       const tip = whatReplaced(resolveClaimGraph(ctx.vault), id);
-      return { operation, id, tip: tip !== null && shown(tip) ? renderClaimNode(tip) : null };
+      return {
+        operation,
+        id,
+        tip: tip !== null && shown(tip) ? renderClaimNode(delivery, tip) : null,
+      };
     }
     case "contests": {
       const id = coerceStr(args, "id", true)!;
       const rows = visible(whatContests(resolveClaimGraph(ctx.vault), id));
-      return { operation, id, claims: rows.map(renderClaimNode) };
+      return { operation, id, claims: rows.map((n) => renderClaimNode(delivery, n)) };
     }
     case "at": {
       const at = coerceStr(args, "at", true)!;
@@ -1026,15 +1041,28 @@ function toolBrainClaims(
         );
       }
       const rows = visible(truthAt(resolveClaimGraph(ctx.vault), probe));
-      return { operation, at, count: rows.length, claims: rows.map(renderClaimNode) };
+      return {
+        operation,
+        at,
+        count: rows.length,
+        claims: rows.map((n) => renderClaimNode(delivery, n)),
+      };
     }
     case "history": {
       const rows = visible(allClaims(resolveClaimGraph(ctx.vault)));
-      return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
+      return {
+        operation,
+        count: rows.length,
+        claims: rows.map((n) => renderClaimNode(delivery, n)),
+      };
     }
     case "current": {
       const rows = visible(currentTruth(resolveClaimGraph(ctx.vault)));
-      return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
+      return {
+        operation,
+        count: rows.length,
+        claims: rows.map((n) => renderClaimNode(delivery, n)),
+      };
     }
     default:
       throw unknownOperationError(

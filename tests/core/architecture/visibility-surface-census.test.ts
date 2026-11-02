@@ -516,7 +516,24 @@ function discoverMcpToolPopulation(
  */
 const MCP_SOURCE_TREE = [...readTree(MCP_ROOT), ...readTree(OPENCLAW_ROOT)];
 const REAL_TOOL_NAMES: ReadonlySet<string> = new Set(buildToolTable("full").map((t) => t.name));
-const MCP_TOOL_POPULATION = discoverMcpToolPopulation(MCP_SOURCE_TREE, REAL_TOOL_NAMES);
+
+/**
+ * `brain_attestations` joins the population BY HAND, and this is its
+ * stated reason: the sweep's population unit is the note-content import,
+ * and its file will never make one - the tool reads attestation records
+ * under `.open-second-brain/attestations/` and re-measures the Brain log,
+ * handing back ids, timestamps, device ids, shard names, hashes and
+ * verdicts, never a page path, title or body. Naming a false producer to
+ * sweep it in would corrupt the vocabulary this census's docblock
+ * defines, so the row enters here instead, where the exception is one
+ * findable sentence rather than a lie about what the sweep found. The
+ * registry row it legitimates classifies the tool as excluded, which is
+ * the classification its absence of page content deserves.
+ */
+const MCP_TOOL_POPULATION: ReadonlySet<string> = new Set([
+  ...discoverMcpToolPopulation(MCP_SOURCE_TREE, REAL_TOOL_NAMES),
+  "brain_attestations",
+]);
 
 const REGISTRY_BY_KIND = (
   kind: (typeof VISIBILITY_SURFACE_KIND)[keyof typeof VISIBILITY_SURFACE_KIND],
@@ -618,12 +635,22 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * `pledge-tools.ts`'s two registrations: `brain_pledge` and
  * `brain_intake_pledges`. Both ask readableAtContextReach before a pledge
  * page is read or written, so both classify as covered.
+ *
+ * 87 -> 88: `brain_attestations` (delivery trust) joins by hand, not by
+ * the sweep - its file imports no note-content primitive and never will,
+ * because the tool reads no note content (see the population's own
+ * docblock above). Classified excluded: attestation evidence carries no
+ * page content at any reach.
  */
-const MCP_TOOL_POPULATION_SIZE = 87;
+const MCP_TOOL_POPULATION_SIZE = 88;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
-/** Measured: hand-enumerated CLI verb mirrors. */
-const CLI_VERB_POPULATION_SIZE = 20;
+/**
+ * Measured: hand-enumerated CLI verb mirrors. 20 -> 21: `brain attest`
+ * (delivery trust) joins as the CLI mirror of `brain_attestations`; the
+ * keygen and sign subverbs are operator-only and read no vault page.
+ */
+const CLI_VERB_POPULATION_SIZE = 21;
 
 describe("visibility surface census", () => {
   test("every category is one of the two closed values", () => {

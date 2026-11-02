@@ -83,8 +83,23 @@ function seedUnreadable(overrides: Partial<InsightCandidate> = {}): string {
  * Seed the finding the core scan tests use (a burst of confirmed
  * preferences): the one vault shape whose `scan` produces candidates on
  * its own, so a rescan after the finding is silenced lands in `skipped`.
+ *
+ * The burst dates are relative to the run clock, not fixed calendar
+ * days: `brain trigger scan` drives the production path, whose
+ * semantic-health source judges the real wall clock, and evidence on a
+ * fixed past day crosses the 180-day stale-claim window as the calendar
+ * advances - each member then also fires a stale_claim trigger and the
+ * scan no longer creates exactly the one batch finding.
  */
 const BURST_SIZE = 6;
+const HOUR_MS = 60 * 60 * 1000;
+// Eight hours back, so the last member (anchor + 5 h) is still in the past
+// and the whole burst sits inside the 24-hour batch-inflation window.
+const BURST_ANCHOR_MS = Date.now() - 8 * HOUR_MS;
+
+function burstHour(index: number): string {
+  return new Date(BURST_ANCHOR_MS + index * HOUR_MS).toISOString();
+}
 
 function seedBurstMember(index: number): void {
   writePreference(
@@ -93,14 +108,14 @@ function seedBurstMember(index: number): void {
       slug: `zzburst-${index}`,
       topic: `zzburst-topic-${index}`,
       principle: `Keep burst preference ${index} distinct from its siblings.`,
-      created_at: "2026-05-01T00:00:00Z",
-      unconfirmed_until: "2026-05-08T00:00:00Z",
+      created_at: new Date(BURST_ANCHOR_MS - 24 * HOUR_MS).toISOString(),
+      unconfirmed_until: new Date(BURST_ANCHOR_MS + 6 * 24 * HOUR_MS).toISOString(),
       status: BRAIN_PREFERENCE_STATUS.confirmed,
       evidenced_by: [],
-      confirmed_at: `2026-05-02T0${index}:00:00Z`,
+      confirmed_at: burstHour(index),
       applied_count: 1,
       violated_count: 0,
-      last_evidence_at: "2026-05-02T00:00:00Z",
+      last_evidence_at: burstHour(index),
     },
     { overwrite: true },
   );

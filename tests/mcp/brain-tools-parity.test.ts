@@ -99,6 +99,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_anticipatory_context",
   "brain_append_note",
   "brain_apply_evidence",
+  "brain_attestations",
   "brain_audit",
   "brain_backlinks",
   "brain_benchmark",

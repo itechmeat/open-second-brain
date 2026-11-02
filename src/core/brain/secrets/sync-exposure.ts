@@ -25,6 +25,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+import { attestationKeyPaths, attestationKeysDir } from "../attestation/signing.ts";
 import { secretsDir } from "./store.ts";
 
 /** The marker Syncthing keeps at the root of every synced folder. */
@@ -133,12 +134,43 @@ function isIgnored(patterns: ReadonlyArray<IgnorePattern>, relPath: string): boo
 }
 
 /**
- * The exposure, or null when there is none to report: no secrets
- * directory, no Syncthing folder around the vault, or a `.stignore` that
- * already ignores the directory or one of its ancestors.
+ * The secrets store's exposure, or null when there is none to report.
  */
 export function secretsSyncExposure(vault: string): SecretsSyncExposure | null {
-  const dir = secretsDir(vault);
+  return dirSyncExposure(vault, secretsDir(vault));
+}
+
+/**
+ * The attestation signing key's exposure, under the same matcher. The
+ * private half lives beside the exported public one under the derived
+ * store and gets only git exclusion from keygen, so the same question
+ * the secrets family answers - does a synced folder carry it to every
+ * peer - is asked of it too, by the same doctor check. The suggested
+ * pattern names the PRIVATE half only: the public half is the copy that
+ * lets peers verify, and a pattern covering the whole directory would
+ * stop it from syncing and leave every peer with no key to verify
+ * against.
+ */
+export function attestationKeysSyncExposure(vault: string): SecretsSyncExposure | null {
+  const { privatePath } = attestationKeyPaths(vault);
+  // Nothing secret, nothing to report: without the private half the
+  // directory holds only the exportable public one.
+  if (!existsSync(privatePath)) return null;
+  return dirSyncExposure(vault, attestationKeysDir(vault), privatePath);
+}
+
+/**
+ * The exposure for one directory, or null when there is none to report:
+ * the directory is absent, no Syncthing folder around the vault, or a
+ * `.stignore` that already ignores the directory or one of its ancestors.
+ * `targetPath`, when offered, is the file the suggested pattern names -
+ * the private keyfile - instead of the directory itself.
+ */
+function dirSyncExposure(
+  vault: string,
+  dir: string,
+  targetPath?: string,
+): SecretsSyncExposure | null {
   if (!existsSync(dir)) return null;
   // Syncthing walks real directories and does not follow symbolic links,
   // so the question is asked of the real paths: a vault reached through a
@@ -146,9 +178,10 @@ export function secretsSyncExposure(vault: string): SecretsSyncExposure | null {
   // target sits in, and a secrets directory that links out of the folder
   // is not carried by it.
   const realDir = realPathOrResolved(dir);
+  const realTarget = targetPath !== undefined ? realPathOrResolved(targetPath) : realDir;
   const root = syncthingFolderRoot(realPathOrResolved(vault));
   if (root === null) return null;
-  const relNative = relative(root, realDir);
+  const relNative = relative(root, realTarget);
   if (relNative === "" || relNative === ".." || relNative.startsWith(`..${sep}`)) return null;
   const rel = relNative.split(sep).join("/");
   const stignorePath = join(root, STIGNORE_FILE);
@@ -181,6 +214,35 @@ export function formatSecretsSyncExposure(exposure: SecretsSyncExposure): string
     `${STIGNORE_FILE} does not ignore it, so the keyfile and the ciphertext it decrypts sync ` +
     `to every peer (Syncthing does not read .gitignore). Add this line to ` +
     `${exposure.stignorePath}: ${exposure.suggestedPattern}`
+  );
+}
+
+/**
+ * The same gap, stated for the ATTESTATION signing key: what would sync
+ * is the private half of the operator's Ed25519 keypair, so the sentence
+ * names that instead of the custody store's keyfile-and-ciphertext pair.
+ */
+export function formatAttestationKeysSyncExposure(exposure: SecretsSyncExposure): string {
+  return (
+    `the attestation signing key sits inside a Syncthing folder (${exposure.folderRoot}) ` +
+    `whose ${STIGNORE_FILE} does not ignore it, so the private half would sync to every ` +
+    "peer (Syncthing does not read .gitignore). Add this line to " +
+    `${exposure.stignorePath}: ${exposure.suggestedPattern}`
+  );
+}
+
+/**
+ * The attestation gap, stated for a PASSPHRASE-WRAPPED private half: what
+ * would sync is the envelope, and the passphrase is the only protection
+ * left against offline guessing on a peer - the same residual the custody
+ * store's wrapped wording names.
+ */
+export function formatAttestationWrappedKeysSyncExposure(exposure: SecretsSyncExposure): string {
+  return (
+    `the passphrase-wrapped attestation signing key sits inside a Syncthing folder ` +
+    `(${exposure.folderRoot}) whose ${STIGNORE_FILE} does not ignore it, so the envelope ` +
+    "syncs to every peer and the passphrase is the only protection left against offline " +
+    `guessing there. Add this line to ${exposure.stignorePath}: ${exposure.suggestedPattern}`
   );
 }
 

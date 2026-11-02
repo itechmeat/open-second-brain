@@ -78,6 +78,10 @@ import {
   retiredPath,
   validateIsoDate,
   validateSlug,
+  BRAIN_ACTIVE_FILE,
+  BRAIN_LESSONS_FILE,
+  BRAIN_PREFERENCES_REL,
+  BRAIN_ROOT_REL,
 } from "../core/brain/paths.ts";
 import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
 import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
@@ -92,6 +96,12 @@ import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
 import { parseLogDayFile, renderLogEntryBlock, type ParseLogDayResult } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
+import {
+  deliveryRelForBrainArtifact,
+  deliveryView,
+  signalDeliveryRel,
+  UNPROBED_DELIVERY_REL,
+} from "./brain/reach-events.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 export interface ResourceContext {
@@ -144,6 +154,15 @@ export interface ResourceContent {
 }
 
 const MIME_MARKDOWN = "text/markdown";
+
+/**
+ * Vault-relative paths of the two generated digest files, the probes the
+ * delivery binding names when one of them is what a reader delivers
+ * (delivery-trust, lane A). The files are the system's own render, so
+ * the derivation reads THEIR absence of stamps rather than guessing.
+ */
+const ACTIVE_REL = `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`;
+const LESSONS_REL = `${BRAIN_ROOT_REL}/${BRAIN_LESSONS_FILE}`;
 
 const CONCRETE: ReadonlyArray<ResourceDescriptor> = [
   {
@@ -288,6 +307,21 @@ function notFound(id: string): MCPError {
   return new MCPError(INTERNAL_ERROR, new BrainNotFoundError(id).message);
 }
 
+/**
+ * The delivery binding for one resource read (delivery-trust, lane A):
+ * the same binding every report-shaped tool shares, bound to the request
+ * the resource view already resolved. At local reach `shape` is the
+ * identity and no probe runs - the operator's own readers keep the
+ * pre-wave bytes; at remote reach the markdown of the readers that
+ * deliver stored-record text is fenced through the K1 shaper, the
+ * fence's origin naming the governing page's derived provenance. One
+ * binding per read: `readResource` dispatches to exactly one reader, so
+ * one frontmatter cache serves the whole request.
+ */
+function deliveryFor(ctx: ResourceContext, view: RequestView): ReturnType<typeof deliveryView> {
+  return deliveryView({ vault: ctx.vault, configPath: null, repoRoot: null, reach: view.reach });
+}
+
 // ----- URI parsing ---------------------------------------------------------
 
 type Parsed =
@@ -364,7 +398,15 @@ function readActive(ctx: ResourceContext, uri: string, view: RequestView): Resou
     ...(view.ownerScope !== null ? { agentScope: view.ownerScope } : {}),
     restricted: view.reach !== TRANSPORT_REACH.local,
   });
-  return { uri, mimeType: MIME_MARKDOWN, text };
+  return {
+    uri,
+    mimeType: MIME_MARKDOWN,
+    // The digest quotes stored principles (delivery-trust, lane A): the
+    // delivery is fenced at remote reach, named for the generated file's
+    // own absence of stamps - the system's render is not operator prose,
+    // and the derivation says so rather than guessing authorship.
+    text: deliveryFor(ctx, view).shape(text, ACTIVE_REL),
+  };
 }
 
 function readLessons(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
@@ -384,10 +426,15 @@ function readLessons(ctx: ResourceContext, uri: string, view: RequestView): Reso
   }
   // A local reader with no owner scope is served the shared file as it
   // is; any other reader gets the digest rendered without the records it
-  // cannot see, scored and stamped at the generation on disk.
-  if (view.refs.filtersNothing) return readMarkdown(uri, path);
-  const text = renderLessonsForReader(ctx.vault, { readable: view.refs.visible }).document;
-  return { uri, mimeType: MIME_MARKDOWN, text };
+  // cannot see, scored and stamped at the generation on disk. Either way
+  // the delivered markdown is the lessons corpus quoting stored
+  // principles (delivery-trust, lane A): fenced at remote reach, named
+  // for the generated file's own absence of stamps.
+  const delivery = deliveryFor(ctx, view);
+  const text = view.refs.filtersNothing
+    ? readMarkdown(uri, path).text
+    : renderLessonsForReader(ctx.vault, { readable: view.refs.visible }).document;
+  return { uri, mimeType: MIME_MARKDOWN, text: delivery.shape(text, LESSONS_REL) };
 }
 
 function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
@@ -404,7 +451,15 @@ function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView):
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: rendered.content,
+    // The digest quotes stored principles (delivery-trust, lane A) in the
+    // same render family as the active and lessons digests, so it shapes
+    // through the same binding: fenced at remote reach, named for the
+    // compiled-digest render's own absence of stamps - the system's voice
+    // is not operator prose, and the derivation says so rather than
+    // guessing authorship. The probe rel names that family's on-disk
+    // member (BRAIN_COMPILED_DIGEST_RELS), whose generated page carries
+    // no stamps, the exact probe readActive's render makes.
+    text: deliveryFor(ctx, view).shape(rendered.content, ACTIVE_REL),
   };
 }
 
@@ -480,7 +535,19 @@ function readPreference(
   // not - the presence of the prefix a one-bit existence oracle over the
   // whole reserved population.
   if (!view.refs.visible(resolvedId)) throw notFound(normalized);
-  return readMarkdown(uri, filePath);
+  const file = readMarkdown(uri, filePath);
+  return {
+    ...file,
+    // The whole file - frontmatter and body - is the delivery
+    // (delivery-trust, lane A): fenced at remote reach through the
+    // binding, named for the page's own derived provenance; local keeps
+    // the bytes. The probe asks the RESOLVED page - the id the
+    // active-to-retired fallback answered - never the caller's spelling.
+    text: deliveryFor(ctx, view).shape(
+      file.text,
+      deliveryRelForBrainArtifact(ctx.vault, resolvedId),
+    ),
+  };
 }
 
 function readTopic(
@@ -520,11 +587,33 @@ function readTopic(
     signals: view.refs.keep(result.signals, (s) => [s.id]),
     all_log_events: logEntriesAtReach(view.refs, result.all_log_events),
   });
-  return {
-    uri,
-    mimeType: MIME_MARKDOWN,
-    text: renderTopicMarkdown(rawSlug, scoped),
-  };
+  // The synthesis is composed from spans shaped at the page each span
+  // quotes (delivery-trust, lane A): the body under the governing
+  // preference page's provenance - a topic with no current rule probes
+  // the page that would hold it, the absent-page fail-closed answer -
+  // and the objection block under the page ITS text quotes, because the
+  // strongest objection may quote an agent-authored counter-signal
+  // whose page is not the page that decided the body's treatment.
+  const delivery = deliveryFor(ctx, view);
+  const preferenceRel = result.preference
+    ? deliveryRelForBrainArtifact(ctx.vault, result.preference.id)
+    : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`;
+  const objection = topicObjectionSection(ctx.vault, scoped);
+  let text: string;
+  if (objection.rel === null) {
+    // The block quotes the governing preference itself (or no page at
+    // all): one document, one probe. The trailing newline keeps the
+    // unfenced bytes identical to the pre-shaping document.
+    text = delivery.shape(
+      `${renderTopicMarkdown(rawSlug, scoped)}\n${objection.text}\n`,
+      preferenceRel,
+    );
+  } else {
+    text =
+      `${delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel)}\n` +
+      `${delivery.shape(objection.text, objection.rel)}\n`;
+  }
+  return { uri, mimeType: MIME_MARKDOWN, text };
 }
 
 function readLog(
@@ -613,13 +702,24 @@ function readBacklinks(
   // Every spelling the target answers to across its retirement: a
   // retired reserved record is otherwise asked as `pref-x`, which names
   // no page once `ret-x` is the one on disk.
-  const refs = view.refs.row(...recordRefs(target))
+  const targetVisible = view.refs.row(...recordRefs(target));
+  const refs = targetVisible
     ? (index.get(target) ?? []).filter((ref) => view.refs.visible(ref.source))
     : [];
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: renderBacklinksMarkdown(target, refs),
+    // The rendered document is derived from stored pages (delivery-trust,
+    // lane A): fenced at remote reach, named for the TARGET page's own
+    // derived provenance; local keeps the bytes. A withheld target probes
+    // the guaranteed-absent page instead: reading a hidden target's real
+    // stamps would name its existence and its channel through the fence's
+    // origin label, while an absent one reads as unverified - the two
+    // answers must stay identical.
+    text: deliveryFor(ctx, view).shape(
+      renderBacklinksMarkdown(target, refs),
+      targetVisible ? deliveryRelForBrainArtifact(ctx.vault, target) : UNPROBED_DELIVERY_REL,
+    ),
   };
 }
 
@@ -765,36 +865,56 @@ function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopi
     }
     lines.push("");
   }
-  // Steelman: always surface the single best-formed objection to the
-  // topic's implicit conclusion (the current preference) so a reader
-  // confronts the strongest dissent before acting. Deterministic
-  // selection — no generated prose — kept consistent with the
-  // deep-synthesis dossier.
-  lines.push("## Strongest objection");
-  lines.push("");
-  lines.push(`- ${buildTopicObjection(result)}`);
-  lines.push("");
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n") + "\n";
+}
+
+/**
+ * The rendered "Strongest objection" section, and the page whose
+ * provenance governs it: null rel when the block quotes the governing
+ * preference itself (retired, quarantined, unconfirmed) or no page at
+ * all, so the document's own probe covers it; the counter-signal's own
+ * page when the block quotes a negative signal's principle - agent-
+ * authored text from a DIFFERENT page than the preference that decided
+ * the document's treatment, which brain_query's signal payloads shape
+ * at the same page.
+ */
+function topicObjectionSection(
+  vault: string,
+  result: ReturnType<typeof queryByTopic>,
+): { readonly text: string; readonly rel: string | null } {
+  const sentence = buildTopicObjection(vault, result);
+  const text = `## Strongest objection\n\n- ${sentence.sentence}`;
+  return { text, rel: sentence.rel };
 }
 
 /**
  * The single best-formed reason to distrust the topic's current
  * preference, by fixed priority: an already-retired rule > a
  * quarantined rule > a recorded negative counter-signal > an
- * unconfirmed rule still in its trial window. Returns a "no standing
- * objection" line when none applies.
+ * unconfirmed rule still in its trial window, and a "no standing
+ * objection" sentence when none applies. The rel names the page the
+ * sentence quotes, for the section renderer to probe.
  */
-function buildTopicObjection(result: ReturnType<typeof queryByTopic>): string {
+function buildTopicObjection(
+  vault: string,
+  result: ReturnType<typeof queryByTopic>,
+): { readonly sentence: string; readonly rel: string | null } {
   const pref = result.preference;
   if (pref && pref.id.startsWith("ret-")) {
     const r = pref as BrainRetired;
-    return `This rule was already retired (\`${r.retired_reason}\`); adopting "${r.principle}" again would repeat a judgment the Brain has discarded.`;
+    return {
+      sentence: `This rule was already retired (\`${r.retired_reason}\`); adopting "${r.principle}" again would repeat a judgment the Brain has discarded.`,
+      rel: null,
+    };
   }
   if (pref) {
     const p = pref as BrainPreference;
     if (p.status === "quarantine") {
-      return `The rule "${p.principle}" is on probation — recent evidence has been dominantly negative, and a single further violation retires it.`;
+      return {
+        sentence: `The rule "${p.principle}" is on probation — recent evidence has been dominantly negative, and a single further violation retires it.`,
+        rel: null,
+      };
     }
   }
   const negatives = result.signals
@@ -802,13 +922,23 @@ function buildTopicObjection(result: ReturnType<typeof queryByTopic>): string {
     .toSorted((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   if (negatives.length > 0) {
     const n = negatives[0]!;
-    return `A recorded counter-signal (\`${n.id}\`) argues against this: "${n.principle}". Treat the preference as contested.`;
+    return {
+      sentence: `A recorded counter-signal (\`${n.id}\`) argues against this: "${n.principle}". Treat the preference as contested.`,
+      rel: signalDeliveryRel(vault, n.id),
+    };
   }
   if (pref) {
     const p = pref as BrainPreference;
     if (p.status === "unconfirmed") {
-      return `The rule "${p.principle}" is unconfirmed — it has not yet earned applied evidence and may not survive its trial window (until ${p.unconfirmed_until.slice(0, 10)}).`;
+      return {
+        sentence: `The rule "${p.principle}" is unconfirmed — it has not yet earned applied evidence and may not survive its trial window (until ${p.unconfirmed_until.slice(0, 10)}).`,
+        rel: null,
+      };
     }
   }
-  return "No standing objection: the current preference is confirmed and faces no recorded counter-signal.";
+  return {
+    sentence:
+      "No standing objection: the current preference is confirmed and faces no recorded counter-signal.",
+    rel: null,
+  };
 }

@@ -78,6 +78,13 @@ export interface LedgerShardGrammar {
   readonly base: string;
   /** Extensions, without the leading dot. */
   readonly extensions: ReadonlyArray<string>;
+  /**
+   * When true, only the bare `<base>.<ext>` name parses - the optional
+   * device-shard segment is refused. For a ledger whose writer names
+   * its file exactly once per directory (a watermark, a rendered
+   * digest), a shard-spelled name can only be a planted file.
+   */
+  readonly exact?: boolean;
 }
 
 /**
@@ -139,11 +146,14 @@ function nameRe(grammar: LedgerShardGrammar): RegExp {
   // JSON rather than a joined string: it needs no separator character,
   // so two grammars whose parts differ can never collide by having those
   // parts run together.
-  const key = JSON.stringify([grammar.base, grammar.extensions]);
+  const key = JSON.stringify([grammar.base, grammar.extensions, grammar.exact ?? false]);
   const cached = NAME_RE_CACHE.get(key);
   if (cached !== undefined) return cached;
   const exts = grammar.extensions.map(literalBase).join("|");
-  const re = new RegExp(`^(${grammar.base})(?:\\.(${SHARD_ID_PATTERN}))?\\.(${exts})$`);
+  // An exact grammar drops the optional shard segment entirely: its
+  // bare name is the only name the writer ever produces.
+  const shardGroup = grammar.exact === true ? "" : `(?:\\.(${SHARD_ID_PATTERN}))?`;
+  const re = new RegExp(`^(${grammar.base})${shardGroup}\\.(${exts})$`);
   NAME_RE_CACHE.set(key, re);
   return re;
 }
@@ -161,6 +171,9 @@ export function parseShardedName(
 ): ParsedShardedName | null {
   const m = nameRe(grammar).exec(name);
   if (m === null) return null;
+  // An exact grammar compiled without the shard group, so its second
+  // capture is the extension: the bare name is the empty shard.
+  if (grammar.exact === true) return { base: m[1]!, shardId: "", ext: m[2]! };
   const shardId = m[2] ?? "";
   if (shardId.startsWith(SYNC_CONFLICT_SHARD_PREFIX)) return null;
   return { base: m[1]!, shardId, ext: m[3]! };

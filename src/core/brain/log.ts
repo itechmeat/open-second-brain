@@ -45,6 +45,7 @@ import lockfile from "proper-lockfile";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import {
+  brainDirs,
   brainDirsForWrite,
   logPath,
   logShardJsonlPath,
@@ -53,7 +54,7 @@ import {
 } from "./paths.ts";
 import { WRITE_LANE } from "./freeze-marker.ts";
 import { isValidDeviceId } from "../config.ts";
-import { resolveAppendShardId } from "./ledger-shards.ts";
+import { listShardedFiles, resolveAppendShardId } from "./ledger-shards.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 import { PREF_ID_PREFIX } from "./dream-plan.ts";
@@ -281,12 +282,17 @@ export function parseLogDayFile(vault: string, date: string, path: string): Pars
  * tries again, up to `MAX_ATTEMPTS`. Any non-`ELOCKED` error is
  * rethrown immediately (permission, fs corruption, …).
  *
+ * Exported so the fixtures that reproduce log-lock contention hold the
+ * SAME lock the appender takes (the attestation digest and verify
+ * suites): if this site or its options move, the fixtures fail loudly
+ * instead of silently reproducing nothing.
+ *
  * Total worst-case wait: `MAX_ATTEMPTS * SLEEP_MS` ≈ 500 ms — short
  * enough to feel synchronous to a coding agent, long enough to ride
  * out a sibling `appendLogEvent` call that landed within the same
  * millisecond.
  */
-function acquireLogLock(logDir: string): () => void {
+export function acquireLogLock(logDir: string): () => void {
   const MAX_ATTEMPTS = 10;
   const SLEEP_MS = 50;
   let lastErr: unknown;
@@ -581,6 +587,71 @@ function lastChainHash(jsonl: string): string | null {
     if (typeof h === "string" && h !== "") return h;
   }
   return null;
+}
+
+/**
+ * The JSONL-only half of the log's shard grammar, for the head collector
+ * below. The recogniser itself lives in `ledger-shards.ts` like every
+ * other ledger's; the markdown twin is deliberately absent here because
+ * it is not chained and carries no head to collect. Exported so the
+ * attestation record reader validates manifest shard names against the
+ * ONE grammar the collector names them with - a second spelling would
+ * let the two drift apart.
+ */
+export const LOG_HEAD_GRAMMAR = Object.freeze({
+  base: "\\d{4}-\\d{2}-\\d{2}",
+  extensions: Object.freeze(["jsonl"]),
+});
+
+/**
+ * Every JSONL shard's chain head, keyed by the shard's file name.
+ *
+ * Exported for the attestation manifest (delivery trust): a signed
+ * record binds the log state, and the log shards per device per day, so
+ * what gets attested is this MAP and never a single head - there is no
+ * total order across shards, and one file's head says nothing about
+ * another's.
+ *
+ * The key is the shard's FILE NAME (`2026-06-03.jsonl`,
+ * `2026-06-03.device-b.jsonl`) rather than the bare device id the appender
+ * resolves: the same device writes one shard per day, so the device id
+ * alone would collide in a map that spans days. The file name is the
+ * shard's unique, stable identity in `Brain/log/`, and it is what a
+ * verifier needs to re-resolve the head to bytes.
+ *
+ * Each head is read under the SAME per-directory lock the appender takes
+ * ({@link acquireLogLock}), for the reason documented at the append site:
+ * a head read without the lock can name a line the appender has already
+ * superseded, and a signature computed over it would vouch for state that
+ * never existed as a whole. A store that cannot be locked or read refuses
+ * by throwing, exactly as {@link appendLogEvent} does - refusing to attest
+ * is the honest answer, and a silent empty map would be a signature over
+ * nothing. Shards whose lines carry no chain hash at all (pre-chain
+ * history) contribute no entry; their names are still covered by the
+ * attested ledger inventory, so nothing escapes the manifest.
+ *
+ * Returns `{}` for a vault with no log directory - there is nothing to
+ * attest, which is a fact about the store, not a failure.
+ */
+export function collectLogShardHeads(vault: string): Readonly<Record<string, string>> {
+  const logDir = brainDirs(vault).log;
+  if (!existsSync(logDir)) return {};
+  const heads: Record<string, string> = {};
+  const release = acquireLogLock(logDir);
+  try {
+    // The listing runs INSIDE the lock, beside the head reads it feeds:
+    // a shard created between an outside listing and the lock (a day
+    // rollover, a new device's first append) would escape the map and a
+    // signed manifest would vouch for a log that omits it.
+    const files = listShardedFiles(logDir, LOG_HEAD_GRAMMAR);
+    for (const file of files) {
+      const head = lastChainHash(readFileSync(file.path, "utf8"));
+      if (head !== null) heads[file.name] = head;
+    }
+  } finally {
+    release();
+  }
+  return heads;
 }
 
 // ----- Bullet block parser --------------------------------------------------

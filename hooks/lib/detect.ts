@@ -171,7 +171,7 @@ export function summarizeTurn(
  * renders byte-identical reminder text to the v0.10.4 baseline, so
  * a future runtime that breaks both signals never crashes the hook.
  */
-export type HookRuntime = "claudecode" | "codex" | "grok" | "unknown";
+export type HookRuntime = "claudecode" | "codex" | "grok" | "opencode" | "unknown";
 
 const CLAUDE_TRANSCRIPT_NEEDLES = ["/.claude/projects/", "/.claude/sessions/"] as const;
 const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
@@ -183,16 +183,23 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  *   1. Grok: camelCase payload shape (`hookEventName` / `workspaceRoot`) or a
  *      `GROK_*` hook env var. Grok ships no `transcript_path` and uses
  *      camelCase keys Claude/Codex never send, so this is unambiguous.
- *   2. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
- *   3. `transcript_path` substring (`/.codex/sessions/`).
- *   4. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
- *   5. Claude Code Stop shape: `hook_event_name === "Stop"` with
+ *   2. `hook_host: "opencode"` - the explicit marker the opencode
+ *      plugin's synthetic payloads carry (plugins/opencode/
+ *      open-second-brain.ts states the same literal; the plugin is
+ *      copied alone and cannot import this module). An honest marker,
+ *      where a fabricated Claude Code `tool_use_id` would mislabel
+ *      every audit row the lane writes - and it outranks the
+ *      apply_patch shape, which an opencode patch payload shares.
+ *   3. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
+ *   4. `transcript_path` substring (`/.codex/sessions/`).
+ *   5. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
+ *   6. Claude Code Stop shape: `hook_event_name === "Stop"` with
  *      `stop_hook_active` and `last_assistant_message` but no `turn_id`
  *      (Codex adds `turn_id` to every Stop payload). Catches a Claude Code
  *      install whose transcripts live outside `~/.claude` (`CLAUDE_CONFIG_DIR`).
- *   6. Codex apply_patch shape (`tool_name === "apply_patch"` with
+ *   7. Codex apply_patch shape (`tool_name === "apply_patch"` with
  *      a patch body in `tool_input.input`).
- *   7. `"unknown"`.
+ *   8. `"unknown"`.
  *
  * `normalizeHookPayload` preserves grok's original camelCase keys, so this
  * works whether it runs before or after normalization. Malformed payloads
@@ -212,6 +219,12 @@ export function detectHookRuntime(
   if (env["GROK_HOOK_EVENT"] || env["GROK_SESSION_ID"] || env["GROK_WORKSPACE_ROOT"]) {
     return "grok";
   }
+
+  // The opencode plugin's synthetic payloads state their host outright -
+  // the most explicit signal there is, ahead of every shape guess. It
+  // must outrank the apply_patch shape below: an opencode patch payload
+  // carries the same `*** Begin Patch` body a Codex one does.
+  if (p["hook_host"] === "opencode") return "opencode";
 
   const raw = p["transcript_path"];
   // On Windows the host sends a native path (`C:\Users\u\.claude\projects\…`);

@@ -124,6 +124,65 @@ fresh install never reports drift against itself.
   `brain_feedback` / `brain_apply_evidence` / `brain_note` before its
   final reply.
 
+- **Tool gating** - on `tool.execute.before` (V1) /
+  `tool.hook("execute.before")` (V2) the plugin relays the opt-in
+  `o2b-hook pretool-orient` (flag `hook_strict_enabled`) and
+  `o2b-hook pretool-host-backup` (flag `host_settings_backup`,
+  file-mutating tools only) shims with synthetic PreToolUse payloads
+  carrying the opencode session id and an explicit host marker, with
+  the host's tool names and argument keys translated onto the
+  Claude Code spellings the shim decision cores parse - so the vault
+  hook-state stamps dedupe per session exactly as on the Claude Code
+  lane, the orient gate denies the first raw vault read here too, and
+  the audit trail records the translated spellings (the declared
+  divergence below). Only an explicit structured
+  `permissionDecision: "deny"` blocks the tool call, by throwing with
+  the shim's `permissionDecisionReason` as the error text; a flag that
+  is off (which also means zero spawns), a missing binary, a spawn
+  failure, a timeout, or malformed shim output all pass the tool call
+  untouched. Both flags are default-OFF.
+
+- **Prompt-time injection** - on `chat.message` (V1) /
+  `session.hook("prompt")` (V2) the plugin relays the opt-in
+  `o2b-hook recall-inject` (`recall_inject_enabled`),
+  `nav-inject` (`nav_tier_enabled`), `counterparty-brief`
+  (`counterparty_brief_enabled`) and `reground-deliver`
+  (`reground_parts_enabled`) shims with synthetic UserPromptSubmit
+  payloads carrying the opencode session id, so the injection ledger
+  dedupes (recall once per session, brief on the first qualifying
+  turn, reground's take-once cursor) exactly as on the Claude Code
+  lane, and the queued context is delivered only to a model request of
+  the session that prompted - one session's recalled context never
+  rides into another session's request. The prompt hook observes the
+  prompt before durable admission and is not a delivery channel: shim
+  context enters a single-slot
+  per-turn queue that the context delivery points drain on the first
+  model request of the turn, beside the cached active inject, exactly
+  once per turn. All four flags are default-OFF; with them off the
+  prompt lane spawns nothing.
+
+### Live verification
+
+The two registrations above (`execute.before`, the prompt hook) are
+exercised by stub-driven tests only - opencode is not installed on dev
+or CI machines, and these two hook names have never been verified
+against a released opencode build (the three original hooks were
+verified live against opencode 2.0.24; see the 1.50.x CHANGELOG). To
+live-verify on an operator machine:
+
+1. `o2b install --target opencode --apply --yes`, restart opencode,
+   and check the plugin loaded with `opencode api get /api/plugin`.
+2. With `OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED=true` exported: point a
+   raw file read at a vault note. The first read should be denied once
+   with the redirect text, and later reads should pass (the shim's
+   once-per-session downgrade lives in the vault hook-state).
+3. With `OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED=true` exported: submit
+   a prompt that matches remembered notes and confirm the recalled
+   block appears once on the next model request and is not repeated on
+   later requests in the same turn.
+4. With both flag groups unset: confirm ordinary tool calls and prompts
+   spawn no `o2b-hook` processes at all (zero-spawn default).
+
 Every plugin hook is fail-soft: a missing vault, missing `o2b-hook`
 binary, or SDK error never breaks the opencode session.
 
@@ -163,9 +222,29 @@ installed plugin file. User-authored config is untouched.
 
 ## Known gaps relative to Claude Code / Codex
 
-- **No stop-log guardrail.** opencode exposes no blocking stop hook,
-  so the guardrail that vetoes an unlogged artifact turn cannot be
-  reproduced; the post-write reminder still fires.
+Every row of `hooks/hooks.json` is either carried by the plugin or a
+declared divergence with a written reason; the census in
+`tests/core/install/adapters/opencode-hook-parity.test.ts` fails the
+build when a row appears in hooks.json without an opencode decision, or
+when a declared divergence outlives the gap it excuses.
+
+| Divergence                              | Reason                                                                                                                                                                                                                     |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stop:stop-log-guardrail`               | opencode exposes no blocking stop hook, so the veto that holds an unlogged artifact turn cannot be reproduced (documented known gap); the post-write reminder still fires                                                  |
+| `Stop:answer-quote-check`               | opencode exposes no stop hook to audit quoted spans against the turn's notes on turn end                                                                                                                                   |
+| `Stop:hygiene-digest`                   | opencode exposes no stop hook to surface pending hygiene findings on turn end                                                                                                                                              |
+| `SubagentStart:subagent-inject`         | opencode has no subagent spawn hook; there is no subagent lifecycle event to deliver context to                                                                                                                            |
+| `PreToolUse:nudge-channel`              | opencode tool calls carry no additionalContext channel, so the orient allow-verdict nudge passes silently; only a structured deny is relayed                                                                               |
+| `PreToolUse:payload-mapping`            | the gate translates the host's lowercase tool names and camelCase argument keys onto the Claude Code payload shapes the shim decision cores parse, so the audit trail records the translated spellings, not the host's own |
+| `UserPromptSubmit:pre-admission-caveat` | the prompt hook observes before durable prompt admission, so shim context rides the context hook's per-turn queue instead of the prompt event                                                                              |
+| `PostToolUse:subagent-inject`           | opencode tool events carry no agent_id, so the subagent/main-thread discrimination the PostToolUse fallback carrier relies on does not exist                                                                               |
+| `PostToolUse:reground-deliver`          | reground parts ride the prompt lane's per-turn queue; opencode has no per-tool-call context channel to re-deliver on                                                                                                       |
+| `SessionStart:gap-agenda`               | opencode exposes no session-start hook to a loaded plugin; the opt-in recall-gap agenda shim has no carrier outside Claude Code / Codex                                                                                    |
+| `SessionStart:backlog-nudge`            | opencode exposes no session-start hook to a loaded plugin; the opt-in backlog nudge shim has no carrier outside Claude Code / Codex                                                                                        |
+| `SessionStart:log-catchup`              | opencode exposes no session-start hook to a loaded plugin; the opt-in log catch-up shim has no carrier outside Claude Code / Codex                                                                                         |
+| `SessionEnd:gap-promote`                | opencode exposes no session-end hook; gap promotion runs only where the Claude Code lane fires it                                                                                                                          |
+| `SubagentStop:session-capture`          | opencode has no subagent lifecycle events, so a delegated sub-agent's turns never enter a capturable session                                                                                                               |
+
 - **V1 context inject rides an experimental hook**
   (`experimental.chat.system.transform`). V2 instead uses the session
   `context` hook. If a future V1 release changes the experimental hook,

@@ -1542,8 +1542,15 @@ const DIRECT_WRITE_ROWS = 86;
  * vault `.gitignore` through the shared atomic writer - git configuration at
  * the vault root, created or merged at brain init, never a page under
  * `Brain/`.
+ *
+ * 133 -> 135, from the delivery-trust wave: the attestation kernel's record
+ * writer (`src/core/brain/attestation/record.ts`) lands one attestation JSON
+ * through the shared atomic writer and the signing kernel
+ * (`src/core/brain/attestation/signing.ts`) writes the keypair halves the
+ * same way - both committed through the shared writer, so both join the
+ * shared-helper population.
  */
-const SHARED_HELPER_ROWS = 133;
+const SHARED_HELPER_ROWS = 135;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1573,6 +1580,10 @@ const ORIGIN_CHANNEL_STAMPED: ReadonlyArray<string> = Object.freeze([
   "src/core/brain/log.ts",
   "src/core/brain/notes/create-note.ts",
   "src/core/brain/signal.ts",
+  // The shared mutation seam: every MCP note update and append stamps the
+  // writing process's channel there, so an agent-authored body can never
+  // ride an inherited operator stamp.
+  "src/core/brain/write-batch.ts",
 ]);
 
 /** Import specifier of the resolver, in either quote style. */
@@ -1713,8 +1724,16 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * 128 -> 129 is the gitignore guard (trust-and-responsiveness-hardening):
  * the `.gitignore` it seeds is git configuration at the vault root,
  * carrying no origin channel - no record family of Unit C names it.
+ *
+ * 129 -> 131 is the delivery-trust wave's attestation kernel: the record
+ * writer and the signing kernel commit through the shared atomic writer,
+ * and neither stamps an origin channel - an attestation is evidence about
+ * the store, not a stored record family.
+ * 131 -> 130 is the same wave's mutation channel stamp: the shared
+ * write-batch seam moved from the unstamped to the stamped shared class
+ * when note mutations began stamping the writing process's channel.
  */
-const UNSTAMPED_SHARED_ROWS = 129;
+const UNSTAMPED_SHARED_ROWS = 130;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
@@ -1810,6 +1829,7 @@ describe("origin-channel coverage boundary", () => {
       "src/core/brain/log.ts",
       "src/core/brain/notes/create-note.ts",
       "src/core/brain/signal.ts",
+      "src/core/brain/write-batch.ts",
     ]);
     const unstampedShared = sharedRows.filter((row) => !STAMPED_PATHS.has(row.path));
     expect(unstampedShared.length).toBe(UNSTAMPED_SHARED_ROWS);

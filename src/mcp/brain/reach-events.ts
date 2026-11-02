@@ -11,10 +11,30 @@
  * reference view by hand.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { readerRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { eventAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
+import { posixRel } from "../../core/path-safety.ts";
+import {
+  BRAIN_ARCHIVED_SIGNALS_REL,
+  BRAIN_INBOX_REL,
+  BRAIN_PREFERENCES_REL,
+  BRAIN_PROCESSED_REL,
+  BRAIN_RETIRED_REL,
+} from "../../core/brain/path-constants.ts";
+import type { FrontmatterCache } from "../../core/search/result-filters.ts";
+import {
+  deliveryOriginLabel,
+  pageOriginForDelivery,
+  storedTextTreatment,
+} from "../../core/brain/provenance/page-origin.ts";
+import { shapeStoredTextForDelivery } from "../../core/brain/delivery-shaping.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import type { TemporalEvent } from "../../core/brain/temporal/types.ts";
 import type { ServerContext } from "../tool-contract.ts";
+import { contextReach } from "../tool-contract.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 export { eventAtReach, recordRefs };
@@ -25,6 +45,104 @@ export { eventAtReach, recordRefs };
  */
 export function requestRefView(ctx: ServerContext): ArtifactRefView {
   return readerRefView(ctx.vault, readableAtContextReachOrUndefined(ctx));
+}
+
+/**
+ * The delivery binding for one report-shaped request (delivery-trust,
+ * lane A): the one object every report-shaped read shares for shaping
+ * stored record text on its way out.
+ *
+ * It answers the request's reach once - `reach`, for callers that need
+ * to branch before shaping at all - and `shape(text, rel)` for the
+ * bodies themselves. At local reach `shape` is the identity and the
+ * binding holds no state: the operator's own tools get the pre-wave
+ * bytes, and no shaper code runs at all. At remote reach each body is
+ * probed through ONE `FrontmatterCache` per request - one frontmatter
+ * read per distinct page however many serializers name it - and
+ * delivered through the K1 shaper: fenced unless the page proves
+ * operator-authorship, fail-closed to fenced on every absence, with the
+ * fence's origin attribute naming the derived provenance.
+ *
+ * The fence lives inside the field the text was read from, so no output
+ * schema changes; a reference the request's view withholds never
+ * reaches a serializer (a fence on a withheld row would be an existence
+ * leak), and the log-entry serializers are deliberately NOT wired
+ * through this binding - their formats are parsed by heading structure
+ * and stay the wave's stated delivery-shaping boundary.
+ */
+export function deliveryView(
+  ctx: ServerContext,
+  opts?: { cache?: FrontmatterCache },
+): {
+  reach: TransportReach;
+  shape(text: string, rel: string): string;
+} {
+  const reach = contextReach(ctx);
+  if (reach === TRANSPORT_REACH.local) return { reach, shape: (text) => text };
+  const cache: FrontmatterCache = opts?.cache ?? new Map();
+  return {
+    reach,
+    shape(text: string, rel: string): string {
+      // The rel is a vault-relative POSIX path by contract; fold any
+      // Windows separators a caller's spelling carries so the probe
+      // names the same page on every host.
+      const origin = pageOriginForDelivery(ctx.vault, posixRel(rel), cache);
+      return shapeStoredTextForDelivery(text, {
+        treatment: storedTextTreatment(origin),
+        origin: deliveryOriginLabel(origin),
+      }).text;
+    },
+  };
+}
+
+/**
+ * A vault-relative page no vault can carry: NUL is not a legal byte in a
+ * file name on any supported host, so the provenance probe reads a
+ * guaranteed-absent page and the shaper answers with the fail-closed
+ * fence. It is the rel for stored text whose OWN page cannot be asked -
+ * a cross-vault search row naming a foreign vault's relative path, a
+ * note contribution with no page of its own - where probing a guessed
+ * local path would let whatever happens to sit there decide the
+ * treatment.
+ */
+export const UNPROBED_DELIVERY_REL = "\u0000unprobed";
+
+/**
+ * The vault-relative page whose provenance governs a delivery naming a
+ * Brain artifact by id, or any vault page by relative path.
+ *
+ * The Brain record types carry ids, not paths, and the delivery side
+ * must probe the page the id was parsed from: `pref-`/`ret-` ids map
+ * onto their single folders, `sig-` ids onto whichever of the three
+ * signal lanes holds the page (asked in walk order; none existing is
+ * the fail-closed absent-page probe), a string with a separator is
+ * already a vault-relative path, and anything else is treated as a
+ * vault-root page name. An id that resolves to no file probes as
+ * absent - the fenced answer - never as an error.
+ */
+export function deliveryRelForBrainArtifact(vault: string, id: string): string {
+  if (id.includes("/")) return id;
+  if (id.startsWith("ret-")) return `${BRAIN_RETIRED_REL}/${id}.md`;
+  if (id.startsWith("pref-")) return `${BRAIN_PREFERENCES_REL}/${id}.md`;
+  if (id.startsWith("sig-")) return signalDeliveryRel(vault, id);
+  return `${id}.md`;
+}
+
+/**
+ * The page a signal was parsed from. The record carries only the
+ * basename (`sig-<date>-<slug>`); the lane is whichever of the three
+ * signal folders holds it, so the candidates are asked in walk order and
+ * the first existing one wins. None existing is not an error: the probe
+ * then reads an absent page, which is the fail-closed answer. Exported
+ * so the report-shaped serializers and the artifact-id mapping above
+ * answer the walk the same way - one derivation, not two that can drift.
+ */
+export function signalDeliveryRel(vault: string, id: string): string {
+  for (const dir of [BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL]) {
+    const rel = `${dir}/${id}.md`;
+    if (existsSync(join(vault, rel))) return rel;
+  }
+  return `${BRAIN_INBOX_REL}/${id}.md`;
 }
 
 /** The events this caller may see, each in the form it may see it, in order. */

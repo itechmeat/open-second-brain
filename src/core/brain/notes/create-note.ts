@@ -785,9 +785,13 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // all the way to the export boundary.
   //
   // Stamped on CREATION only. `update_note` and `append_note` rewrite a
-  // note this call did not author, and re-stamping there would overwrite
-  // the creating channel with the mutating one - the same objection that
-  // refuses backfilling the field onto existing records.
+  // note this call did not author and keep the creating channel - the same
+  // objection that refuses backfilling the field onto existing records -
+  // with the one delivery-trust exception the mutation seam itself applies
+  // (`write-batch.ts`, `mutationChannelStamp`): a writer whose own channel
+  // differs never keeps an inherited `cli` stamp, because the delivery
+  // side reads that stamp as operator-authorship of the words the
+  // mutation left behind.
   const callerFrontmatterWithoutClass = withoutCallerContentClass(callerFrontmatter);
   const contentClass = contentClassCreationStamp(originChannel);
   const frontmatter: FrontmatterMap = {

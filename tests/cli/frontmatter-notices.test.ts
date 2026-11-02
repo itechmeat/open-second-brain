@@ -110,9 +110,13 @@ describe("o2b brain doctor frontmatter notices", () => {
   });
 
   test("a dropped line alone does not change the doctor exit code", async () => {
+    // The fixture page carries the operator-authored `cli` stamp so the
+    // delivery-provenance check stays silent: what this test isolates is
+    // the dropped-line UNCERTAINTY, and an unstamped delivered page
+    // would raise its own warning that --strict legitimately fails on.
     writeFileSync(
       join(vault, "Brain", "notes", "odd.md"),
-      "---\ntitle: Odd\ntopic: odd\n-foo\n---\n\nBody.\n",
+      "---\ntitle: Odd\ntopic: odd\norigin_channel: cli\n-foo\n---\n\nBody.\n",
     );
     // Uncertainty is neither a warning nor an error, so even --strict
     // must stay at 0 when nothing else is wrong.

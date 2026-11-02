@@ -140,12 +140,20 @@ describe("the audit lane while frozen", () => {
 
 /**
  * The audit lane is an exemption from the freeze, and an exemption
- * spreads by being convenient. This is the bound: two modules ask for it,
- * both of them are the record-keeping the freeze cannot silence, and a
- * third asking is a decision somebody has to make in front of this test.
+ * spreads by being convenient. This is the bound: four modules ask for
+ * it, all of them are the record-keeping the freeze cannot silence, and
+ * a fifth asking is a decision somebody has to make in front of this
+ * test. The attestation pair joined with the delivery-trust wave: a
+ * signed attestation is the store-integrity record itself, so a freeze
+ * must not silence it any more than it silences the log.
  */
 describe("the audit lane's blast radius", () => {
-  const ALLOWED = new Set(["src/core/brain/log.ts", "src/core/brain/freeze.ts"]);
+  const ALLOWED = new Set([
+    "src/core/brain/log.ts",
+    "src/core/brain/freeze.ts",
+    "src/core/brain/attestation/record.ts",
+    "src/core/brain/attestation/signing.ts",
+  ]);
 
   function sourceFiles(dir: string): string[] {
     const out: string[] = [];

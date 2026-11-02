@@ -8,7 +8,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolveAgentName } from "../../core/config.ts";
-import { brainActivePath, brainDirs, brainStandingRulesPath } from "../../core/brain/paths.ts";
+import {
+  brainActivePath,
+  brainDirs,
+  brainStandingRulesPath,
+  BRAIN_ACTIVE_FILE,
+  BRAIN_ROOT_REL,
+} from "../../core/brain/paths.ts";
 import {
   readStandingRules,
   renderStandingRules,
@@ -68,6 +74,7 @@ import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt, unknownOperationError } from "../coerce.ts";
+import { deliveryView } from "./reach-events.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
@@ -244,18 +251,44 @@ function coercePinnedContextOperation(args: Record<string, unknown>): PinnedCont
   return operation;
 }
 
+/**
+ * The scratchpad body as THIS request may receive it (delivery-trust,
+ * lane A): stored text, so at remote reach it is shaped through the
+ * request's delivery binding - fenced, naming the scratchpad file's own
+ * derived provenance - and at local reach the stored bytes untouched. An
+ * absent scratchpad has no body to fence. `delivery` may be handed in by
+ * a caller that already holds the request's binding, so one request
+ * keeps one frontmatter cache.
+ */
+function shapedPinnedContent(
+  ctx: ServerContext,
+  pinned: PinnedContext,
+  delivery: ReturnType<typeof deliveryView> = deliveryView(ctx),
+): string {
+  if (!pinned.present || pinned.content.length === 0) return pinned.content;
+  return delivery.shape(pinned.content, vaultRelativeSafe(ctx.vault, pinned.path));
+}
+
 function serializePinnedContext(
   ctx: ServerContext,
   pinned: PinnedContext,
   operation?: PinnedContextOperation,
   done?: boolean,
+  opts?: { shapeBody?: boolean; delivery?: ReturnType<typeof deliveryView> },
 ): Record<string, unknown> {
   return {
     ...(operation ? { operation } : {}),
     present: pinned.present,
     path: vaultRelativeSafe(ctx.vault, pinned.path),
     absolute_path: pinned.path,
-    content: pinned.content,
+    // Only a READ shapes the body (delivery-trust, lane A). A write or
+    // batch confirmation echoes bytes the caller just authored - the
+    // terminal-ack contract stays byte-stable; the delivery contract is
+    // about handing stored text to a caller that did not write it.
+    content:
+      opts?.shapeBody === true
+        ? shapedPinnedContent(ctx, pinned, opts.delivery ?? deliveryView(ctx))
+        : pinned.content,
     // Terminal/idempotent marker on successful writes so the agent does
     // not redundantly re-call after the store already committed.
     ...(done ? { done: true } : {}),
@@ -271,7 +304,9 @@ async function toolBrainPinnedContext(
   }
   const operation = coercePinnedContextOperation(args);
   if (operation === "read") {
-    return serializePinnedContext(ctx, readPinnedContext(ctx.vault), operation);
+    return serializePinnedContext(ctx, readPinnedContext(ctx.vault), operation, undefined, {
+      shapeBody: true,
+    });
   }
   let pinned: PinnedContext;
   try {
@@ -374,6 +409,11 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
+  // The request's delivery binding, resolved ONCE and used for the active
+  // body AND the pinned scratchpad beside it (delivery-trust, lane A): one
+  // frontmatter cache serves the whole assembly, instead of the pinned
+  // serializer building a second binding per call.
+  const delivery = deliveryView(ctx);
   // Bounded to the single newest `Brain/log/` day - see
   // `computeMaintenanceOverdueFlag`'s docblock for the cost bound. This
   // is the always-loaded path, so the full `maintenance_debt` derivation
@@ -407,7 +447,10 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
       content: prependBlock(standing.text, prependBlock(scoped?.text ?? "", "")),
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
-      pinned: serializePinnedContext(ctx, pinned),
+      pinned: serializePinnedContext(ctx, pinned, undefined, undefined, {
+        shapeBody: true,
+        delivery,
+      }),
       maintenance_overdue: maintenanceOverdue,
       ...standingRulesField(ctx, standing),
       ...scopedRulesField(scoped),
@@ -472,9 +515,20 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     }
   }
 
-  // Constitution first, then the scoped rules, then the memory body.
+  // Constitution first, then the scoped rules, then the memory body -
+  // and the body is shaped BEFORE the assembly (delivery-trust, lane A):
+  // the fence wraps the stored-record bytes only. The constitution and
+  // the scoped rules are the operator's own voice delivered local-only,
+  // and the pinned scratchpad shapes through the same binding beside
+  // this assembly, so neither slips past the fence the body carries.
+  // An unfetchable body has nothing to fence: the pinned scratchpad's
+  // shaper skips empty bodies, and the main body answers the same way
+  // instead of wrapping an empty block in the fence.
+  if (content.length > 0) {
+    content = delivery.shape(content, `${BRAIN_ROOT_REL}/${BRAIN_ACTIVE_FILE}`);
+  }
   content = prependBlock(standing.text, prependBlock(scoped?.text ?? "", content));
-  content = appendPinnedToContextContent(content, pinned.content);
+  content = appendPinnedToContextContent(content, shapedPinnedContent(ctx, pinned, delivery));
 
   // Optional vault-root instruction file (v0.10.17). Absent file =
   // field omitted so hosts that strip unknown fields stay
@@ -501,7 +555,10 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     content,
     counts,
     generated_at: generatedAt,
-    pinned: serializePinnedContext(ctx, pinned),
+    pinned: serializePinnedContext(ctx, pinned, undefined, undefined, {
+      shapeBody: true,
+      delivery,
+    }),
     maintenance_overdue: maintenanceOverdue,
     ...(error ? { error } : {}),
     ...standingRulesField(ctx, standing),

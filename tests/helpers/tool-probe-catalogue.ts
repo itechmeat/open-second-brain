@@ -296,8 +296,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 106;
-export const PROBE_RECIPE_COUNT = 247;
+export const PROBE_ENTRY_COUNT = 107;
+export const PROBE_RECIPE_COUNT = 250;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -490,6 +490,13 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       REASON.writerEcho,
     ),
   },
+  {
+    name: "brain_attestations",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "verify" }, reason: REASON.ownerlessLane },
+    ],
+  },
   { name: "brain_audit", calls: one({ pref_id: "pref-shared" }, REASON.callerNamedArtifact) },
   { name: "brain_backlinks", calls: one({ id: SHARED_ID }, REASON.ownerFiltered) },
   {
@@ -564,6 +571,7 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { operation: "list" }, reason: REASON.ownerlessLane },
       { args: { operation: "summary" }, reason: REASON.ownerlessLane },
       { args: { operation: "show", id: "rcpt-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "verify", id: "rcpt-probe-absent" }, reason: REASON.ownerlessLane },
     ],
   },
   {

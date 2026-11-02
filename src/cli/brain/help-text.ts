@@ -66,6 +66,7 @@ Brain verbs (observing memory):
   freeze           Stop every content write on every device (--reason <text>)
   unfreeze         Lift the freeze and reopen the content lane
   log              Inspect Brain/log itself: verify (per-shard hash chain)
+  attest           Ed25519-signed store attestations: keygen, sign, list, verify
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
@@ -135,7 +136,7 @@ Brain verbs (observing memory):
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
   token-footprint     Report per-category vault token size with a warn threshold
   context-pack        Return a tier-then-recency vault slice under a token budget
-  context-receipts    List/show prompt context receipt records
+  context-receipts    List/show/verify prompt context receipt records
   event-trace         Show context traces attached to logged events by correlation id
   context-presets     Show/suggest/diff read-only context budget presets
   pre-compact-extract Extract typed continuity records from bounded text
@@ -504,6 +505,21 @@ export const VERB_HELP: Record<string, string> = {
   log:
     "usage: o2b brain log verify [--vault <path>] [--json]\n" +
     "Walk every JSONL shard of the Brain log and report where each one stops linking up. Each appended row carries prev and h, a sha256 over the previous line's hash plus the row's own ts, kind and payload, so an edited or deleted line is detectable. Output names the shard path, the line number, and whether the line was edited (hash-mismatch), removed or reordered (prev-mismatch), or stripped of its chain fields (malformed). Rows written before the chain shipped carry no h; they are counted as legacy and are clean while they precede the chain. Reports only: nothing here rewrites a log to make it verify, and the read path never consults the chain. Exits 1 when any shard does not link up.\n",
+  attest:
+    "usage: o2b brain attest keygen [--passphrase-from-env NAME] [--vault <path>] [--json]\n" +
+    "       o2b brain attest sign [--passphrase-from-env NAME] [--vault <path>] [--json]\n" +
+    "       o2b brain attest list [--vault <path>] [--json]\n" +
+    "       o2b brain attest verify [--vault <path>] [--json]\n" +
+    "Ed25519-signed store attestations. keygen creates the operator keypair under\n" +
+    ".open-second-brain/keys/attestation/ (private half 0600, never synced); the\n" +
+    "optional passphrase arrives as an env var NAME or on stdin, never argv, and a\n" +
+    "lost key leaves every past attestation unverifiable. sign measures the store,\n" +
+    "seals and signs one attestation record, and writes it as one JSON file - it\n" +
+    "never creates a key. list prints every attestation newest first; verify\n" +
+    "re-measures the store against the newest one: per-shard intact / appended /\n" +
+    "diverged / missing, the signature, and the store digest. Exit 0 with the store\n" +
+    "intact or legitimately appended, 1 on diverged or missing shards or an invalid\n" +
+    "signature, 2 on usage errors. Reports only: nothing here repairs a store.\n",
   unfreeze:
     "usage: o2b brain unfreeze [--vault <path>] [--json]\n" +
     "Remove the freeze marker and reopen the content lane. The unfreeze log event records who lifted it and what the marker said, which is the only place that survives the file. Idempotent.\n",
@@ -1120,6 +1136,7 @@ export const VERB_HELP: Record<string, string> = {
   "context-receipts":
     "usage: o2b brain context-receipts list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--vault <path>] [--json]\n" +
     "       o2b brain context-receipts show <receipt-id> [--vault <path>] [--json]\n" +
+    "       o2b brain context-receipts verify <receipt-id> [--vault <path>] [--json]\n" +
     "Read prompt context receipt continuity records emitted by opt-in callers.\n",
   "event-trace":
     "usage: o2b brain event-trace [--date <YYYY-MM-DD>] [--at <HH:MM:SS>] [--kind <event-kind>] [--session-id <id>] [--limit <n>] [--keep-private] [--vault <path>] [--json]\n" +

@@ -49,6 +49,13 @@ function postWriteCadenceLine(runtime: HookRuntime): string {
         "_sessions risk forgetting the context that distinguishes one_",
         "_artifact from the next._",
       ].join("\n");
+    case "opencode":
+      return [
+        "_opencode session: many turns ahead — capture the signal or_",
+        "_evidence now rather than batching to end-of-session; long_",
+        "_sessions risk forgetting the context that distinguishes one_",
+        "_artifact from the next._",
+      ].join("\n");
     case "unknown":
       return "";
   }

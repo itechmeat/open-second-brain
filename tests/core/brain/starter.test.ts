@@ -106,6 +106,43 @@ describe("copyStarterBundle", () => {
     expect(result.copied).toHaveLength(1);
     expect(readdirSync(join(vault, "Brain", "preferences"))).toEqual(["pref-x.md"]);
   });
+  test("a custom bundle copy stays unstamped: the run did not author third-party text", () => {
+    const vault = mkVault();
+    for (const sub of ["preferences", "retired", "inbox", "log"]) {
+      mkdirSync(join(vault, "Brain", sub), { recursive: true });
+    }
+    const custom = mkdtempSync(join(tmpdir(), "osb-starter-src-"));
+    tmpRoots.push(custom);
+    for (const sub of ["preferences", "retired", "inbox", "log"]) {
+      mkdirSync(join(custom, sub), { recursive: true });
+    }
+    // An unstamped page the bundle's author wrote: no origin_channel.
+    writeFileSync(
+      join(custom, "preferences", "pref-x.md"),
+      "---\nkind: brain-preference\nid: pref-x\n---\n",
+    );
+    copyStarterBundle(vault, { starterPath: custom });
+    const copied = readFileSync(join(vault, "Brain", "preferences", "pref-x.md"), "utf8");
+    expect(copied).not.toContain("origin_channel");
+  });
+
+  test("the shipped bundle stamps its pages: the run's own seed is what it vouches for", () => {
+    const vault = mkVault();
+    for (const sub of ["preferences", "retired", "inbox", "log"]) {
+      mkdirSync(join(vault, "Brain", sub), { recursive: true });
+    }
+    const result = copyStarterBundle(vault, {});
+    expect(result.copied.length).toBeGreaterThan(0);
+    const stamped = readdirSync(join(vault, "Brain", "preferences")).filter((name) =>
+      name.endsWith(".md"),
+    );
+    expect(stamped.length).toBeGreaterThan(0);
+    for (const name of stamped) {
+      expect(readFileSync(join(vault, "Brain", "preferences", name), "utf8")).toContain(
+        "origin_channel: cli",
+      );
+    }
+  });
 
   test("ages a custom bundle that nests a subtree instead of failing on it", () => {
     // The copy is recursive, so a top-level entry can be a directory. Reading

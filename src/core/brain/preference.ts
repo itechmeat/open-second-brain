@@ -800,8 +800,26 @@ export function wouldRewritePreference(vault: string, input: WritePreferenceInpu
     // on disk. No config path is needed - the file exists, so the
     // resolution can only carry forward, never stamp.
     const owned = withResolvedOwner(vault, path, input, undefined);
-    const metadata = preferenceFrontmatter(owned, id);
+    const rendered = preferenceFrontmatter(owned, id);
     const body = renderPreferenceBody(owned);
+    // The same tier merge the overwrite write performs, or this
+    // predicate reports "would change" on every pass forever against a
+    // file carrying a user-tier field the render does not emit: the
+    // merge preserves the field, the comparison against a render that
+    // dropped it never matches, and each pass re-plans the rewrite the
+    // previous pass just performed. The write's fallback order is
+    // mirrored too - an unreadable existing file or schema pack
+    // compares against the plain render.
+    let metadata = rendered;
+    try {
+      const [existingMeta] = parseFrontmatter(path);
+      metadata = mergeFrontmatterTiered(existingMeta, rendered, {
+        kind: "brain-preference",
+        pack: loadSchemaPack(vault),
+      });
+    } catch (exc) {
+      if (exc instanceof FrontmatterTierConflictError) throw exc;
+    }
     const next = formatFrontmatter(metadata, body);
     const prev = readFileSync(path, "utf8");
     return next !== prev;

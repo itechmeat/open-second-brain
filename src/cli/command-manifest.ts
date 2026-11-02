@@ -347,6 +347,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
+        command(
+          "attest",
+          "Ed25519-signed store attestations: keygen, sign, list, verify",
+          [flag("vault", "string"), flag("json", "boolean"), flag("passphrase-from-env", "string")],
+          [
+            command("keygen", "Generate the operator's Ed25519 attestation keypair", []),
+            command("sign", "Seal, sign and write one store attestation", []),
+            command("list", "Every attestation, newest first", []),
+            command("verify", "Re-measure the store against the newest attestation", []),
+          ],
+        ),
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),
@@ -796,7 +807,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("page-dedup", "Detect, and optionally merge, near-duplicate vault pages"),
         command("token-footprint", "Report per-category vault token size against a warn threshold"),
         command("context-pack", "Return a tier-then-recency vault slice under a token budget"),
-        command("context-receipts", "List or show prompt context receipt records"),
+        command("context-receipts", "List, show, or re-hash-verify prompt context receipt records"),
         command(
           "event-trace",
           "Join logged events to the continuity records sharing their correlation ids",

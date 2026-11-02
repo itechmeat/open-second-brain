@@ -104,7 +104,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "statistics and the diversity rerank are computed over the shared index, which counts " +
       "pages the caller may not read (reserved pages, the Brain log), so two vaults that " +
       "return the same paths remotely can return different scores and rerank reasons - a weak " +
-      "count signal across the whole index, not a page or its content.",
+      "count signal across the whole index, not a page or its content. Delivery shaping " +
+      "(delivery-trust, lane A): every delivered row's content is fenced at remote reach " +
+      "through the shared delivery shaper (cached page-provenance probe plus the " +
+      "untrusted-source fence), byte-identical at local reach; a withheld row gains no fence " +
+      "and no count.",
   },
   {
     surface: "brain_file_context",
@@ -114,7 +118,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "src/mcp/search-tools.ts's toolBrainFileContext calls fileContextRecall " +
       "(core/brain/file-recall.ts), which calls search() with the derived query and no visibility " +
       "override, so it inherits the same pool-filters gate as brain_search. It is covered " +
-      "transitively, not by an independent check of its own.",
+      "transitively, not by an independent check of its own. Delivery shaping (delivery-trust, " +
+      "lane A): the tool delivers path, title and score only - no stored text crosses this " +
+      "surface at any reach, so there is nothing to fence (quote-fencing-search.test.ts pins " +
+      "the exact key set).",
   },
   {
     surface: "search query",
@@ -135,7 +142,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "root C - the key-addressed read. It asks isPathReadableAtReach on EVERY call rather than " +
       "only when an argument arrived, and refuses a reserved page with the SAME error an absent " +
       "chunk produces, because a chunk id is a sequential integer and a distinguishable refusal " +
-      "over an enumerable key space is an existence oracle.",
+      "over an enumerable key space is an existence oracle. Delivery shaping (delivery-trust, " +
+      "lane A): the hydrated chunk text is fenced at remote reach through the same shaper, " +
+      "byte-identical at local reach.",
   },
   {
     surface: "second_brain_query",
@@ -172,7 +181,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "because a topic resolves to exactly one preference and filtering afterwards would report a " +
       "topic as having no rule whenever a reserved one sorted first; the signals, the log events " +
       "and the preference-mode lookup are filtered through reachView, and a reserved preference " +
-      "answers with the message an absent one produces.",
+      "answers with the message an absent one produces. Delivery shaping (delivery-trust, lane " +
+      "A): the preference and topic payload bodies are fenced at remote reach through the " +
+      "shared delivery binding (one reach resolution and one frontmatter cache per request), " +
+      "byte-identical at local reach; the log-entry serializers are the stated boundary and " +
+      "stay untouched.",
   },
   {
     surface: "brain_backlinks",
@@ -194,7 +207,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "and Brain/retired itself, so the MCP handler passes reachView alongside the owner scope: " +
       "a reserved SOURCE is skipped before its body is read, and a reserved TARGET answers with " +
       "no mentions - the reply an absent target gets - because each mention's `term` is the " +
-      "target's title or alias.",
+      "target's title or alias. Each mention's `context` is one line of the source page's own " +
+      "prose, so it shapes through the request's delivery binding at the page the source id was " +
+      "parsed from.",
   },
   {
     surface: "brain_sources",
@@ -262,6 +277,22 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "timestamp, pref_id, op, agent, revision hashes - never a note body or title, and no " +
       "visibility check runs over them. Included for completeness though its disclosure is " +
       "narrower than the other entries here: no page content crosses this surface at all.",
+  },
+  {
+    // Delivery trust (lane D). The attestation store sits under
+    // `.open-second-brain/`, so the sweep has no frontmatter to read at
+    // this file; the row is the fact written down rather than a behavior
+    // change.
+    surface: "brain_attestations",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "list and verify (src/mcp/brain/attest-tools.ts) read the signed attestation records " +
+      "under .open-second-brain/attestations/ and re-measure the Brain log against the newest " +
+      "one - the rows carry attestation ids, timestamps, device ids, shard names, hashes and " +
+      "verdicts, never a note path, title or body, so the withheld-row refusals of the content " +
+      "tools have nothing to refuse here and the answer is identical at every reach. Included " +
+      "for completeness of the file-level sweep only.",
   },
   {
     surface: "brain_bridges",
@@ -340,7 +371,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "artifact's id, vault-relative path, topic and full principle text; every row-returning " +
       "operation and the rebuild count keep a row only when it passes gatedOwnerScopeView and, " +
       "at the caller's reach, reachView over its page, its id under the pref- and ret- " +
-      "spellings, and the records that superseded or contest it.",
+      "spellings, and the records that superseded or contest it. The principle is the record's " +
+      "own stored text, so it shapes through the request's delivery binding at the claim's own " +
+      "page - the same text brain_query fences inside the preference payloads.",
   },
   {
     surface: "brain_truth",
@@ -481,7 +514,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "toolBrainContext (context-tools.ts) serves Brain/active.md's bytes only to a local " +
       "reader with no owner scope enforced; any other reader gets renderActiveForReader's " +
       "in-memory render without the preference and retired records readableAtContextReach(ctx) " +
-      "withholds, counts included, so the choice never depends on what is withheld.",
+      "withholds, counts included, so the choice never depends on what is withheld. Delivery " +
+      "shaping (delivery-trust, lane A): the active body and the pinned scratchpad body are " +
+      "fenced at remote reach through the shared delivery shaper, byte-identical at local " +
+      "reach; the constitution and scoped-rules blocks are the operator's own voice and stay " +
+      "outside the fence.",
   },
   {
     surface: "brain_agent_query",
@@ -492,7 +529,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "reachView(ctx.vault, contextReach(ctx)) as its view option and drops, before the roster " +
       "is folded, every contribution whose named page or event-body string the caller may not " +
       "read at its reach, so a note-write row for a withheld page is answered as one for an " +
-      "absent page; agent_scope still gates ownership.",
+      "absent page; agent_scope still gates ownership. Delivery shaping (delivery-trust, lane " +
+      "A): note-write contribution bodies (and the principle their data block echoes) are " +
+      "fenced at remote reach through the shared delivery binding, byte-identical at local " +
+      "reach; log rows are the stated boundary and stay untouched.",
   },
   {
     surface: "brain_writes",
@@ -525,7 +565,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "diffAgentSources folds queryAgentSources, and the handler passes the same " +
       "reachView(ctx.vault, contextReach(ctx)) view brain_agent_query does, so a contribution " +
       "naming a page the caller may not read at its reach is dropped before any count or topic " +
-      "map is built; ownership is gated by the GATED server identity.",
+      "map is built; ownership is gated by the GATED server identity. Delivery shaping " +
+      "(delivery-trust, lane A): contribution bodies are fenced at remote reach through the " +
+      "same shared delivery binding, byte-identical at local reach.",
   },
   {
     surface: "brain_anticipatory_context",
@@ -593,7 +635,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "reads/writes Brain/pinned.md, a single Brain-authored scratchpad file, with no visibility " +
-      "check - the field would be meaningless on a file with exactly one owner-less instance.",
+      "check - the field would be meaningless on a file with exactly one owner-less instance. " +
+      "Delivery shaping (delivery-trust, lane A): a READ of the scratchpad still fences the " +
+      "body at remote reach through the shared delivery shaper (byte-identical at local, and " +
+      "write acknowledgements stay byte-stable) - no visibility row, but no unfenced delivery " +
+      "either.",
   },
   {
     surface: "brain_write_session",
@@ -970,7 +1016,14 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "subject the gated owner view ANDed with reachView hides, before the total and paging. " +
       "record over an occupied withheld slug refuses 'decision already exists', the inherent " +
       "create-collision residual; the review obligation record opens names the decision's title " +
-      "at default visibility unless the operator reserves it too.",
+      "at default visibility unless the operator reserves it too. Delivery shaping " +
+      "(delivery-trust, lane A): the decision page's stored free-text payload fields - show's " +
+      "assumption, premortem and outcome, the compare rows' rationale and outcome, the list and " +
+      "similar rows' outcome - plus the recall render and the open-decision question, context " +
+      "and discard-reason prose are fenced at remote reach through the shared delivery binding, " +
+      "byte-identical at local reach. The identifiers (title, chosen, slug), the enumerated " +
+      "options, the structured fields, the write echoes of caller-authored values, and the " +
+      "change-history receipts (prefixed state grammar, the ledger boundary) stay untouched.",
   },
   {
     surface: "brain_scaffold_stub",
@@ -1241,6 +1294,16 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "read brain_audit uses; no note body or title crosses either surface.",
   },
   {
+    surface: "brain attest",
+    kind: K.cliVerb,
+    category: C.excluded,
+    reason:
+      "src/cli/brain/verbs/attest.ts drives the same attestation kernel as brain_attestations " +
+      "in the operator's own shell, plus keygen and sign, which mint keys and signed records " +
+      "under .open-second-brain/ and read no vault page at all; no note path, title or body " +
+      "crosses any of the four subverbs.",
+  },
+  {
     surface: "brain claims",
     kind: K.cliVerb,
     category: C.excluded,
@@ -1293,7 +1356,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "whether the request is below local reach to readActiveForReader, which serves the shared " +
       "file only to a local reader with no owner scope and otherwise renders the digest without " +
       "the preference and retired records the reader cannot see, stamped with the file's " +
-      "generated_at.",
+      "generated_at. Delivery shaping (delivery-trust, lane A): the delivered markdown is " +
+      "fenced at remote reach through the shared delivery shaper, named for the generated " +
+      "file's own absence of stamps; local keeps the bytes.",
   },
   {
     surface: "osb://lessons",
@@ -1304,7 +1369,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "owner scope; any other reader gets renderLessonsForReader, handed the request view " +
       "(owner view ANDed with reachView): a preference or dead-end it cannot read, and every " +
       "apply-evidence event naming a page it cannot read, is absent, scored at the generation " +
-      "on disk.",
+      "on disk. Delivery shaping (delivery-trust, lane A): the delivered markdown is fenced at " +
+      "remote reach through the same shaper; local keeps the bytes.",
   },
   {
     surface: "osb://digest/latest",
@@ -1315,7 +1381,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "preference or retired record the caller cannot read is absent from every row and count, " +
       "with the log events, backlink sources and action targets naming one, and the agent " +
       "summary counts only the events the caller may read; the token-footprint action " +
-      "measures the whole vault.",
+      "measures the whole vault. Delivery shaping (delivery-trust, lane A): the delivered " +
+      "markdown is fenced at remote reach through the shared delivery shaper, named for the " +
+      "compiled-digest render's own absence of stamps (the same probe the active and lessons " +
+      "readers make); local keeps the bytes.",
   },
   {
     surface: "osb://status",
@@ -1334,7 +1403,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "root C, the key-addressed read: the whole file - frontmatter, owner line and body prose - " +
       "is what this reader hands back, so both rules are asked before the read rather than " +
       "filtered out of the bytes afterwards. A withheld preference is reported byte for byte as " +
-      "an absent one, because preference ids are pref-<topic-slug> and therefore guessable.",
+      "an absent one, because preference ids are pref-<topic-slug> and therefore guessable. " +
+      "Delivery shaping (delivery-trust, lane A): the whole-file delivery is fenced at remote " +
+      "reach, named for the resolved page's own derived provenance; local keeps the bytes.",
   },
   {
     surface: "osb://topic/{slug}",
@@ -1344,7 +1415,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "the same root-C view as osb://preference/{id}, with the reach reaching the SELECTION of the " +
       "topic's current rule for the reason the owner scope already reached it: a topic resolves " +
       "to one preference, so filtering afterwards would hide a readable rule whenever a reserved " +
-      "one happened to sort ahead of it.",
+      "one happened to sort ahead of it. Delivery shaping (delivery-trust, lane A): the " +
+      "synthesis is fenced at remote reach, named for the governing rule's derived provenance " +
+      "(the absent-rule probe, fail closed); local keeps the bytes.",
   },
   {
     surface: "osb://log/{date}",
@@ -1363,7 +1436,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "the same reference-shaped root-C decision brain_backlinks makes, over the same index: the " +
       "target and every ref's source artifact are both asked, and a withheld target answers with " +
-      "the empty backlink document rather than a refusal that would prove it exists.",
+      "the empty backlink document rather than a refusal that would prove it exists. Delivery " +
+      "shaping (delivery-trust, lane A): the rendered document is fenced at remote reach, named " +
+      "for the target page's own derived provenance; local keeps the bytes.",
   },
 
   // --- Excluded: the index's own storage --------------------------------------

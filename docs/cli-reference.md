@@ -435,6 +435,7 @@ o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (ex
 o2b brain freeze              (CLI-only) Write Brain/.state/frozen.json and stop every content write in this vault (--reason "<text>", --json). Syncthing carries the marker, so the stop holds on every device that shares the vault, not only this one. The Brain log keeps recording: `freeze` names who set it, and each refused MCP call appends `write-refused`. Idempotent - a second freeze reports the first one's timestamp, agent and reason rather than replacing them. A marker that is present and unparseable freezes too: an operator who wrote a broken one meant to stop writes
 o2b brain unfreeze            (CLI-only) Remove the freeze marker and reopen the content lane (--json). The `unfreeze` log event records who lifted it plus what the marker said, which is the only place those survive the file. Idempotent. `o2b brain rollback` is refused while frozen like every other content write, with no exemption for recovery: an operator restoring a frozen vault is the operator who should decide the freeze is over
 o2b brain log verify          Walk every JSONL shard of the Brain log and report where each one stops linking up (--json). Each appended row carries `prev` and `h`: `h = sha256(canonical JSON of { prev, ts, kind, payload })`, `prev` the previous chained line's `h` or null at the shard's genesis, so an edited or deleted line is detectable. Output names the shard path, the line number, and the break - `hash-mismatch` (the line was edited), `prev-mismatch` (a line was removed or reordered), `malformed` (a line carries no chain link where the chain had already started). Rows written before the chain shipped carry no `h` and are counted as legacy: clean while they precede the chain, a break after it. The markdown twin is a derived rendering and is not chained. Reports only - nothing rewrites a log to make it verify and the read path never consults the chain - and exits 1 when any shard does not link up
+o2b brain attest              Ed25519-signed store attestations (since v1.97.0): `keygen` creates the operator keypair under `.open-second-brain/keys/attestation/` (private half 0600, never synced; the optional passphrase arrives as an env var NAME via `--passphrase-from-env` or on stdin, never argv, and a lost key leaves every past attestation unverifiable); `sign` measures the store (log heads, ledger inventories, index stamp), seals and signs one attestation record, and writes it as one JSON file - signing never creates a key; `list` prints every attestation newest first; `verify` re-measures the store against the newest one (per-shard intact/appended/diverged/missing, the signature, the store digest). Exit 0 with the store intact or legitimately appended, 1 on diverged or missing shards, a store-digest drift no appended shard explains, or an invalid signature, 2 on usage errors. Reports only - nothing here repairs a store, and keygen + sign have no MCP surface (read-only `brain_attestations` mirrors list and verify)
 o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain/_brain.yaml (--clear)
 o2b brain protect             (CLI-only) Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
 o2b brain unprotect           (CLI-only) Remove the Open-Second-Brain-managed deny rules for the chosen target
@@ -470,7 +471,7 @@ o2b brain today               Read-only today dashboard: due and overdue obligat
 o2b brain apply-markers       Turn `@osb set note=<target> field=<field> value=<value>` markers into schema-validated frontmatter writes. Report mode by default (writes nothing); --apply needs `guardrails.marker_writeback` in _brain.yaml, consumes applied markers so a re-run is idempotent, and leaves unresolvable or refused targets unconsumed; --path <subdir> (repeatable) or notes.read_paths
 o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it, and --propose-backlog batches the already-imported undistilled backlog into one ask-once distill envelope (see "Session logs this machine already has" below)
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
-o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0). Since v1.95.0 `show` joins the receipt to its session's `reply_presence` continuity record - the per-note verdicts the answer-quote-check Stop hook folded for the session's latest checked turn (`verified` / strongest miss / `absent` per injected note, plus the reply-span count and the answer-text hash) - keyed by exact `session_id`, never a time-window guess: a receipt whose session wrote no presence record, or that names no session at all, reports `unjoined` and names which of the two it was, so a missing join is never read as a silent all-clear. `list` stays a summary and carries no join
+o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0). Since v1.95.0 `show` joins the receipt to its session's `reply_presence` continuity record - the per-note verdicts the answer-quote-check Stop hook folded for the session's latest checked turn (`verified` / strongest miss / `absent` per injected note, plus the reply-span count and the answer-text hash) - keyed by exact `session_id`, never a time-window guess: a receipt whose session wrote no presence record, or that names no session at all, reports `unjoined` and names which of the two it was, so a missing join is never read as a silent all-clear. `list` stays a summary and carries no join. Since v1.97.0 `verify <receipt-id> [--json]` re-hashes one receipt's items against the vault it was drawn from (per-item `match`/`changed`/`unavailable` with the recorded budget re-applied so trimmed items do not false-CHANGED; exit 1 naming the changed items; private or redacted receipts refused)
 o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
 o2b brain generation-reports  Record/list/summarise opt-in inbound LLM generation traces (prompt hash + token counts only; kernel never calls an LLM)
 o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
@@ -531,7 +532,7 @@ created - the journal records whether each target pre-existed.
 
 ```text
 o2b brain context-pack        Existing budgeted context pack; add --receipt to emit a context receipt, --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
-o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
+o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]; verify <receipt-id> [--json]
 o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress|query] [--status ok|empty|error|timeout] [--channel mcp|cli|hook] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - --channel is a read filter on list and summary only; gate-list, gate-summary and cost refuse it by name rather than ignoring it
 o2b brain generation-reports  record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--json]; list|summary [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]; show <report-id> [--json] - record is gated (default off) by --enable or generation_trace_enabled; stores prompt_hash + counts only
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
@@ -1495,6 +1496,30 @@ per family once its foldable population crosses 1,000 records, naming
 `o2b brain receipts scan` as the next command, and reports a ledger it
 could not read in the uncertain stream - growth unknown, never flattened
 to growth fine.
+
+Delivery trust (remote reads): every MCP face that hands back stored-record
+text - the search family, the report-shaped reads,
+`brain_context`/`brain_pinned_context`, and the `osb://` preference, topic,
+active, lessons and backlinks readers - fences that text at remote reach in
+the same `<untrusted_source origin="...">` wrapper the intake path uses,
+with the origin naming the page's derived provenance (`origin_channel`,
+`content_class`, `untrusted_source`); any absence fences fail closed. Local
+reach is byte-identical to the pre-wave bytes. The
+`delivery-provenance-unknown` doctor check names how many delivered pages
+carry no derivable provenance so the widening is observable; the remediation
+is stamping, which every write path already does going forward.
+
+The same wave's operator-side evidence is `o2b brain attest`: keygen, sign,
+list and verify over Ed25519-signed store attestations under
+`.open-second-brain/attestations/`. An attestation is a signed point-in-time
+measure of the store; signing needs the operator key, so keygen and sign are
+CLI verbs with no MCP surface, while list and verify are mirrored by the
+read-only `brain_attestations` tool. `o2b brain doctor` reads the newest
+attestation back (`attestation-stale-or-diverged`): a stale signed point, a
+missing key while signed evidence exists, or a shard diverged since it was
+signed is one warning naming the next command; a vault that never attests
+stays silent, and evidence that cannot be read reaches the uncertain stream
+rather than a clean bill.
 
 Receipt compaction gives the two append-only receipt ledgers - the
 continuity ledger and the metrics ledger - a drain. `scan` inventories

@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { indexVault, resolveSearchConfig, search } from "../../src/core/search/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 /** Mirrors `MCP_CONTENT_MAX` in `src/mcp/search-tools.ts`. */
 const MCP_CONTENT_MAX = 600;
@@ -36,7 +37,7 @@ const BODY = `${LEAD}${MATCH_SENTENCE} ${FILLER.repeat(24)}`;
 
 let vault: string;
 let configHome: string;
-let ctx: { vault: string; configPath: string };
+let ctx: { vault: string; configPath: string; reach: typeof TRANSPORT_REACH.local };
 
 const tool = () => SEARCH_TOOLS.find((t) => t.name === "brain_search")!;
 
@@ -68,7 +69,11 @@ beforeEach(async () => {
   atomicWriteFileSync(configPath, `vault: ${vault}\nsearch_chunk_size: ${FIXTURE_CHUNK_SIZE}\n`);
   mkdirSync(join(vault, "notes"), { recursive: true });
   writeFileSync(join(vault, "notes", "physics.md"), `---\ntitle: Physics\n---\n\n${BODY}\n`);
-  ctx = { vault, configPath };
+  // The delivery fence shapes remote deliveries, and an absent reach
+  // resolves remote, fail closed. These pins name the reach they always
+  // meant - the operator's own local reads - where the window mechanics
+  // under test live; the remote fence has its own suites.
+  ctx = { vault, configPath, reach: TRANSPORT_REACH.local };
   await indexVault(resolveSearchConfig({ vault, configPath }), {});
 });
 

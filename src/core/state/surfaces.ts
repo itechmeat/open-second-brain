@@ -116,6 +116,8 @@ export const STATE_SURFACE_ID = Object.freeze({
   ingestContentManifest: "ingest_content_manifest",
   ingestCheckpoints: "ingest_checkpoints",
   sessionImportCheckpoints: "session_import_checkpoints",
+  attestations: "attestations",
+  attestationKeys: "attestation_keys",
   writeDeadLetters: "write_dead_letters",
   sessionImportLedger: "session_import_ledger",
   sessionMiningLedger: "session_mining_ledger",
@@ -286,6 +288,8 @@ const SECRETS_DIR = "secrets";
 const INGEST_MANIFEST_FILE = "ingest-manifest.json";
 const INGEST_CHECKPOINT_DIR = "ingest-checkpoints";
 const SESSION_CHECKPOINT_DIR = "session-import-checkpoints";
+const ATTESTATIONS_DIR = "attestations";
+const ATTESTATION_KEYS_DIR = "keys/attestation";
 const DEAD_LETTER_DIR = "dead-letters";
 const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const SESSION_MINING_LEDGER_FILE = "session-mining-ledger.json";
@@ -475,6 +479,37 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "still suppresses the repeated writes. `OSB_INGEST_NO_CHECKPOINT` suppresses writing them; " +
       "it does not move them.",
     sources: ["src/core/brain/sessions/checkpoint.ts", "src/core/brain/checkpoint-store.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.attestations,
+    label: "store attestations",
+    tier: STATE_TIER.vaultContent,
+    derive: derivedStore(ATTESTATIONS_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "One signed JSON file per `o2b brain attest sign` run, each binding the log chain " +
+      "heads and the state-surface stamps of the moment it was taken. It is evidence, not " +
+      "scratch: a signature made in the past cannot be recomputed, so deleting the file " +
+      "discards that point in history forever - the store it described is untouched.",
+    sources: ["src/core/brain/attestation/record.ts", "src/core/brain/attestation/digest.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.attestationKeys,
+    label: "attestation signing keys",
+    tier: STATE_TIER.vaultContent,
+    derive: derivedStore(ATTESTATION_KEYS_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "The operator's Ed25519 attestation keypair: the private half born 0600 with the " +
+      "secrets sync-exclusion marker so it never replicates, the public half safe to copy " +
+      "to every peer. Nothing rebuilds the private half and there is no recovery - losing " +
+      "it leaves every past attestation unverifiable, and rotation never re-signs old " +
+      "records.",
+    sources: ["src/core/brain/attestation/signing.ts"],
   },
   {
     id: STATE_SURFACE_ID.writeDeadLetters,

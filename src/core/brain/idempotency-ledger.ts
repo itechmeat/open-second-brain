@@ -60,7 +60,7 @@ const MONTH_BASE = "\\d{4}-\\d{2}";
 const MONTH_RE = new RegExp(`^${MONTH_BASE}$`);
 
 /** The ledger's file-name layout, handed to the shared shard grammar. */
-const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: MONTH_BASE,
   extensions: Object.freeze([JSONL_LEDGER_EXT]),
 });

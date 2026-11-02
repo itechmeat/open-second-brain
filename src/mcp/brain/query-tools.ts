@@ -6,6 +6,9 @@
  * BRAIN_TOOLS surface.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { buildBacklinkIndex } from "../../core/brain/backlinks.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { readPrefAudit } from "../../core/brain/pref-audit.ts";
@@ -74,7 +77,115 @@ import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
+import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../../core/brain/path-constants.ts";
+import type { AgentSourceContribution } from "../../core/brain/agent-source/types.ts";
+import { deliveryView, signalDeliveryRel, UNPROBED_DELIVERY_REL } from "./reach-events.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
+
+// ----- delivery shaping (delivery-trust, lane A) ----------------------------
+//
+// The report-shaped reads share one binding per request
+// (`deliveryView`, beside `requestRefView` in reach-events.ts): local
+// reach is a byte-identical no-op, remote reach probes the named page's
+// provenance through the binding's shared cache and fences through the
+// K1 shaper. These helpers only decide WHICH vault-relative page a
+// payload's provenance is probed from.
+
+/** The page a preference or retired payload was parsed from. */
+function preferenceDeliveryRel(p: BrainPreference | BrainRetired): string {
+  return p.kind === "brain-retired"
+    ? `${BRAIN_RETIRED_REL}/${p.id}.md`
+    : `${BRAIN_PREFERENCES_REL}/${p.id}.md`;
+}
+
+/**
+ * The page an agent contribution's provenance is probed from, or null
+ * when there is none to ask: a `log` row is a log event's own text,
+ * which the delivery-shaping boundary deliberately leaves untouched.
+ * The signal walk is {@link signalDeliveryRel}, shared with the
+ * artifact-id mapping in reach-events.ts so the two faces cannot drift.
+ * A note with no page of its own probes the guaranteed-absent page -
+ * null means "leave untouched" for log rows only, because a fenced
+ * delivery is the fail-closed answer for note text whose provenance
+ * nothing can name.
+ */
+function contributionDeliveryRel(vault: string, c: AgentSourceContribution): string | null {
+  switch (c.kind) {
+    case "note":
+      return c.path ?? UNPROBED_DELIVERY_REL;
+    case "preference":
+      return c.id.startsWith("ret-")
+        ? `${BRAIN_RETIRED_REL}/${c.id}.md`
+        : `${BRAIN_PREFERENCES_REL}/${c.id}.md`;
+    case "signal":
+      return signalDeliveryRel(vault, c.id);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Serialize one preference payload with its principle shaped.
+ *
+ * Delivery boundary (delivery-trust, lane A): `principle` is the payload's
+ * stored-record body and fences; a retired payload's `retired_reason` does
+ * NOT, because it is not free text - `parseRetired` refuses any value
+ * outside the closed `BRAIN_RETIRED_REASON` vocabulary (and every writer
+ * passes an enum member), so the field is a machine-readable token, not
+ * stored prose, and fencing it would break the closed-vocabulary reading
+ * remote consumers do. The free text the retire path actually collects
+ * lands in `user_rejected_reason`, which no MCP surface delivers.
+ */
+function shapePreferencePayload(
+  delivery: ReturnType<typeof deliveryView>,
+  p: BrainPreference | BrainRetired,
+): Record<string, unknown> {
+  const payload = serializePreference(p);
+  if (delivery.reach === TRANSPORT_REACH.local) return payload;
+  return {
+    ...payload,
+    principle: delivery.shape(payload.principle as string, preferenceDeliveryRel(p)),
+  };
+}
+
+/** Serialize one signal payload with its principle and raw body shaped. */
+function shapeSignalPayload(
+  delivery: ReturnType<typeof deliveryView>,
+  vault: string,
+  s: BrainSignal,
+): Record<string, unknown> {
+  const payload = serializeSignal(s);
+  if (delivery.reach === TRANSPORT_REACH.local) return payload;
+  const rel = signalDeliveryRel(vault, s.id);
+  const shaped: Record<string, unknown> = {
+    ...payload,
+    principle: delivery.shape(payload.principle as string, rel),
+  };
+  if (typeof payload.raw === "string") shaped.raw = delivery.shape(payload.raw, rel);
+  return shaped;
+}
+
+/**
+ * Shape one contribution row: its `text` body, and the principle the
+ * structured `data` block echoes beside it - the same stored text, so a
+ * fenced body with an unfenced copy in `data` would not be a fence.
+ * Log rows pass through untouched.
+ */
+function shapeContribution(
+  delivery: ReturnType<typeof deliveryView>,
+  vault: string,
+  c: AgentSourceContribution,
+): AgentSourceContribution {
+  if (delivery.reach === TRANSPORT_REACH.local) return c;
+  const rel = contributionDeliveryRel(vault, c);
+  if (rel === null) return c;
+  const data = { ...c.data };
+  if (typeof data["principle"] === "string") {
+    data["principle"] = delivery.shape(data["principle"] as string, rel);
+  }
+  return { ...c, text: delivery.shape(c.text, rel), data };
+}
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
 const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
@@ -175,6 +286,9 @@ async function toolBrainQuery(
   // a signal, a log event and a preference each NAME an artifact, and a
   // row naming one the caller may not see discloses it by naming it.
   const queryView = reachView(ctx.vault, contextReach(ctx));
+  // The delivery binding (delivery-trust, lane A): one reach resolution
+  // and one frontmatter cache for every payload body this tool returns.
+  const delivery = deliveryView(ctx);
 
   const startedAtMs = Date.now();
   const emitQueryTelemetry = (status: "ok" | "empty" | "error", resultCount: number): void => {
@@ -227,7 +341,7 @@ async function toolBrainQuery(
         emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
         return {
           mode: "preference",
-          preference: serializePreference(res.preference),
+          preference: shapePreferencePayload(delivery, res.preference),
           evidence: res.evidence.map(serializeLogEntry),
         };
       } catch (exc) {
@@ -265,8 +379,8 @@ async function toolBrainQuery(
       return {
         mode: "topic",
         topic,
-        signals: signals.map(serializeSignal),
-        preference: topicPrefVisible ? serializePreference(res.preference!) : null,
+        signals: signals.map((s) => shapeSignalPayload(delivery, ctx.vault, s)),
+        preference: topicPrefVisible ? shapePreferencePayload(delivery, res.preference!) : null,
         all_log_events: logEvents.map(serializeLogEntry),
       };
     }
@@ -317,6 +431,10 @@ async function toolBrainAgentQuery(
     limit: Number.MAX_SAFE_INTEGER,
   });
   const page = pageSlice(full.contributions, offset, limit);
+  // Delivery shaping (delivery-trust, lane A): the note-write bodies and
+  // the principle echoes ride the request's one binding; log rows pass
+  // through untouched.
+  const delivery = deliveryView(ctx);
   return {
     mode: full.mode,
     // `filters.limit` echoes the PAGE size the caller asked for, not the
@@ -326,7 +444,7 @@ async function toolBrainAgentQuery(
     unknown_agents: full.unknown_agents,
     total_matched: full.total_matched,
     returned: page.items.length,
-    contributions: page.items,
+    contributions: page.items.map((c) => shapeContribution(delivery, ctx.vault, c)),
     // The core already computed the summary over the WHOLE matched set
     // (the fetch-all above), so it does not move between pages - the
     // same whole-set semantics the sibling `brain_agent_diff` keeps.
@@ -641,6 +759,9 @@ async function toolBrainAgentDiff(
     limit: Number.MAX_SAFE_INTEGER,
   });
   const page = pageSlice(result.contributions, offset, limit);
+  // Delivery shaping (delivery-trust, lane A): the same rule the twin
+  // query tool applies, through the request's one binding.
+  const delivery = deliveryView(ctx);
   return {
     mode: result.mode,
     diff_mode: result.diff_mode,
@@ -652,7 +773,7 @@ async function toolBrainAgentDiff(
     topic_map: result.topic_map,
     total_matched: result.total_matched,
     returned: page.items.length,
-    contributions: page.items,
+    contributions: page.items.map((c) => shapeContribution(delivery, ctx.vault, c)),
     summary: result.summary,
     next_cursor: page.next_cursor,
   };
@@ -861,6 +982,15 @@ async function toolBrainUnlinkedMentions(
     reachView: reachView(ctx.vault, contextReach(ctx)),
   });
   const page = pageSlice(mentions, offset, pageSize);
+  // Each mention's `context` is one line of the source page's own prose
+  // (delivery-trust, lane A): shaped through the request's delivery
+  // binding at the page the source id was parsed from - asked in the
+  // scanner's own walk order (preferences, then retired), so the probe
+  // reads the exact page the line came from. An id whose file sits in
+  // neither folder probes the guaranteed-absent page: fail closed,
+  // never a guessed root page whose stamps could vouch for prose it
+  // does not carry. Local reach keeps the bytes.
+  const delivery = deliveryView(ctx);
   return {
     vault_path: vaultPathField(ctx),
     target_id: targetId,
@@ -869,10 +999,24 @@ async function toolBrainUnlinkedMentions(
       source: m.source,
       line: m.line,
       term: m.term,
-      context: m.contextSnippet,
+      context: delivery.shape(m.contextSnippet, mentionSourceRel(ctx.vault, m.source)),
     })),
     next_cursor: page.next_cursor,
   };
+}
+
+/**
+ * The page a mention's source id was parsed from: the scanner walks the
+ * preferences folder then the retired one, so the same walk order
+ * answers which of the two holds the file, and an id whose file is in
+ * neither probes the guaranteed-absent page.
+ */
+function mentionSourceRel(vault: string, id: string): string {
+  for (const dir of [BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]) {
+    const rel = `${dir}/${id}.md`;
+    if (existsSync(join(vault, rel))) return rel;
+  }
+  return UNPROBED_DELIVERY_REL;
 }
 
 // ----- brain_foresight (t_08a79c81) -----------------------------------------

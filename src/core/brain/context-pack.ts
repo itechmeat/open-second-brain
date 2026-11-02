@@ -1799,6 +1799,7 @@ function finalizeContextPackReport(
         safetyFiltered: item.safety?.filtered,
         epistemic: item.epistemic,
         evidenceRefs: item.evidenceRefs,
+        ...(item.dedupedFrom !== undefined ? { dedupedFrom: item.dedupedFrom } : {}),
       })),
       finalText: report.items.map((item) => item.body).join("\n\n"),
       budget: contextPackBudgetMetadata(opts, enriched),

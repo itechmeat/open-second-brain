@@ -5,6 +5,7 @@ import {
   isAnswerQuoteVerdict,
   mergeAnswerQuoteVerdicts,
 } from "./answer-quotes/check.ts";
+import { isContextReceiptTrigger, type ContextReceiptTrigger } from "./context-receipt-trigger.ts";
 import {
   appendContinuityRecord,
   isCanonicalUtcTimestamp,
@@ -14,16 +15,11 @@ import { CONTINUITY_SESSION_ID_KEY, type ContinuityRecord } from "./continuity/t
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import type { ReachView } from "./reach-view.ts";
 
-/**
- * What produced the injected context a receipt accounts for.
- *
- * `context_pack` and `pre_compress` are the two pack builders. Unit H of
- * the context-integrity-gates wave adds `session_inject`: the SessionStart
- * eager layer, which until now emitted context that nothing measured. The
- * vocabulary is closed - a reader switching over it can enumerate every
- * injection surface that exists.
- */
-export type ContextReceiptTrigger = "context_pack" | "pre_compress" | "session_inject";
+// The trigger vocabulary lives in `context-receipt-trigger.ts`, a leaf
+// module, and is re-exported here so this module's export surface is
+// unchanged; defining it here too would close an import cycle through the
+// verify kernel and the doctor registry.
+export type { ContextReceiptTrigger } from "./context-receipt-trigger.ts";
 
 export interface ContextReceiptOptions {
   readonly host: string;
@@ -52,6 +48,14 @@ export interface ContextReceiptItemInput {
   readonly epistemic?: string;
   /** `evidenced_by` wikilinks grounding the item. */
   readonly evidenceRefs?: ReadonlyArray<string>;
+  /**
+   * The id of the first copy when the dedup transform replaced this
+   * item's delivered body with the shared omission sentence (additive,
+   * forward-compatible): the one fact the verify kernel needs to
+   * re-derive the delivered bytes, which are synthetic and not a
+   * projection of the page at all.
+   */
+  readonly dedupedFrom?: string;
 }
 
 export interface EmitContextReceiptInput {
@@ -153,6 +157,7 @@ export function emitContextReceipt(
       ? { evidence_refs: [...item.evidenceRefs] }
       : {}),
     ...(item.text ? { text_hash: sha256Hex(item.text) } : {}),
+    ...(item.dedupedFrom !== undefined ? { deduped_from: item.dedupedFrom } : {}),
   }));
   const payload: Record<string, unknown> = {
     host: input.options.host,
@@ -838,16 +843,7 @@ export const RECEIPT_ITEM_SCOPED_RULES = "scoped-rules";
 export const RECEIPT_ITEM_ACTIVE_BODY = "active-body";
 export const RECEIPT_ITEM_LESSONS_BODY = "lessons-body";
 
-export function isContextReceiptTrigger(value: unknown): value is ContextReceiptTrigger {
-  return value === "context_pack" || value === "pre_compress" || value === "session_inject";
-}
-
-/** Every trigger, in declaration order, for schemas and error messages. */
-export const CONTEXT_RECEIPT_TRIGGERS: ReadonlyArray<ContextReceiptTrigger> = Object.freeze([
-  "context_pack",
-  "pre_compress",
-  "session_inject",
-]);
+export { CONTEXT_RECEIPT_TRIGGERS, isContextReceiptTrigger } from "./context-receipt-trigger.ts";
 
 function matchesReceiptFilter(record: ContinuityRecord, filter: ContextReceiptFilter): boolean {
   const payload = record.payload;

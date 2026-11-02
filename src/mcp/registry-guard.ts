@@ -398,6 +398,9 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_session_describe: "single-session metadata only",
   brain_context_receipts: "bounded receipt list per session",
   brain_event_trace: "bounded event→trace join summary; full records via per-kind readers",
+  brain_attestations:
+    "bounded store evidence: fixed-shape metadata rows over the attestation ledger plus one " +
+    "per-shard verdict summary; carries no note content at any reach",
   brain_write_destinations:
     "bounded destination table: the handler caps the page at limit and total_matched reports " +
     "the pre-truncation count; the fold is recomputed per call, so a cursor pages one walk, " +

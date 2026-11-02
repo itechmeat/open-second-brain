@@ -404,7 +404,13 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     [
       "brain_context_receipts",
       { operation: BOGUS },
-      "brain_context_receipts: operation must be list, show, or summary",
+      "brain_context_receipts: operation must be list, show, summary, or verify",
+    ],
+    [
+      "brain_attestations",
+      { operation: BOGUS },
+      "brain_attestations: operation must be list|verify " +
+        "(keygen and sign are operator CLI verbs: o2b brain attest)",
     ],
     [
       "brain_context_presets",

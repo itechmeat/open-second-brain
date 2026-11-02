@@ -58,6 +58,16 @@ import {
   writeImagesDir,
 } from "../../../src/core/brain/paths.ts";
 import { deadLetterDir } from "../../../src/core/brain/dead-letter.ts";
+import {
+  attestationsDir,
+  buildAttestationRecord,
+  writeAttestationRecord,
+} from "../../../src/core/brain/attestation/record.ts";
+import {
+  attestationKeysDir,
+  generateAttestationKeypair,
+} from "../../../src/core/brain/attestation/signing.ts";
+import { collectAttestationManifest } from "../../../src/core/brain/attestation/digest.ts";
 import { sourceArchivesDir } from "../../../src/core/brain/provenance/source-archive.ts";
 import { decisionLedgerDir } from "../../../src/core/brain/permissions/ledger.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
@@ -271,6 +281,8 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["session_import_ledger", (v) => sessionLedgerPath(v)],
     ["session_mining_ledger", (v) => sessionMiningLedgerPath(v)],
     ["session_mining_surveys", (v) => sessionMiningSurveysPath(v)],
+    ["attestations", (v) => attestationsDir(v)],
+    ["attestation_keys", (v) => attestationKeysDir(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["bootstrap_receipt", (v) => bootstrapReceiptPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],
@@ -421,6 +433,29 @@ const DRIVEN_BINDINGS: ReadonlyArray<DrivenBinding> = Object.freeze([
       mkdirSync(log, { recursive: true });
       writeFileSync(join(log, "watchdog"), "not a directory", "utf8");
       return runBrainWatchdog(vault).audit_path;
+    },
+    artifact: (derived) => derived,
+  },
+  {
+    // The attestation writer reports the exact file it created; the row
+    // declares the DIRECTORY, so the report binds through dirname.
+    id: STATE_SURFACE_ID.attestations,
+    drive: (vault) =>
+      writeAttestationRecord(
+        vault,
+        buildAttestationRecord(vault, collectAttestationManifest(vault), {
+          now: new Date("2026-08-16T10:00:00Z"),
+        }),
+      ).path,
+    artifact: (derived) => derived,
+  },
+  {
+    // The signing keys appear when the operator generates a keypair; the
+    // row declares the directory both halves live in.
+    id: STATE_SURFACE_ID.attestationKeys,
+    drive: (vault) => {
+      generateAttestationKeypair(vault);
+      return null;
     },
     artifact: (derived) => derived,
   },

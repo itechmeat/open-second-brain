@@ -113,6 +113,9 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
     "reads the WHOLE store once to count the records per kind that name no " +
     "session; count-only, so a partial read would dress a store gap up as a " +
     "finding and an unreadable ledger costs an uncertainty instead.",
+  "src/core/brain/doctor/receipt-content-drift-check.ts":
+    "reads the newest `context_receipt` month through the raw store door to " +
+    "re-hash drifted items; the skip keeps old month shards out of the walk.",
   "src/core/brain/link-graph/repair-lane.ts":
     "reads the WHOLE store to harvest `sourceRefs` paths for link repair.",
   "src/core/brain/link-graph/session-mining.ts":
@@ -176,7 +179,10 @@ const READ_MODEL_READER_COUNT = 5;
 // 27 -> 28: the session-mining-economy wave registers the explorer console
 // collector (`explorer-console.ts`), which reads every kind inside the
 // 30-day window for the written-per-day histogram.
-const DIRECT_STORE_READER_COUNT = 29;
+// 29 -> 30: the delivery-trust wave registers the receipt-content drift
+// doctor check (`doctor/receipt-content-drift-check.ts`), which reads the
+// newest receipt month through the raw store door to re-hash its items.
+const DIRECT_STORE_READER_COUNT = 30;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 

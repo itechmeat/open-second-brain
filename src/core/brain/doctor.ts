@@ -52,6 +52,7 @@ import { activeBudgetPressureCheck } from "./doctor/active-budget-check.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./doctor/check.ts";
 import { inboxArchivableCheck } from "./doctor/inbox-archive-check.ts";
 import { privacyMarkerCheck } from "./doctor/privacy-marker-check.ts";
+import { deliveryProvenanceCheck } from "./doctor/delivery-provenance-check.ts";
 import { plantedRowsCheck } from "./doctor/planted-rows-check.ts";
 import { capturePatternCheck, configCheck, vaultIgnoreCheck } from "./doctor/config-checks.ts";
 import { entityRegistryCheck } from "./doctor/entity-checks.ts";
@@ -89,6 +90,7 @@ import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts"
 import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
 import { storageCapacityCheck } from "./doctor/storage-capacity.ts";
 import { receiptLedgerCheck } from "./doctor/receipt-ledger.ts";
+import { receiptContentDriftCheck } from "./doctor/receipt-content-drift-check.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
@@ -96,6 +98,7 @@ import { frozenVaultCheck } from "./doctor/frozen-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
+import { attestationCheck } from "./doctor/attestation-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
   danglingWorkrunCheck,
@@ -220,11 +223,17 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   gitTrackedStateCheck,
   inboxArchivableCheck,
   privacyMarkerCheck,
+  // The delivery-trust wave's observable: how many delivered pages the fail-closed
+  // fence covers for lack of any derivable provenance stamp (t_1af24938).
+  deliveryProvenanceCheck,
   // The write-time twin of the privacy-marker count: third-party text
   // that planted live structure (t_c2ac4fc8), audited with the same
   // grammar the neutralizer escapes with.
   plantedRowsCheck,
   logChainCheck,
+  // The attestation liveness check (delivery trust, t_3bdb82b0): a stale,
+  // unkeyed or diverged newest attestation, one warning under one code.
+  attestationCheck,
   symlinkEscapeCheck,
   frontmatterUncertaintyProbe,
   lineageLedgerProbe,
@@ -234,6 +243,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   recoveryPointLivenessCheck,
   storageCapacityCheck,
   receiptLedgerCheck,
+  receiptContentDriftCheck,
   embeddingSunsetCheck,
   embeddingsHealthCheck,
   chunkHoldsCheck,

@@ -21,7 +21,7 @@
  * position a reader below local reach is already in.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +47,42 @@ const OWNER_B = "agent-b";
 const OWNED_BY_A = "owned-by-a";
 /** The ownerless page: delivered to every scope, so a scoped answer is never empty. */
 const SHARED = "shared";
+
+/**
+ * The one clock reference every day-aligned window input and every seed
+ * instant in this file derives from, computed once at collection time.
+ *
+ * The views this suite exercises build their windows on UTC calendar
+ * days: `view=daily` defaults to the UTC day of "now", and a date-only
+ * digest `until` renders the 24h that end at that date's midnight - so
+ * a seed at `now - 1h` falls on the previous UTC day whenever the suite
+ * runs between 00:00 and 01:00 UTC, and the windows legitimately come
+ * back empty. The anchor removes the dependence on the hour of day:
+ * it is noon of the UTC day the window machinery will see - today when
+ * the suite runs at or after 12:00 UTC, yesterday otherwise, so the
+ * anchor is always in the past - and the daily date, the weekly and
+ * digest date keys, the month and every seed instant are derived from
+ * that day. Whatever time the suite runs at, the seeded events sit
+ * hours away from every window edge the assertions lean on.
+ */
+const CLOCK = (() => {
+  const now = new Date();
+  const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const noonMs = 12 * 60 * 60 * 1000;
+  const anchor = new Date(dayStartMs + (noonMs <= now.getTime() - dayStartMs ? noonMs : -noonMs));
+  const anchorIso = anchor.toISOString();
+  return {
+    now,
+    /** Noon of the anchor day: the seed instant, always in the past. */
+    anchor,
+    /** The anchor day, `YYYY-MM-DD`: what `view=daily` is asked for. */
+    day: anchorIso.slice(0, 10),
+    /** The day after the anchor: the exclusive weekly/digest date key. */
+    nextDay: new Date(anchor.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    /** The anchor's month, `YYYY-MM`. */
+    month: anchorIso.slice(0, 7),
+  };
+})();
 
 let vault: string;
 
@@ -107,7 +143,7 @@ function log(
  * source pointer naming its artifact).
  */
 function seedTwoOwnerActivity(): string {
-  const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const recent = CLOCK.anchor.toISOString();
   makePref(SHARED);
   // Written while no gate is set, so the owner is the one this fixture
   // states rather than one a write-time gate stamped.
@@ -152,12 +188,13 @@ interface TransitionRow {
 }
 
 describe("brain_brief views honour the caller's enforced owner scope", () => {
-  const weekEnd = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const month = new Date().toISOString().slice(0, 7);
-  // A pinned instant one hour ahead, so the digest's window ([until-24h,
-  // until]) covers the fixtures' now-1h events and the rendered markdown
-  // carries no moving timestamp between two calls.
-  const digestUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const weekEnd = CLOCK.nextDay;
+  const month = CLOCK.month;
+  // A pinned instant twelve hours past the anchor noon, so the digest's
+  // window ([until-24h, until]) is the anchor day itself with the seeds
+  // at its center, and the rendered markdown carries no moving
+  // timestamp between two calls.
+  const digestUntil = new Date(CLOCK.anchor.getTime() + 12 * 60 * 60 * 1000).toISOString();
 
   test("view=weekly hides another owner's rows under fail and keeps the caller's own", async () => {
     seedTwoOwnerActivity();
@@ -191,7 +228,7 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
     seedTwoOwnerActivity();
     setGate(GATE_MODE.fail);
 
-    const asB = await call({ view: "daily" }, OWNER_B);
+    const asB = await call({ view: "daily", date: CLOCK.day }, OWNER_B);
     expect(stableText(asB)).not.toContain(OWNED_BY_A);
     expect(asB["source_pointers"]).toEqual([]);
     expect((asB["status_transitions"] as TransitionRow[]).map((t) => t.prefId)).toEqual([
@@ -199,7 +236,7 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
     ]);
     expect(asB["vault_delta"]).toMatchObject({ newPromotions: 1, newRetired: 0 });
 
-    const asA = await call({ view: "daily" }, OWNER_A);
+    const asA = await call({ view: "daily", date: CLOCK.day }, OWNER_A);
     expect(stableText(asA)).toContain(OWNED_BY_A);
     expect((asA["status_transitions"] as TransitionRow[]).map((t) => t.prefId)).toContain(
       `pref-${OWNED_BY_A}`,
@@ -229,15 +266,24 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
     seedTwoOwnerActivity();
     setGate(GATE_MODE.fail);
 
-    const asB = await call({ view: "today" }, OWNER_B);
-    expect(stableText(asB)).not.toContain(OWNED_BY_A);
-    const activityB = asB["recent_activity"] as { total: number; bullets: string[] };
-    expect(activityB.total).toBe(1);
-    expect(activityB.bullets.join("\n")).toContain("confirmed=1");
+    // The handler reads a live `new Date()` per call and the seeded
+    // event sits exactly on the hour, so two calls that straddle an
+    // hour boundary would render different age labels. Both calls
+    // answer at the same frozen instant, the CLOCK anchor's own now.
+    setSystemTime(CLOCK.now);
+    try {
+      const asB = await call({ view: "today" }, OWNER_B);
+      expect(stableText(asB)).not.toContain(OWNED_BY_A);
+      const activityB = asB["recent_activity"] as { total: number; bullets: string[] };
+      expect(activityB.total).toBe(1);
+      expect(activityB.bullets.join("\n")).toContain("confirmed=1");
 
-    const asA = await call({ view: "today" }, OWNER_A);
-    expect(stableText(asA)).toContain(OWNED_BY_A);
-    expect((asA["recent_activity"] as { total: number }).total).toBe(2);
+      const asA = await call({ view: "today" }, OWNER_A);
+      expect(stableText(asA)).toContain(OWNED_BY_A);
+      expect((asA["recent_activity"] as { total: number }).total).toBe(2);
+    } finally {
+      setSystemTime();
+    }
   });
 
   // The load-bearing convention of the delivery surfaces: a gate that
@@ -249,29 +295,39 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
       seedTwoOwnerActivity();
       setGate(mode);
 
-      const unscoped = {
-        weekly: await call({ view: "weekly", week_end: weekEnd }),
-        daily: await call({ view: "daily" }),
-        monthly: await call({ view: "monthly", month }),
-        today: await call({ view: "today" }),
-        digest: await call({ view: "digest", until: digestUntil }),
-      };
-      // Not vacuous: the private rows really are on the unscoped envelopes.
-      expect(stableText(unscoped.weekly)).toContain(OWNED_BY_A);
-      expect(stableText(unscoped.digest)).toContain(OWNED_BY_A);
+      // The fixture seeds at the CLOCK anchor, which sits exactly on an
+      // hour, and `view=today` renders the live age per call - so the
+      // byte-identical comparison below needs both renders taken at one
+      // frozen instant, exactly as the view=today test above freezes
+      // its own.
+      setSystemTime(CLOCK.now);
+      try {
+        const unscoped = {
+          weekly: await call({ view: "weekly", week_end: weekEnd }),
+          daily: await call({ view: "daily", date: CLOCK.day }),
+          monthly: await call({ view: "monthly", month }),
+          today: await call({ view: "today" }),
+          digest: await call({ view: "digest", until: digestUntil }),
+        };
+        // Not vacuous: the private rows really are on the unscoped envelopes.
+        expect(stableText(unscoped.weekly)).toContain(OWNED_BY_A);
+        expect(stableText(unscoped.digest)).toContain(OWNED_BY_A);
 
-      const scoped = {
-        weekly: await call({ view: "weekly", week_end: weekEnd }, OWNER_B),
-        daily: await call({ view: "daily" }, OWNER_B),
-        monthly: await call({ view: "monthly", month }, OWNER_B),
-        today: await call({ view: "today" }, OWNER_B),
-        digest: await call({ view: "digest", until: digestUntil }, OWNER_B),
-      };
-      expect(stableText(scoped.weekly)).toBe(stableText(unscoped.weekly));
-      expect(stableText(scoped.daily)).toBe(stableText(unscoped.daily));
-      expect(stableText(scoped.monthly)).toBe(stableText(unscoped.monthly));
-      expect(stableText(scoped.today)).toBe(stableText(unscoped.today));
-      expect(stableText(scoped.digest)).toBe(stableText(unscoped.digest));
+        const scoped = {
+          weekly: await call({ view: "weekly", week_end: weekEnd }, OWNER_B),
+          daily: await call({ view: "daily", date: CLOCK.day }, OWNER_B),
+          monthly: await call({ view: "monthly", month }, OWNER_B),
+          today: await call({ view: "today" }, OWNER_B),
+          digest: await call({ view: "digest", until: digestUntil }, OWNER_B),
+        };
+        expect(stableText(scoped.weekly)).toBe(stableText(unscoped.weekly));
+        expect(stableText(scoped.daily)).toBe(stableText(unscoped.daily));
+        expect(stableText(scoped.monthly)).toBe(stableText(unscoped.monthly));
+        expect(stableText(scoped.today)).toBe(stableText(unscoped.today));
+        expect(stableText(scoped.digest)).toBe(stableText(unscoped.digest));
+      } finally {
+        setSystemTime();
+      }
     });
   }
 });
@@ -296,6 +352,11 @@ describe("brain_brief view=digest answers the same caller as the digest resource
    * unfiltered: the retired record is a real file because
    * `connection_health` counts the retired directory directly, and the
    * events carry their author so `agent_summary` groups them per agent.
+   *
+   * The tool here is called without `until`, so its window moves with
+   * the wall clock (the last 24h), as does the resource's; the events
+   * are seeded exactly twelve hours back, the center of that window,
+   * so both sides see them at any hour the suite runs at.
    */
   function seedDigestResourceFixture(): void {
     makePref(SHARED);
@@ -324,7 +385,7 @@ describe("brain_brief view=digest answers the same caller as the digest resource
       ].join("\n"),
     );
     setGate(GATE_MODE.fail);
-    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const recent = new Date(CLOCK.now.getTime() - 12 * 60 * 60 * 1000).toISOString();
     for (let i = 0; i < 3; i++) {
       log(
         recent,
@@ -418,7 +479,7 @@ describe("brain_brief view=digest answers the same caller as the digest resource
 
   test("an unscoped digest under fail stays byte-identical to the unfiltered render", async () => {
     seedDigestResourceFixture();
-    const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const until = new Date(CLOCK.now.getTime() + 60 * 60 * 1000).toISOString();
 
     const toolMarkdown = String((await call({ view: "digest", until }, undefined))["content"]);
     // Not vacuous: the unfiltered render really carries the other owner's rows.
@@ -449,10 +510,14 @@ describe("the brain_brief report snapshots follow the caller's scope", () => {
 
   /**
    * A digest fixture whose rows are inside the window, so the snapshot
-   * payload really carries both owners' ids.
+   * payload really carries both owners' ids. A date-only `until` of the
+   * day after the anchor renders the 24h that end at that date's
+   * midnight - the anchor day itself - and the preferences are created
+   * at the anchor noon, so the rows sit hours inside that window
+   * whatever hour the suite runs at.
    */
   function seedWindowDigest(): string {
-    const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const until = CLOCK.nextDay;
     for (const [slug, owner] of [
       [SHARED, undefined],
       [OWNED_BY_A, OWNER_A],
@@ -461,7 +526,7 @@ describe("the brain_brief report snapshots follow the caller's scope", () => {
         slug,
         topic: slug,
         principle: `principle for ${slug}`,
-        created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        created_at: CLOCK.anchor.toISOString(),
         unconfirmed_until: until,
         status: BRAIN_PREFERENCE_STATUS.unconfirmed,
         evidenced_by: [`[[sig-${slug}]]`],
@@ -517,15 +582,15 @@ describe("the brain_brief report snapshots follow the caller's scope", () => {
     seedTwoOwnerActivity();
     setGate(GATE_MODE.fail);
 
-    const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const dailyAsB = await call({ view: "daily" }, OWNER_B);
+    const until = CLOCK.nextDay;
+    const dailyAsB = await call({ view: "daily", date: CLOCK.day }, OWNER_B);
     expect(dailyAsB["delta"]).toBeUndefined();
     const weeklyAsB = await call({ view: "weekly", week_end: until }, OWNER_B);
     expect(weeklyAsB["delta"]).toBeUndefined();
 
     // A later unscoped run is still the first: no scoped slice was
     // persisted for it to diff against.
-    const dailyFull = await call({ view: "daily" }, undefined);
+    const dailyFull = await call({ view: "daily", date: CLOCK.day }, undefined);
     expect((dailyFull["delta"] as { prior_date: string | null }).prior_date).toBeNull();
     const weeklyFull = await call({ view: "weekly", week_end: until }, undefined);
     expect((weeklyFull["delta"] as { prior_date: string | null }).prior_date).toBeNull();

@@ -17,6 +17,7 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainActivePath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
@@ -162,7 +163,11 @@ describe("brain_context tool — Brain present", () => {
       scope: "writing",
     });
 
-    const server = new MCPServer({ vault, configPath });
+    // The verbatim-body contract is the LOCAL face (delivery-trust, lane
+    // A): a remote reach now receives the fenced delivery, so the pin
+    // names the reach it always meant - the operator's own reads. (An
+    // absent reach resolves remote, fail closed.)
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
     await initialize(server);
     const out = await callContext(server);
     const fromDisk = readFileSync(brainActivePath(vault), "utf8");

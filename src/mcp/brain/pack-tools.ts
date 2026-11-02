@@ -65,6 +65,7 @@ import {
   summarizeContextReceiptSession,
   type ContextReceiptOptions,
 } from "../../core/brain/context-receipts.ts";
+import { verifyContextReceipt } from "../../core/brain/context-receipts-verify.ts";
 import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import {
@@ -741,7 +742,93 @@ async function toolBrainContextReceipts(
 
   if (operation === "summary") return summarizeReceipts(ctx, args);
 
-  throw unknownOperationError("brain_context_receipts: operation must be list, show, or summary");
+  if (operation === "verify") return verifyReceipt(ctx, args);
+
+  throw unknownOperationError(
+    "brain_context_receipts: operation must be list, show, summary, or verify",
+  );
+}
+
+// ----- brain_context_receipts verify (t_4300e5fd) ---------------------------
+
+/** The `operation` value a verify refusal names. */
+export const RECEIPT_VERIFY_OPERATION = "verify" as const;
+
+/** The refusal reason when the caller is below local reach. */
+export const RECEIPT_VERIFY_REACH_REASON = "reach" as const;
+
+/** The refusal reason when the receipt is flagged private or redacted. */
+export const RECEIPT_VERIFY_WITHHELD_REASON = "receipt_withheld" as const;
+
+export type ReceiptVerifyRefusalReason =
+  | typeof RECEIPT_VERIFY_REACH_REASON
+  | typeof RECEIPT_VERIFY_WITHHELD_REASON;
+
+/**
+ * A verify call that was not answered, in the shape the receipts
+ * surfaces already use for a refused half (`ReceiptCompactRefusal`):
+ * the operation names itself, `measured: false` says no item was
+ * re-hashed, and the reason names which guard refused - never a partial
+ * verification.
+ */
+export interface ReceiptVerifyRefusal {
+  readonly operation: typeof RECEIPT_VERIFY_OPERATION;
+  readonly measured: false;
+  readonly reason: ReceiptVerifyRefusalReason;
+  readonly detail: string;
+}
+
+/**
+ * Re-hash verification of one stored receipt (t_4300e5fd).
+ *
+ * Read-only, and local-reach only: the kernel re-reads the vault pages
+ * the receipt names, and page content is host-local, so a caller below
+ * local reach gets the typed refusal instead of a partial answer - the
+ * same posture the `brain_receipts` compact half takes. A receipt the
+ * session fold withholds (`private` or `redacted`) is refused
+ * symmetrically: the fold never unfolds it, and verify never re-hashes
+ * it.
+ */
+async function verifyReceipt(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const id = optionalStringArg("brain_context_receipts", args, "id");
+  if (id === undefined) {
+    throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for verify");
+  }
+  if (contextReach(ctx) !== TRANSPORT_REACH.local) {
+    // Returned as the literal, `satisfies`-checked against the refusal
+    // interface, mirroring the compact refusal's construction: the
+    // handler's wire type is Record<string, unknown>, and a value held
+    // in the interface's name would not carry the index signature.
+    return {
+      operation: RECEIPT_VERIFY_OPERATION,
+      measured: false,
+      reason: RECEIPT_VERIFY_REACH_REASON satisfies ReceiptVerifyRefusalReason,
+      detail:
+        "context receipt verification re-reads the vault pages the receipt names; " +
+        "page content is host-local, so it answers at local reach only",
+    } satisfies ReceiptVerifyRefusal;
+  }
+  const stored = getContextReceipt(ctx.vault, id);
+  if (stored === null) {
+    throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
+  }
+  if (stored.private || stored.redacted) {
+    return {
+      operation: RECEIPT_VERIFY_OPERATION,
+      measured: false,
+      reason: RECEIPT_VERIFY_WITHHELD_REASON satisfies ReceiptVerifyRefusalReason,
+      detail:
+        "the receipt is flagged private or redacted and is refused symmetrically " +
+        "with the session fold, which withholds it whole",
+    } satisfies ReceiptVerifyRefusal;
+  }
+  // Spread, not returned in its own name: the kernel's frozen interface
+  // carries no index signature, and the handler's wire type is
+  // Record<string, unknown> (the members are unchanged by the spread).
+  return { ...verifyContextReceipt(ctx.vault, stored) };
 }
 
 /** Predicate: a receipt item whose `id` is one of `ids`. */
@@ -1466,19 +1553,23 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_context_receipts",
     kind: "read",
     description:
-      "List context receipt summaries, show one full receipt by id, or fold a window into a retrieval summary (distinct items, per-item injection frequency, token cost, observed use). Receipts are append-only continuity records emitted by opt-in injection callers. Read-only.",
+      "List receipt summaries, show one receipt, fold a window into a retrieval summary " +
+      "(distinct items, frequency, token cost, observed use), or re-hash-verify a receipt " +
+      "against its vault (match/changed/unavailable; local reach; withheld refused). " +
+      "Append-only records from opt-in injectors. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "show", "summary"],
+          enum: ["list", "show", "summary", "verify"],
           description:
-            "list returns summaries, show returns one full receipt by id, summary folds a window into a retrieval report.",
+            "list returns summaries, show returns one full receipt by id, summary folds a " +
+            "window into a retrieval report, verify re-hashes one receipt against the vault.",
         },
         id: {
           type: "string",
-          description: "Receipt id required when operation is show.",
+          description: "Receipt id required when operation is show or verify.",
         },
         trigger: {
           type: "string",

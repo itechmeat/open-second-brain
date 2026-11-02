@@ -78,7 +78,9 @@ const DEFAULT_CONCURRENCY = 32;
  * Read-side complement of {@link computeDedupHash}. Walks `Brain/inbox/`,
  * `Brain/inbox/processed/` and `Brain/inbox/archived/`, and maps every
  * `sig-*.md`'s `dedup_hash` to its `{id, path}` (first seen wins, directories
- * in that order, files in listing order).
+ * in that order, files in sorted name order within a directory - a fixed
+ * order, so two files sharing a hash resolve to the same winner on every
+ * machine rather than to whichever one `readdir` happened to list first).
  *
  * The archive is included on purpose. It holds inbox signals the dream pass
  * archived because they left the contradiction window unconsumed; they used
@@ -199,7 +201,14 @@ function planWalk(vault: string, opts: DedupIndexOptions): WalkPlan {
     let names: string[];
     let mtimeMs: number | null = null;
     try {
-      names = readdirSync(dir).filter((n) => n.startsWith("sig-") && n.endsWith(".md"));
+      // Sorted, so the first-seen winner of a shared hash is the same file
+      // on every machine: raw readdir order is filesystem-dependent, and
+      // two same-hash files in one directory made the index - and the
+      // cache built from it - answer with whichever name that machine's
+      // directory listing put first.
+      names = readdirSync(dir)
+        .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
+        .toSorted();
       mtimeMs = statSync(dir).mtimeMs;
     } catch {
       continue;
