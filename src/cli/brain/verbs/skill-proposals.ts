@@ -1,7 +1,11 @@
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 
-import { resolveSkillsDir } from "../../../core/config.ts";
+import {
+  resolveSkillsDir,
+  resolveSkillRewriteJudgeCmd,
+  resolveSkillRewriteModeConfig,
+} from "../../../core/config.ts";
 import {
   SkillPageDraftError,
   commitSkillPageDraft,
@@ -14,7 +18,39 @@ import {
   listPendingSkillProposals,
   recoverSkillProposalAccepts,
   rejectSkillProposal,
+  readRewriteIncumbent,
+  recordSkillRewriteGrade,
+  stageScoredRewriteProposal,
+  DeclaredSkillProposalError,
+  type RewriteIncumbent,
 } from "../../../core/brain/skill-proposals.ts";
+import {
+  buildRewriteEnvelopes,
+  buildRewriteGradeRecord,
+  buildRewriteHeldoutEnvelopes,
+  checkRewriteHeldout,
+  runRewriteJudge,
+  scoreRewriteTranscripts,
+  selectRewriteCandidate,
+  type RewriteTaskScore,
+  type SkillRewriteMode,
+} from "../../../core/brain/skill-rewrite.ts";
+import {
+  parseSkillRewriteSpec,
+  skillRewriteSpecHash,
+  verifyRewriteTake,
+  SKILL_REWRITE_VERDICT,
+  type SkillRewriteSpec,
+} from "../../../core/brain/skill-rewrite-spec.ts";
+import {
+  parseSkillBenchmarkTasks,
+  SKILL_BENCHMARK_TASKS_FILE,
+} from "../../../core/brain/skill-rewrite-tasks.ts";
+import {
+  skillBenchmarkRoundsDir,
+  skillBenchmarkSpecPath,
+  skillBenchmarkTasksPath,
+} from "../../../core/brain/paths.ts";
 import { deriveSkillUsage } from "../../../core/brain/skill-usage.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
@@ -38,9 +74,11 @@ export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   if (sub === "usage") return usage(rest);
   if (sub === "page-candidates") return pageCandidates(rest);
   if (sub === "page-draft") return pageDraft(rest);
+  if (sub === "rewrite-plan") return rewritePlan(rest);
+  if (sub === "rewrite-score") return rewriteScore(rest);
   throw new CliError(
     "brain skill-proposals: expected learn, list, accept, reject, recover, usage, " +
-      "page-candidates, or page-draft",
+      "page-candidates, page-draft, rewrite-plan, or rewrite-score",
   );
 }
 
@@ -366,4 +404,410 @@ function parsePositiveInteger(value: string, label: string): number {
   const parsed = Number.parseInt(value, 10);
   if (parsed < 1) throw new CliError(`${label} must be a positive integer`);
   return parsed;
+}
+
+// ----- the rewrite gate rounds (agent-presence, Lane A) -------------------------
+
+/** The task set + spec pair a rewrite round is gated against, once verified. */
+interface VerifiedBenchmark {
+  readonly spec: SkillRewriteSpec;
+  readonly specHash: string;
+}
+
+/**
+ * Load and verify the benchmark: parse the task set and the spec, then run
+ * `verifyRewriteTake`. Every refusal names the file or the receipt reason -
+ * a stale benchmark silently gating nothing is worse than a loud stop.
+ */
+function loadVerifiedBenchmark(vault: string, skill: string): VerifiedBenchmark {
+  const tasksPath = skillBenchmarkTasksPath(vault, skill);
+  if (!existsSync(tasksPath)) {
+    throw new CliError(
+      `brain skill-proposals rewrite: no benchmark task set for '${skill}' at ${tasksPath} ` +
+        `(${SKILL_BENCHMARK_TASKS_FILE} must exist before a rewrite round can be planned)`,
+    );
+  }
+  const specPath = skillBenchmarkSpecPath(vault, skill);
+  if (!existsSync(specPath)) {
+    throw new CliError(
+      `brain skill-proposals rewrite: no frozen spec for '${skill}' at ${specPath} ` +
+        "(run the receipt step before planning a rewrite round)",
+    );
+  }
+  let rawTasks: unknown;
+  let rawSpec: unknown;
+  try {
+    rawTasks = JSON.parse(readFileSync(tasksPath, "utf8"));
+    rawSpec = JSON.parse(readFileSync(specPath, "utf8"));
+  } catch (error) {
+    throw new CliError(
+      `brain skill-proposals rewrite: the benchmark files for '${skill}' are not valid JSON: ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const tasks = parseSkillBenchmarkTasks(rawTasks, tasksPath);
+  const spec = parseSkillRewriteSpec(rawSpec, specPath);
+  const take = verifyRewriteTake(spec, tasks);
+  if (!take.ok) {
+    throw new CliError(
+      `brain skill-proposals rewrite: refused take for '${skill}': ${take.reason ?? "receipt mismatch"}`,
+    );
+  }
+  return { spec, specHash: skillRewriteSpecHash(spec) };
+}
+
+/**
+ * The incumbent body and version, read from the skills root this
+ * invocation's config names. A rewrite gates the CANDIDATE against the
+ * INCUMBENT, so the incumbent's bytes are the baseline round's body and
+ * its `version` is what the staged proposal bumps; a skill with no
+ * incumbent is not a rewrite target and is refused by name.
+ */
+/**
+ * The incumbent, resolved through the core's own skills-root resolution so
+ * a plan or score refusal names the same file the accept would write.
+ * The core refuses by name; this wrapper keeps the CLI error prefix.
+ */
+function loadIncumbent(
+  vault: string,
+  configPath: string,
+  skill: string,
+  override: string | undefined,
+): RewriteIncumbent {
+  const skillsRoot = override?.trim() || resolveSkillsDir(configPath) || undefined;
+  try {
+    return readRewriteIncumbent(vault, skill, skillsRoot ? { skillsRoot } : {});
+  } catch (error) {
+    if (error instanceof DeclaredSkillProposalError) {
+      throw new CliError(`brain skill-proposals rewrite: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * `rewrite-plan <skill> --candidate-file <path>`: validate the task set and
+ * the frozen spec, print the receipt, and hand out the dev-round envelopes
+ * - one baseline round over the incumbent body, one candidate round over
+ * the candidate body. Held-out members are never printed here: their
+ * single check is handed out by rewrite-score, only after a promote.
+ */
+function rewritePlan(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    "skills-root": { type: "string" },
+    "candidate-file": { type: "string", required: true },
+  });
+  const skill = trim(positional[0]);
+  if (!skill) throw new CliError("brain skill-proposals rewrite-plan: skill name is required");
+  const { config, vault } = brainVerbContext(flags);
+  const mode = resolveSkillRewriteModeConfig(config);
+  const { spec, specHash } = loadVerifiedBenchmark(vault, skill);
+  const tasks = loadTasks(vault, skill);
+  const candidatePath = trim(flags["candidate-file"]);
+  if (!candidatePath) {
+    throw new CliError("brain skill-proposals rewrite-plan: --candidate-file is required");
+  }
+  const candidateBody = readCandidateBody(candidatePath);
+  const incumbent = loadIncumbent(vault, config, skill, flags["skills-root"] as string | undefined);
+
+  const baseline = buildRewriteEnvelopes(incumbent.body, spec, tasks, { round: "baseline" });
+  const candidate = buildRewriteEnvelopes(candidateBody, spec, tasks, { round: "candidate" });
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          skill,
+          mode,
+          receipt: {
+            schema_version: spec.schemaVersion,
+            tasks_hash: spec.tasksHash,
+            seed: spec.seed,
+            split_rule: spec.splitRule,
+            dev_task_ids: spec.devTaskIds,
+            heldout_task_ids: spec.heldoutTaskIds,
+            required_margin: spec.requiredMargin,
+            min_dev_tasks: spec.minDevTasks,
+            spec_hash: specHash,
+          },
+          incumbent_version: incumbent.version,
+          rounds: { baseline, candidate },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(
+    `rewrite-plan ${skill}: mode=${mode} schema=${spec.schemaVersion} spec=${specHash} ` +
+      `tasks=${spec.tasksHash} split=${spec.splitRule} seed=${spec.seed} margin=${spec.requiredMargin} ` +
+      `dev=${spec.devTaskIds.length} heldout=${spec.heldoutTaskIds.length} ` +
+      `incumbent_version=${incumbent.version}\n`,
+  );
+  for (const envelope of [...baseline, ...candidate]) {
+    process.stdout.write(
+      `  ${envelope.round} ${envelope["task_id"]} -> ${envelope.target_path}\n` +
+        `${envelope.prompt
+          .split("\n")
+          .map((line) => `    ${line}`)
+          .join("\n")}\n`,
+    );
+  }
+  return 0;
+}
+
+function loadTasks(vault: string, skill: string): ReturnType<typeof parseSkillBenchmarkTasks> {
+  return parseSkillBenchmarkTasks(
+    JSON.parse(readFileSync(skillBenchmarkTasksPath(vault, skill), "utf8")),
+    skillBenchmarkTasksPath(vault, skill),
+  );
+}
+
+/**
+ * `rewrite-score <skill> [--rounds-dir <dir>] [--candidate-file <path>]`:
+ * score the submitted transcripts, run the selection gate, and either
+ * hand out the single held-out round (promote, held-out not yet scored) or
+ * apply the held-out gate and stage the pending proposal on a final
+ * promote. A hold and a short dev arm write ONLY the grade record.
+ *
+ * The command is re-runnable: the transcripts stay in the rounds tree, the
+ * gates are deterministic, and the second run sees the held-out arm the
+ * first run asked for.
+ */
+function rewriteScore(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    "rounds-dir": { type: "string" },
+    "candidate-file": { type: "string" },
+    "skills-root": { type: "string" },
+  });
+  const skill = trim(positional[0]);
+  if (!skill) throw new CliError("brain skill-proposals rewrite-score: skill name is required");
+  const { config, vault } = brainVerbContext(flags);
+  const mode: SkillRewriteMode = resolveSkillRewriteModeConfig(config);
+  const { spec, specHash } = loadVerifiedBenchmark(vault, skill);
+  const tasks = loadTasks(vault, skill);
+
+  const roundsDir = trim(flags["rounds-dir"]) ?? skillBenchmarkRoundsDir(vault, skill);
+  const baseline = scoreArm(vault, roundsDir, "baseline", tasks, spec);
+  const candidate = scoreArm(vault, roundsDir, "candidate", tasks, spec);
+  const selection = selectRewriteCandidate(baseline, candidate, spec);
+
+  // The advisory judge rides the command bridge, fail-open, and never
+  // moves the metric: its verdicts are reported beside the deterministic
+  // ones and reach nothing downstream.
+  const judge = runRewriteJudge(resolveSkillRewriteJudgeCmd(config), {
+    skill,
+    spec_hash: specHash,
+    metric: "tasks_passed_rate",
+    baseline_rate: selection.baselineRate,
+    candidate_rate: selection.candidateRate,
+    verdict: selection.verdict,
+  });
+
+  let heldoutScores: ReadonlyArray<RewriteTaskScore> = [];
+  let heldoutVerdict: string | null = null;
+  let heldoutEnvelopes: ReturnType<typeof buildRewriteHeldoutEnvelopes> | null = null;
+  let staged: { id: string; slug: string } | null = null;
+
+  if (selection.verdict === SKILL_REWRITE_VERDICT.promote) {
+    const heldoutDir = join(roundsDir, "heldout");
+    if (existsSync(heldoutDir) && readDirNames(heldoutDir).length > 0) {
+      heldoutScores = scoreArm(vault, roundsDir, "heldout", tasks, spec);
+      heldoutVerdict = checkRewriteHeldout(heldoutScores, spec);
+      const finalVerdict = heldoutVerdict;
+      if (finalVerdict === SKILL_REWRITE_VERDICT.promote) {
+        const candidatePath = trim(flags["candidate-file"]);
+        if (!candidatePath) {
+          throw new CliError(
+            "brain skill-proposals rewrite-score: --candidate-file is required to stage a " +
+              "promoted rewrite (the pending proposal carries the candidate body)",
+          );
+        }
+        const candidateBody = readCandidateBody(candidatePath);
+        const incumbent = loadIncumbent(
+          vault,
+          config,
+          skill,
+          flags["skills-root"] as string | undefined,
+        );
+        const result = stageScoredRewriteProposal(vault, {
+          skill: {
+            name: skill,
+            description: incumbent.description ?? "Rewritten by a benchmark-gated gate round.",
+            triggers: incumbent.triggers ?? [],
+            body: candidateBody,
+          },
+          spec,
+          specHash,
+          baselineScore: selection.baselineRate,
+          candidateScore: selection.candidateRate,
+          heldoutScore: heldoutScores.length > 0 ? passedRateOf(heldoutScores) : 1,
+          incumbentVersion: incumbent.version,
+        });
+        if (result.outcome !== "created") {
+          throw new CliError(
+            `brain skill-proposals rewrite-score: staging declined (${result.outcome}${
+              "reason" in result ? `: ${result.reason}` : ""
+            })`,
+          );
+        }
+        staged = { id: result.id, slug: result.slug };
+      }
+    } else {
+      // The one moment held-out text may enter an envelope: the selection
+      // just promoted the candidate, and the single check has not run yet.
+      const candidatePath = trim(flags["candidate-file"]);
+      if (!candidatePath) {
+        throw new CliError(
+          "brain skill-proposals rewrite-score: --candidate-file is required to hand out the " +
+            "held-out round (the envelopes carry the candidate body)",
+        );
+      }
+      heldoutEnvelopes = buildRewriteHeldoutEnvelopes(
+        readCandidateBody(candidatePath),
+        spec,
+        tasks,
+      );
+    }
+  }
+
+  const finalVerdict =
+    heldoutVerdict ??
+    (selection.verdict === SKILL_REWRITE_VERDICT.promote ? null : selection.verdict);
+  const gradeRecorded =
+    finalVerdict !== null
+      ? recordSkillRewriteGrade(vault, {
+          payload: buildRewriteGradeRecord({
+            skill,
+            spec,
+            specHash,
+            selection,
+            heldoutVerdict:
+              heldoutVerdict === SKILL_REWRITE_VERDICT.promote
+                ? SKILL_REWRITE_VERDICT.promote
+                : SKILL_REWRITE_VERDICT.hold,
+            devScores: candidate,
+            heldoutScores,
+          }),
+        }).id
+      : null;
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          skill,
+          mode,
+          spec_hash: specHash,
+          tasks_hash: spec.tasksHash,
+          verdict: finalVerdict ?? "heldout_pending",
+          baseline_rate: selection.baselineRate,
+          candidate_rate: selection.candidateRate,
+          dev: candidate,
+          held_out: heldoutScores,
+          heldout_verdict: heldoutVerdict,
+          heldout_envelopes: heldoutEnvelopes,
+          judge,
+          staged,
+          grade_record_id: gradeRecorded,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(
+    `rewrite-score ${skill}: verdict=${finalVerdict ?? "heldout_pending"} ` +
+      `baseline=${selection.baselineRate.toFixed(3)} candidate=${selection.candidateRate.toFixed(3)} ` +
+      `mode=${mode}\n`,
+  );
+  for (const score of candidate) {
+    process.stdout.write(
+      `  dev ${score.taskId} ${score.passed ? "pass" : `fail(${score.failedChecks.join(",")})`}\n`,
+    );
+  }
+  for (const score of heldoutScores) {
+    process.stdout.write(
+      `  held-out ${score.taskId} ${score.passed ? "pass" : `fail(${score.failedChecks.join(",")})`}\n`,
+    );
+  }
+  if (judge.status !== "skipped") {
+    process.stdout.write(`  judge ${judge.status}${judge.detail ? `: ${judge.detail}` : ""}\n`);
+  }
+  if (heldoutEnvelopes !== null) {
+    process.stdout.write("  held-out round pending; the single check's envelopes:\n");
+    for (const envelope of heldoutEnvelopes) {
+      process.stdout.write(
+        `  ${envelope.round} ${envelope["task_id"]} -> ${envelope.target_path}\n` +
+          `${envelope.prompt
+            .split("\n")
+            .map((line) => `    ${line}`)
+            .join("\n")}\n`,
+      );
+    }
+  }
+  if (staged !== null) process.stdout.write(`  staged ${staged.id}\n`);
+  return 0;
+}
+
+/**
+ * Read the candidate body, refusing by name when the file is not there.
+ * The raw ENOENT would put a machine stack where a refusal belongs.
+ */
+function readCandidateBody(path: string): string {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch (error) {
+    throw new CliError(
+      `brain skill-proposals rewrite: --candidate-file is not readable at ${path}: ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+}
+
+/** Read one arm's transcript files from the rounds tree and score them. */
+function scoreArm(
+  vault: string,
+  roundsDir: string,
+  arm: "baseline" | "candidate" | "heldout",
+  tasks: ReturnType<typeof parseSkillBenchmarkTasks>,
+  spec: SkillRewriteSpec,
+): ReadonlyArray<RewriteTaskScore> {
+  if (arm === "heldout") {
+    // The caller decides when the held-out arm is allowed to exist.
+    const dir = join(roundsDir, arm);
+    if (!existsSync(dir)) return [];
+    return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "heldout", spec });
+  }
+  const dir = join(roundsDir, arm);
+  if (!existsSync(dir)) {
+    throw new CliError(
+      `brain skill-proposals rewrite-score: no ${arm} round transcripts under ${dir}; ` +
+        "run rewrite-plan and execute the envelopes first - an absent arm is not a passing arm",
+    );
+  }
+  return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "dev", spec });
+}
+
+function readSubmissions(dir: string): ReadonlyArray<unknown> {
+  return readDirNames(dir)
+    .toSorted()
+    .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")));
+}
+
+function readDirNames(dir: string): ReadonlyArray<string> {
+  return readdirSync(dir).filter((name) => name.endsWith(".json"));
+}
+
+function passedRateOf(scores: ReadonlyArray<RewriteTaskScore>): number {
+  if (scores.length === 0) return 0;
+  return scores.filter((score) => score.passed).length / scores.length;
 }

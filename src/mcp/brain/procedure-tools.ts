@@ -12,6 +12,7 @@ import {
   discardUnreadableSkillAcceptJournals,
   learnSkillProposals,
   listPendingSkillProposals,
+  readSkillRewriteStatus,
   recoverSkillProposalAccepts,
   rejectSkillProposal,
   resolveSkillProposalEvidence,
@@ -288,6 +289,20 @@ async function toolBrainRecurrence(
   );
 }
 
+async function toolBrainSkillRewriteStatus(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const skillName = requiredStringArg("brain_skill_rewrite_status", args, "skill_name");
+  const status = readSkillRewriteStatus(ctx.vault, skillName);
+  return {
+    skill: status.skill,
+    receipt: status.receipt,
+    grades: status.grades,
+    pending_rewrite_slug: status.pending_rewrite_slug,
+  };
+}
+
 async function toolBrainProceduralGraph(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -424,6 +439,24 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainSkillProposals,
+  },
+  {
+    name: "brain_skill_rewrite_status",
+    kind: "read",
+    description:
+      "Read-only rewrite-lane status: the frozen benchmark receipt and whether the task set still verifies, completed gate runs' verdicts and rates, and any staged rewrite awaiting a human accept. MCP never accepts or scores.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_name: {
+          type: "string",
+          description: "Skill directory name: lowercase letters, digits, single hyphens.",
+        },
+      },
+      required: ["skill_name"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSkillRewriteStatus,
   },
   {
     name: "brain_procedural_memory",

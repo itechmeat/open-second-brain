@@ -22,10 +22,18 @@ import { rebuildProceduralGraph } from "./procedural-graph.ts";
 import type { RewriteGradeRecordPayload } from "./skill-rewrite.ts";
 import {
   isSkillRewriteVerdict,
+  parseSkillRewriteSpec,
+  skillRewriteSpecHash,
+  verifyRewriteTake,
   SKILL_REWRITE_METRIC,
   type SkillRewriteSpec,
+  type SkillRewriteVerdict,
 } from "./skill-rewrite-spec.ts";
-import { SKILL_BENCHMARK_SPEC_FILE, skillBenchmarkRelPath } from "./skill-rewrite-tasks.ts";
+import {
+  parseSkillBenchmarkTasks,
+  SKILL_BENCHMARK_SPEC_FILE,
+  skillBenchmarkRelPath,
+} from "./skill-rewrite-tasks.ts";
 import {
   listProceduralMemory,
   proceduralEntryId,
@@ -48,6 +56,8 @@ import {
   proposalWatermarkPath,
   skillAcceptJournalPath,
   skillAcceptPriorContentPath,
+  skillBenchmarkSpecPath,
+  skillBenchmarkTasksPath,
   skillProposalAcceptedPath,
   skillProposalPendingPath,
   skillProposalRejectedPath,
@@ -1597,6 +1607,194 @@ function validateRewriteGradePayload(payload: RewriteGradeRecordPayload): Contin
     dev: Object.freeze(payload.dev.map((row) => rebuildGradeTaskRow(row, "dev"))),
     held_out: Object.freeze(payload.held_out.map((row) => rebuildGradeTaskRow(row, "held-out"))),
   });
+}
+
+export interface RewriteIncumbent {
+  readonly body: string;
+  readonly version: number;
+  readonly path: string;
+  /** Present when the incumbent frontmatter carries a usable description. */
+  readonly description?: string;
+  /** Present when the incumbent frontmatter carries usable triggers. */
+  readonly triggers?: ReadonlyArray<string>;
+}
+
+/**
+ * Read an incumbent SKILL.md as a rewrite round's baseline: its body (the
+ * baseline round's prompt text) and its `version` (what the staged
+ * proposal bumps).
+ *
+ * A rewrite gates the CANDIDATE against the INCUMBENT, so a skill with no
+ * incumbent is not a rewrite target and is refused by name rather than
+ * gated against nothing. This is the CLI and MCP face of the same
+ * resolution `acceptSkillProposal` uses, so the surfaces cannot disagree
+ * about where the incumbent lives.
+ */
+export function readRewriteIncumbent(
+  vault: string,
+  skillName: string,
+  opts: { readonly skillsRoot?: string } = {},
+): RewriteIncumbent {
+  if (!SKILL_NAME_RE.test(skillName)) {
+    throw new DeclaredSkillProposalError(
+      `rewrite incumbent requires a skill directory name ` +
+        `(lowercase letters, digits and single hyphens): ${JSON.stringify(skillName)}`,
+    );
+  }
+  const path = join(resolveSkillsRoot(vault, opts.skillsRoot), skillName, SKILL_FILE_NAME);
+  if (!existsSync(path)) {
+    throw new DeclaredSkillProposalError(
+      `no incumbent SKILL.md for '${skillName}' at ${path}; a rewrite gates a candidate ` +
+        "against an existing skill, not a fresh one",
+    );
+  }
+  const [fm, body] = parseFrontmatter(path);
+  // Unlike the proposal paths, there is no default here: the incumbent's
+  // version is what the staged proposal bumps, and inventing one would
+  // silently rewrite a skill's history. A corrupted incumbent is refused.
+  const versionRaw = fm["version"];
+  const version =
+    typeof versionRaw === "number"
+      ? versionRaw
+      : typeof versionRaw === "string"
+        ? Number.parseInt(versionRaw, 10)
+        : Number.NaN;
+  if (!Number.isInteger(version) || version < 1) {
+    throw new DeclaredSkillProposalError(
+      `the incumbent SKILL.md for '${skillName}' has no usable version frontmatter at ${path}`,
+    );
+  }
+  const description = fm[SKILL_DRAFT_DESCRIPTION_KEY];
+  const triggersRaw = fm[SKILL_DRAFT_TRIGGERS_KEY];
+  const triggers = Array.isArray(triggersRaw)
+    ? triggersRaw.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+    : typeof triggersRaw === "string" && triggersRaw.trim().length > 0
+      ? [triggersRaw.trim()]
+      : [];
+  return {
+    body,
+    version,
+    path,
+    ...(typeof description === "string" && description.trim().length > 0
+      ? { description: description.trim() }
+      : {}),
+    ...(triggers.length > 0 ? { triggers } : {}),
+  };
+}
+
+// ----- the rewrite status read (agent-presence, Lane A) -------------------------
+
+/** The frozen receipt as the read-only surfaces report it. */
+export interface SkillRewriteStatusReceipt {
+  readonly schema_version: string;
+  readonly tasks_hash: string;
+  readonly spec_hash: string;
+  readonly seed: number;
+  readonly split_rule: string;
+  readonly dev_task_ids: ReadonlyArray<string>;
+  readonly heldout_task_ids: ReadonlyArray<string>;
+  readonly required_margin: number;
+  readonly min_dev_tasks: number;
+  /** Whether the CURRENT task set still matches the receipt's frozen hash. */
+  readonly take_verifies: boolean;
+  readonly take_reason: string | null;
+}
+
+/** One completed gate run, as the read-only surfaces report it. */
+export interface SkillRewriteStatusGrade {
+  readonly created_at: string;
+  readonly verdict: SkillRewriteVerdict;
+  readonly baseline_rate: number;
+  readonly candidate_rate: number;
+  readonly spec_hash: string;
+}
+
+export interface SkillRewriteStatus {
+  readonly skill: string;
+  /** Null when the skill has no benchmark yet - a named empty, not an error. */
+  readonly receipt: SkillRewriteStatusReceipt | null;
+  /** Completed gate runs for this skill, oldest first, capped at the last 10. */
+  readonly grades: ReadonlyArray<SkillRewriteStatusGrade>;
+  /** The slug of a staged-but-unaccepted scored_rewrite proposal, if any. */
+  readonly pending_rewrite_slug: string | null;
+}
+
+export const SKILL_REWRITE_STATUS_GRADE_CAP = 10;
+
+/**
+ * Read one skill's rewrite lane status: the verified receipt, the grade
+ * ledger's rows for this skill, and whether a rewrite proposal is sitting
+ * in pending awaiting a human accept.
+ *
+ * READ-ONLY, and deliberately terse: identifiers, hashes and rates - the
+ * same discipline as the grade record itself. The per-task check rows stay
+ * in the ledger where the accept review reads them; a status surface that
+ * dumped every task row on every call would be a bounded-output refusal
+ * waiting to happen, and would add nothing a human accept needs.
+ */
+export function readSkillRewriteStatus(vault: string, skillName: string): SkillRewriteStatus {
+  if (!SKILL_NAME_RE.test(skillName)) {
+    throw new DeclaredSkillProposalError(
+      `skill rewrite status requires a skill directory name ` +
+        `(lowercase letters, digits and single hyphens): ${JSON.stringify(skillName)}`,
+    );
+  }
+
+  let receipt: SkillRewriteStatusReceipt | null = null;
+  const tasksPath = skillBenchmarkTasksPath(vault, skillName);
+  const specPath = skillBenchmarkSpecPath(vault, skillName);
+  if (existsSync(tasksPath) && existsSync(specPath)) {
+    const tasks = parseSkillBenchmarkTasks(JSON.parse(readFileSync(tasksPath, "utf8")), tasksPath);
+    const spec = parseSkillRewriteSpec(JSON.parse(readFileSync(specPath, "utf8")), specPath);
+    const take = verifyRewriteTake(spec, tasks);
+    receipt = {
+      schema_version: spec.schemaVersion,
+      tasks_hash: spec.tasksHash,
+      spec_hash: skillRewriteSpecHash(spec),
+      seed: spec.seed,
+      split_rule: spec.splitRule,
+      dev_task_ids: spec.devTaskIds,
+      heldout_task_ids: spec.heldoutTaskIds,
+      required_margin: spec.requiredMargin,
+      min_dev_tasks: spec.minDevTasks,
+      take_verifies: take.ok,
+      take_reason: take.reason,
+    };
+  }
+
+  const grades = listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" })
+    .filter((record) => (record.payload as Record<string, unknown>)["skill"] === skillName)
+    .map((record) => {
+      const payload = record.payload as Record<string, unknown>;
+      const verdict = payload["verdict"];
+      return {
+        created_at: record.createdAt,
+        verdict: (isSkillRewriteVerdict(verdict) ? verdict : "hold") as SkillRewriteVerdict,
+        baseline_rate: Number(payload["baseline_rate"] ?? 0),
+        candidate_rate: Number(payload["candidate_rate"] ?? 0),
+        spec_hash: String(payload["spec_hash"] ?? ""),
+      };
+    })
+    .slice(-SKILL_REWRITE_STATUS_GRADE_CAP);
+
+  // The pending match reads the proposal's own `rewrites_skill` key: the
+  // name key would do, but the frontmatter claim is what the reviewer saw.
+  let pendingSlug: string | null = null;
+  for (const proposal of listPendingSkillProposals(vault)) {
+    if (proposal.patternKind !== SCORED_REWRITE_PATTERN_KIND) continue;
+    const [fm] = parseFrontmatter(skillProposalPendingPath(vault, proposal.slug));
+    if (fm[SKILL_REWRITES_SKILL_KEY] === skillName) {
+      pendingSlug = proposal.slug;
+      break;
+    }
+  }
+
+  return {
+    skill: skillName,
+    receipt,
+    grades,
+    pending_rewrite_slug: pendingSlug,
+  };
 }
 
 function outcomeState(successes: number, failures: number): SkillEvidenceOutcomeState {
