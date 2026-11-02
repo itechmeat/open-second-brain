@@ -295,29 +295,39 @@ describe("brain_brief views honour the caller's enforced owner scope", () => {
       seedTwoOwnerActivity();
       setGate(mode);
 
-      const unscoped = {
-        weekly: await call({ view: "weekly", week_end: weekEnd }),
-        daily: await call({ view: "daily", date: CLOCK.day }),
-        monthly: await call({ view: "monthly", month }),
-        today: await call({ view: "today" }),
-        digest: await call({ view: "digest", until: digestUntil }),
-      };
-      // Not vacuous: the private rows really are on the unscoped envelopes.
-      expect(stableText(unscoped.weekly)).toContain(OWNED_BY_A);
-      expect(stableText(unscoped.digest)).toContain(OWNED_BY_A);
+      // The fixture seeds at the CLOCK anchor, which sits exactly on an
+      // hour, and `view=today` renders the live age per call - so the
+      // byte-identical comparison below needs both renders taken at one
+      // frozen instant, exactly as the view=today test above freezes
+      // its own.
+      setSystemTime(CLOCK.now);
+      try {
+        const unscoped = {
+          weekly: await call({ view: "weekly", week_end: weekEnd }),
+          daily: await call({ view: "daily", date: CLOCK.day }),
+          monthly: await call({ view: "monthly", month }),
+          today: await call({ view: "today" }),
+          digest: await call({ view: "digest", until: digestUntil }),
+        };
+        // Not vacuous: the private rows really are on the unscoped envelopes.
+        expect(stableText(unscoped.weekly)).toContain(OWNED_BY_A);
+        expect(stableText(unscoped.digest)).toContain(OWNED_BY_A);
 
-      const scoped = {
-        weekly: await call({ view: "weekly", week_end: weekEnd }, OWNER_B),
-        daily: await call({ view: "daily", date: CLOCK.day }, OWNER_B),
-        monthly: await call({ view: "monthly", month }, OWNER_B),
-        today: await call({ view: "today" }, OWNER_B),
-        digest: await call({ view: "digest", until: digestUntil }, OWNER_B),
-      };
-      expect(stableText(scoped.weekly)).toBe(stableText(unscoped.weekly));
-      expect(stableText(scoped.daily)).toBe(stableText(unscoped.daily));
-      expect(stableText(scoped.monthly)).toBe(stableText(unscoped.monthly));
-      expect(stableText(scoped.today)).toBe(stableText(unscoped.today));
-      expect(stableText(scoped.digest)).toBe(stableText(unscoped.digest));
+        const scoped = {
+          weekly: await call({ view: "weekly", week_end: weekEnd }, OWNER_B),
+          daily: await call({ view: "daily", date: CLOCK.day }, OWNER_B),
+          monthly: await call({ view: "monthly", month }, OWNER_B),
+          today: await call({ view: "today" }, OWNER_B),
+          digest: await call({ view: "digest", until: digestUntil }, OWNER_B),
+        };
+        expect(stableText(scoped.weekly)).toBe(stableText(unscoped.weekly));
+        expect(stableText(scoped.daily)).toBe(stableText(unscoped.daily));
+        expect(stableText(scoped.monthly)).toBe(stableText(unscoped.monthly));
+        expect(stableText(scoped.today)).toBe(stableText(unscoped.today));
+        expect(stableText(scoped.digest)).toBe(stableText(unscoped.digest));
+      } finally {
+        setSystemTime();
+      }
     });
   }
 });
