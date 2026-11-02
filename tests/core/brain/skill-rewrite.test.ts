@@ -7,9 +7,13 @@
  * check. The scorer reads structural predicates only and refuses any
  * submission carrying a self-reported success field, so nothing the
  * agent claims about its own work can move the metric. Selection is the
- * preregistered three arms, and the held-out gate downgrades a promoted
- * candidate on a miss. The grade record carries ids, scores and check
- * verdicts with the spec hash - never task text, never transcript text.
+ * preregistered three arms over the receipt's FULL dev membership (a
+ * self-selected subset is not enough evidence, and an unregistered id
+ * is a refusal), the held-out gate runs once on the full held-out
+ * membership and downgrades a promoted candidate on a miss, and every
+ * transcript is bound to the candidate body it was produced against.
+ * The grade record carries ids, scores and check verdicts with the spec
+ * hash - never task text, never transcript text.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -22,6 +26,7 @@ import {
   type SkillBenchmarkTask,
 } from "../../../src/core/brain/skill-rewrite-tasks.ts";
 import {
+  SKILL_REWRITE_ROUND_ARM,
   SKILL_REWRITE_STEP,
   SKILL_REWRITE_VERDICT,
   buildRewriteEnvelopes,
@@ -33,6 +38,7 @@ import {
   scoreRewriteTranscripts,
   selectRewriteCandidate,
   type RewriteSubmission,
+  type RewriteTaskScore,
 } from "../../../src/core/brain/skill-rewrite.ts";
 import {
   buildSkillRewriteSpec,
@@ -40,6 +46,7 @@ import {
   type SkillRewriteSpec,
 } from "../../../src/core/brain/skill-rewrite-spec.ts";
 import { parseSkillBenchmarkTasks } from "../../../src/core/brain/skill-rewrite-tasks.ts";
+import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const FIXTURE_PATH = join(REPO_ROOT, "tests", "fixtures", "skill-bench", "example-skill");
@@ -98,7 +105,7 @@ describe("buildRewriteEnvelopes", () => {
       expect(envelope.status).toBe(NEEDS_LLM_STEP);
       expect(envelope.step).toBe(SKILL_REWRITE_STEP);
       expect(SPEC.devTaskIds).toContain(String(envelope["task_id"]));
-      expect(String(envelope["round"])).toBe("candidate");
+      expect(String(envelope["round"])).toBe(SKILL_REWRITE_ROUND_ARM.candidate);
       expect(envelope.prompt).toContain(CANDIDATE_BODY);
     }
     const inputs = TASKS.tasks.filter((task) => SPEC.devTaskIds.includes(task.id));
@@ -109,12 +116,26 @@ describe("buildRewriteEnvelopes", () => {
   });
 
   test("target paths drop into the skill's benchmark rounds tree", () => {
-    const envelopes = buildRewriteEnvelopes(CANDIDATE_BODY, SPEC, TASKS, { round: "baseline" });
+    const envelopes = buildRewriteEnvelopes(CANDIDATE_BODY, SPEC, TASKS, {
+      round: SKILL_REWRITE_ROUND_ARM.baseline,
+    });
     for (const envelope of envelopes) {
       expect(envelope.target_path).toBe(
         `Brain/skill-benchmarks/example-skill/rounds/baseline/${String(envelope["task_id"])}.json`,
       );
-      expect(String(envelope["round"])).toBe("baseline");
+      expect(String(envelope["round"])).toBe(SKILL_REWRITE_ROUND_ARM.baseline);
+    }
+  });
+
+  test("envelopes carry the candidate body hash the transcript must echo", () => {
+    const envelopes = buildRewriteEnvelopes(CANDIDATE_BODY, SPEC, TASKS);
+    const heldout = buildRewriteHeldoutEnvelopes(CANDIDATE_BODY, SPEC, TASKS);
+    const expected = sha256Hex(CANDIDATE_BODY);
+    for (const envelope of [...envelopes, ...heldout]) {
+      expect(envelope.candidate_sha256).toBe(expected);
+      // The prompt names the binding too: the executing agent reads the
+      // prompt, not the envelope fields.
+      expect(envelope.prompt).toContain(expected);
     }
   });
 
@@ -151,7 +172,7 @@ describe("buildRewriteHeldoutEnvelopes", () => {
     expect(envelopes.length).toBe(SPEC.heldoutTaskIds.length);
     for (const envelope of envelopes) {
       expect(SPEC.heldoutTaskIds).toContain(String(envelope["task_id"]));
-      expect(String(envelope["round"])).toBe("heldout");
+      expect(String(envelope["round"])).toBe(SKILL_REWRITE_ROUND_ARM.heldout);
       expect(envelope.prompt).toContain(CANDIDATE_BODY);
     }
     const heldoutInputs = TASKS.tasks.filter((task) => SPEC.heldoutTaskIds.includes(task.id));
@@ -267,6 +288,47 @@ describe("scoreRewriteTranscripts", () => {
     ).toThrow(/dev/);
   });
 
+  test("with the current candidate hash required, a bound transcript scores and stale or missing bindings refuse", () => {
+    const devTask = TASKS.tasks.find((task) => SPEC.devTaskIds.includes(task.id))!;
+    const candidateHash = sha256Hex(CANDIDATE_BODY);
+    const bound: RewriteSubmission = {
+      ...passingSubmission(devTask),
+      candidate_sha256: candidateHash,
+    };
+    const scores = scoreRewriteTranscripts([bound], TASKS, {
+      arm: "dev",
+      spec: SPEC,
+      candidateHash,
+    });
+    expect(scores[0]?.passed).toBe(true);
+
+    // A transcript left over from a previous candidate body never gates
+    // this one.
+    const stale: RewriteSubmission = {
+      ...passingSubmission(devTask),
+      candidate_sha256: "0".repeat(64),
+    };
+    expect(() =>
+      scoreRewriteTranscripts([stale], TASKS, { arm: "dev", spec: SPEC, candidateHash }),
+    ).toThrow(/does not match the current candidate body/);
+
+    const unbound = passingSubmission(devTask);
+    expect(() =>
+      scoreRewriteTranscripts([unbound], TASKS, { arm: "dev", spec: SPEC, candidateHash }),
+    ).toThrow(/candidate_sha256/);
+  });
+
+  test("candidate_sha256 is shape-checked even when no binding is enforced", () => {
+    const devTask = TASKS.tasks.find((task) => SPEC.devTaskIds.includes(task.id))!;
+    const malformed: RewriteSubmission = { ...passingSubmission(devTask), candidate_sha256: "zz" };
+    expect(() => scoreRewriteTranscripts([malformed], TASKS)).toThrow(/candidate_sha256/);
+    const wellFormed: RewriteSubmission = {
+      ...passingSubmission(devTask),
+      candidate_sha256: sha256Hex(CANDIDATE_BODY),
+    };
+    expect(() => scoreRewriteTranscripts([wellFormed], TASKS)).not.toThrow();
+  });
+
   test("scores come back sorted by task id", () => {
     const devTasks = TASKS.tasks.filter((task) => SPEC.devTaskIds.includes(task.id));
     const submissions = devTasks.map(passingSubmission).toSorted(() => -1);
@@ -335,6 +397,108 @@ describe("selectRewriteCandidate", () => {
     const outcome = selectRewriteCandidate(baseline, candidate, SPEC);
     expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.not_enough_evidence);
   });
+
+  test("a candidate promoting on a self-selected dev subset is not_enough_evidence", () => {
+    // The A-1 exploit: baseline runs the whole receipted dev arm, the
+    // candidate runs only its two easiest tasks. n = 2 meets the floor
+    // and the subset rate is 1.0, but five receipted dev tasks were
+    // never attempted, so the preregistered comparison cannot be
+    // computed and the gate must not promote.
+    const baseline = scoreRewriteTranscripts(devTasks.map(failingSubmission), TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    const candidate = scoreRewriteTranscripts(devTasks.slice(0, 2).map(passingSubmission), TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    const outcome = selectRewriteCandidate(baseline, candidate, SPEC);
+    expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.not_enough_evidence);
+  });
+
+  test("a dev arm missing one receipted member is not_enough_evidence even with n met", () => {
+    const baseline = scoreRewriteTranscripts(devTasks.map(failingSubmission), TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    const candidate = scoreRewriteTranscripts(devTasks.slice(1).map(passingSubmission), TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    const outcome = selectRewriteCandidate(baseline, candidate, SPEC);
+    expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.not_enough_evidence);
+  });
+
+  test("a score outside the receipt's dev membership refuses the selection by name", () => {
+    // Reachable only by bypassing the arm-checked scorer; the selection
+    // refuses it the way the held-out gate refuses a non-member, rather
+    // than letting an unregistered id move the metric.
+    const heldoutTask = TASKS.tasks.find((task) => SPEC.heldoutTaskIds.includes(task.id))!;
+    const baseline = scoreRewriteTranscripts(devTasks.map(passingSubmission), TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    const strayCandidate = scoreRewriteTranscripts(
+      [...devTasks.map(passingSubmission), passingSubmission(heldoutTask)],
+      TASKS,
+    );
+    expect(() => selectRewriteCandidate(baseline, strayCandidate, SPEC)).toThrow(
+      /not a dev member/,
+    );
+    const strayBaseline = scoreRewriteTranscripts([passingSubmission(heldoutTask)], TASKS);
+    expect(() => selectRewriteCandidate(strayBaseline, baseline, SPEC)).toThrow(/not a dev member/);
+  });
+});
+
+// Rates on this synthetic 8-id dev arm are exact binary fractions, so
+// the boundary case is bit-exact by construction: baseline 2/8 = 0.25,
+// candidate 4/8 = 0.5, margin 0.25, and 0.25 + 0.25 is exactly 0.5 in
+// IEEE doubles. A `>` relaxed to `>=` promotes here; nothing else in
+// the suite lands on the boundary.
+const GATE_IDS = [
+  "gate-01",
+  "gate-02",
+  "gate-03",
+  "gate-04",
+  "gate-05",
+  "gate-06",
+  "gate-07",
+  "gate-08",
+];
+
+const gateScore = (id: string, passed: boolean): RewriteTaskScore => ({
+  taskId: id,
+  passed,
+  failedChecks: [],
+});
+
+const gateArm = (passCount: number): ReadonlyArray<RewriteTaskScore> =>
+  GATE_IDS.map((id, index) => gateScore(id, index < passCount));
+
+const gateSpec = (margin: number): SkillRewriteSpec => ({
+  ...SPEC,
+  devTaskIds: GATE_IDS,
+  requiredMargin: margin,
+});
+
+describe("selectRewriteCandidate strict-beat boundary", () => {
+  test("a beat exactly at the required margin holds", () => {
+    const outcome = selectRewriteCandidate(gateArm(2), gateArm(4), gateSpec(0.25));
+    expect(outcome.baselineRate).toBe(0.25);
+    expect(outcome.candidateRate).toBe(0.5);
+    expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.hold);
+  });
+
+  test("a real beat under the margin holds", () => {
+    const outcome = selectRewriteCandidate(gateArm(2), gateArm(3), gateSpec(0.25));
+    expect(outcome.candidateRate).toBeGreaterThan(outcome.baselineRate);
+    expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.hold);
+  });
+
+  test("a beat beyond the margin promotes", () => {
+    const outcome = selectRewriteCandidate(gateArm(2), gateArm(5), gateSpec(0.25));
+    expect(outcome.verdict).toBe(SKILL_REWRITE_VERDICT.promote);
+  });
 });
 
 describe("checkRewriteHeldout", () => {
@@ -359,8 +523,33 @@ describe("checkRewriteHeldout", () => {
     expect(checkRewriteHeldout(scores, SPEC)).toBe(SKILL_REWRITE_VERDICT.hold);
   });
 
-  test("no held-out evidence is not a pass", () => {
-    expect(checkRewriteHeldout([], SPEC)).toBe(SKILL_REWRITE_VERDICT.hold);
+  test("a partial held-out pass refuses: every held-out member must be scored", () => {
+    // A-2: one passing transcript for the first two members; t-05 was
+    // never run. The one-shot check is incomplete, and an incomplete
+    // check refuses by name (naming the unscored member) instead of
+    // recording a hold the check never earned.
+    const scores = scoreRewriteTranscripts(heldoutTasks.slice(0, 2).map(passingSubmission), TASKS, {
+      arm: "heldout",
+      spec: SPEC,
+    });
+    expect(() => checkRewriteHeldout(scores, SPEC)).toThrow(/t-05/);
+    expect(() => checkRewriteHeldout(scores, SPEC)).toThrow(/incomplete/);
+  });
+
+  test("a dev score array handed to the held-out gate refuses by name", () => {
+    const devTask = TASKS.tasks.find((task) => SPEC.devTaskIds.includes(task.id))!;
+    const devScores = scoreRewriteTranscripts([passingSubmission(devTask)], TASKS, {
+      arm: "dev",
+      spec: SPEC,
+    });
+    expect(() => checkRewriteHeldout(devScores, SPEC)).toThrow(/not a held-out member/);
+  });
+
+  test("no held-out evidence refuses the check rather than passing or holding quietly", () => {
+    // An empty arm is the degenerate partial coverage: zero of the
+    // receipted members were scored, so the one-shot check refuses
+    // instead of issuing any verdict.
+    expect(() => checkRewriteHeldout([], SPEC)).toThrow(/incomplete/);
   });
 });
 

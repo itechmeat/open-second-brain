@@ -12,12 +12,37 @@
  * decision-model eval, and the held-out gate runs once, on the candidate
  * that earned promotion; a miss downgrades it.
  *
+ * Coverage is part of the preregistration. The dev arms may only decide
+ * when every dev member has a scored transcript on BOTH arms, and the
+ * held-out gate runs only on the full held-out membership. A short dev
+ * arm - an n under the floor, or receipted ids that were never
+ * submitted - is `not_enough_evidence`, the same honest outcome either
+ * way: the comparison the receipt preregistered cannot be computed yet,
+ * and the round stays re-runnable while the missing transcripts are
+ * produced. A score for an id OUTSIDE the receipt's membership is
+ * different in kind - the arm scored something the receipt never
+ * registered - and is refused by name. The held-out gate refuses
+ * instead of holding on partial coverage, because a hold would be
+ * recorded in a grade record as a verdict the one-shot check never
+ * earned (and would leak which held-out tasks fail without the check
+ * having run in full); a refusal writes nothing.
+ *
+ * Round transcripts are bound to the candidate body they were produced
+ * against: every envelope carries `candidate_sha256`, the sha-256 of the
+ * body in its prompt, the prompt names the binding, and the scorer
+ * refuses - by name - a transcript whose `candidate_sha256` is missing
+ * or stale whenever the caller hands it the current candidate body's
+ * hash. No transcript can gate a candidate it was never run against.
+ *
  * Every refusal here is a named {@link SkillRewriteError}: a stale task
  * set, a phantom receipt id, a malformed submission, a self-report, a
- * cross-arm leak, an unknown mode - none of them is ever a silent skip,
- * because a gate that quietly passes is worse than no gate.
+ * cross-arm leak, a stale or missing candidate binding, an unregistered
+ * task id, an incomplete held-out check, an unknown mode - none of them
+ * is ever a silent skip, because a gate that quietly passes is worse
+ * than no gate.
  */
 
+import { sha256Hex } from "../integrity/digest.ts";
 import { runJsonCommandBridge } from "../reliability/command-bridge.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
 import {
@@ -68,16 +93,21 @@ export const SKILL_REWRITE_ROUND_ARMS: ReadonlyArray<SkillRewriteRoundArm> = Obj
 );
 
 /**
- * One rewrite round envelope: the needs-llm-step spine plus the two fields
- * that tie the generated transcript back to the task it answers and the
- * arm that asked for it. The submission scorer reads `task_id` off the
- * TRANSCRIPT, not the envelope; these fields exist so a caller can
- * correlate an envelope with its task, and so the dev-only containment
- * assertion in the builder has a typed handle.
+ * One rewrite round envelope: the needs-llm-step spine plus the fields
+ * that tie the generated transcript back to the task it answers, the arm
+ * that asked for it, and the candidate body the task was rendered
+ * against. The submission scorer reads `task_id` and `candidate_sha256`
+ * off the TRANSCRIPT, not the envelope; these fields exist so a caller
+ * can correlate an envelope with its task, so the executing agent knows
+ * exactly which hash the transcript must carry, and so the dev-only
+ * containment assertion in the builder has a typed handle.
  */
 export type RewriteTaskEnvelope = NeedsLlmStep & {
   readonly task_id: string;
   readonly round: SkillRewriteRoundArm;
+  /** sha-256 of the candidate body in this envelope's prompt; the
+   * transcript must echo it, and the scorer refuses a stale one. */
+  readonly candidate_sha256: string;
 };
 
 export function isSkillRewriteRoundArm(value: unknown): value is SkillRewriteRoundArm {
@@ -126,6 +156,10 @@ export interface RewriteTaskScore {
  * One submitted transcript, in its serialized shape - the exact JSON the
  * envelope's schema hints name, dropped at the envelope's target path.
  * Field spellings are snake case to match the file on disk.
+ * `candidate_sha256` binds the transcript to the candidate body it was
+ * produced against; when the caller hands the scorer the current
+ * candidate hash, a transcript without it - or with a stale one - is
+ * refused, so scores from a previous body never gate this one.
  */
 export interface RewriteSubmission {
   readonly task_id: string;
@@ -133,6 +167,7 @@ export interface RewriteSubmission {
   readonly tools_used?: ReadonlyArray<string>;
   readonly artifacts?: ReadonlyArray<string>;
   readonly output?: Readonly<Record<string, unknown>>;
+  readonly candidate_sha256?: string;
 }
 
 /** The selection gate's outcome, with the rates it decided on. */
@@ -162,7 +197,11 @@ const KNOWN_SUBMISSION_KEYS: ReadonlyArray<string> = Object.freeze([
   "tools_used",
   "artifacts",
   "output",
+  "candidate_sha256",
 ]);
+
+/** A transcript's `candidate_sha256` must be a sha-256 hex digest. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 /** Dev rounds an envelope builder may be asked for. */
 type DevRound = Extract<SkillRewriteRoundArm, "baseline" | "candidate">;
@@ -219,6 +258,7 @@ function buildRoundEnvelopes(
   }
   const byId = new Map(tasks.tasks.map((task) => [task.id, task]));
   const devMembers = new Set(spec.devTaskIds);
+  const candidateHash = sha256Hex(candidateBody);
   const envelopes = memberIds.map((taskId) => {
     const task = byId.get(taskId);
     if (task === undefined) {
@@ -235,11 +275,12 @@ function buildRoundEnvelopes(
     );
     return buildNeedsLlmStep({
       step: SKILL_REWRITE_STEP,
-      prompt: renderTaskPrompt(candidateBody, task, targetPath),
+      prompt: renderTaskPrompt(candidateBody, task, targetPath, candidateHash),
       schema_hints: Object.freeze([SUBMISSION_SHAPE_HINT]),
       target_path: targetPath,
       task_id: task.id,
       round,
+      candidate_sha256: candidateHash,
     });
   });
   // The containment assertion the gate leans on: every envelope answers a
@@ -259,13 +300,16 @@ function buildRoundEnvelopes(
 /** The transcript contract the submitting agent must honor. */
 const SUBMISSION_SHAPE_HINT =
   "Return one JSON object per task with keys: task_id (string), steps (string array), " +
-  "tools_used (string array), artifacts (string array), output (object). " +
+  "tools_used (string array), artifacts (string array), output (object), " +
+  "candidate_sha256 (string, the sha-256 hex digest of the candidate skill body the " +
+  "task was performed against). " +
   "No other top-level keys.";
 
 function renderTaskPrompt(
   candidateBody: string,
   task: SkillBenchmarkTask,
   targetPath: string,
+  candidateHash: string,
 ): string {
   return [
     "Perform the task exactly as the candidate skill body instructs, then record what you did.",
@@ -276,23 +320,34 @@ function renderTaskPrompt(
     `Task ${task.id}:`,
     task.input,
     "",
+    `Set "candidate_sha256" to ${candidateHash} in the transcript: it binds the ` +
+      "transcript to the candidate body above, and a transcript for a different body " +
+      "is refused.",
+    "",
     `Write the JSON transcript to ${targetPath} when the task is done.`,
   ].join("\n");
 }
 
 /** Options for {@link scoreRewriteTranscripts}: which arm is being scored,
- * against which receipt. Omitted opts scores whatever was submitted. */
+ * against which receipt, and which candidate body the transcripts must be
+ * bound to. Omitted opts scores whatever was submitted, unbound. */
 export interface ScoreRewriteOptions {
   readonly arm: "dev" | "heldout";
   readonly spec: SkillRewriteSpec;
+  /** The sha-256 of the CURRENT candidate body. When given, every
+   * submission must carry a matching `candidate_sha256`; a missing or
+   * stale binding is a named refusal, so transcripts left over from a
+   * previous candidate can never gate this one. */
+  readonly candidateHash?: string;
 }
 
 /**
  * Validate submitted transcripts and score them against the task set's
  * structural predicates. Throws a named {@link SkillRewriteError} on any
  * malformed shape, an unknown task id, a duplicate submission, a
- * self-reported success field, or - when the arm is named - a submission
- * for a task the arm may not see. Scores come back sorted by task id.
+ * self-reported success field, a malformed or stale `candidate_sha256`
+ * binding, or - when the arm is named - a submission for a task the arm
+ * may not see. Scores come back sorted by task id.
  */
 export function scoreRewriteTranscripts(
   submissions: ReadonlyArray<unknown>,
@@ -333,6 +388,31 @@ export function scoreRewriteTranscripts(
         );
       }
     }
+    const boundHash = record["candidate_sha256"];
+    if (
+      boundHash !== undefined &&
+      (typeof boundHash !== "string" || !SHA256_HEX_RE.test(boundHash))
+    ) {
+      throw new SkillRewriteError(
+        "rewrite submission candidate_sha256 must be a sha-256 hex digest of the " +
+          "candidate body the task was performed against",
+      );
+    }
+    if (opts?.candidateHash !== undefined) {
+      if (boundHash === undefined) {
+        throw new SkillRewriteError(
+          `rewrite submission for task '${taskId}' is missing candidate_sha256; transcripts ` +
+            `are bound to the candidate body they were run against (expected ${opts.candidateHash})`,
+        );
+      }
+      if (boundHash !== opts.candidateHash) {
+        throw new SkillRewriteError(
+          `rewrite submission for task '${taskId}' carries candidate_sha256 ${boundHash}, ` +
+            "which does not match the current candidate body " +
+            `(${opts.candidateHash}); a transcript from a different body never gates this one`,
+        );
+      }
+    }
     if (seen.has(taskId)) {
       throw new SkillRewriteError(`rewrite submission for task '${taskId}' appears twice`);
     }
@@ -370,16 +450,31 @@ export function scoreRewriteTranscripts(
  * by strictly beating the baseline by more than the spec's margin with
  * the dev n met; a tie - and anything under the margin - holds; a short
  * dev n is its own arm, never a pass.
+ *
+ * "Met" means the receipt's full dev membership, scored on BOTH arms: a
+ * score for every dev task id. An arm that scored a subset - however
+ * large, and however good the subset's rate - has not produced the
+ * preregistered comparison, so the verdict is `not_enough_evidence`,
+ * exactly as for an n under the floor: both are the same shortfall
+ * (incomplete evidence for the receipted claim), and folding them keeps
+ * a mid-round invocation a verdict instead of an error, re-runnable once
+ * the missing transcripts land. A score for an id OUTSIDE the receipt's
+ * dev membership is different in kind - the arm scored something the
+ * receipt never registered - and is refused by name, matching the
+ * held-out gate's member refusal.
  */
 export function selectRewriteCandidate(
   baseline: ReadonlyArray<RewriteTaskScore>,
   candidate: ReadonlyArray<RewriteTaskScore>,
   spec: SkillRewriteSpec,
 ): RewriteSelection {
+  assertDevMembers(baseline, "baseline", spec);
+  assertDevMembers(candidate, "candidate", spec);
   const n = Math.min(baseline.length, candidate.length);
   const baselineRate = passedRate(baseline);
   const candidateRate = passedRate(candidate);
-  if (n < spec.minDevTasks) {
+  const fullyScored = coversAll(baseline, spec.devTaskIds) && coversAll(candidate, spec.devTaskIds);
+  if (!fullyScored || n < spec.minDevTasks) {
     return {
       verdict: SKILL_REWRITE_VERDICT.not_enough_evidence,
       baselineRate,
@@ -393,10 +488,49 @@ export function selectRewriteCandidate(
 }
 
 /**
+ * The dev arms score receipt members only: an id outside `spec.devTaskIds`
+ * in either arm means the caller bypassed the arm-checked scorer, so the
+ * selection refuses by name instead of letting an unregistered id move
+ * the metric.
+ */
+function assertDevMembers(
+  scores: ReadonlyArray<RewriteTaskScore>,
+  armName: string,
+  spec: SkillRewriteSpec,
+): void {
+  const devMembers = new Set(spec.devTaskIds);
+  for (const score of scores) {
+    if (!devMembers.has(score.taskId)) {
+      throw new SkillRewriteError(
+        `rewrite selection scored '${score.taskId}' in the ${armName} arm, which is not a ` +
+          "dev member of the receipt; the dev arms score the receipt's dev members only",
+      );
+    }
+  }
+}
+
+/** Whether every receipted id has a scored transcript in the arm. */
+function coversAll(
+  scores: ReadonlyArray<RewriteTaskScore>,
+  memberIds: ReadonlyArray<string>,
+): boolean {
+  const scored = new Set(scores.map((score) => score.taskId));
+  return memberIds.every((id) => scored.has(id));
+}
+
+/**
  * The held-out gate, run ONCE, on the candidate that earned promotion: a
- * full pass promotes, any miss - or an empty held-out arm, which is no
- * evidence at all - holds. Every score must name a held-out member; a
- * dev score array handed here is refused by name rather than folded in.
+ * full pass promotes, any miss holds. Every score must name a held-out
+ * member (a dev score array handed here is refused by name rather than
+ * folded in), and every held-out member must have a score: the one-shot
+ * check is incomplete until the whole preregistered membership has run.
+ * An incomplete check refuses by name - naming the unscored members -
+ * rather than hold, because a hold would be recorded in a grade record
+ * as a verdict the check never earned, and would tell the submitting
+ * agent which held-out tasks fail without the check having run in full.
+ * An empty arm is the degenerate partial coverage (zero of the
+ * receipted members scored) and refuses the same way; no verdict at all
+ * is the only honest output of a check that did not run.
  */
 export function checkRewriteHeldout(
   candidate: ReadonlyArray<RewriteTaskScore>,
@@ -411,7 +545,15 @@ export function checkRewriteHeldout(
       );
     }
   }
-  if (candidate.length === 0) return SKILL_REWRITE_VERDICT.hold;
+  const scored = new Set(candidate.map((score) => score.taskId));
+  const unscored = spec.heldoutTaskIds.filter((id) => !scored.has(id));
+  if (unscored.length > 0) {
+    throw new SkillRewriteError(
+      `the held-out check is incomplete: ${unscored.length} of ${spec.heldoutTaskIds.length} ` +
+        `held-out members were never scored (${unscored.join(", ")}); the one-shot check runs ` +
+        "on the full receipted membership or issues no verdict at all",
+    );
+  }
   return candidate.every((score) => score.passed)
     ? SKILL_REWRITE_VERDICT.promote
     : SKILL_REWRITE_VERDICT.hold;
