@@ -386,7 +386,12 @@ function accept(argv: string[]): number {
       "Nothing was written. The exact command: " +
       `o2b brain skill-proposals accept ${slug} --yes`;
     if (flags["json"]) {
-      writeJson({ consent: "consent-refused", written: false, error: refusal });
+      // The registered refusal verdict (CONSENT_VERDICTS in trust.ts), the
+      // same string every sibling lane's --json refusal envelope carries -
+      // a headless consumer branches on the verdict, so the field stays in
+      // the one machine vocabulary even though the exit code already says
+      // consentRefused.
+      writeJson({ consent: "headless-refused", written: false, error: refusal });
     } else {
       process.stderr.write(`error: ${refusal}\n`);
     }

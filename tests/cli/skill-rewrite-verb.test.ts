@@ -551,6 +551,29 @@ describe("rewrite-score", () => {
     expect(listPendingSkillProposals(vault).length).toBe(1);
   });
 
+  test("the --json consent refusal carries the registered headless-refused verdict", async () => {
+    // The consent vocabulary is the tree's one machine contract for
+    // refusals (CONSENT_VERDICTS in trust.ts): install, lessons, protect
+    // and doctor all emit `headless-refused` on this field with the same
+    // exit 6, so a script branching on the verdict string must not meet
+    // an unregistered spelling on this verb.
+    const slug = await stagePromotedRound();
+    const refused = await runCli([
+      "brain",
+      "skill-proposals",
+      "accept",
+      slug,
+      "--vault",
+      vault,
+      "--json",
+    ]);
+    expect(refused.returncode).toBe(6);
+    const payload = JSON.parse(refused.stdout) as { consent: string; written: boolean };
+    expect(payload.consent).toBe("headless-refused");
+    expect(payload.written).toBe(false);
+    expect(listPendingSkillProposals(vault).length).toBe(1);
+  });
+
   test("a replayed promote record cannot bless a body swapped in after staging, through the CLI", async () => {
     // The round-2 replay (M1 residual R1), end to end: rates collide, so
     // after this gate round a hand-edit that swaps the staged candidate
