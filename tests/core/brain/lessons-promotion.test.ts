@@ -30,6 +30,7 @@ import {
   LESSONS_APPROVALS_FILE,
   LESSON_PROMOTION_BLOCKED,
   LESSONS_PROMOTION_SCOPES_CONFIG_KEY,
+  LessonRenderError,
   lessonPromotionCandidates,
   lessonsApprovalsPath,
   markLessonPromoted,
@@ -407,6 +408,88 @@ describe("renderLessonsBlockBody", () => {
     expect(body).not.toContain(DEFAULT_BEGIN_MARKER);
     expect(body).not.toContain(DEFAULT_END_MARKER);
     expect(RULES_BLOCK_MARKERS.lessons.begin).not.toBe(RULES_BLOCK_MARKERS.usage.begin);
+  });
+
+  test("a scope carrying a line break refuses the render by name (marker forgery attempt)", () => {
+    // A multi-line scope (a YAML block scalar in agent-authored
+    // frontmatter) could carry a whole-line lessons end marker and brick
+    // every later lessons-block operation. The render refuses the lesson
+    // instead of emitting it.
+    const forged: LessonPromotionCandidate = {
+      prefId: "pref-forge",
+      principle: "an approved rule",
+      scope: `backend\n${RULES_BLOCK_MARKERS.lessons.end}`,
+      tier: LESSON_TIER.preferred,
+      confidence: "high",
+      contentHash: "hash-forge",
+    };
+    let thrown: unknown = null;
+    try {
+      renderLessonsBlockBody([forged]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(LessonRenderError);
+    const err = thrown as InstanceType<typeof LessonRenderError>;
+    expect(err.prefId).toBe("pref-forge");
+    expect(err.field).toBe("scope");
+    expect(err.message).toContain("pref-forge");
+    expect(err.message).not.toMatch(/\n/);
+  });
+
+  test("a scope carrying a marker string on one line refuses the render too", () => {
+    const shaped: LessonPromotionCandidate = {
+      prefId: "pref-shape",
+      principle: "an approved rule",
+      scope: RULES_BLOCK_MARKERS.lessons.end,
+      tier: LESSON_TIER.preferred,
+      confidence: "high",
+      contentHash: "hash-shape",
+    };
+    expect(() => renderLessonsBlockBody([shaped])).toThrow(LessonRenderError);
+    // Every spelling is checked, not just the lessons pair.
+    const usageShaped: LessonPromotionCandidate = {
+      ...shaped,
+      prefId: "pref-usage-shape",
+      scope: DEFAULT_BEGIN_MARKER,
+    };
+    expect(() => renderLessonsBlockBody([usageShaped])).toThrow(LessonRenderError);
+  });
+
+  test("a pref id carrying whitespace or a backtick refuses the render by name", () => {
+    const base: LessonPromotionCandidate = {
+      prefId: "pref-ok",
+      principle: "an approved rule",
+      scope: "backend",
+      tier: LESSON_TIER.preferred,
+      confidence: "high",
+      contentHash: "hash-ok",
+    };
+    for (const prefId of ["pref-two words", "pref-new\nline", "pref-`backtick`"]) {
+      let thrown: unknown = null;
+      try {
+        renderLessonsBlockBody([{ ...base, prefId }]);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(LessonRenderError);
+      const err = thrown as InstanceType<typeof LessonRenderError>;
+      expect(err.field).toBe("prefId");
+    }
+  });
+
+  test("a single-line scope with inner spaces still renders", () => {
+    const body = renderLessonsBlockBody([
+      {
+        prefId: "pref-space",
+        principle: "an approved rule",
+        scope: "code review",
+        tier: LESSON_TIER.preferred,
+        confidence: "high",
+        contentHash: "hash-space",
+      },
+    ]);
+    expect(body).toContain("(scope: code review)");
   });
 });
 

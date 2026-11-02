@@ -24,7 +24,12 @@
  *
  * The block body is a pure, deterministic render of the qualified set:
  * identical inputs produce identical bytes, no timestamp ever appears,
- * ordering is tier, then scope, then id. Idempotence lives in the shared
+ * ordering is tier, then scope, then id. Every rendered lesson is
+ * provably one line that cannot forge a managed-block marker: the
+ * principle is whitespace-collapsed, and a scope or id carrying a line
+ * break or a marker-shaped sequence REFUSES the render by name
+ * ({@link LessonRenderError}) rather than being silently rewritten.
+ * Idempotence lives in the shared
  * rules-block writer (`src/core/install/rules-block.ts`), which is the
  * ONLY writer for these files: this module never touches a rules file,
  * it only renders bodies and keeps the approval ledger.
@@ -44,7 +49,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { RULES_BLOCK_ID, type RulesBlockId } from "../install/rules-block.ts";
+import { RULES_BLOCK_ID, RULES_BLOCK_MARKERS, type RulesBlockId } from "../install/rules-block.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { listDeadEnds } from "./dead-ends.ts";
 import { LESSON_TIER, computeLessons, type LessonEntry, type LessonTier } from "./lessons.ts";
@@ -267,12 +272,80 @@ export interface RenderLessonsBlockBodyOptions {
   readonly limit?: number;
 }
 
+/** Which rendered field a {@link LessonRenderError} refused. */
+export type LessonRenderField = "prefId" | "scope";
+
+/**
+ * One lesson cannot be rendered as one managed-block line: its scope or
+ * id carries a line break or a marker-shaped sequence that could forge a
+ * lessons or usage marker inside the fence. The render refuses the
+ * lesson by name instead of silently rewriting the text - the operator
+ * fixes the preference and approves again.
+ */
+export class LessonRenderError extends Error {
+  constructor(
+    message: string,
+    public readonly prefId: string,
+    public readonly field: LessonRenderField,
+  ) {
+    super(message);
+    this.name = "LessonRenderError";
+  }
+}
+
+/** Every marker string a rendered lesson line must never carry. */
+const LESSON_LINE_FORBIDDEN_MARKERS: ReadonlyArray<string> = Object.freeze(
+  Object.values(RULES_BLOCK_MARKERS).flatMap((pair) => [pair.begin, pair.end]),
+);
+
+/**
+ * Refuse a candidate whose scope or id could break the one-line-per-
+ * lesson invariant: a line break can forge a whole-line marker, and a
+ * marker-shaped sequence anywhere in the scope is refused on sight (the
+ * discipline is "provably cannot be a marker line", not "happens not to
+ * be one"). The principle is NOT validated here - it is whitespace-
+ * collapsed below, which cannot form a marker line.
+ */
+function assertRenderableLine(candidate: LessonPromotionCandidate): void {
+  const scopeProblem = /\r|\n/.test(candidate.scope)
+    ? "it carries a line break"
+    : LESSON_LINE_FORBIDDEN_MARKERS.some((marker) => candidate.scope.includes(marker))
+      ? "it carries a managed-block marker string"
+      : null;
+  if (scopeProblem !== null) {
+    throw new LessonRenderError(
+      `renderLessonsBlockBody refuses ${candidate.prefId}: the scope is not one renderable ` +
+        "managed-block line - a scope that could forge a lessons or usage marker must never " +
+        `enter the fence (${scopeProblem}); fix the preference's scope to a single-line value ` +
+        "and approve again",
+      candidate.prefId,
+      "scope",
+    );
+  }
+  const idProblem = /\s/.test(candidate.prefId)
+    ? "it carries whitespace"
+    : candidate.prefId.includes("`")
+      ? "it carries a backtick"
+      : null;
+  if (idProblem !== null) {
+    throw new LessonRenderError(
+      `renderLessonsBlockBody refuses ${candidate.prefId}: the id is not one renderable ` +
+        `managed-block line (${idProblem}, which would break the one-line-per-lesson shape ` +
+        "and the id parser); fix the preference id and approve again",
+      candidate.prefId,
+      "prefId",
+    );
+  }
+}
+
 /**
  * Render the body that goes between the lessons markers in a rules file.
  * Deterministic: identical inputs produce identical bytes; ordering is
  * tier, then scope, then id; no timestamp ever appears (a stamped body
  * would defeat the byte-idempotent write). One line per lesson; principle
- * text is whitespace-collapsed so the one-line-per-lesson invariant holds.
+ * text is whitespace-collapsed so the one-line-per-lesson invariant holds,
+ * and a scope or id that could forge a marker line is a named refusal
+ * ({@link LessonRenderError}), never a silent rewrite.
  *
  * An EMPTY qualified set is a named refusal, not an empty fence: removal
  * of a whole block - markers included - is the shared writer's
@@ -304,13 +377,16 @@ export function renderLessonsBlockBody(
     return a.prefId.localeCompare(b.prefId);
   });
 
+  const head = ordered.slice(0, limit);
+  for (const candidate of head) assertRenderableLine(candidate);
+
   const out: string[] = [
     "Operator-approved lessons, promoted from the vault's confirmed preferences",
     "(scope-gated, hash-pinned approvals). Managed by Open Second Brain:",
     "do not hand-edit - refresh with `o2b brain lessons refresh-blocks`.",
     "",
   ];
-  for (const candidate of ordered.slice(0, limit)) {
+  for (const candidate of head) {
     const principle = candidate.principle.replace(/\s+/g, " ").trim();
     out.push(`- \`${candidate.prefId}\` (scope: ${candidate.scope}) — ${principle}`);
   }

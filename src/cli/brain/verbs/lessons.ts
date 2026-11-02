@@ -13,11 +13,15 @@
  *   - `approve <pref-id>` follows the install consent ladder: plan-only
  *     by default (target files and the block diff), `--apply` executes,
  *     a headless `--apply` without `--yes` refuses with exit 6, an
- *     interactive `--apply` without `--yes` asks once. The ledger row is
- *     recorded only AFTER the rules-block writes landed, so a refused
- *     approve lifts nothing - not even a prior denial. Every rules-file
- *     byte goes through the shared writer (`src/core/install/
- *     rules-block.ts`); this verb never writes a rules file itself.
+ *     interactive `--apply` without `--yes` asks once. Before any write,
+ *     the plan for EVERY affected target is computed and every writer
+ *     refusal is fired (the same dry pre-pass refresh-blocks runs), so a
+ *     refusal on one target refuses the whole verb and no target is left
+ *     written and unmanaged. The ledger row is recorded only AFTER the
+ *     rules-block writes landed, so a refused approve lifts nothing -
+ *     not even a prior denial. Every rules-file byte goes through the
+ *     shared writer (`src/core/install/rules-block.ts`); this verb never
+ *     writes a rules file itself.
  *   - `deny <pref-id>` records the decision and appends the log event,
  *     gated by the same ladder because a denial is a state change too;
  *     it never writes a rules file.
@@ -56,6 +60,7 @@ import { BRAIN_LOG_EVENT_KIND, type BrainLogEventKind } from "../../../core/brai
 import { AGENT_INSTRUCTION_FILES } from "../../../core/brain/writeback-contract.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import {
+  FUTURE_ANCHOR_ALLOWANCE_MS,
   RULES_BLOCK_ERROR_KIND,
   RULES_BLOCK_ID,
   RulesBlockError,
@@ -256,7 +261,12 @@ function rulesBlockErrorLine(err: unknown): string {
  * The latest promotion stamp among the approval rows covering `file`, as
  * epoch ms - the ownership record the writer's hand-edit gate compares
  * the file mtime against. No stamped row returns null, which makes the
- * writer refuse to overwrite a diverged block nobody recorded.
+ * writer refuse to overwrite a diverged block nobody recorded. A stamp
+ * further than the shared clock-skew allowance into the future is
+ * ignored as if unparsable: the ledger is agent-writable state, and a
+ * future-stamped record would make every operator hand-edit read as a
+ * canonical move under an untouched file - the fail-closed direction is
+ * "no trustworthy record".
  */
 function installedAtMsFor(
   approvals: ReadonlyArray<LessonApprovalRow>,
@@ -267,7 +277,9 @@ function installedAtMsFor(
     if (row.decision !== "approved" || !row.targets.includes(file)) continue;
     if (row.lastPromotedAt === null) continue;
     const ms = Date.parse(row.lastPromotedAt);
-    if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
+    if (!Number.isFinite(ms)) continue;
+    if (ms > Date.now() + FUTURE_ANCHOR_ALLOWANCE_MS) continue;
+    if (latest === null || ms > latest) latest = ms;
   }
   return latest;
 }
@@ -489,7 +501,15 @@ async function lessonsApprove(argv: string[]): Promise<number> {
     );
   }
 
-  const planLines = approvePlanLines(vault, prefId, sim.promotable, simulated, targets.targets);
+  // The plan render is a refusal surface too (a target with malformed
+  // markers, or a lesson whose scope cannot render as one block line):
+  // it refuses BEFORE consent, never with a crash past it.
+  let planLines: string[];
+  try {
+    planLines = approvePlanLines(vault, prefId, sim.promotable, simulated, targets.targets);
+  } catch (err) {
+    return fail(rulesBlockErrorLine(err));
+  }
   if (!apply) {
     if (json) {
       writeJson({
@@ -517,6 +537,40 @@ async function lessonsApprove(argv: string[]): Promise<number> {
       ok("approval cancelled; nothing was written");
       return LESSONS_EXIT.ok;
     }
+  }
+
+  // The dry pre-pass, the same pure-plan discipline the installer and
+  // refresh-blocks hold: the plan for EVERY affected target is computed
+  // and every writer refusal is fired BEFORE any write lands. A refusal
+  // on any target refuses the whole verb, so a multi-target approve can
+  // never leave an earlier target written, approved-shaped, and managed
+  // by nothing (the ledger row lands only after every write succeeds).
+  const prePassRefusals: string[] = [];
+  for (const target of targets.targets) {
+    let body: string | null;
+    try {
+      body = canonicalBodyFor(sim.promotable, simulated, target, vault);
+    } catch (err) {
+      prePassRefusals.push(`${target}: ${rulesBlockErrorLine(err)}`);
+      continue;
+    }
+    if (body === null) continue; // unreachable: the approved lesson qualifies
+    try {
+      writeBlock(join(vault, target), body, {
+        dryRun: true,
+        force,
+        installedAtMs: installedAtMsFor(ledger, target),
+      });
+    } catch (err) {
+      prePassRefusals.push(`${target}: ${rulesBlockErrorLine(err)}`);
+    }
+  }
+  if (prePassRefusals.length > 0) {
+    return fail(
+      `approve refused before any write:\n` +
+        prePassRefusals.map((line) => `  ${line}`).join("\n") +
+        "\nnothing was written and no approval was recorded",
+    );
   }
 
   const written: string[] = [];
@@ -719,7 +773,15 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
       skips.push({ target, reason: "no managed lessons block (refresh never creates one)" });
       continue;
     }
-    const body = canonicalBodyFor(promotable, ledger, target, vault);
+    let body: string | null;
+    try {
+      body = canonicalBodyFor(promotable, ledger, target, vault);
+    } catch (err) {
+      // A canonical body that cannot render (a lesson whose scope could
+      // forge a marker line) is a named per-target error, not a crash.
+      errors.push(`${target}: ${rulesBlockErrorLine(err)}`);
+      continue;
+    }
     const installedAtMs = installedAtMsFor(ledger, target);
     if (body === null) {
       // Removal is the empty qualified set's only honest render. The

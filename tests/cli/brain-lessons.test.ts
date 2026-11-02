@@ -247,6 +247,94 @@ describe("o2b brain lessons approve", () => {
     expect(out.returncode).toBe(2);
     expect(out.stderr).toContain("pref-absent");
   });
+
+  test("a lesson whose scope could forge a block marker refuses the approve by name", async () => {
+    // The enabled-scope twin carries the marker-shaped scope, so the
+    // lesson QUALIFIES - and the render must still refuse it, before any
+    // consent, write or ledger row. writePreference refuses a marker-
+    // shaped scope at write time, so the fixture seeds a normal file and
+    // then edits the persisted frontmatter directly: the preference file
+    // is vault state that can arrive by other means than this build's
+    // writer, which is exactly the shape the render must refuse.
+    const forgedScope = RULES_BLOCK_MARKERS.lessons.end;
+    seedPreferredLesson("forge-lesson");
+    const prefPath = join(vault, "Brain", "preferences", "pref-forge-lesson.md");
+    const persisted = readFileSync(prefPath, "utf8");
+    expect(persisted).toContain("scope:");
+    writeFileSync(prefPath, persisted.replace(/scope:.*/, `scope: "${forgedScope}"`));
+    writeFileSync(join(vault, "AGENTS.md"), "# house rules\n\nbe careful.\n");
+    const rulesBefore = readFileSync(join(vault, "AGENTS.md"), "utf8");
+
+    const planned = await runCli(["brain", "lessons", "approve", "pref-forge-lesson"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [SCOPE_ENV]: forgedScope },
+    });
+    expect(planned.returncode).toBe(1);
+    expect(planned.stderr).toContain("pref-forge-lesson");
+    expect(planned.stderr).toContain("scope");
+
+    const applied = await runCli(
+      [
+        "brain",
+        "lessons",
+        "approve",
+        "pref-forge-lesson",
+        "--apply",
+        "--yes",
+        "--target",
+        "AGENTS.md",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [SCOPE_ENV]: forgedScope } },
+    );
+    expect(applied.returncode).toBe(1);
+    expect(applied.stderr).toContain("pref-forge-lesson");
+    // Nothing was written: no block, no ledger row.
+    expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toBe(rulesBefore);
+    expect(existsSync(lessonsApprovalsPath(vault))).toBe(false);
+  });
+
+  test("a refusal on the second target refuses the whole approve before any write", async () => {
+    // The multi-target approve must compute the plan for ALL targets
+    // first (the installer's dry-pass discipline): a refusal on the
+    // second target must not leave the first written and unmanaged.
+    seedPreferredLesson("multi-lesson");
+    writeFileSync(join(vault, "AGENTS.md"), "# rules\n");
+    writeFileSync(
+      join(vault, "CLAUDE.md"),
+      [
+        "# claude rules",
+        "",
+        RULES_BLOCK_MARKERS.lessons.begin,
+        "hand-written lessons content",
+        RULES_BLOCK_MARKERS.lessons.end,
+        "",
+      ].join("\n"),
+    );
+    const out = await runCli(
+      [
+        "brain",
+        "lessons",
+        "approve",
+        "pref-multi-lesson",
+        "--apply",
+        "--yes",
+        "--target",
+        "AGENTS.md",
+        "--target",
+        "CLAUDE.md",
+      ],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    expect(out.stderr).toContain("CLAUDE.md");
+    expect(out.stderr).toContain("user-modified-block");
+    expect(out.stderr).toContain("nothing was written");
+    // Neither target moved and no approval row was recorded.
+    expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toBe("# rules\n");
+    expect(readFileSync(join(vault, "CLAUDE.md"), "utf8")).toContain(
+      "hand-written lessons content",
+    );
+    expect(existsSync(lessonsApprovalsPath(vault))).toBe(false);
+  });
 });
 
 describe("o2b brain lessons deny", () => {
@@ -397,6 +485,58 @@ describe("o2b brain lessons refresh-blocks", () => {
     expect(dry.returncode).toBe(0);
     expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toBe(before);
     expect(readFileSync(lessonsApprovalsPath(vault), "utf8")).toBe(ledgerBefore);
+  });
+
+  test("a future-stamped lastPromotedAt is untrusted: the hand-edited block refuses without --force", async () => {
+    // The promotion stamp lives in agent-writable ledger state. Stamping
+    // it into the future would make every later operator hand-edit read
+    // as a canonical move under an untouched file, so the gate must
+    // treat it as no record - which refuses the removal path too.
+    seedPreferredLesson("future-stamp-lesson");
+    writeFileSync(join(vault, "AGENTS.md"), "# rules\n");
+    const approval = await runCli(
+      [
+        "brain",
+        "lessons",
+        "approve",
+        "pref-future-stamp-lesson",
+        "--apply",
+        "--yes",
+        "--target",
+        "AGENTS.md",
+      ],
+      { env: env() },
+    );
+    expect(approval.returncode).toBe(0);
+    // Re-stamp the row into the future, far past the clock-skew allowance.
+    const rows = readLessonApprovals(vault);
+    recordLessonApproval(vault, {
+      ...rows[0]!,
+      lastPromotedAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    });
+    // The approved text moves, so nothing qualifies any more and the
+    // refresh would REMOVE the block; a hand edit makes the file the
+    // operator's, not the writer's.
+    const rulesPath = join(vault, "AGENTS.md");
+    writeFileSync(
+      rulesPath,
+      readFileSync(rulesPath, "utf8").replace(PRINCIPLE, "HAND EDITED LINE"),
+    );
+    const refused = await runCli(["brain", "lessons", "refresh-blocks", "--apply", "--yes"], {
+      env: env(),
+    });
+    expect(refused.returncode).toBe(1);
+    expect(refused.stderr).toContain("user-modified-block");
+    expect(readFileSync(rulesPath, "utf8")).toContain("HAND EDITED LINE");
+    // --force stays the documented override.
+    const forced = await runCli(
+      ["brain", "lessons", "refresh-blocks", "--apply", "--yes", "--force"],
+      { env: env() },
+    );
+    expect(forced.returncode).toBe(0);
+    expect(existsSync(rulesPath) ? readFileSync(rulesPath, "utf8") : "").not.toContain(
+      "HAND EDITED LINE",
+    );
   });
 
   test("a hand-edited block refuses the refresh by name; --force overrides", async () => {
