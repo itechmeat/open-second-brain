@@ -117,7 +117,7 @@ describe("active-inject session_inject receipt session key", () => {
     expect(injected.length).toBeGreaterThan(0);
     // Each test here spawns a real `bun run` hook child; pin the per-test
     // budget past bun's 5 s default so a loaded runner cannot flake it.
-  }, 20000);
+  }, 60000);
 
   test("a payload without a session_id leaves the key absent, never invented", async () => {
     writeActive(ACTIVE_BODY);
@@ -126,5 +126,5 @@ describe("active-inject session_inject receipt session key", () => {
     const receipts = injectionReceipts();
     expect(receipts.length).toBe(1);
     expect("session_id" in receipts[0]!.payload).toBe(false);
-  }, 20000);
+  }, 60000);
 });
