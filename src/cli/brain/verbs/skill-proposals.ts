@@ -42,6 +42,7 @@ import {
   SKILL_REWRITE_VERDICT,
   type SkillRewriteSpec,
 } from "../../../core/brain/skill-rewrite-spec.ts";
+import { sha256Hex } from "../../../core/integrity/digest.ts";
 import {
   parseSkillBenchmarkTasks,
   SKILL_BENCHMARK_TASKS_FILE,
@@ -571,11 +572,16 @@ function loadTasks(vault: string, skill: string): ReturnType<typeof parseSkillBe
 }
 
 /**
- * `rewrite-score <skill> [--rounds-dir <dir>] [--candidate-file <path>]`:
+ * `rewrite-score <skill> --candidate-file <path> [--rounds-dir <dir>]`:
  * score the submitted transcripts, run the selection gate, and either
  * hand out the single held-out round (promote, held-out not yet scored) or
  * apply the held-out gate and stage the pending proposal on a final
  * promote. A hold and a short dev arm write ONLY the grade record.
+ *
+ * The candidate body is required on every run, not just a staging one:
+ * the scorer binds each candidate-arm submission to the CURRENT candidate
+ * body through the `candidate_sha256` its envelope carried, so a
+ * transcript left over from a previous candidate can never gate this one.
  *
  * The command is re-runnable: the transcripts stay in the rounds tree, the
  * gates are deterministic, and the second run sees the held-out arm the
@@ -596,9 +602,19 @@ function rewriteScore(argv: string[]): number {
   const { spec, specHash } = loadVerifiedBenchmark(vault, skill);
   const tasks = loadTasks(vault, skill);
 
+  const candidatePath = trim(flags["candidate-file"]);
+  if (!candidatePath) {
+    throw new CliError(
+      "brain skill-proposals rewrite-score: --candidate-file is required so the scorer binds " +
+        "transcripts to the candidate body they were produced against (candidate_sha256)",
+    );
+  }
+  const candidateBody = readCandidateBody(candidatePath);
+  const candidateHash = sha256Hex(candidateBody);
+
   const roundsDir = trim(flags["rounds-dir"]) ?? skillBenchmarkRoundsDir(vault, skill);
   const baseline = scoreArm(vault, roundsDir, "baseline", tasks, spec);
-  const candidate = scoreArm(vault, roundsDir, "candidate", tasks, spec);
+  const candidate = scoreArm(vault, roundsDir, "candidate", tasks, spec, candidateHash);
   const selection = selectRewriteCandidate(baseline, candidate, spec);
 
   // The advisory judge rides the command bridge, fail-open, and never
@@ -621,18 +637,10 @@ function rewriteScore(argv: string[]): number {
   if (selection.verdict === SKILL_REWRITE_VERDICT.promote) {
     const heldoutDir = join(roundsDir, "heldout");
     if (existsSync(heldoutDir) && readDirNames(heldoutDir).length > 0) {
-      heldoutScores = scoreArm(vault, roundsDir, "heldout", tasks, spec);
+      heldoutScores = scoreArm(vault, roundsDir, "heldout", tasks, spec, candidateHash);
       heldoutVerdict = checkRewriteHeldout(heldoutScores, spec);
       const finalVerdict = heldoutVerdict;
       if (finalVerdict === SKILL_REWRITE_VERDICT.promote) {
-        const candidatePath = trim(flags["candidate-file"]);
-        if (!candidatePath) {
-          throw new CliError(
-            "brain skill-proposals rewrite-score: --candidate-file is required to stage a " +
-              "promoted rewrite (the pending proposal carries the candidate body)",
-          );
-        }
-        const candidateBody = readCandidateBody(candidatePath);
         const incumbent = loadIncumbent(
           vault,
           config,
@@ -665,18 +673,7 @@ function rewriteScore(argv: string[]): number {
     } else {
       // The one moment held-out text may enter an envelope: the selection
       // just promoted the candidate, and the single check has not run yet.
-      const candidatePath = trim(flags["candidate-file"]);
-      if (!candidatePath) {
-        throw new CliError(
-          "brain skill-proposals rewrite-score: --candidate-file is required to hand out the " +
-            "held-out round (the envelopes carry the candidate body)",
-        );
-      }
-      heldoutEnvelopes = buildRewriteHeldoutEnvelopes(
-        readCandidateBody(candidatePath),
-        spec,
-        tasks,
-      );
+      heldoutEnvelopes = buildRewriteHeldoutEnvelopes(candidateBody, spec, tasks);
     }
   }
 
@@ -776,19 +773,32 @@ function readCandidateBody(path: string): string {
   }
 }
 
-/** Read one arm's transcript files from the rounds tree and score them. */
+/**
+ * Read one arm's transcript files from the rounds tree and score them.
+ * `candidateHash` binds the arm's submissions to the CURRENT candidate
+ * body (kernel review, Fixer A1's transcript-candidate binding): a
+ * submission whose `candidate_sha256` is missing or stale is refused by
+ * name. The baseline arm is left unbound - its transcripts answer the
+ * incumbent's envelopes, and the incumbent does not change mid-round.
+ */
 function scoreArm(
   vault: string,
   roundsDir: string,
   arm: "baseline" | "candidate" | "heldout",
   tasks: ReturnType<typeof parseSkillBenchmarkTasks>,
   spec: SkillRewriteSpec,
+  candidateHash?: string,
 ): ReadonlyArray<RewriteTaskScore> {
+  const binding = candidateHash !== undefined ? { candidateHash } : {};
   if (arm === "heldout") {
     // The caller decides when the held-out arm is allowed to exist.
     const dir = join(roundsDir, arm);
     if (!existsSync(dir)) return [];
-    return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "heldout", spec });
+    return scoreRewriteTranscripts(readSubmissions(dir), tasks, {
+      arm: "heldout",
+      spec,
+      ...binding,
+    });
   }
   const dir = join(roundsDir, arm);
   if (!existsSync(dir)) {
@@ -797,7 +807,7 @@ function scoreArm(
         "run rewrite-plan and execute the envelopes first - an absent arm is not a passing arm",
     );
   }
-  return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "dev", spec });
+  return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "dev", spec, ...binding });
 }
 
 function readSubmissions(dir: string): ReadonlyArray<unknown> {

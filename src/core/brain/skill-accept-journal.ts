@@ -40,6 +40,24 @@
  * the sequence completes or is resolved. A journal left on disk means a
  * sequence is still outstanding.
  *
+ * The marker file itself is agent-writable, and its `materializedPath`
+ * drives the rollback's deletion and the restore's rewrite, so the parser
+ * refuses (security audit M4, the deletion sink) a `materialized_path` the
+ * accept sequence cannot have produced on a marker whose target did not
+ * exist - the shape the rollback's `rmSync` reads with no at-use guard in
+ * front of it: a relative value (the module writes only absolute paths), or
+ * an absolute path resolving outside the vault and the skills root the
+ * materialize step resolves. The one shape left outside both roots stays
+ * admissible - a `mature_page` materialization under a caller's override
+ * skills root, which recovery cannot re-derive (the field exists precisely
+ * so the resolver never has to guess a tree) - recognized as an absolute
+ * path ending in the skill page filename. On a marker whose target DID
+ * exist, the path reaches only the restore branch, which validates its own
+ * target at use; there the parser stays permissive so diagnosis can still
+ * read the marker. A refused marker is unreadable data, exactly like a
+ * corrupt one: named, retained, and blocking every accept until an operator
+ * removes it. A hand-edited journal is not a recovery input.
+ *
  * A marker that cannot be READ is a third state, and it used to be a dead
  * end: the sweep runs before every accept, so one unparseable file blocked
  * the verb permanently and the refusal named no way out. There are now two
@@ -50,10 +68,12 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
+import { resolveSkillsDir } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
+import { SKILL_FILE_NAME } from "../surface/skills.ts";
 import { requireNextStep } from "./next-step.ts";
 import {
   BRAIN_SKILL_ACCEPT_JOURNAL_REL,
@@ -199,12 +219,15 @@ export function readSkillAcceptJournals(vault: string): SkillAcceptJournalState 
   if (!existsSync(dir)) {
     return Object.freeze({ entries: Object.freeze([]), unreadable: Object.freeze([]) });
   }
+  // Resolved once per read: the parse-time materialized-path guard checks
+  // against the same skills root the writing accept resolved.
+  const skillsRoot = resolveJournalSkillsRoot(vault);
   const entries: SkillAcceptJournalEntry[] = [];
   const unreadable: UnreadableSkillAcceptJournal[] = [];
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(JOURNAL_SUFFIX)) continue;
     const path = join(dir, name);
-    const parsed = parseJournal(path);
+    const parsed = parseJournal(path, vault, skillsRoot);
     if ("detail" in parsed) unreadable.push(parsed);
     else entries.push(parsed);
   }
@@ -224,7 +247,11 @@ export function listSkillAcceptJournals(vault: string): ReadonlyArray<SkillAccep
   return state.entries;
 }
 
-function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAcceptJournal {
+function parseJournal(
+  path: string,
+  vault: string,
+  skillsRoot: string,
+): SkillAcceptJournalEntry | UnreadableSkillAcceptJournal {
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -249,13 +276,23 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
   }
   const materializedPath = raw["materialized_path"];
   const priorContentPath = raw["prior_content_path"];
+  const materializedExisted = raw["procedure_existed"] === true;
+  // The rollback's rmSync is the one sink a hand-edited path reaches with
+  // no at-use guard in front of it. The restore branch validates its own
+  // target (security audit M4), and once the target existed mid-sequence
+  // the path feeds nothing else - so the parse boundary refuses an
+  // unproducible path exactly where the deletion sink reads it.
+  if (!materializedExisted && typeof materializedPath === "string" && materializedPath.length > 0) {
+    const refusal = refusedMaterializedPathDetail(materializedPath, vault, skillsRoot);
+    if (refusal !== null) return Object.freeze({ path, detail: refusal });
+  }
   return Object.freeze({
     slug,
     id,
     phase: phase as SkillAcceptPhase,
     startedAt,
     acceptedExisted: raw["accepted_existed"] === true,
-    materializedExisted: raw["procedure_existed"] === true,
+    materializedExisted,
     ...(typeof materializedPath === "string" && materializedPath.length > 0
       ? { materializedPath }
       : {}),
@@ -263,4 +300,60 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
       ? { priorContentPath }
       : {}),
   });
+}
+
+/**
+ * The skills root the materialize step resolves when the accept sequence
+ * stamps a marker: the configured override, else the vault's own skills
+ * subtree. The same resolution `acceptSkillProposal` performs, so the
+ * parse-time guard admits exactly the paths a real accept can write.
+ */
+function resolveJournalSkillsRoot(vault: string): string {
+  return resolveSkillsDir() ?? join(vault, "Brain", "skills");
+}
+
+/**
+ * The parse-time refusal for a journal-supplied `materialized_path` on a
+ * marker whose target did not exist (the rollback's deletion shape), or
+ * null when the accept sequence itself could have written it.
+ *
+ * A value the module cannot have produced is refused at the boundary both
+ * readers share, before any recovery touches the filesystem: a relative
+ * value (the module writes only absolute paths), or an absolute path
+ * resolving outside the vault and the skills root - except the one shape
+ * recovery cannot re-derive, a `mature_page` materialization under a
+ * caller's override skills root, admissible when it ends in the skill page
+ * filename (this also keeps markers readable across a skills-dir config
+ * change between accept and recovery).
+ */
+function refusedMaterializedPathDetail(
+  value: string,
+  vault: string,
+  skillsRoot: string,
+): string | null {
+  if (!isAbsolute(value)) {
+    return (
+      `materialized_path '${value}' is not an absolute path; the accept sequence writes only ` +
+      "absolute paths, so this marker was hand-edited and is not a recovery input"
+    );
+  }
+  if (isLexicallyInside(value, vault) || isLexicallyInside(value, skillsRoot)) return null;
+  if (basename(value) === SKILL_FILE_NAME) return null;
+  return (
+    `materialized_path '${value}' resolves outside the vault and the skills root ` +
+    `(${skillsRoot}) and is not a materialized ${SKILL_FILE_NAME} path; a hand-edited ` +
+    "journal is not a recovery input"
+  );
+}
+
+/**
+ * Lexical containment of `target` inside `root`, mirroring the rollback
+ * confinement predicate in `skill-proposals` (`isLexicallyInside` there):
+ * `path.resolve` normalisation plus the platform separator, so the
+ * parse-time guard and the at-use guard admit the same paths.
+ */
+function isLexicallyInside(target: string, root: string): boolean {
+  const resolvedTarget = resolve(target);
+  const resolvedRoot = resolve(root) + sep;
+  return resolvedTarget.startsWith(resolvedRoot);
 }

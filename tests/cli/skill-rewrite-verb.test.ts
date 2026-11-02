@@ -6,7 +6,10 @@
  * envelopes (the incumbent body and the candidate body, never held-out
  * text); score grades the submitted transcripts, runs the selection and
  * held-out gates, prints the verdict, writes the grade record, and stages
- * the pending proposal ONLY on a final promote. Every refusal is a named
+ * the pending proposal ONLY on a final promote. The scorer binds every
+ * candidate-arm submission to the current candidate body through the
+ * `candidate_sha256` its envelope carried, so a transcript left over from
+ * a previous candidate never gates this one. Every refusal is a named
  * stderr line and a non-zero exit.
  */
 
@@ -18,6 +21,7 @@ import { join } from "node:path";
 import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts";
 import { skillBenchmarkTasksPath } from "../../src/core/brain/paths.ts";
 import { listPendingSkillProposals } from "../../src/core/brain/skill-proposals.ts";
+import { sha256Hex } from "../../src/core/integrity/digest.ts";
 import {
   SKILL_REWRITE_JUDGE_CMD_ENV_KEY,
   SKILL_REWRITE_MODE_ENV_KEY,
@@ -82,6 +86,11 @@ const INCUMBENT_BODY = [
 const CANDIDATE_BODY =
   "Candidate body: plan first, search twice, write once, and report the artifact path.";
 
+/** The hash every candidate-round envelope stamps: sha-256 of the candidate body. */
+const CANDIDATE_HASH = sha256Hex(CANDIDATE_BODY);
+/** The hash a STALE transcript carries: it was produced against a different body. */
+const STALE_HASH = sha256Hex("Candidate body from a round that has since been re-generated.");
+
 const DEV_TASKS = FIXTURE_SPEC.dev_task_ids;
 const HELDOUT_TASKS = FIXTURE_SPEC.held_out_task_ids;
 
@@ -114,6 +123,7 @@ interface Transcript {
   readonly tools_used: ReadonlyArray<string>;
   readonly artifacts: ReadonlyArray<string>;
   readonly output: Record<string, unknown>;
+  readonly candidate_sha256?: string;
 }
 
 /** A transcript that passes every structural predicate the fixture pins for the task. */
@@ -178,6 +188,11 @@ function passingTranscript(taskId: string): Transcript {
 /** A transcript that fails every check: no steps, no tools, no artifacts, empty output. */
 function failingTranscript(taskId: string): Transcript {
   return { task_id: taskId, steps: [], tools_used: [], artifacts: [], output: {} };
+}
+
+/** Echo the candidate_sha256 the envelope the transcript answers carried. */
+function boundWith(transcript: Transcript, hash: string): Transcript {
+  return { ...transcript, candidate_sha256: hash };
 }
 
 function writeRounds(
@@ -307,7 +322,12 @@ describe("rewrite-score", () => {
       index < 3 ? passingTranscript(taskId) : failingTranscript(taskId),
     );
     writeRounds("baseline", tie);
-    writeRounds("candidate", tie);
+    // The candidate arm's transcripts echo the candidate_sha256 their
+    // envelopes carried; the scorer binds them to the candidate body.
+    writeRounds(
+      "candidate",
+      tie.map((transcript) => boundWith(transcript, CANDIDATE_HASH)),
+    );
 
     const r = await runCli([
       "brain",
@@ -316,6 +336,8 @@ describe("rewrite-score", () => {
       "example-skill",
       "--vault",
       vault,
+      "--candidate-file",
+      join(scratch, "candidate.md"),
     ]);
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("hold");
@@ -324,6 +346,70 @@ describe("rewrite-score", () => {
     expect(grades.length).toBe(1);
     // Gate failure stages nothing.
     expect(listPendingSkillProposals(vault).length).toBe(0);
+  });
+
+  test("a stale candidate_sha256 refuses the score by name", async () => {
+    // The transcripts were produced against a DIFFERENT candidate body than
+    // the one on disk now. The scorer binds submissions to the current
+    // candidate, so a stale round never gates this candidate - and never
+    // reaches the gates at all.
+    seedBenchmark();
+    writeRounds(
+      "baseline",
+      DEV_TASKS.map((taskId, index) =>
+        index < 3 ? passingTranscript(taskId) : failingTranscript(taskId),
+      ),
+    );
+    writeRounds(
+      "candidate",
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), STALE_HASH)),
+    );
+
+    const r = await runCli([
+      "brain",
+      "skill-proposals",
+      "rewrite-score",
+      "example-skill",
+      "--vault",
+      vault,
+      "--candidate-file",
+      join(scratch, "candidate.md"),
+    ]);
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("candidate_sha256");
+    expect(r.stderr).toContain("does not match the current candidate body");
+    // Refused before anything was decided: no grade record, no staged draft.
+    expect(listPendingSkillProposals(vault).length).toBe(0);
+    expect(listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).length).toBe(0);
+  });
+
+  test("a transcript with no candidate_sha256 refuses once the scorer binds to the candidate", async () => {
+    seedBenchmark();
+    writeRounds(
+      "baseline",
+      DEV_TASKS.map((taskId, index) =>
+        index < 3 ? passingTranscript(taskId) : failingTranscript(taskId),
+      ),
+    );
+    writeRounds(
+      "candidate",
+      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+    );
+
+    const r = await runCli([
+      "brain",
+      "skill-proposals",
+      "rewrite-score",
+      "example-skill",
+      "--vault",
+      vault,
+      "--candidate-file",
+      join(scratch, "candidate.md"),
+    ]);
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("missing candidate_sha256");
+    expect(listPendingSkillProposals(vault).length).toBe(0);
+    expect(listContinuityRecords(vault, { kind: "skill_rewrite_eval_grade" }).length).toBe(0);
   });
 
   test("a promote with a held-out pass stages the scored_rewrite proposal", async () => {
@@ -336,11 +422,11 @@ describe("rewrite-score", () => {
     );
     writeRounds(
       "candidate",
-      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
     writeRounds(
       "heldout",
-      HELDOUT_TASKS.map((taskId) => passingTranscript(taskId)),
+      HELDOUT_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
 
     const r = await runCli([
@@ -378,11 +464,11 @@ describe("rewrite-score", () => {
     );
     writeRounds(
       "candidate",
-      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
     writeRounds(
       "heldout",
-      HELDOUT_TASKS.map((taskId) => passingTranscript(taskId)),
+      HELDOUT_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
     const scored = await runCli([
       "brain",
@@ -426,7 +512,7 @@ describe("rewrite-score", () => {
     );
     writeRounds(
       "candidate",
-      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
 
     const r = await runCli([
@@ -454,7 +540,7 @@ describe("rewrite-score", () => {
     writeRounds("baseline", [passingTranscript(DEV_TASKS[0]!)]);
     writeRounds(
       "candidate",
-      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
 
     const r = await runCli([
@@ -464,6 +550,8 @@ describe("rewrite-score", () => {
       "example-skill",
       "--vault",
       vault,
+      "--candidate-file",
+      join(scratch, "candidate.md"),
     ]);
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("not_enough_evidence");
@@ -498,11 +586,11 @@ describe("rewrite-score", () => {
     );
     writeRounds(
       "candidate",
-      DEV_TASKS.map((taskId) => passingTranscript(taskId)),
+      DEV_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
     writeRounds(
       "heldout",
-      HELDOUT_TASKS.map((taskId) => passingTranscript(taskId)),
+      HELDOUT_TASKS.map((taskId) => boundWith(passingTranscript(taskId), CANDIDATE_HASH)),
     );
 
     const r = await runCli([
