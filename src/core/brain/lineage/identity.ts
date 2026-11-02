@@ -89,6 +89,7 @@ import { join } from "node:path";
 
 import { discoverConfig } from "../../config.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import type { LedgerShardGrammar } from "../ledger-shards.ts";
 import { ensureInsideVault } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { brainStateDirPath } from "./ledger.ts";
@@ -156,9 +157,28 @@ const LANE_ID_ENV_KEY = "OPEN_SECOND_BRAIN_LANE_ID";
 const WORK_ID_CONFIG_KEY = "work_id";
 const LANE_ID_CONFIG_KEY = "lane_id";
 
-/** Directory holding one marker file per worktree. */
-const MARKER_DIR = "work-identity";
+/**
+ * Directory holding one marker file per worktree, under the Brain state
+ * directory. Exported so the attestation sweep's growth map names the
+ * known ledger subdirectory through the module that owns it rather than
+ * restating the name.
+ */
+export const WORK_IDENTITY_MARKER_DIR = "work-identity";
+const MARKER_DIR = WORK_IDENTITY_MARKER_DIR;
 const MARKER_FILE_SUFFIX = ".json";
+
+/**
+ * The file-name layout of the marker directory: one
+ * `<sha256-hex>.json` marker per worktree, named exactly once per
+ * worktree - the hash is the worktree's whole identity, so a
+ * shard-spelled name is a planted file. Exported for the attestation
+ * sweep's growth map, the same way `LINEAGE_STATE_GRAMMARS` is.
+ */
+export const WORK_IDENTITY_MARKER_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "[0-9a-f]{64}",
+  extensions: Object.freeze(["json"]),
+  exact: true,
+});
 
 /**
  * How long an INHERITED declaration keeps speaking for a worktree.

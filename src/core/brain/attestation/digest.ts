@@ -39,6 +39,7 @@ import { CONTINUITY_GRAMMAR, continuityLogDir } from "../continuity/store.ts";
 import { gitStoreRootDir, STORE_LAYOUT_GRAMMARS } from "../git/store.ts";
 import { IDEMPOTENCY_GRAMMAR, idempotencyLogDir } from "../idempotency-ledger.ts";
 import { LINEAGE_STATE_GRAMMARS, brainStateDirPath } from "../lineage/ledger.ts";
+import { WORK_IDENTITY_MARKER_DIR, WORK_IDENTITY_MARKER_GRAMMAR } from "../lineage/identity.ts";
 import { ANY_SURFACE_GRAMMAR, metricsDir } from "../metrics.ts";
 import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
 import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
@@ -170,13 +171,19 @@ function ledgerSweepDirs(vault: string): string[] {
  *
  *   - `Brain/preferences` holds operator-authored state, so ANY addition
  *     is drift;
- *   - the skill-proposals root and the preference-audit ROOT hold no
- *     appendable ledger (proposals live in their phase subdirectories;
- *     the flat per-preference trail is legacy, still read, never
- *     written);
+ *   - the skill-proposals root holds no appendable ledger (proposals
+ *     live in their phase subdirectories);
  *   - `Brain/log` itself is the log-shard rule the verifier applies
  *     (a new shard's JSONL beside its markdown twin), which a name
  *     grammar cannot express.
+ *
+ * The preference-audit ROOT is in the map with an EMPTY layout: it holds
+ * no appendable ledger of its own (the flat per-preference trail is
+ * legacy, still read, never written), so no name parses as a shard file
+ * there and a new entry is lawful only as a per-preference trail
+ * directory - which the per-parent descent below registers with the
+ * shard grammar. Registering the root is what lets a first trail
+ * explain itself in the root's own inventory and in `Brain/log`'s.
  *
  * A ledger directory added to the sweep without joining this map simply
  * verifies strict - the failure is an honest one, and the digest tests
@@ -202,6 +209,11 @@ export function ledgerGrowthGrammars(
   put(idempotencyLogDir(vault), [IDEMPOTENCY_GRAMMAR]);
   put(metricsDir(vault), [ANY_SURFACE_GRAMMAR]);
   put(brainStateDirPath(vault), LINEAGE_STATE_GRAMMARS);
+  // The work-identity marker directory beneath the state directory: the
+  // sweep lists it by name and descends into nothing, so the map's key
+  // is what tells the verifier a lawful subdirectory lives there (and
+  // that its `<sha256>.json` files are the producer's shape).
+  put(join(brainStateDirPath(vault), WORK_IDENTITY_MARKER_DIR), [WORK_IDENTITY_MARKER_GRAMMAR]);
   // One shard directory per preference and per repository, the same
   // one-level descent the sweep performs. A store's layout is the whole
   // writer: the commits shards AND the exact-name watermark and digest
@@ -209,6 +221,7 @@ export function ledgerGrowthGrammars(
   // legitimate shape.
   const prefRoot = prefAuditDir(vault);
   const gitRoot = gitStoreRootDir(vault);
+  if (existsSync(prefRoot)) put(prefRoot, []);
   for (const [parent, layout] of [
     [prefRoot, [PREF_AUDIT_GRAMMAR]],
     [gitRoot, STORE_LAYOUT_GRAMMARS],

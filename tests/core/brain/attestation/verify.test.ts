@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +33,9 @@ import { verifyAttestation } from "../../../../src/core/brain/attestation/verify
 import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
 import { brainDirs, hookAuditDir, logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
+import { appendPrefAudit } from "../../../../src/core/brain/pref-audit.ts";
+import { recordWorkIdentityMarker } from "../../../../src/core/brain/lineage/identity.ts";
+import { PREF_AUDIT_OP } from "../../../../src/core/brain/types.ts";
 import { appendAuditRecord } from "../../../../src/core/reliability/audit.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
 import { noopSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
@@ -376,6 +380,104 @@ describe("verifyAttestation", () => {
     expect(result.signatureValid).toBe(true);
     expect(result.unexplainedDrift).toBe(false);
     expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("a work-identity directory signed with the vault still verifies clean", () => {
+    // The marker writer keeps one directory of per-worktree marker files
+    // under `Brain/.state` - an entry the sweep lists by name, no
+    // inventory descends into, and this build's writers make exactly as
+    // a directory. A vault signed with it present is healthy, not drift.
+    recordWorkIdentityMarker(vault, "/tmp/worktree-a", { workId: "wid-a" });
+    const record = signedRecord();
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(true);
+  });
+
+  test("a first work-identity directory created after signing is growth, not unexplained drift", () => {
+    // The first declared work id creates the marker directory on a vault
+    // that may have been signed long before - a normal action on a
+    // normal Tuesday, and the producer's own shape for the name.
+    const record = signedRecord();
+    recordWorkIdentityMarker(vault, "/tmp/worktree-b", { workId: "wid-b" });
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("a first per-preference trail created after signing is growth, not unexplained drift", () => {
+    // appendPrefAudit is the feature's common write path: the first
+    // mutation of a preference creates its trail directory inside the
+    // pref-audit root whenever it first happens - including entirely
+    // after signing. The root holds no appendable ledger of its own, so
+    // the trail is lawful exactly as the directory the writer makes.
+    const record = signedRecord();
+    appendPrefAudit(vault, {
+      pref_id: "pref-later",
+      op: PREF_AUDIT_OP.create,
+      agent: "@tester",
+      revision_before: null,
+      revision_after: 1,
+      hash_before: null,
+      hash_after: "a".repeat(64),
+    });
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("a metric surface first appended after signing is growth, not unexplained drift", () => {
+    // The metrics, hook-audit, watchdog, idempotency and lineage state
+    // ledgers all sit OUTSIDE `Brain/log` and may not exist when the
+    // vault is signed; their first shard is grammar-named growth like
+    // any other, never damage. Metrics is the case: the directory is
+    // created by the first append.
+    const record = signedRecord();
+    mkdirSync(join(vault, "Brain", "metrics"), { recursive: true });
+    writeFileSync(join(vault, "Brain", "metrics", "recall_latency.jsonl"), "", "utf8");
+    const result = verifyAttestation(vault, record);
+    expect(result.signatureValid).toBe(true);
+    expect(result.unexplainedDrift).toBe(false);
+    expect(result.storeDigestMatches).toBe(false);
+  });
+
+  test("a directory named as a new shard's markdown twin is still drift", () => {
+    // The log's allowed growth is FILES: a new shard's JSONL beside its
+    // markdown twin, like every entry the writers make. A directory
+    // riding the twin's lawful name - as a directory can ride a shard's
+    // - is not something the appender writes, and no manifest
+    // inventories what sits inside it to catch it any other way.
+    append(1);
+    const record = signedRecord();
+    append(1, "device-b");
+    const twin = join(vault, "Brain", "log", `${DATE}.device-b.md`);
+    rmSync(twin);
+    mkdirSync(twin, { recursive: true });
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
+  });
+
+  test("a symlink spelled as a shard is never explained growth", () => {
+    // The kind read must judge the entry itself, not its target: the
+    // producers append regular files, so a symlink riding a lawful
+    // shard name - pointing at a real shard file, as here - is not
+    // growth this build can explain. (Windows skips: links there need
+    // privileges.)
+    if (process.platform === "win32") return;
+    const shard = appendAuditRecord(hookAuditDir(vault), {
+      timestamp: "2026-05-28T10:00:00Z",
+      actor: "@tester",
+      action: "capture",
+      target: "session-1",
+      ok: true,
+    });
+    const record = signedRecord();
+    symlinkSync(shard, join(hookAuditDir(vault), "2026-W45.jsonl"));
+    const result = verifyAttestation(vault, record);
+    expect(result.unexplainedDrift).toBe(true);
   });
 
   test("an unrelated file in a new repository store is still drift", () => {

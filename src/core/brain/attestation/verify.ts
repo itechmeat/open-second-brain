@@ -48,7 +48,7 @@
  * that moved, not a store that was broken.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import {
@@ -301,13 +301,18 @@ function sameFiles(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean 
 /**
  * The kind of one entry of an inventoried directory, read through the
  * directory's inventory key, or null when the entry cannot be stated
- * (it vanished or cannot be read between the listing and this check).
+ * (it vanished or cannot be read between the listing and this check) or
+ * is not a regular file or directory - a symlink, FIFO or socket is not
+ * something this build's writers produce, and a kind read through the
+ * link's TARGET would let a planted link ride a lawful name as growth.
  * An entry this run cannot measure is never explained growth.
  */
 function entryKind(vault: string, dirKey: string, name: string): "file" | "directory" | null {
   try {
     const dir = join(vault, ...dirKey.split("/"));
-    return statSync(join(dir, name)).isDirectory() ? "directory" : "file";
+    const st = lstatSync(join(dir, name));
+    if (st.isDirectory()) return "directory";
+    return st.isFile() ? "file" : null;
   } catch {
     return null;
   }
@@ -315,17 +320,23 @@ function entryKind(vault: string, dirKey: string, name: string): "file" | "direc
 
 /**
  * Whether one inventoried directory's entry list is explained: every
- * attested entry must still be there as the file it was signed as, and
- * every name that was not attested must be normal growth for that
- * directory - a file parsing under the directory's ledger grammar (a
- * new ISO-week audit shard, a new continuity month, a new metric
- * surface) or a known ledger subdirectory created beneath it (a first
- * continuity month inside `Brain/log`, a first per-preference trail
- * inside the preference-audit root). The name alone does not settle it:
- * the producers append files, so an entry whose kind is not the
- * producer's (a directory spelled as a shard, or a file where a known
- * ledger subdirectory belongs) is not something this build writes, and
- * a kind this run cannot read is not provable growth either. A
+ * attested entry must still be there with the kind its NAME says the
+ * producer gave it, and every name that was not attested must be normal
+ * growth for that directory - a file parsing under the directory's
+ * ledger grammar (a new ISO-week audit shard, a new continuity month, a
+ * new metric surface) or a known ledger subdirectory created beneath it
+ * (a first work-identity directory inside `Brain/.state`, a first
+ * per-preference trail inside the preference-audit root). The name
+ * alone does not settle it: an entry whose kind is not the producer's
+ * (a directory spelled as a shard, or a file where a known ledger
+ * subdirectory belongs) is not something this build writes, and a kind
+ * this run cannot read is not provable growth either. The same
+ * name-derived expectation judges the ATTESTED entries - a shard name
+ * was signed as a file, a known subdirectory name as a directory - so
+ * an attested file swapped for a same-name directory is still drift,
+ * while a subdirectory the producers legitimately made before signing
+ * is not. An attested name under no grammar at all was signed as a
+ * file, the only kind this build's writers make at the file level. A
  * directory with no grammar entry is strict - additions there are not
  * something this build's writers produce.
  */
@@ -340,10 +351,12 @@ function ledgerGrowthExplained(
   if (layout === undefined) return sameFiles(attestedFiles, now);
   const attestedSet = new Set(attestedFiles);
   const kind = (name: string): string | null => entryKind(vault, dir, name);
+  const wanted = (name: string): string =>
+    isGrammarValidName(name, layout) || !grammars.has(`${dir}/${name}`) ? "file" : "directory";
   return (
-    attestedFiles.every((name) => now.includes(name) && kind(name) === "file") &&
+    attestedFiles.every((name) => now.includes(name) && kind(name) === wanted(name)) &&
     now.every((name) => {
-      if (attestedSet.has(name)) return kind(name) === "file";
+      if (attestedSet.has(name)) return kind(name) === wanted(name);
       if (isGrammarValidName(name, layout)) return kind(name) === "file";
       return grammars.has(`${dir}/${name}`) && kind(name) === "directory";
     })
@@ -360,12 +373,14 @@ function ledgerGrowthExplained(
  * new continuity month, a new metric surface) - allowed exactly when the
  * new names parse under the producer's own grammar and carry the kind
  * the producer writes (files; a known subdirectory where a nested
- * ledger belongs), with every attested entry still present as the file
- * it was signed as. Known ledger subdirectories of `Brain/log` that
- * were created entirely after signing follow the same rule against an
- * empty attested list. Everything else is drift no verdict names: the
- * vault identity, the index stamp, an attested entry gone, an invalid
- * name, or ANY addition to `Brain/preferences`, whose files are
+ * ledger belongs), with every attested entry still present with the
+ * kind its name says it was signed as. Ledger directories and known
+ * subdirectories that were created entirely after signing follow the
+ * same rule against an empty attested list - a first metric surface, a
+ * first hook-audit week on a vault signed before the hooks ran, a first
+ * work-identity directory. Everything else is drift no verdict names:
+ * the vault identity, the index stamp, an attested entry gone, an
+ * invalid name, or ANY addition to `Brain/preferences`, whose files are
  * authored state.
  */
 function unexplainedManifestDrift(
@@ -389,8 +404,9 @@ function unexplainedManifestDrift(
     )
     .toSorted();
   // The log directory's inventory also names the ledger subdirectories
-  // under it (a first continuity month, a first audit family), so its
-  // allowed set grows by exactly those known names.
+  // under it (the audit families, the schema-mutation audit, the
+  // pref-audit root), so its allowed set grows by exactly those known
+  // names.
   const logLedgerSubdirs = [...grammars.keys()].flatMap((key) =>
     key.startsWith(`${BRAIN_LOG_REL}/`) && !key.slice(BRAIN_LOG_REL.length + 1).includes("/")
       ? [key.slice(BRAIN_LOG_REL.length + 1)]
@@ -400,7 +416,9 @@ function unexplainedManifestDrift(
     const now = recomputed.ledgerInventories[dir];
     if (now === undefined) return true; // an inventoried directory vanished
     if (dir === logDirKey) {
-      if (!explainedLogGrowth(attestedFiles, newShards, newLogFiles, logLedgerSubdirs, now)) {
+      if (
+        !explainedLogGrowth(vault, attestedFiles, newShards, newLogFiles, logLedgerSubdirs, now)
+      ) {
         return true;
       }
       continue;
@@ -413,12 +431,16 @@ function unexplainedManifestDrift(
     // explained when it is the log directory filling with the new
     // shards and known ledger subdirectories, one of those known
     // subdirectories itself (a first continuity month, a first audit
-    // week), or a first repository store directory - each judged against
-    // its producer's grammar, so every name it brings must parse and an
-    // unrelated file stays drift.
+    // week), a directory whose producer declares a grammar (the
+    // metrics, hook-audit, watchdog, idempotency, continuity and
+    // lineage-state ledgers all live outside `Brain/log` and may be
+    // created entirely after signing), or a first repository store
+    // directory - each judged against its producer's grammar, so every
+    // name it brings must parse and an unrelated file stays drift.
     if (
       dir === logDirKey &&
       explainedLogGrowth(
+        vault,
         [],
         newShards,
         newLogFiles,
@@ -429,7 +451,9 @@ function unexplainedManifestDrift(
       continue;
     }
     if (
-      (dir.startsWith(`${BRAIN_LOG_REL}/`) || isFirstRepoStoreDir(vault, dir)) &&
+      (grammars.has(dir) ||
+        dir.startsWith(`${BRAIN_LOG_REL}/`) ||
+        isFirstRepoStoreDir(vault, dir)) &&
       ledgerGrowthExplained(vault, grammars, dir, [], recomputed.ledgerInventories[dir] ?? [])
     ) {
       continue;
@@ -455,13 +479,17 @@ function isFirstRepoStoreDir(vault: string, dir: string): boolean {
 /**
  * Whether the log directory's entry list is explained by growth, in set
  * semantics: every attested file and every new shard's JSONL must still
- * be there, the new shards' markdown twins MAY be there (a twin can
- * predate its JSONL on a legacy md-only day, and the appender's own
- * partial-failure path can leave a JSONL without one), the known ledger
- * subdirectories under the log MAY appear (their own inventories are
- * judged by the ledger rule), and nothing else may appear or vanish.
+ * be there with the kind its name says the producer gave it, the new
+ * shards' markdown twins MAY be there (a twin can predate its JSONL on
+ * a legacy md-only day, and the appender's own partial-failure path can
+ * leave a JSONL without one), the known ledger subdirectories under the
+ * log MAY appear as the DIRECTORIES they are (their own inventories are
+ * judged by the ledger rule; a regular file riding a subdirectory's
+ * name is an impostor no inventory catches any other way), and nothing
+ * else may appear or vanish.
  */
 function explainedLogGrowth(
+  vault: string,
   attestedFiles: ReadonlyArray<string>,
   newShards: ReadonlyArray<string>,
   newLogFiles: ReadonlyArray<string>,
@@ -469,6 +497,12 @@ function explainedLogGrowth(
   now: ReadonlyArray<string>,
 ): boolean {
   const allowed = new Set([...attestedFiles, ...newLogFiles, ...ledgerSubdirs]);
+  const subdirs = new Set(ledgerSubdirs);
+  const kind = (name: string): string | null => entryKind(vault, BRAIN_LOG_REL, name);
+  const wanted = (name: string): string => (subdirs.has(name) ? "directory" : "file");
   const required = [...attestedFiles, ...newShards];
-  return required.every((name) => now.includes(name)) && now.every((name) => allowed.has(name));
+  return (
+    required.every((name) => now.includes(name) && kind(name) === wanted(name)) &&
+    now.every((name) => allowed.has(name) && kind(name) === wanted(name))
+  );
 }
