@@ -3510,11 +3510,20 @@ var init_audit_dirs = __esm(() => {
 
 // src/core/path-safety.ts
 import { existsSync as existsSync4, realpathSync, statSync as statSync4 } from "node:fs";
-import { basename as basename2, dirname as dirname5, join as join7, posix as posix2, relative, resolve as resolve4, sep as sep2 } from "node:path";
+import {
+  basename as basename2,
+  dirname as dirname5,
+  join as join7,
+  posix as pathPosix,
+  relative,
+  resolve as resolve4,
+  sep as sep2,
+  win32 as pathWin32
+} from "node:path";
 function ensureInsideVault(target, vault) {
   const resolvedTarget = resolve4(target);
   const resolvedVault = resolve4(vault);
-  if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
+  if (!isLexicallyInsideHost(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault: ${target}`);
   }
   if (existsSync4(resolvedVault) && !realpathInsideVault(resolvedTarget, resolvedVault)) {
@@ -3528,12 +3537,20 @@ function realpathInsideVault(target, vault) {
     return true;
   const realVault = safeRealpath(resolvedVault);
   const realAncestor = safeRealpath(deepestExistingAncestor(resolve4(target)));
-  return isLexicallyInside(realAncestor, realVault);
+  return isLexicallyInsideHost(realAncestor, realVault);
 }
-function isLexicallyInside(target, root) {
-  const t = process.platform === "win32" ? target.toLowerCase() : target;
-  const r = process.platform === "win32" ? root.toLowerCase() : root;
-  return t === r || t.startsWith(r + sep2);
+function isLexicallyInside(platform, target, root) {
+  const fold = platform === "win32";
+  const sepChar = fold ? pathWin32.sep : pathPosix.sep;
+  const t = fold ? target.toLowerCase() : target;
+  const r = fold ? root.toLowerCase() : root;
+  return t === r || t.startsWith(r + sepChar);
+}
+function hostPlatform() {
+  return process.platform === "win32" ? "win32" : "posix";
+}
+function isLexicallyInsideHost(target, root) {
+  return isLexicallyInside(hostPlatform(), target, root);
 }
 function deepestExistingAncestor(target) {
   let cur = target;
@@ -3556,7 +3573,7 @@ function safeRealpath(p) {
 }
 function vaultRelative(target, vault) {
   const rel = relative(resolve4(vault), resolve4(target));
-  return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix2.sep);
+  return rel.split(/[\\/]/).filter((p) => p.length > 0).join(pathPosix.sep);
 }
 var VAULT_ESCAPE_CODE = "ESCAPE", VaultEscapeError;
 var init_path_safety = __esm(() => {
