@@ -79,6 +79,7 @@ import { sessionMiningSurveysPath } from "../../../src/core/brain/session-mining
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
 import { manifestPath as installManifestPath } from "../../../src/core/install/manifest.ts";
 import { instructionBlockLockPath } from "../../../src/core/install/instruction-block.ts";
+import { skillBenchmarkTasksPath } from "../../../src/core/brain/paths.ts";
 import { bootstrapReceiptPath } from "../../../src/cli/bootstrap/receipt.ts";
 import { receiptsDir } from "../../../src/core/brain/decisions/receipts.ts";
 import { anticipatoryCachePath } from "../../../src/core/brain/anticipatory-cache.ts";
@@ -286,6 +287,14 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["attestation_keys", (v) => attestationKeysDir(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["instruction_block_lock", (v) => instructionBlockLockPath(v)],
+    [
+      "skill_benchmarks",
+      // The tasks file is what an operator authors and the receipt
+      // verification reads; the row is the TREE above it (one directory
+      // per skill), so the binding climbs two levels from the core
+      // resolver's file to the directory the row declares.
+      (v) => dirname(dirname(skillBenchmarkTasksPath(v, "example-skill"))),
+    ],
     ["bootstrap_receipt", (v) => bootstrapReceiptPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],

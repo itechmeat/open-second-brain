@@ -88,6 +88,7 @@ import {
   DERIVED_STORE_FILE,
   HOOK_AUDIT_DIR,
 } from "../brain/path-constants.ts";
+import { SKILL_BENCHMARKS_DIR } from "../brain/skill-rewrite-tasks.ts";
 import { WATCHDOG_FALLBACK_AUDIT_DIR } from "../brain/audit-dirs.ts";
 import { JSONL_LEDGER_EXT, jsonlLedgerGrammar, parseShardedName } from "../brain/ledger-shards.ts";
 import { MAINTENANCE_JOURNAL_STEM } from "../brain/maintenance/journal.ts";
@@ -165,6 +166,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   decisionLedger: "decision_ledger",
   sourceArchives: "source_archives",
   instructionBlockLock: "instruction_block_lock",
+  skillBenchmarks: "skill_benchmarks",
 } as const);
 
 export type StateSurfaceId = (typeof STATE_SURFACE_ID)[keyof typeof STATE_SURFACE_ID];
@@ -1191,6 +1193,28 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "makes the installer refuse a hand-edited block; without it the installer cannot prove " +
       "a block is its own and refuses to rewrite any diverged one.",
     sources: ["src/core/install/instruction-block.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.skillBenchmarks,
+    label: "skill benchmarks",
+    tier: STATE_TIER.vaultContent,
+    derive: (vault) => join(vault, BRAIN_ROOT_REL, SKILL_BENCHMARKS_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Each skill's benchmark task set, its frozen rewrite receipt, and the submitted gate-round " +
+      "transcripts under rounds/. This is the preregistration an operator audits a staged " +
+      "rewrite against: the spec hash on a pending scored_rewrite proposal is a claim about " +
+      "these files, and the grade ledger's verdicts are only as trustworthy as the task set " +
+      "they gated on. Operator-authored content in the same sense the skills tree is - the " +
+      "vault is the primary home so the receipt travels with the skills it gates.",
+    sources: [
+      "src/core/brain/skill-rewrite-tasks.ts",
+      "src/core/brain/skill-rewrite.ts",
+      "src/core/brain/skill-proposals.ts",
+      "src/core/brain/paths.ts",
+    ],
   },
 ]);
 

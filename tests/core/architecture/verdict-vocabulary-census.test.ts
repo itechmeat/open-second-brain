@@ -115,6 +115,28 @@ import {
   SCHEMA_PACK_UNVERIFIED_REASONS,
 } from "../../../src/core/brain/schema-integrity.ts";
 import {
+  isSkillBenchCheck,
+  isSkillBenchTaskKind,
+  isSkillBenchValueClass,
+  SKILL_BENCH_CHECK,
+  SKILL_BENCH_CHECKS,
+  SKILL_BENCH_TASK_KIND,
+  SKILL_BENCH_TASK_KINDS,
+  SKILL_BENCH_VALUE_CLASS,
+  SKILL_BENCH_VALUE_CLASSES,
+} from "../../../src/core/brain/skill-rewrite-tasks.ts";
+import {
+  isSkillRewriteMode,
+  isSkillRewriteRoundArm,
+  isSkillRewriteVerdict,
+  SKILL_REWRITE_MODE,
+  SKILL_REWRITE_MODES,
+  SKILL_REWRITE_ROUND_ARM,
+  SKILL_REWRITE_ROUND_ARMS,
+  SKILL_REWRITE_VERDICT,
+  SKILL_REWRITE_VERDICTS,
+} from "../../../src/core/brain/skill-rewrite.ts";
+import {
   isNegativeRecallState,
   isNegativeRecallUnknownReason,
   isRetractionEvidenceKind,
@@ -1783,6 +1805,59 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: CONTENT_CLASSES,
     guard: isContentClass,
   },
+  {
+    // agent-presence, Lane A (t_635e3e72): the three-arm rewrite verdict,
+    // copied from the decision-model eval vocabulary the gate generalizes.
+    // Leaves TypeScript in grade records and the CLI/MCP status surfaces.
+    name: "SKILL_REWRITE_VERDICT",
+    values: SKILL_REWRITE_VERDICT,
+    members: SKILL_REWRITE_VERDICTS,
+    guard: isSkillRewriteVerdict,
+  },
+  {
+    // The closed task-kind vocabulary of a benchmark task set. Leaves
+    // TypeScript in the tasks.json fixtures and their named parse errors.
+    name: "SKILL_BENCH_TASK_KIND",
+    values: SKILL_BENCH_TASK_KIND,
+    members: SKILL_BENCH_TASK_KINDS,
+    guard: isSkillBenchTaskKind,
+  },
+  {
+    // The closed structural-predicate vocabulary a task's expectations are
+    // written against; the check ids leave TypeScript in grade-record rows
+    // and the score output.
+    name: "SKILL_BENCH_CHECK",
+    values: SKILL_BENCH_CHECK,
+    members: SKILL_BENCH_CHECKS,
+    guard: isSkillBenchCheck,
+  },
+  {
+    // The closed value-class vocabulary an output_field expectation
+    // asserts over; leaves TypeScript in the fixtures and their named
+    // parse errors.
+    name: "SKILL_BENCH_VALUE_CLASS",
+    values: SKILL_BENCH_VALUE_CLASS,
+    members: SKILL_BENCH_VALUE_CLASSES,
+    guard: isSkillBenchValueClass,
+  },
+  {
+    // Which round an envelope belongs to: the baseline and candidate dev
+    // rounds and the single held-out check. Leaves TypeScript in the
+    // transcript drop-site paths and the round reports.
+    name: "SKILL_REWRITE_ROUND_ARM",
+    values: SKILL_REWRITE_ROUND_ARM,
+    members: SKILL_REWRITE_ROUND_ARMS,
+    guard: isSkillRewriteRoundArm,
+  },
+  {
+    // The rewrite gate mode: gated (one candidate per round) or iterative
+    // (a bounded dev-only edit loop, still gated before any write).
+    // Resolved from `skill_rewrite.mode`, refused by name on other values.
+    name: "SKILL_REWRITE_MODE",
+    values: SKILL_REWRITE_MODE,
+    members: SKILL_REWRITE_MODES,
+    guard: isSkillRewriteMode,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -2068,7 +2143,11 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 109: LESSON_PROMOTION_BLOCKED (operator-approved lesson promotion,
 // t_1e952e43) - the named reason a lesson fails the promotion gate,
 // rendered by the candidates listing and the JSON surfaces.
-const VOCABULARY_POPULATION = 109;
+// 110-115: the agent-presence rewrite lane's six closed vocabularies
+// (t_635e3e72) - SKILL_REWRITE_VERDICT, SKILL_BENCH_TASK_KIND,
+// SKILL_BENCH_CHECK, SKILL_BENCH_VALUE_CLASS, SKILL_REWRITE_ROUND_ARM and
+// SKILL_REWRITE_MODE - join, each with its membership list and guard.
+const VOCABULARY_POPULATION = 115;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

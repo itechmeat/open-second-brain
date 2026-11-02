@@ -1177,8 +1177,8 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain generation-reports show <report-id> [--vault <path>] [--json]\n" +
     "Inbound, opt-in LLM generation tracing. record is gated (default off) by --enable or generation_trace_enabled; only prompt_hash + counts are stored, never the prompt.\n",
   "skill-proposals":
-    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage|page-candidates|page-draft> [args]\n" +
-    "Proposal queue lifecycle, from continuity telemetry and from mature vault pages.\n" +
+    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage|page-candidates|page-draft|rewrite-plan|rewrite-score> [args]\n" +
+    "Proposal queue lifecycle, from continuity telemetry, from mature vault pages, and from benchmark-gated rewrite rounds.\n" +
     "  learn [--min-support <n>] [--vault <path>] [--json]\n" +
     "  list [--vault <path>] [--json]\n" +
     "  accept <slug> [--note <text>] [--vault <path>] [--json]\n" +
@@ -1187,8 +1187,11 @@ export const VERB_HELP: Record<string, string> = {
     "  usage [--vault <path>] [--json]\n" +
     "  page-candidates [--vault <path>] [--json]\n" +
     "  page-draft <page> (--payload <json> | --payload-file <path>) [--vault <path>] [--json]\n" +
+    "  rewrite-plan <skill> --candidate-file <path> [--skills-root <path>] [--vault <path>] [--json]\n" +
+    "  rewrite-score <skill> [--rounds-dir <dir>] [--candidate-file <path>] [--skills-root <path>] [--vault <path>] [--json]\n" +
     "page-candidates is read-only: it gates the vault's user pages on the page-meta trio (core tier, non-stale lifecycle, high confidence) and an observed-reuse floor, skips any page an installed skill already covers, and returns one needs-llm-step envelope per admitted page plus every skip with its reason. page-draft validates the returned draft and STAGES it as a pending mature_page proposal inside the vault; accept is what materializes the SKILL.md under the configured skills root.\n" +
-    "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n",
+    "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n" +
+    "rewrite-plan verifies the skill's benchmark task set against its frozen receipt and prints the receipt plus the dev-round envelopes: a baseline round over the incumbent body and a candidate round over --candidate-file, each with its transcript drop site under Brain/skill-benchmarks/<skill>/rounds/. Held-out members are never printed here. rewrite-score grades the submitted transcripts with structural predicates only, runs the preregistered selection gate (a candidate promotes only by strictly beating the baseline by the pinned margin with the dev n met), hands out the single held-out round on a promote, and stages a scored_rewrite pending proposal ONLY on a final promote after the held-out pass; a hold and a short dev arm write only the grade record. The optional judge (skill_rewrite_judge_cmd) is advisory and never moves the metric. An unknown skill_rewrite.mode refuses by name; MCP reads the same status read-only and never accepts or scores.\n",
   "procedural-memory":
     "usage: o2b brain procedural-memory <reconcile|list|mark-used> [args]\n" +
     "Procedural index reconciliation and usage tracking sidecar.\n" +

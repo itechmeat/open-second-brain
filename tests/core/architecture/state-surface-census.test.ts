@@ -100,7 +100,18 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // instruction-block installer (`src/core/install/instruction-block.ts`,
 // t_ba41a78a) spells it for `instruction-block.lock.json` and is answered
 // by the `instruction_block_lock` row's `sources`.
-const SWEPT_POPULATION_SIZE = 32;
+/** 32 -> 33: the agent-presence lane's skill-benchmarks tree joins the swept
+ * population (its modules attribute to the new skill_benchmarks row); the
+ * operator-approved-lessons modules landing in the same window attribute
+ * to that lane's rows in its own lane-final commit.
+ */
+/** 32 -> 33: the agent-presence lane's skill-benchmarks tree joins the swept
+ * population (its modules attribute to the new skill_benchmarks row). The
+ * operator-approved-lessons modules that landed in the same window attribute
+ * to that lane's rows in its own lane-final commit; the declared-surface
+ * count below moves with each lane's row in the same way.
+ */
+const SWEPT_POPULATION_SIZE = 33;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,
@@ -117,7 +128,7 @@ const SWEPT_POPULATION_SIZE = 32;
 // 55 -> 56: the instruction-block lock row (t_ba41a78a Task B4) joins the
 // catalogue - the ownership record uninstall reads to remove exactly the
 // recorded pair, the same derived-store join the install manifest made.
-const DECLARED_SURFACE_COUNT = 56;
+const DECLARED_SURFACE_COUNT = 57;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;
