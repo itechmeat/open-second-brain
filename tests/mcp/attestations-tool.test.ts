@@ -166,7 +166,9 @@ test("list returns the fixture attestation newest-first with id, created_at, dev
   expect(rows[0]!["id"]).toMatch(/^attest-\d{8}T\d{6}\d{3}Z$/);
   expect(rows[0]!["created_at"]).toBe("2026-06-03T10:05:00.000Z");
   expect(typeof rows[0]!["device_id"]).toBe("string");
-  expect(rows[0]!["path"]).toBe(path.slice(vault.length + 1));
+  // The tool relativizes with posix joins, so the row carries forward
+  // slashes whatever the host separator is; the fixture path does not.
+  expect(rows[0]!["path"]).toBe(path.slice(vault.length + 1).replaceAll("\\", "/"));
 });
 
 test("list reports an unreadable record on its own row and still lists the readable ones", async () => {
