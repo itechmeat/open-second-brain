@@ -52,8 +52,15 @@ import { isInstallTargetId, type InstallTargetId } from "../../core/runtime/host
 import { renderDataOwnership } from "../../core/install/ownership.ts";
 import type { DataOwnership } from "../../core/install/ownership.ts";
 import { measureDataOwnership } from "../../core/install/ownership-measure.ts";
-import { InstallError } from "../../core/install/types.ts";
+import { InstallError, type InstallPlan, type InstallStep } from "../../core/install/types.ts";
 import type { ApplyOpts, InstallEnv, VerifyResult } from "../../core/install/types.ts";
+import {
+  applyInstructionBlock,
+  instructionBlockTargetFor,
+  planInstructionBlock,
+} from "../../core/install/instruction-block.ts";
+import type { InstructionBlockPlan } from "../../core/install/instruction-block.ts";
+import { RULES_BLOCK_ERROR_KIND, RulesBlockError } from "../../core/install/rules-block.ts";
 import {
   renderApplyJson,
   renderApplyResult,
@@ -375,6 +382,58 @@ function runFriction(args: ParsedInstallArgs): number {
   return INSTALL_EXIT.ok;
 }
 
+/**
+ * The instruction step a target's plan gains, or null when the target
+ * installs no agent-instruction file (a named skip renders as a
+ * postNote instead, see {@link augmentPlanWithInstructionStep}).
+ *
+ * The step rides the same `runTarget` lane the adapter writes do - one
+ * plan render, ONE consent verdict above both writes, one apply - so
+ * there is nothing new to consent to twice (t_ba41a78a B3). The kind is
+ * the existing `managed-block` member; no new step vocabulary.
+ */
+function instructionStepFor(
+  env: InstallEnv,
+  target: InstallTargetId,
+): { step: InstallStep; plan: InstructionBlockPlan } | null {
+  if (instructionBlockTargetFor(target) === null) return null;
+  const plan = planInstructionBlock(env, target);
+  const preview =
+    plan.changed === true
+      ? `install the Open Second Brain write-gate managed block in ${plan.path}` +
+        (plan.note === null ? "" : ` (${plan.note})`)
+      : `${plan.path} already carries the current write-gate managed block (no change)`;
+  const step: InstallStep = {
+    kind: "managed-block",
+    path: plan.path,
+    preview,
+    ...(plan.diff !== "" ? { diff: plan.diff } : {}),
+  };
+  return { step, plan };
+}
+
+/**
+ * Append the instruction step (or its named skip) to a rendered plan.
+ * Pure over the given plan: the original plan still goes to the adapter,
+ * and the augmented copy is what the operator consents to.
+ */
+function augmentPlanWithInstructionStep(
+  plan: InstallPlan,
+  target: InstallTargetId,
+  step: InstallStep | null,
+): InstallPlan {
+  if (step === null) {
+    return {
+      ...plan,
+      postNotes: [
+        ...plan.postNotes,
+        `instruction block: skipped for ${target} - the host reads no agent-instruction file in HOST_INSTRUCTION_PRECEDENCE`,
+      ],
+    };
+  }
+  return { ...plan, steps: [...plan.steps, step] };
+}
+
 async function runTarget(args: ParsedInstallArgs): Promise<number> {
   const adapter = defaultRegistry.get(args.target!);
   if (!adapter) return refuseUnknownTarget("--target", args.target!);
@@ -402,12 +461,35 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
 
   const plan = adapter.plan(payload, env);
 
+  // t_ba41a78a B3: the instruction step rides this lane. The pure plan
+  // computes now (reads only); the apply below re-derives it from the
+  // live disk and refuses if the bytes moved since this render, so what
+  // the operator consents to is exactly what gets written. A refusal at
+  // plan time (a symbolic link, malformed markers, an unreadable file)
+  // must be the named error, never an unhandled rejection: nothing has
+  // been consented to or written yet, so the run ends here with the
+  // named message and the runtime exit.
+  let instruction: ReturnType<typeof instructionStepFor>;
+  try {
+    instruction = instructionStepFor(env, args.target as InstallTargetId);
+  } catch (e) {
+    if (e instanceof RulesBlockError) {
+      process.stderr.write(`error: ${e.message}\n`);
+      return INSTALL_EXIT.runtimeError;
+    }
+    throw e;
+  }
+  const renderedPlan =
+    instruction === null
+      ? augmentPlanWithInstructionStep(plan, args.target as InstallTargetId, null)
+      : augmentPlanWithInstructionStep(plan, args.target as InstallTargetId, instruction.step);
+
   // Plan-only (no --apply, no --check) — print and return.
   if (!args.apply) {
     if (args.json) {
-      process.stdout.write(renderPlanJson(plan));
+      process.stdout.write(renderPlanJson(renderedPlan));
     } else {
-      process.stdout.write(renderPlan(plan));
+      process.stdout.write(renderPlan(renderedPlan));
     }
     return INSTALL_EXIT.ok;
   }
@@ -447,7 +529,7 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     // asking for apply consent, not previewing a dry run. The plain
     // print-only plan (no --apply) keeps its stdout dry-run render
     // below.
-    process.stderr.write(renderPlan(plan, { consent: true }));
+    process.stderr.write(renderPlan(renderedPlan, { consent: true }));
     process.stderr.write("Proceed? [y/N] ");
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
@@ -461,8 +543,23 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
   // same vocabulary protect/unprotect/doctor record.
   const consent: LaneConsentVerdict = args.yes ? "yes-flag" : "interactive-yes";
 
+  let instructionWrote = false;
   try {
     const result = adapter.apply(plan, payload, env, opts);
+    // t_ba41a78a B3: the instruction write runs after the adapter apply,
+    // under the SAME consent verdict - the prompt above covered both
+    // writes. A refusal here (hand-edited block, preview drift, symlink)
+    // leaves the adapter write in place and exits non-zero; a re-run
+    // converges because the step is idempotent and bound to a fresh
+    // plan. The approved binding is the plan this run rendered.
+    if (instruction !== null) {
+      const instructionResult = applyInstructionBlock(env, {
+        dryRun: opts.dryRun,
+        force: opts.force,
+        approved: instruction.plan,
+      });
+      instructionWrote = instructionResult.backupPath !== null;
+    }
     // An apply that returned changed the machine, so the close fires
     // unconditionally here - unlike verify, where exit 0 also covers a
     // runtime nobody installed.
@@ -471,6 +568,16 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
       process.stdout.write(renderApplyJson(result, ownership, consent));
     } else {
       process.stdout.write(renderApplyResult(result, consent));
+      // The instruction write is invisible in the adapter's own summary
+      // (its step count is the adapter's), so one line says what this
+      // lane did with the operator's consent.
+      if (instruction !== null && !opts.dryRun) {
+        process.stdout.write(
+          instructionWrote
+            ? `instruction block: ${instruction.plan.path} now carries the write-gate block\n`
+            : `instruction block: ${instruction.plan.path} already carries the current write-gate block\n`,
+        );
+      }
       process.stdout.write(renderDataOwnership(ownership));
     }
     return INSTALL_EXIT.ok;
@@ -484,6 +591,15 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
       process.stderr.write(`error: ${e.message}\n`);
       if (e.hint) process.stderr.write(`hint: ${e.hint}\n`);
       return INSTALL_EXIT.runtimeError;
+    }
+    // The instruction step's refusals ride the same exit vocabulary: a
+    // hand-edited block IS a user-modified-block (exit 4, --force is the
+    // documented override); every other kind is a named runtime error.
+    if (e instanceof RulesBlockError) {
+      process.stderr.write(`error: ${e.message}\n`);
+      return e.kind === RULES_BLOCK_ERROR_KIND.userModifiedBlock
+        ? INSTALL_EXIT.userModifiedBlock
+        : INSTALL_EXIT.runtimeError;
     }
     process.stderr.write(`error: ${(e as Error).message}\n`);
     return INSTALL_EXIT.runtimeError;
