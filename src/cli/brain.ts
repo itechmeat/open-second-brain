@@ -20,6 +20,7 @@ import {
   cmdBrainTension,
   cmdBrainDream,
   cmdBrainApplyEvidence,
+  cmdBrainLessons,
   cmdBrainDigest,
   cmdBrainIntentReview,
   cmdBrainRetention,
@@ -283,6 +284,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPin(rest);
       case "unpin":
         return await cmdBrainUnpin(rest);
+      case "lessons":
+        return await cmdBrainLessons(rest);
       case "state":
         return await cmdBrainState(rest);
       case "set-primary":

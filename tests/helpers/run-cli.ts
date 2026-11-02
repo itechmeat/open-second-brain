@@ -73,6 +73,10 @@ const RUNTIME_OVERRIDABLE_ENV = [
   // shell that happens to carry it must not turn a locked-store test into
   // an unlocked one (or steal the value mid-run).
   "OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE",
+  // Lesson-promotion scope selection (t_1e952e43). A developer shell
+  // carrying an enabled scope must not silently flip the promotion gate
+  // in every lessons CLI test.
+  "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES",
 ] as const;
 
 export interface RunCliOptions {

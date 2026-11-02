@@ -40,17 +40,24 @@
  * lock through the shared atomic writer, sorted-key serialization.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { RULES_BLOCK_ID, type RulesBlockId } from "../install/rules-block.ts";
 import { computeContentHash } from "./content-hash.ts";
-import { LESSON_TIER, type LessonEntry, type LessonTier } from "./lessons.ts";
+import { listDeadEnds } from "./dead-ends.ts";
+import { LESSON_TIER, computeLessons, type LessonEntry, type LessonTier } from "./lessons.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
+import { brainDirs } from "./paths.ts";
+import { parsePreference } from "./preference.ts";
 import {
+  LESSONS_CORROBORATION_MIN_DEFAULT,
+  LESSONS_HALF_LIFE_DAYS_DEFAULT,
   LESSONS_LIMIT_DEFAULT,
   LESSONS_PROMOTION_SCOPES_CONFIG_KEY,
+  resolveLessonsPromotionScopes,
+  type LessonsPromotionScopesResolution,
 } from "./policy/blocks/lessons.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
@@ -577,4 +584,80 @@ function validateRow(row: LessonApprovalRow): void {
   if (row.lastPromotedAt !== null && typeof row.lastPromotedAt !== "string") {
     throw new Error(`recordLessonApproval: ${row.prefId} carries a malformed lastPromotedAt`);
   }
+}
+
+// ----- Vault-side inputs -----------------------------------------------------
+
+/** Everything one promotion pass reads from the vault, gathered once. */
+export interface LessonsPromotionInputs {
+  /** Every parseable active preference under `Brain/preferences/`. */
+  readonly preferences: ReadonlyArray<BrainPreference>;
+  /** The signed, recency-scored digest entries the tiers come from. */
+  readonly lessons: ReadonlyArray<LessonEntry>;
+  /** The resolved promotion scopes (a count of zero disables promotion). */
+  readonly scopes: LessonsPromotionScopesResolution;
+}
+
+export interface GatherLessonsPromotionInputsOptions {
+  /** Wall clock for the recency decay. Defaults to `new Date()`. */
+  readonly now?: Date;
+  /** The `o2b` config file the scopes resolve against; null for default discovery. */
+  readonly configPath?: string | null;
+}
+
+/**
+ * Gather the promotion inputs from one vault: the active preferences
+ * (corrupted files are omitted; doctor is the surface for them, exactly
+ * as the lessons digest reads), the dead ends, and the digest computed
+ * fresh at `opts.now` under the configured `lessons:` tuning. The digest
+ * is COMPUTED, not read off `Brain/lessons.md`: qualification and the
+ * doctor must grade what a refresh would render now, not what the last
+ * dream pass sealed. Config that cannot be read resolves the shared
+ * defaults - a config error is doctor's finding, never a promotion veto.
+ */
+export function gatherLessonsPromotionInputs(
+  vault: string,
+  opts: GatherLessonsPromotionInputsOptions = {},
+): LessonsPromotionInputs {
+  const preferences = readActivePreferencesForPromotion(vault);
+  const deadEnds = listDeadEnds(vault).entries;
+
+  let halfLifeDays = LESSONS_HALF_LIFE_DAYS_DEFAULT;
+  let corroborationMin = LESSONS_CORROBORATION_MIN_DEFAULT;
+  let limit = LESSONS_LIMIT_DEFAULT;
+  try {
+    const cfg = loadBrainConfig(vault);
+    if (cfg.lessons) {
+      halfLifeDays = cfg.lessons.half_life_days ?? halfLifeDays;
+      corroborationMin = cfg.lessons.corroboration_min ?? corroborationMin;
+      limit = cfg.lessons.limit ?? limit;
+    }
+  } catch {
+    // intentional fallback - config error is doctor's job to surface
+  }
+
+  const lessons = computeLessons(vault, preferences, deadEnds, {
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    halfLifeDays,
+    corroborationMin,
+    limit,
+  });
+  const scopes = resolveLessonsPromotionScopes(opts.configPath ?? undefined);
+  return { preferences, lessons, scopes };
+}
+
+/** The active preferences, parsed; a corrupted file is omitted, not fatal. */
+function readActivePreferencesForPromotion(vault: string): BrainPreference[] {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.preferences)) return [];
+  const out: BrainPreference[] = [];
+  for (const name of readdirSync(dirs.preferences)) {
+    if (!name.endsWith(".md")) continue;
+    try {
+      out.push(parsePreference(join(dirs.preferences, name)));
+    } catch {
+      // Corrupted frontmatter - doctor flags it; promotion reads the rest.
+    }
+  }
+  return out;
 }

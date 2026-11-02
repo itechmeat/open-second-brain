@@ -233,7 +233,7 @@ describe("the repaired manifest reaches its two consumers", () => {
   /** Verbs the audit found missing; a spot check of each level. */
   const REPAIRED = Object.freeze({
     top: ["secrets", "partner"],
-    brain: ["pending", "lint", "stale", "today", "obligation"],
+    brain: ["pending", "lint", "stale", "today", "obligation", "lessons"],
     search: ["expand", "focus", "feedback", "weights", "rerank-provider", "rerank-fit", "plan"],
   });
 

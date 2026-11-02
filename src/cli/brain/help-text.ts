@@ -154,6 +154,7 @@ Brain verbs (observing memory):
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queues (signals/notes/ingest): list | apply <id> | reject <id>
+  lessons             Operator-approved lesson promotion: candidates | approve <id> | deny <id> | refresh-blocks
   signal              Fact signal lifecycle: retire <id> --reason <text>
   capture             Stage one capture from the terminal: body, source, sender, guidance
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
@@ -1259,6 +1260,23 @@ export const VERB_HELP: Record<string, string> = {
     "renders it into Brain/retired/ with retire-shaped frontmatter (the\n" +
     "same --dry-run honesty). Applying or rejecting a missing id exits 2\n" +
     "(never a silent no-op).\n",
+  lessons:
+    "usage: o2b brain lessons candidates [--vault <path>] [--json]\n" +
+    "       o2b brain lessons approve <pref-id> [--target <file>...] [--apply] [--yes] [--force]\n" +
+    "       o2b brain lessons deny <pref-id> [--apply] [--yes] [--vault <path>] [--json]\n" +
+    "       o2b brain lessons refresh-blocks [--apply] [--yes] [--force] [--vault <path>] [--json]\n" +
+    "Operator-approved lesson promotion into the managed lessons block of the\n" +
+    "agent rules files (AGENTS.md, CLAUDE.md, GEMINI.md). candidates is\n" +
+    "read-only: the promotable set plus every blocked lesson with its single\n" +
+    "named reason, and the resolved promotion scopes. approve follows the\n" +
+    "install consent ladder: plan-only by default, --apply executes, headless\n" +
+    "--apply without --yes refuses with exit 6; the ledger row is recorded\n" +
+    "only after the rules-file writes landed, and every byte goes through the\n" +
+    "shared rules-block writer. deny records without writing rules files.\n" +
+    "refresh-blocks re-renders blocks under management (dry run by default;\n" +
+    "never creates a block), drops a lesson whose approval went stale by\n" +
+    "name, and stamps lastPromotedAt on what it wrote. Operator-only: no MCP\n" +
+    "tool exposes these subcommands.\n",
   signal:
     "usage: o2b brain signal retire <id> --reason <text> [--superseded-by <id>] [--vault <path>] [--json]\n" +
     "Retire an extracted fact signal: move Brain/inbox/sig-*.md into\n" +
