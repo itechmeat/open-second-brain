@@ -11,6 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
+import { readStdinText } from "../../src/cli/stdin.ts";
+
 const STDIN_MODULE = resolve(join(import.meta.dir, "..", "..", "src", "cli", "stdin.ts"));
 
 /** A child that awaits `readStdinText` through a promise chain, like the CLI entry. */
@@ -57,5 +59,21 @@ describe("readStdinText", () => {
     const proc = run("");
     expect(proc.status).toBe(0);
     expect(JSON.parse(proc.stdout)).toEqual({ length: 0, head: "", tail: "" });
+  });
+
+  test("a completed read releases stdin for the next reader in the same process", async () => {
+    // The CLI reads stdin once per process, but the TEST process is
+    // long-lived and shares one stdin across files: an earlier file's
+    // in-process readStdinText left Bun's stdin body locked forever, so a
+    // later file's in-process y/N prompt (readSingleLine's event-listener
+    // read) threw `ReadableStream is locked` - and the suite's verdict
+    // depended on bun's file discovery order. A completed read must
+    // release the lock it took; the bytes are irrelevant here (stdin may
+    // already be drained when this file runs), only the lock is.
+    await readStdinText();
+    expect(() => {
+      process.stdin.resume();
+      process.stdin.pause();
+    }).not.toThrow();
   });
 });
