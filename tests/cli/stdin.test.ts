@@ -11,8 +11,6 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { readStdinText } from "../../src/cli/stdin.ts";
-
 const STDIN_MODULE = resolve(join(import.meta.dir, "..", "..", "src", "cli", "stdin.ts"));
 
 /** A child that awaits `readStdinText` through a promise chain, like the CLI entry. */
@@ -25,8 +23,30 @@ async function main() {
 main().then(() => process.exit(0));
 `;
 
-function run(input: string | Buffer) {
-  return spawnSync(process.execPath, ["-e", CHILD], {
+/**
+ * A child that reads once and then checks the stream is free for the next
+ * reader in the SAME process - the lock-release regression the last test
+ * pins. Its stdin is the closed, empty pipe the runner hands it, so the
+ * read completes immediately and deterministically.
+ */
+const CHILD_LOCK = `
+import { readStdinText } from ${JSON.stringify(STDIN_MODULE)};
+async function main() {
+  await readStdinText();
+  let released = true;
+  try {
+    process.stdin.resume();
+    process.stdin.pause();
+  } catch {
+    released = false;
+  }
+  process.stdout.write(JSON.stringify({ released }));
+}
+main().then(() => process.exit(0));
+`;
+
+function run(input: string | Buffer, child: string = CHILD) {
+  return spawnSync(process.execPath, ["-e", child], {
     input,
     encoding: "utf8",
     timeout: 30_000,
@@ -61,19 +81,20 @@ describe("readStdinText", () => {
     expect(JSON.parse(proc.stdout)).toEqual({ length: 0, head: "", tail: "" });
   });
 
-  test("a completed read releases stdin for the next reader in the same process", async () => {
-    // The CLI reads stdin once per process, but the TEST process is
-    // long-lived and shares one stdin across files: an earlier file's
-    // in-process readStdinText left Bun's stdin body locked forever, so a
-    // later file's in-process y/N prompt (readSingleLine's event-listener
-    // read) threw `ReadableStream is locked` - and the suite's verdict
-    // depended on bun's file discovery order. A completed read must
-    // release the lock it took; the bytes are irrelevant here (stdin may
-    // already be drained when this file runs), only the lock is.
-    await readStdinText();
-    expect(() => {
-      process.stdin.resume();
-      process.stdin.pause();
-    }).not.toThrow();
+  test("a completed read releases stdin for the next reader in the same process", () => {
+    // The CLI reads stdin once per process, but a long-lived embedder
+    // (the test runner among them) shares one stdin across files: an
+    // earlier file's in-process readStdinText left Bun's stdin body
+    // locked forever, so a later file's in-process y/N prompt
+    // (readSingleLine's event-listener read) threw `ReadableStream is
+    // locked` - and the suite's verdict depended on bun's file discovery
+    // order. A completed read must release the lock it took; only the
+    // lock is under test. The read runs in a child whose stdin is a
+    // closed, empty pipe: reading the RUNNER's own stdin here would hang
+    // a terminal `scripts/test` on the drain until EOF, the exact stall
+    // this file exists to rule out.
+    const proc = run("", CHILD_LOCK);
+    expect(proc.status).toBe(0);
+    expect(JSON.parse(proc.stdout)).toEqual({ released: true });
   });
 });
