@@ -147,6 +147,7 @@ function gradeFile(
   file: string,
   ledger: ReadonlyArray<LessonApprovalRow>,
   now: Date,
+  configPath?: string,
 ): Grade | null {
   // Defense in depth beside candidateFiles: any caller handing this
   // grader a ledger-supplied string gets the same fixed-list guard
@@ -175,7 +176,16 @@ function gradeFile(
   if (extracted === null) {
     return { state: LESSONS_BLOCK_STATE.absent, staleIds: [], qualifiedIds: [], detail: null };
   }
-  const plan: LessonsBlockPlan = planLessonsBlock(vault, file, { now });
+  // The plan resolves against the config the CALLER selected - the
+  // doctor run's `configPath` - not against whatever file discovery
+  // would find: two configs with different `lessons.promotion.scopes`
+  // qualify different lessons, and grading the block against the wrong
+  // list reported drifted or stale for a block the selected config
+  // renders current. No path given, the planner keeps its own default.
+  const plan: LessonsBlockPlan = planLessonsBlock(vault, file, {
+    now,
+    ...(configPath !== undefined ? { configPath } : {}),
+  });
   const staleIds = lessonIdsInBlockBody(extracted).filter((id) => plan.staleIds.includes(id));
   if (staleIds.length > 0) {
     return {
@@ -209,7 +219,7 @@ function gradeFile(
  */
 export function lessonsBlockStates(
   vault: string,
-  opts: { readonly now?: Date } = {},
+  opts: { readonly now?: Date; readonly configPath?: string } = {},
 ): ReadonlyArray<LessonsBlockStateRow> {
   let ledger: ReadonlyArray<LessonApprovalRow>;
   try {
@@ -237,7 +247,7 @@ export function lessonsBlockStates(
   }
   for (const file of candidates) {
     try {
-      const grade = gradeFile(vault, file, ledger, now);
+      const grade = gradeFile(vault, file, ledger, now, opts.configPath);
       if (grade !== null) {
         rows.push({
           file,
@@ -276,7 +286,7 @@ export const lessonsBlockCheck: DoctorCheck = {
     for (const file of candidateFiles(ledger)) {
       let grade: Grade | null;
       try {
-        grade = gradeFile(ctx.vault, file, ledger, ctx.now);
+        grade = gradeFile(ctx.vault, file, ledger, ctx.now, ctx.configPath);
       } catch (err) {
         out.issues.push({
           severity: "warning",

@@ -238,6 +238,31 @@ describe("lessons-block doctor check", () => {
     expect(out.issues[0]?.message).toContain(LESSONS_APPROVALS_FILE);
   });
 
+  test("the states grade against the config the doctor run selected", () => {
+    // The doctor carries the config the operator selected; the check
+    // graded its blocks against the DISCOVERY config's scope list instead,
+    // so a selected config with a different `lessons.promotion.scopes`
+    // reported drifted for a block the selected config renders current.
+    // The env twin is cleared for the grading itself, so the selected
+    // file is the layer under test - discovery finds no config under the
+    // throwaway HOME, which disables promotion and drifts every block.
+    const configPath = join(tmp, "selected-config.yaml");
+    writeFileSync(configPath, "lessons.promotion.scopes: backend\n", "utf8");
+    const prefId = seedLesson("doctor-config-path");
+    approveAndWrite(prefId);
+    delete process.env[SCOPE_ENV];
+    const selected = lessonsBlockStates(vault, { now: NOW, configPath });
+    const discovery = lessonsBlockStates(vault, { now: NOW });
+    expect(selected.map((row) => row.state)).toEqual([LESSONS_BLOCK_STATE.current]);
+    expect(discovery.map((row) => row.state)).toEqual([LESSONS_BLOCK_STATE.drifted]);
+
+    // The check grades through the same selected config: a block the
+    // selected config renders current stays silent.
+    const out: DoctorFindings = { issues: [], uncertain: [] };
+    lessonsBlockCheck.run({ ...fixtureContext(), configPath }, out);
+    expect(out.issues).toEqual([]);
+  });
+
   test("the per-file states cover the closed four-state vocabulary", () => {
     const prefId = seedLesson("doctor-states");
     approveAndWrite(prefId);
