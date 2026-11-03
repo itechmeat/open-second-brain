@@ -582,7 +582,7 @@ describe("lesson approvals ledger", () => {
     const original = readFileSync(path, "utf8");
     const patterns: ReadonlyArray<RegExp> = [/corrupted/, /schema_version/, /decision/];
     const mutations: ReadonlyArray<string> = [
-      original.replace("{", "{broken"),
+      original.replaceAll("{", "{broken"),
       original.replace('"schema_version": 1', '"schema_version": 99'),
       original.replace('"decision": "approved"', '"decision": "maybe"'),
     ];
