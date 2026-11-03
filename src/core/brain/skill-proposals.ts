@@ -601,6 +601,17 @@ const SKILL_DRAFT_DESCRIPTION_KEY = "skill_description";
 const SKILL_DRAFT_TRIGGERS_KEY = "skill_triggers";
 
 /**
+ * Frontmatter keys of a MATERIALIZED `SKILL.md` - the incumbent spelling
+ * the accept materializer writes and every later reader of that file
+ * (the rewrite incumbent reader among them) must use. Declared beside the
+ * draft keys because this exact split - proposal-only `skill_*` spellings
+ * versus the incumbent's own - is what a mixed-up reader and writer pair
+ * would corrupt.
+ */
+const SKILL_DESCRIPTION_KEY = "description";
+const SKILL_TRIGGERS_KEY = "triggers";
+
+/**
  * Scored-contract keys a `scored_rewrite` proposal carries beside the
  * SKILL.md draft fields: which skill it rewrites, the spec hash the gate
  * verified against, the three rates the gate decided on, and the sha-256
@@ -1003,15 +1014,17 @@ function planDeclaredSkillProposal(
   // must not pin the skill against the next changed candidate the gate's
   // iterative mode stages, so acceptance suppresses on the complete
   // payload identity (skill, body and salt) instead of the name alone.
-  // The pending and rejected phases keep the family match: one pending
-  // overwrite per skill at a time - two accepted drafts would stamp the
+  // The pending and rejected phases keep the family match - one pending
+  // overwrite per skill at a time (two accepted drafts would stamp the
   // same version over one SKILL.md and the second would silently drop the
-  // first - and an operator reject is sticky for the whole rewrite family,
-  // per the design. The family match also covers proposals staged before
-  // the payload key existed (a bare `name_key` matches its own family).
-  // The salt joins the hashed payload ONLY when a producer supplies one,
-  // so the declared and mature-page hashes stay byte-identical to the
-  // pre-rewrite spellings.
+  // first) and an operator reject is sticky for the whole rewrite family,
+  // per the design. The family match also covers pending and rejected
+  // proposals staged before the payload key existed; a same-payload
+  // re-stage against a LEGACY accepted proposal is still caught by the
+  // slug-occupancy guard below, because an identical payload derives the
+  // identical slug. The salt joins the hashed payload ONLY when a
+  // producer supplies one, so the declared and mature-page hashes stay
+  // byte-identical to the pre-rewrite spellings.
   const payloadHash = createHash("sha256")
     .update(
       JSON.stringify(
@@ -1233,8 +1246,10 @@ export function acceptSkillProposal(
           materializedPath,
           {
             name: skillDraft.name,
-            description: skillDraft.description,
-            ...(skillDraft.triggers.length > 0 ? { triggers: skillDraft.triggers } : {}),
+            [SKILL_DESCRIPTION_KEY]: skillDraft.description,
+            ...(skillDraft.triggers.length > 0
+              ? { [SKILL_TRIGGERS_KEY]: skillDraft.triggers }
+              : {}),
             source_proposal: id,
             version,
             created_at: now,
@@ -1808,8 +1823,8 @@ export function readRewriteIncumbent(
   // keys made every real incumbent read as undescribed, so the staged
   // rewrite wore the placeholder description and an empty trigger list,
   // and the accept overwrote the incumbent's identity with them.
-  const description = fm["description"];
-  const triggersRaw = fm["triggers"];
+  const description = fm[SKILL_DESCRIPTION_KEY];
+  const triggersRaw = fm[SKILL_TRIGGERS_KEY];
   const triggers = Array.isArray(triggersRaw)
     ? triggersRaw.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
     : typeof triggersRaw === "string" && triggersRaw.trim().length > 0
