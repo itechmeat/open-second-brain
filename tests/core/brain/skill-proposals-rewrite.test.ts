@@ -274,6 +274,73 @@ describe("the scored_rewrite pattern kind", () => {
     expect(incumbent.description).toBe("The incumbent instructions.");
     expect(incumbent.triggers).toEqual(["thing"]);
   });
+
+  test("a changed rewrite stages after its predecessor was accepted", () => {
+    // The rewrite gate is iterative by design (the reserved `iterative`
+    // mode is rounds over the SAME skill), so an accepted proposal must
+    // not pin the skill name against the next changed candidate. The
+    // payload identity - body and salt - is what dedupes a scored
+    // rewrite; the bare name is what a REJECTION pins.
+    const first = seedCompletedGateRound();
+    acceptSkillProposal(vault, first.slug, { skillsRoot, note: "gate passed" });
+    const second = stageScoredRewriteProposal(vault, {
+      skill: {
+        name: TASKS.skillName,
+        description: "Does a thing, safely.",
+        triggers: ["thing"],
+        body: `${CANDIDATE_BODY}\nRefined after the first accepted round.`,
+      },
+      spec: SPEC,
+      specHash: skillRewriteSpecHash(SPEC),
+      baselineScore: 0.4,
+      candidateScore: 0.75,
+      heldoutScore: 1,
+      incumbentVersion: 4,
+    });
+    expect(second.outcome).toBe("created");
+  });
+
+  test("an identical pending payload still dedupes", () => {
+    stagePromoted();
+    const again = stageScoredRewriteProposal(vault, {
+      skill: {
+        name: TASKS.skillName,
+        description: "Does a thing, safely.",
+        triggers: ["thing"],
+        body: CANDIDATE_BODY,
+      },
+      spec: SPEC,
+      specHash: skillRewriteSpecHash(SPEC),
+      baselineScore: 0.4,
+      candidateScore: 0.7,
+      heldoutScore: 1,
+      incumbentVersion: 3,
+    });
+    expect(again.outcome).toBe("deduped");
+  });
+
+  test("a rejected rewrite family stays suppressed for the skill name", () => {
+    // The design pins the reject: sticky for the skill name, so a
+    // re-proposed rewrite of the same skill - changed payload included -
+    // stays suppressed until an operator reopens the lane by hand.
+    const { slug } = stagePromoted();
+    rejectSkillProposal(vault, slug, { note: "not this direction" });
+    const changed = stageScoredRewriteProposal(vault, {
+      skill: {
+        name: TASKS.skillName,
+        description: "Does a thing, safely.",
+        triggers: ["thing"],
+        body: `${CANDIDATE_BODY}\nRefined after the rejection.`,
+      },
+      spec: SPEC,
+      specHash: skillRewriteSpecHash(SPEC),
+      baselineScore: 0.4,
+      candidateScore: 0.75,
+      heldoutScore: 1,
+      incumbentVersion: 3,
+    });
+    expect(changed.outcome).toBe("suppressed");
+  });
 });
 
 describe("the journal captures prior content", () => {

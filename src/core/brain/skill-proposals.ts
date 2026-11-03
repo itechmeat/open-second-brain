@@ -998,8 +998,35 @@ function planDeclaredSkillProposal(
 
   const key = slugify(name);
   const nameKey = nameKeyFor(patternKind, key);
+  // The payload hash is computed BEFORE the phase loop because a scored
+  // rewrite's suppression key needs it: its pending and accepted phases
+  // suppress on the complete payload identity (skill, body and salt), not
+  // the skill name alone - an accepted rewrite must not pin the skill
+  // against the next changed candidate the gate's iterative mode stages,
+  // while an identical payload still dedupes. The rejected phase keeps
+  // the bare name key: an operator reject is sticky for the whole rewrite
+  // family, per the design. The salt joins the hashed payload ONLY when a
+  // producer supplies one, so the declared and mature-page hashes stay
+  // byte-identical to the pre-rewrite spellings.
+  const payloadHash = createHash("sha256")
+    .update(
+      JSON.stringify(
+        opts.payloadSalt !== undefined
+          ? { patternKind, key, body, salt: opts.payloadSalt }
+          : { patternKind, key, body },
+      ),
+      "utf8",
+    )
+    .digest("hex");
+  const rewritePayloadKey = `${nameKey}:${payloadHash}`;
+  const isScoredRewrite = patternKind === SCORED_REWRITE_PATTERN_KIND;
   for (const phase of PROPOSAL_PHASES) {
-    const existing = findProposalByNameKey(vault, phase, nameKey);
+    const existing = findProposalByNameKey(
+      vault,
+      phase,
+      isScoredRewrite && phase !== "rejected" ? rewritePayloadKey : nameKey,
+      isScoredRewrite && phase === "rejected",
+    );
     if (existing === null) continue;
     const found = { id: existing.id, slug: existing.slug, path: existing.path };
     if (phase === "pending") return { declined: { ...found, outcome: "deduped" } };
@@ -1014,19 +1041,6 @@ function planDeclaredSkillProposal(
     };
   }
 
-  // The salt joins the hashed payload ONLY when a producer supplies one,
-  // so the declared and mature-page hashes stay byte-identical to the
-  // pre-rewrite spellings.
-  const payloadHash = createHash("sha256")
-    .update(
-      JSON.stringify(
-        opts.payloadSalt !== undefined
-          ? { patternKind, key, body, salt: opts.payloadSalt }
-          : { patternKind, key, body },
-      ),
-      "utf8",
-    )
-    .digest("hex");
   const slug = composeProposalSlug(patternKind, key, payloadHash);
   const id = `prop-${slug}`;
 
@@ -1054,7 +1068,7 @@ function planDeclaredSkillProposal(
       name,
       body,
       key,
-      nameKey,
+      nameKey: isScoredRewrite ? rewritePayloadKey : nameKey,
       payloadHash,
     },
   };
@@ -2127,11 +2141,21 @@ interface FoundProposal {
   readonly body: string;
 }
 
-/** Find the first proposal in `phase` whose stored name key matches. */
+/**
+ * Find the first proposal in `phase` whose stored name key matches.
+ *
+ * `familyPrefix` widens the match to the key's family: the stored key
+ * equals `nameKey` or carries it as the prefix before a `:` separator,
+ * which is the shape a scored rewrite's payload-scoped key
+ * (`<family>:<payload hash>`) shares with its bare family key. The
+ * rejected phase needs the family match - an operator reject is sticky
+ * for the skill name, not for one payload.
+ */
 function findProposalByNameKey(
   vault: string,
   phase: SkillProposalPhase,
   nameKey: string,
+  familyPrefix = false,
 ): FoundProposal | null {
   const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, phase), vault);
   if (!existsSync(dir)) return null;
@@ -2140,7 +2164,11 @@ function findProposalByNameKey(
     const path = ensureInsideVault(join(dir, name), vault);
     const [fm, body] = parseFrontmatter(path);
     if (fm["kind"] !== "brain-skill-proposal") continue;
-    if (fm["name_key"] !== nameKey) continue;
+    const stored = fm["name_key"];
+    const matches =
+      stored === nameKey ||
+      (familyPrefix === true && typeof stored === "string" && stored.startsWith(`${nameKey}:`));
+    if (!matches) continue;
     const slug =
       typeof fm["slug"] === "string" ? fm["slug"] : name.replace(/^prop-/, "").replace(/\.md$/, "");
     const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
