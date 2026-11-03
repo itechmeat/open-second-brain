@@ -45,7 +45,7 @@
  * (`src/cli/install/install.ts`) owns consent, rendering and exits.
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
@@ -327,10 +327,21 @@ export function applyInstructionBlock(
     },
   );
   if (!opts.dryRun) {
+    // Stamp the moment the bytes landed, as the written file's own mtime -
+    // the exact anchor the writer's hand-edit gate compares against.
+    // env.now predates the plan render, the consent prompt and the adapter
+    // apply, so a run-start stamp can sit more than the gate's one-second
+    // slack behind the file's mtime and make our OWN write read as a later
+    // hand edit on the next canonical-body upgrade: every interactive
+    // install would then refuse that upgrade with user-modified-block
+    // instead of taking the documented rewrite path. A file that cannot be
+    // re-statted falls back to the wall clock at record time, which still
+    // postdates the run start.
+    const landed = statSync(approved.path, { throwIfNoEntry: false })?.mtimeMs ?? Date.now();
     recordInstructionBlock(env.vault, name, {
       block_id: RULES_BLOCK_ID.usage,
       begin_marker: RULES_BLOCK_MARKERS.usage.begin,
-      applied_at: env.now.toISOString(),
+      applied_at: new Date(landed).toISOString(),
     });
   }
   return {

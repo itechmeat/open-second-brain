@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -220,7 +221,28 @@ describe("applyInstructionBlock", () => {
     expect(entry).toBeDefined();
     expect(entry?.block_id).toBe(RULES_BLOCK_ID.usage);
     expect(entry?.begin_marker).toBe(RULES_BLOCK_MARKERS.usage.begin);
-    expect(entry?.applied_at).toBe(new Date(APPLIED_AT_MS).toISOString());
+    // The lock stamps when the write landed: the mtime the gate itself
+    // compares against, not the run-start clock in env.now.
+    expect(Date.parse(entry?.applied_at ?? "")).toBe(
+      Math.trunc(statSync(join(tmp, "AGENTS.md")).mtimeMs),
+    );
+  });
+
+  test("the lock stamps when the write landed, not the run-start clock", () => {
+    // env.now predates the plan render, the consent prompt and the
+    // adapter apply - on an interactive install by more than the writer's
+    // MTIME_SLACK_MS. A run-start stamp then sits behind the written
+    // file's mtime, so the next canonical-body upgrade read our own
+    // write as a later hand edit and refused with user-modified-block
+    // instead of taking the documented rewrite path. The lock records
+    // the written file's mtime, the exact anchor the hand-edit gate
+    // compares against.
+    writeFileSync(join(tmp, "AGENTS.md"), OPERATOR);
+    const env = envFor(tmp);
+    applyInstructionBlock(env, { approved: planInstructionBlock(env, "codex") });
+    const stamped = Date.parse(readInstructionBlockLock(tmp).files["AGENTS.md"]?.applied_at ?? "");
+    expect(stamped).toBe(Math.trunc(statSync(join(tmp, "AGENTS.md")).mtimeMs));
+    expect(stamped).not.toBe(APPLIED_AT_MS);
   });
 
   test("a re-plan and re-apply converge: changed false, no new backup", () => {
