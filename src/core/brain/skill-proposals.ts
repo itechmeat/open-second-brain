@@ -1152,10 +1152,14 @@ export function acceptSkillProposal(
     if (isRewrite && skillDraft !== null) {
       verifyScoredRewriteGate(vault, fm, skillDraft.name, body);
     }
+    // The resolved root rides the journal for skill materializations:
+    // recovery must check the journal's path against the tree THIS accept
+    // used, not re-derive a root the caller may have resolved differently.
+    const skillsRoot = resolveSkillsRoot(vault, opts.skillsRoot);
     const materializedPath =
       skillDraft === null
         ? procedurePath(vault, slug)
-        : join(resolveSkillsRoot(vault, opts.skillsRoot), skillDraft.name, SKILL_FILE_NAME);
+        : join(skillsRoot, skillDraft.name, SKILL_FILE_NAME);
 
     let journal: SkillAcceptJournalEntry = {
       slug,
@@ -1167,6 +1171,9 @@ export function acceptSkillProposal(
       acceptedExisted: existsSync(acceptedPath),
       materializedExisted: existsSync(materializedPath),
       materializedPath,
+      // Procedure materializations never consult the skills tree, so they
+      // record no root and recovery keeps its default resolution for them.
+      ...(skillDraft !== null ? { skillsRoot } : {}),
     };
     writeSkillAcceptJournal(vault, journal);
 
@@ -1490,9 +1497,10 @@ function restorePriorSkillContent(vault: string, journal: SkillAcceptJournalEntr
   // The target is a journal-supplied string, read from the same
   // agent-writable file as the source above, so it gets the same distrust
   // (review security M4): a restore may only land inside the vault or the
-  // skills root the materialize step itself resolves. A hand-edited
-  // journal is not a recovery input.
-  const skillsRoot = resolveSkillsRoot(vault, undefined);
+  // skills root the materialize step itself resolved - the root the
+  // journal records, else the default resolution for a legacy marker that
+  // names none. A hand-edited journal is not a recovery input.
+  const skillsRoot = journal.skillsRoot ?? resolveSkillsRoot(vault, undefined);
   if (!isLexicallyInside(target, vault) && !isLexicallyInside(target, skillsRoot)) {
     throw new Error(
       `skill proposal accept rollback for '${journal.slug}' refuses the journal's materialized ` +

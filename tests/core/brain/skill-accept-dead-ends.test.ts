@@ -85,9 +85,15 @@ function corruptJournal(slug: string): string {
 /**
  * Write a well-formed marker the way a hand edit (or a sync merge) would:
  * raw JSON on disk, not the module's own writer, naming a
- * `materialized_path` the accept sequence never produced.
+ * `materialized_path` the accept sequence never produced. `extra` carries
+ * additional raw payload keys a hand edit can plant, such as a recorded
+ * `skills_root`.
  */
-function handEditedJournal(slug: string, materializedPath: string): string {
+function handEditedJournal(
+  slug: string,
+  materializedPath: string,
+  extra: Record<string, unknown> = {},
+): string {
   const path = skillAcceptJournalPath(vault, slug);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(
@@ -102,6 +108,7 @@ function handEditedJournal(slug: string, materializedPath: string): string {
         accepted_existed: false,
         procedure_existed: false,
         materialized_path: materializedPath,
+        ...extra,
       },
       null,
       2,
@@ -262,6 +269,59 @@ describe("a hand-edited materialized path is refused at the journal boundary", (
       expect(existsSync(skillFile)).toBe(false);
     } finally {
       rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("a recorded skills root admits its own subtree the same way the default one does", () => {
+    // A marker that RECORDS the root its accept resolved no longer needs
+    // the path-shape escape: the recorded root itself bounds the subtree,
+    // and the parse guard admits a materialized path inside it exactly as
+    // it admits a vault-side one. The half-written first accept under an
+    // override root rolls back like any other.
+    const externalRoot = mkdtempSync(join(tmpdir(), "o2b-journal-recorded-"));
+    try {
+      const skillDir = join(externalRoot, "some-skill");
+      const skillFile = join(skillDir, "SKILL.md");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(skillFile, "half-written\n", "utf8");
+      writeSkillAcceptJournal(vault, {
+        slug: "ghost",
+        id: "prop-ghost",
+        phase: "materialize",
+        startedAt: ACCEPTED_AT.toISOString(),
+        acceptedExisted: false,
+        materializedExisted: false,
+        materializedPath: skillFile,
+        skillsRoot: externalRoot,
+      });
+
+      const state = readSkillAcceptJournals(vault);
+      expect(state.unreadable).toEqual([]);
+      const recovered = recoverSkillProposalAccepts(vault);
+      expect(recovered.map((entry) => entry.action)).toEqual(["rolled_back"]);
+      expect(existsSync(skillFile)).toBe(false);
+    } finally {
+      rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("a recorded skills root bounds the boundary: outside both vault and that root still refuses", () => {
+    // Naming a root in the marker must not unlock arbitrary paths: the
+    // recorded root bounds the materialize tree exactly as the default one
+    // does, so a path outside the vault AND outside the recorded root stays
+    // a hand edit and is refused at parse, skill-page name or not.
+    const externalRoot = mkdtempSync(join(tmpdir(), "o2b-journal-recorded-"));
+    const victimDir = mkdtempSync(join(tmpdir(), "o2b-journal-victim-"));
+    try {
+      const planted = join(victimDir, "planted-skill", "SKILL.md");
+      const journal = handEditedJournal("ghost", planted, { skills_root: externalRoot });
+      const state = readSkillAcceptJournals(vault);
+      expect(state.entries).toEqual([]);
+      expect(state.unreadable.map((u) => u.path)).toEqual([journal]);
+      expect(state.unreadable[0]!.detail).toContain("materialized_path");
+    } finally {
+      rmSync(externalRoot, { recursive: true, force: true });
+      rmSync(victimDir, { recursive: true, force: true });
     }
   });
 });

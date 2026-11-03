@@ -27,6 +27,7 @@ import {
   SKILL_BENCHMARK_SPEC_FILE,
 } from "../../../src/core/brain/skill-rewrite-tasks.ts";
 import {
+  skillAcceptJournalPath,
   skillAcceptPriorContentPath,
   skillBenchmarkRoundsDir,
   skillBenchmarkSpecPath,
@@ -395,6 +396,83 @@ describe("the journal captures prior content", () => {
     });
     const [without] = readSkillAcceptJournals(vault).entries;
     expect(without?.priorContentPath).toBeUndefined();
+  });
+
+  test("the journal records the skills root the accept resolved, alongside the path", () => {
+    // A mature_page accept resolves the skills root from its caller; the
+    // journal records that root next to the path it produced, so recovery
+    // can check the pair against the tree the accept actually used instead
+    // of re-deriving a root the caller may have overridden.
+    const slug = "recorded-root-slug";
+    const skillPath = join(skillsRoot, "example-skill", "SKILL.md");
+    writeSkillAcceptJournal(vault, {
+      slug,
+      id: `prop-${slug}`,
+      phase: "archive",
+      startedAt: "2026-06-01T09:00:00.000Z",
+      acceptedExisted: false,
+      materializedExisted: false,
+      materializedPath: skillPath,
+      skillsRoot,
+    });
+    const marker = JSON.parse(readFileSync(skillAcceptJournalPath(vault, slug), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(marker["skills_root"]).toBe(skillsRoot);
+    const [entry] = readSkillAcceptJournals(vault).entries;
+    expect(entry?.skillsRoot).toBe(skillsRoot);
+
+    // A legacy marker carries no root: it parses with the field absent,
+    // and recovery keeps its default-root resolution for it.
+    writeSkillAcceptJournal(vault, {
+      slug,
+      id: `prop-${slug}`,
+      phase: "archive",
+      startedAt: "2026-06-01T09:00:00.000Z",
+      acceptedExisted: false,
+      materializedExisted: false,
+    });
+    const [legacy] = readSkillAcceptJournals(vault).entries;
+    expect(legacy?.skillsRoot).toBeUndefined();
+  });
+
+  test("a crash under an explicit skills root restores the incumbent from the recorded root", () => {
+    // The accept ran against a caller-supplied skills root outside the
+    // vault, so the journal it stamped records that root next to the
+    // materialized path. Recovery reads the pair back: the restore target
+    // sits inside the root the accept itself resolved, so the rollback
+    // restores the incumbent body instead of refusing a path it cannot
+    // re-derive.
+    const { slug } = stagePromoted();
+    const skillPath = writeIncumbent();
+    // The overwrite landed, then the process died before the commit.
+    writeFileSync(
+      skillPath,
+      "---\nname: example-skill\ndescription: x\nversion: 4\n---\n\nCandidate body: plan first\n",
+      "utf8",
+    );
+    const priorPath = join(vault, "Brain", "skill-proposals", "accept-journal", `${slug}.prior.md`);
+    mkdirSync(dirname(priorPath), { recursive: true });
+    writeFileSync(priorPath, INCUMBENT_BODY, "utf8");
+    writeSkillAcceptJournal(vault, {
+      slug,
+      id: `prop-${slug}`,
+      phase: "materialize",
+      startedAt: "2026-06-01T09:00:00.000Z",
+      acceptedExisted: false,
+      materializedExisted: true,
+      materializedPath: skillPath,
+      skillsRoot,
+      priorContentPath: priorPath,
+    });
+
+    const recovered = recoverSkillProposalAccepts(vault);
+    expect(recovered.map((entry) => entry.action)).toEqual(["rolled_back"]);
+    // Content, not just existence: the incumbent bytes are back.
+    expect(readFileSync(skillPath, "utf8")).toBe(INCUMBENT_BODY);
+    expect(existsSync(priorPath)).toBe(false);
+    expect(readSkillAcceptJournals(vault).entries).toEqual([]);
   });
 
   test("a crash mid-accept rolls back to the incumbent BODY, not just existence", () => {
