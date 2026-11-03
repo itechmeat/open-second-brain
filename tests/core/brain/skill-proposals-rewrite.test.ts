@@ -41,11 +41,13 @@ import {
 } from "../../../src/core/brain/skill-rewrite-spec.ts";
 import {
   listPendingSkillProposals,
+  readRewriteIncumbent,
   recoverSkillProposalAccepts,
   SCORED_REWRITE_PATTERN_KIND,
   stageScoredRewriteProposal,
   recordSkillRewriteGrade,
   acceptSkillProposal,
+  rejectSkillProposal,
 } from "../../../src/core/brain/skill-proposals.ts";
 import {
   readSkillAcceptJournals,
@@ -258,6 +260,19 @@ describe("the scored_rewrite pattern kind", () => {
     expect(existsSync(join(vault, "Brain", "skill-proposals", "accepted", `prop-${slug}.md`))).toBe(
       true,
     );
+  });
+
+  test("the incumbent reader takes description and triggers from the incumbent's own frontmatter", () => {
+    // An incumbent SKILL.md stores `description` and `triggers` - the same
+    // keys the accept materializer writes - not the proposal-only
+    // `skill_description`/`skill_triggers` spellings. Reading the draft
+    // keys here made every real incumbent read as undescribed, so the
+    // staged rewrite carried the placeholder description and empty
+    // triggers, and the accept dropped the incumbent's own.
+    writeIncumbent();
+    const incumbent = readRewriteIncumbent(vault, TASKS.skillName, { skillsRoot });
+    expect(incumbent.description).toBe("The incumbent instructions.");
+    expect(incumbent.triggers).toEqual(["thing"]);
   });
 });
 

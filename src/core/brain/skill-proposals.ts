@@ -1783,8 +1783,15 @@ export function readRewriteIncumbent(
       `the incumbent SKILL.md for '${skillName}' has no usable version frontmatter at ${path}`,
     );
   }
-  const description = fm[SKILL_DRAFT_DESCRIPTION_KEY];
-  const triggersRaw = fm[SKILL_DRAFT_TRIGGERS_KEY];
+  // The incumbent's OWN frontmatter keys, not the proposal-only draft
+  // spellings (`skill_description`/`skill_triggers` exist on staged
+  // proposals; a materialized SKILL.md carries `description`/`triggers`,
+  // the same keys the accept materializer writes below). Reading the draft
+  // keys made every real incumbent read as undescribed, so the staged
+  // rewrite wore the placeholder description and an empty trigger list,
+  // and the accept overwrote the incumbent's identity with them.
+  const description = fm["description"];
+  const triggersRaw = fm["triggers"];
   const triggers = Array.isArray(triggersRaw)
     ? triggersRaw.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
     : typeof triggersRaw === "string" && triggersRaw.trim().length > 0

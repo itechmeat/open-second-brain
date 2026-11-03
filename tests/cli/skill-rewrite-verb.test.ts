@@ -24,6 +24,7 @@ import {
 } from "../../src/core/brain/continuity/store.ts";
 import { skillBenchmarkTasksPath } from "../../src/core/brain/paths.ts";
 import { listPendingSkillProposals } from "../../src/core/brain/skill-proposals.ts";
+import { parseFrontmatter } from "../../src/core/vault.ts";
 import { sha256Hex } from "../../src/core/integrity/digest.ts";
 import {
   SKILL_REWRITE_JUDGE_CMD_ENV_KEY,
@@ -518,6 +519,13 @@ describe("rewrite-score", () => {
     const skillPath = join(vault, "Brain", "skills", "example-skill", "SKILL.md");
     expect(readFileSync(skillPath, "utf8")).toContain("Candidate body: plan first");
     expect(listPendingSkillProposals(vault).length).toBe(0);
+    // The accepted skill keeps the incumbent's own description and
+    // triggers: the reader takes them from the incumbent's frontmatter,
+    // so the rewrite never degrades to the placeholder description and an
+    // empty trigger list.
+    const [acceptedFm] = parseFrontmatter(skillPath);
+    expect(acceptedFm["description"]).toBe("The incumbent instructions.");
+    expect(acceptedFm["triggers"]).toEqual(["thing"]);
   });
 
   test("a scored_rewrite accept without --yes refuses by name, prints the exact command, and writes nothing", async () => {
