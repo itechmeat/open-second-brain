@@ -319,6 +319,31 @@ describe("the scored_rewrite pattern kind", () => {
     expect(again.outcome).toBe("deduped");
   });
 
+  test("a changed payload while a rewrite is still pending dedupes, naming the pending draft", () => {
+    // One pending overwrite per skill at a time: two accepted drafts would
+    // stamp the same version over one SKILL.md and the second would
+    // silently drop the first, and the accept path does not re-check the
+    // live incumbent version. A new gate round queues behind the pending
+    // draft until the operator accepts or rejects it.
+    const { slug } = stagePromoted();
+    const changed = stageScoredRewriteProposal(vault, {
+      skill: {
+        name: TASKS.skillName,
+        description: "Does a thing, safely.",
+        triggers: ["thing"],
+        body: `${CANDIDATE_BODY}\nRefined while the first round is still pending.`,
+      },
+      spec: SPEC,
+      specHash: skillRewriteSpecHash(SPEC),
+      baselineScore: 0.4,
+      candidateScore: 0.75,
+      heldoutScore: 1,
+      incumbentVersion: 3,
+    });
+    expect(changed.outcome).toBe("deduped");
+    expect(listPendingSkillProposals(vault).map((proposal) => proposal.slug)).toEqual([slug]);
+  });
+
   test("a rejected rewrite family stays suppressed for the skill name", () => {
     // The design pins the reject: sticky for the skill name, so a
     // re-proposed rewrite of the same skill - changed payload included -

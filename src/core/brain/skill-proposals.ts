@@ -999,15 +999,19 @@ function planDeclaredSkillProposal(
   const key = slugify(name);
   const nameKey = nameKeyFor(patternKind, key);
   // The payload hash is computed BEFORE the phase loop because a scored
-  // rewrite's suppression key needs it: its pending and accepted phases
-  // suppress on the complete payload identity (skill, body and salt), not
-  // the skill name alone - an accepted rewrite must not pin the skill
-  // against the next changed candidate the gate's iterative mode stages,
-  // while an identical payload still dedupes. The rejected phase keeps
-  // the bare name key: an operator reject is sticky for the whole rewrite
-  // family, per the design. The salt joins the hashed payload ONLY when a
-  // producer supplies one, so the declared and mature-page hashes stay
-  // byte-identical to the pre-rewrite spellings.
+  // rewrite's ACCEPTED-phase suppression key needs it: an accepted rewrite
+  // must not pin the skill against the next changed candidate the gate's
+  // iterative mode stages, so acceptance suppresses on the complete
+  // payload identity (skill, body and salt) instead of the name alone.
+  // The pending and rejected phases keep the family match: one pending
+  // overwrite per skill at a time - two accepted drafts would stamp the
+  // same version over one SKILL.md and the second would silently drop the
+  // first - and an operator reject is sticky for the whole rewrite family,
+  // per the design. The family match also covers proposals staged before
+  // the payload key existed (a bare `name_key` matches its own family).
+  // The salt joins the hashed payload ONLY when a producer supplies one,
+  // so the declared and mature-page hashes stay byte-identical to the
+  // pre-rewrite spellings.
   const payloadHash = createHash("sha256")
     .update(
       JSON.stringify(
@@ -1024,8 +1028,8 @@ function planDeclaredSkillProposal(
     const existing = findProposalByNameKey(
       vault,
       phase,
-      isScoredRewrite && phase !== "rejected" ? rewritePayloadKey : nameKey,
-      isScoredRewrite && phase === "rejected",
+      isScoredRewrite && phase === "accepted" ? rewritePayloadKey : nameKey,
+      isScoredRewrite && phase !== "accepted",
     );
     if (existing === null) continue;
     const found = { id: existing.id, slug: existing.slug, path: existing.path };
