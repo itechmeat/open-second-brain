@@ -22,6 +22,7 @@ import { resolvePointerVault } from "./brain/portability/pointer.ts";
 import { parseBrainYaml } from "./brain/yaml-parse.ts";
 import { BrainConfigError } from "./brain/policy/errors.ts";
 import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "./brain/path-constants.ts";
+import { resolveSkillRewriteMode, type SkillRewriteMode } from "./brain/skill-rewrite.ts";
 import {
   isWikiLinkFormat,
   WIKI_LINK_FORMATS,
@@ -1012,6 +1013,18 @@ export const DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY =
   "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS";
 
 /**
+ * Environment twin of the lessons promotion scope list (operator-approved
+ * lesson promotion, t_1e952e43). The flat machine-config key itself is
+ * `lessons.promotion.scopes`, declared beside its resolver in
+ * `src/core/brain/policy/blocks/lessons.ts` so the brain module owns its
+ * own key vocabulary. Comma-separated scope names; the same parsing rules
+ * as `resolveCounterpartyBriefTriggers` apply (entries NFC-normalized and
+ * trimmed, empty entries dropped, bracket-shaped values malformed). Absent
+ * or empty disables promotion entirely.
+ */
+export const LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES";
+
+/**
  * Shared body for a non-negative-integer config value: env var (trimmed)
  * wins, falling back to the config key (trimmed). Returns `null` when
  * unset, blank, or not a non-negative integer, so an unconfigured value
@@ -1961,6 +1974,44 @@ export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
     if (id.length > 0 && !ids.includes(id)) ids.push(id);
   }
   return ids;
+}
+
+/**
+ * Rewrite-gate mode for benchmark-gated skill rewrites (agent-presence,
+ * Lane A). `gated` (the default) runs one candidate per gate round;
+ * `iterative` is accepted and currently behaves exactly like `gated` -
+ * one candidate per round - because the bounded edit loop it reserves is
+ * not implemented yet; the value is carried so operators can opt in
+ * without a config migration when the loop ships. The flat
+ * machine-config key is `skill_rewrite.mode`; an unknown value is a named
+ * error from the kernel's own resolver, never a silent fallback to the
+ * default.
+ */
+export const SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode";
+export const SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE";
+
+/** Resolve the rewrite mode: env twin first, then the config file's flat key. */
+export function resolveSkillRewriteModeConfig(configPath?: string): SkillRewriteMode {
+  const env = process.env[SKILL_REWRITE_MODE_ENV_KEY]?.trim();
+  const raw = env || discoverConfig(configPath).data[SKILL_REWRITE_MODE_CONFIG_KEY]?.trim();
+  return resolveSkillRewriteMode(raw);
+}
+
+/**
+ * Optional advisory judge command for rewrite gate rounds (agent-presence,
+ * Lane A). Same contract as `bench_judge_cmd` (t_882c396a): unset (the
+ * default) means the judge phase is skipped, and when set the judge is
+ * advisory only - it never moves the `tasks_passed_rate` metric the gate
+ * decides on. The deterministic scorer stays canonical in every message.
+ */
+export const SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd";
+export const SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
+
+/** Resolve the advisory rewrite judge: env twin first, then the config file. */
+export function resolveSkillRewriteJudgeCmd(configPath?: string): string | undefined {
+  const env = process.env[SKILL_REWRITE_JUDGE_CMD_ENV_KEY]?.trim();
+  const raw = env || discoverConfig(configPath).data[SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY]?.trim();
+  return raw !== undefined && raw !== "" ? raw : undefined;
 }
 
 /**

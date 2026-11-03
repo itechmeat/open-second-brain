@@ -296,8 +296,11 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 107;
-export const PROBE_RECIPE_COUNT = 250;
+// 106 -> 107 -> 108, the second hop the agent-presence wave (t_635e3e72):
+// brain_skill_rewrite_status joins driven beside brain_skill_proposals,
+// one ownerless recipe - ids and rates only, nothing owner-tagged to reach.
+export const PROBE_ENTRY_COUNT = 108;
+export const PROBE_RECIPE_COUNT = 251;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -1063,6 +1066,13 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
         reason: REASON.ownerlessLane,
       },
     ],
+  },
+  {
+    // Benchmark-gated rewrite status (t_635e3e72): ids and rates over one
+    // skill's lane, the same ownerless discipline as the grade record the
+    // read answers from - no page path, title or body at any reach.
+    name: "brain_skill_rewrite_status",
+    calls: one({ skill_name: "probe-skill" }, REASON.ownerlessLane),
   },
   { name: "brain_sources", calls: one({}, REASON.signalAuthorship) },
   { name: "brain_stale_scan", calls: one({}, REASON.ownerFiltered) },

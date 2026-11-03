@@ -158,3 +158,4 @@ export { cmdBrainHygiene } from "./hygiene.ts";
 export { cmdBrainRefresh } from "./refresh.ts";
 export { cmdBrainAnticipate } from "./anticipate.ts";
 export { cmdBrainPermissions } from "./permissions.ts";
+export { cmdBrainLessons } from "./lessons.ts";

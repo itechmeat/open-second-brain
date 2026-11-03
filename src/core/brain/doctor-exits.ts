@@ -461,6 +461,39 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "meant to say exists only in the source it was captured from - reconstructing it here " +
       "would be inventing the observation",
   },
+  {
+    // The lessons-block readiness family (t_1e952e43, task C3). All four
+    // are operator advisories over derived state the refresh verb heals;
+    // each finding already names the exact verb (approve for a missing
+    // block, refresh for a stale or diverged one), so a registry command
+    // would repeat what the finding carries.
+    code: "lessons-block-absent",
+    reason:
+      "an approval names a rules file that carries no lessons block; creation sits behind the " +
+      "approve verb's consent ladder, which the finding itself names, so nothing here is healable " +
+      "without the operator's explicit consent and no single command belongs in the registry",
+  },
+  {
+    code: "lessons-block-drifted",
+    reason:
+      "a managed lessons block is behind the canonical body; the refresh verb converges it and " +
+      "the finding names that verb including the force wording for a hand-edited block, so a " +
+      "registry row would only duplicate what the finding already says",
+  },
+  {
+    code: "lessons-block-stale-lessons",
+    reason:
+      "a managed block still carries a lesson whose approval went stale; the refresh drops it " +
+      "until the operator approves the moved text again, which the finding names - the decision " +
+      "is the operator's own re-approval, not a command the doctor can carry",
+  },
+  {
+    code: "lessons-approvals-unreadable",
+    reason:
+      "the approvals ledger is damaged; every approval is lifted only by the operator moving or " +
+      "deleting the file, which the finding spells out with the fail-closed direction - there is " +
+      "no mechanical repair a registry row could offer",
+  },
 ];
 
 /** Two entries claimed one code - the table would silently lose one. */

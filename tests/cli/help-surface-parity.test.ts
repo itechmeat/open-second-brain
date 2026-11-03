@@ -169,6 +169,33 @@ describe("the flags the branch added verbs for are advertised", () => {
     expect(flags.get("brain pending list")).not.toContain("--dry-run");
     expect(flags.get("brain pending list")).not.toContain("--reason");
   });
+
+  // t_1e952e43: the lessons verb family rides the install consent ladder,
+  // so the consent-bearing subcommands advertise the ladder flags and the
+  // read-only one advertises no write flag at all.
+  test("brain lessons approve advertises the consent ladder flags", async () => {
+    const flags = await jsonFlags();
+    const approve = flags.get("brain lessons approve") ?? [];
+    expect(approve).toContain("--apply");
+    expect(approve).toContain("--yes");
+    expect(approve).toContain("--target");
+    expect(approve).toContain("--force");
+  });
+
+  test("brain lessons candidates advertises no write flag", async () => {
+    const flags = await jsonFlags();
+    const candidates = flags.get("brain lessons candidates") ?? [];
+    expect(candidates).not.toContain("--apply");
+    expect(candidates).not.toContain("--yes");
+  });
+
+  test("brain lessons refresh-blocks advertises the ladder and force", async () => {
+    const flags = await jsonFlags();
+    const refresh = flags.get("brain lessons refresh-blocks") ?? [];
+    expect(refresh).toContain("--apply");
+    expect(refresh).toContain("--yes");
+    expect(refresh).toContain("--force");
+  });
 });
 
 describe("the terse usage names the complete help", () => {

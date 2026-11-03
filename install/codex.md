@@ -82,6 +82,40 @@ makes Codex's Brain writes distinguishable per runtime, and in a shared
 multi-device vault also per device - the same derivation the `grok` and
 `opencode` adapters apply.
 
+## ChatGPT desktop
+
+ChatGPT desktop has no MCP registration of its own: it reads the shared
+Codex configuration at `$CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`), the same file the `codex` target writes. One
+registration serves both, so the install command is the codex one from
+step 4 (add `--vault`, `--apply` and `--yes` as there):
+
+```bash
+o2b install --target codex --apply
+```
+
+Steps 1 and 2 need the `codex` binary - they drive the marketplace
+clone it creates. A desktop-only machine without the Codex CLI skips
+both and installs the `o2b` CLI by hand instead, exactly as
+`install/prerequisites.md` describes (`scripts/o2b install-cli` links
+`o2b` into `~/.local/bin`); with `o2b` on PATH, the install command
+above is all that remains of this page.
+
+Install writes the two `[mcp_servers.*]` tables into that shared file -
+through `codex mcp add` when the `codex` binary is on PATH, otherwise
+through the direct TOML merge. In the merge case the detect output of
+`o2b install` names ChatGPT desktop as a reader of the file. ChatGPT
+desktop picks the servers up on its next session start, and `$CODEX_HOME`
+relocates the file for both hosts exactly as documented above.
+
+`o2b uninstall --target codex --apply` removes the shared registration,
+which undoes it for ChatGPT desktop at the same time. Uninstall resolves
+the vault through the same chain install does, so aim it at the vault
+the install wrote: pass the same `--vault` (or set `VAULT_DIR` the same
+way), because the install manifest it reads lives there. Only the two
+Open Second Brain tables are removed; every other table in the file
+stays.
+
 ## 5. Verify
 
 ```bash

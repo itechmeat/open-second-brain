@@ -201,12 +201,42 @@ export function renderApplyResult(result: ApplyResult, consent: LaneConsentVerdi
  * schema'd document with `applied_at` semantics; the receipt for consent
  * is this CLI payload.
  */
+/**
+ * What the consented managed-block step did on an apply, as the apply
+ * payload's `instruction_block` field. The uninstall payload has carried
+ * the same-named field since its step shipped; the apply receipt carries
+ * it too so a headless consumer that consented to a plan showing the
+ * step can read the outcome of that step from the payload it parses,
+ * instead of the write being reported only on the human path. The shape
+ * mirrors the uninstall field: snake_case keys, a null `file` and a
+ * `skipped_reason` sentence when the target maps no instruction file in
+ * `HOST_INSTRUCTION_PRECEDENCE`.
+ */
+export interface ApplyInstructionBlockOutcome {
+  /** The vault-root file the step wrote, or null on a named skip. */
+  readonly file: string | null;
+  /** True when the apply created the file (a first install takes no backup). */
+  readonly created: boolean;
+  /** True when the apply changed the file's bytes (or would, under dry-run). */
+  readonly changed: boolean;
+  /** The exclusive-create backup of the prior bytes; null when none was taken. */
+  readonly backup_path: string | null;
+  /** Why nothing was written, or null when the step ran. */
+  readonly skipped_reason: string | null;
+}
+
 export function renderApplyJson(
   result: ApplyResult,
   ownership: DataOwnership,
   consent: LaneConsentVerdict,
+  instructionBlock: ApplyInstructionBlockOutcome,
 ): string {
-  return installJson({ consent, ...result, [DATA_OWNERSHIP_KEY]: ownership });
+  return installJson({
+    consent,
+    ...result,
+    instruction_block: instructionBlock,
+    [DATA_OWNERSHIP_KEY]: ownership,
+  });
 }
 
 export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {

@@ -11,7 +11,8 @@
 import { homedir } from "node:os";
 
 import { parseFlags } from "../argparse.ts";
-import { defaultConfigPath, discoverConfig } from "../../core/config.ts";
+import { defaultConfigPath } from "../../core/config.ts";
+import { resolveInstallVault } from "./install.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/aider.ts";
 import "../../core/install/adapters/codex.ts";
@@ -24,6 +25,52 @@ import "../../core/install/adapters/kiro.ts";
 import "../../core/install/adapters/opencode.ts";
 import "../../core/install/adapters/pi.ts";
 import { InstallError, type InstallEnv } from "../../core/install/types.ts";
+import { isInstallTargetId, type InstallTargetId } from "../../core/runtime/host-facts.ts";
+import {
+  instructionBlockTargetFor,
+  instructionStepNoPrecedenceReason,
+  readInstructionBlockLock,
+  uninstallInstructionBlock,
+} from "../../core/install/instruction-block.ts";
+
+/**
+ * The reverse instruction step, against the ownership lock (t_ba41a78a
+ * B3): remove the usage block pair from the instruction file this
+ * target's host reads, but ONLY when the lock recorded it - a pair
+ * nobody recorded is not proven ours, and uninstall never removes
+ * operator content on a guess. Every non-removal outcome is a named
+ * skip rendered beside the adapter's own.
+ */
+function uninstallInstructionStep(
+  env: InstallEnv,
+  target: string,
+  dryRun: boolean,
+): { file: string | null; removed: boolean; skipped_reason: string | null } {
+  const mapped = isInstallTargetId(target) ? instructionBlockTargetFor(target) : null;
+  if (mapped === null) {
+    return {
+      file: null,
+      removed: false,
+      skipped_reason: instructionStepNoPrecedenceReason(target as InstallTargetId),
+    };
+  }
+  const recorded = readInstructionBlockLock(env.vault).files[mapped] !== undefined;
+  if (!recorded) {
+    return {
+      file: mapped,
+      removed: false,
+      skipped_reason: `no lock-recorded instruction block in ${mapped}`,
+    };
+  }
+  const result = uninstallInstructionBlock(env, mapped, { dryRun });
+  return result.removed
+    ? { file: mapped, removed: true, skipped_reason: null }
+    : {
+        file: mapped,
+        removed: false,
+        skipped_reason: `${mapped} carries no usage block pair`,
+      };
+}
 
 export async function cmdUninstallTarget(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -46,10 +93,15 @@ export async function cmdUninstallTarget(argv: string[]): Promise<number> {
   }
 
   const dryRun = !flags["apply"];
+  // The vault resolves through the SAME chain the install verb uses
+  // (`resolveInstallVault`: --vault, then VAULT_DIR, the project pointer,
+  // the active profile, the config vault key). The old local chain here
+  // read the config key BEFORE VAULT_DIR - the exact split install.ts
+  // documents as fixed - so an install that resolved VAULT_DIR was
+  // uninstalled from the configured vault, where the install manifest is
+  // absent and the removal refuses while the real install state stays.
   const cfgPath = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const cfg = discoverConfig(cfgPath).data;
-  const vault =
-    (flags["vault"] as string | undefined) ?? cfg["vault"] ?? process.env["VAULT_DIR"] ?? "";
+  const vault = resolveInstallVault((flags["vault"] as string | null) ?? null, cfgPath);
   if (!vault) {
     process.stderr.write(
       "error: vault not configured. Pass --vault <path>, set VAULT_DIR, or run `o2b init`.\n",
@@ -74,12 +126,20 @@ export async function cmdUninstallTarget(argv: string[]): Promise<number> {
 
   try {
     const result = adapter.uninstall(env, opts);
+    const instruction = uninstallInstructionStep(env, target, dryRun);
     if (flags["json"]) {
-      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      process.stdout.write(
+        JSON.stringify({ ...result, instruction_block: instruction }, null, 2) + "\n",
+      );
       return 0;
     }
     const lines: string[] = [];
     lines.push(`o2b uninstall --target ${target}` + (dryRun ? " (dry-run)" : " --apply"));
+    if (instruction.removed) {
+      lines.push(`  removed instruction block: ${instruction.file}`);
+    } else if (instruction.skipped_reason !== null) {
+      lines.push(`  skipped: instruction block (${instruction.skipped_reason})`);
+    }
     if (result.removed_keys.length > 0) {
       lines.push("  removed keys:");
       for (const k of result.removed_keys) lines.push(`    - ${k}`);

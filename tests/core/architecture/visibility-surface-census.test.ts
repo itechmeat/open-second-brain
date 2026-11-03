@@ -642,7 +642,10 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * docblock above). Classified excluded: attestation evidence carries no
  * page content at any reach.
  */
-const MCP_TOOL_POPULATION_SIZE = 88;
+/** 88 -> 89: `brain_skill_rewrite_status` (agent-presence, Lane A) joins as a
+ * read-only, excluded-class status surface - it names no note content.
+ */
+const MCP_TOOL_POPULATION_SIZE = 89;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /**

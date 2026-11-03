@@ -30,6 +30,9 @@ describe("CLI command manifest", () => {
     const brainVerbs = brain.commands.map((command: any) => command.name);
     expect(brainVerbs).toContain("doctor");
     expect(brainVerbs).toContain("mcp-landscape");
+    // t_1e952e43: the lessons verb family is a manifest entry, so shell
+    // completions and help --json offer it.
+    expect(brainVerbs).toContain("lessons");
   });
 });
 

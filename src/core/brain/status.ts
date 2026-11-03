@@ -68,6 +68,7 @@ import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { parseSignal } from "./signal.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
+import { lessonApprovalCounts, type LessonApprovalCounts } from "./lessons-promotion.ts";
 
 // ----- Public types --------------------------------------------------------
 
@@ -131,6 +132,52 @@ export interface BrainStatusSnapshot {
      */
     readonly signals_awaiting_dream: number;
   };
+  /**
+   * Lesson-promotion approval counts (t_1e952e43): the decisions
+   * currently in force plus how many approved rows went stale,
+   * carried by the snapshot the MCP status tool already returns -
+   * report-only, no new surface minted for them. Fail-soft: a
+   * damaged ledger answers zeros and names itself in `read_error`;
+   * doctor is the surface for the damage itself.
+   */
+  readonly lessons: LessonApprovalCounts & {
+    /** Present only when the approvals ledger could not be read. */
+    readonly read_error?: string;
+  };
+}
+
+/** The lessons counts block for a vault with no Brain layer. */
+const LESSONS_COUNTS_ABSENT: LessonApprovalCounts = Object.freeze({
+  approved: 0,
+  denied: 0,
+  stale: 0,
+});
+
+/**
+ * The fail-soft read_error the snapshot carries when the approvals
+ * ledger cannot be read. Deliberately a fixed, generalized sentence:
+ * the ledger reader's error messages embed the ledger's absolute path,
+ * and machine paths stay out of MCP output - doctor is the surface that
+ * names the cause and the recovery in operator-facing output.
+ */
+const LESSONS_LEDGER_READ_ERROR =
+  "lessons-approvals.json could not be read (the ledger is damaged or unusable); " +
+  "o2b doctor names the cause and the recovery";
+
+/**
+ * Read the lessons counts fail-soft: the doctor is the surface for a
+ * damaged ledger, the status snapshot answers with zeros and names
+ * itself, because an MCP consumer must not lose the whole brain block
+ * over one unreadable file.
+ */
+function lessonsCountsSafe(vault: string): LessonApprovalCounts & {
+  readonly read_error?: string;
+} {
+  try {
+    return lessonApprovalCounts(vault);
+  } catch {
+    return { ...LESSONS_COUNTS_ABSENT, read_error: LESSONS_LEDGER_READ_ERROR };
+  }
 }
 
 export interface ComputeBrainStatusOptions {
@@ -148,6 +195,7 @@ export function computeBrainStatus(
   if (!existsSync(dirs.brain)) {
     return Object.freeze({
       present: false,
+      lessons: LESSONS_COUNTS_ABSENT,
       counts: {
         inbox: 0,
         inbox_processed: 0,
@@ -173,6 +221,7 @@ export function computeBrainStatus(
   return Object.freeze({
     present: true,
     counts,
+    lessons: lessonsCountsSafe(vault),
     last_dream_at: lastDreamAt,
     last_apply_evidence_at: lastApplyEvidenceAt,
     maintenance_debt: maintenanceDebt,

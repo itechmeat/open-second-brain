@@ -79,6 +79,13 @@ import {
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  SKILL_BENCHMARK_SPEC_FILE,
+  SKILL_BENCHMARK_TASKS_FILE,
+  SKILL_BENCH_SKILL_NAME_RE,
+  skillBenchmarkRelPath,
+} from "./skill-rewrite-tasks.ts";
+import { SKILL_REWRITE_ROUNDS_DIR } from "./skill-rewrite.ts";
 import type { ScopedRuleAxis } from "./scoped-rule-axis.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 
@@ -469,6 +476,62 @@ export function skillProposalRejectedPath(vault: string, slug: string): string {
 export function skillAcceptJournalPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.json`), vault);
+}
+
+/**
+ * Prior-content copy for an in-flight rewrite accept:
+ * `Brain/skill-proposals/accept-journal/<slug>.prior.md`.
+ *
+ * A scored rewrite OVERWRITES an incumbent SKILL.md, so the accept
+ * sequence captures the incumbent bytes here before the overwrite and
+ * the rollback restores content from it, not just existence. It is a
+ * repair artifact like the marker beside it and is removed when the
+ * journal is cleared.
+ */
+export function skillAcceptPriorContentPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.prior.md`), vault);
+}
+
+/** Per-skill benchmark task set: `Brain/skill-benchmarks/<skill>/tasks.json`. */
+export function skillBenchmarkTasksPath(vault: string, skillName: string): string {
+  assertBenchmarkSkillName(skillName);
+  return ensureInsideVault(
+    join(vault, skillBenchmarkRelPath(skillName, SKILL_BENCHMARK_TASKS_FILE)),
+    vault,
+  );
+}
+
+/** Frozen rewrite spec: `Brain/skill-benchmarks/<skill>/spec.json`. */
+export function skillBenchmarkSpecPath(vault: string, skillName: string): string {
+  assertBenchmarkSkillName(skillName);
+  return ensureInsideVault(
+    join(vault, skillBenchmarkRelPath(skillName, SKILL_BENCHMARK_SPEC_FILE)),
+    vault,
+  );
+}
+
+/** Transcript drop site for gate rounds: `Brain/skill-benchmarks/<skill>/rounds/`. */
+export function skillBenchmarkRoundsDir(vault: string, skillName: string): string {
+  assertBenchmarkSkillName(skillName);
+  return ensureInsideVault(
+    join(vault, skillBenchmarkRelPath(skillName, SKILL_REWRITE_ROUNDS_DIR)),
+    vault,
+  );
+}
+
+/**
+ * The name becomes a directory under the benchmark root, so it follows
+ * the skill-directory rule, re-checked here the way every path builder
+ * in this module re-checks the slug it derives from.
+ */
+function assertBenchmarkSkillName(skillName: string): void {
+  if (!SKILL_BENCH_SKILL_NAME_RE.test(skillName)) {
+    throw new Error(
+      `skill benchmark name is not a skill directory name ` +
+        `(lowercase letters, digits and single hyphens): ${JSON.stringify(skillName)}`,
+    );
+  }
 }
 
 /** Accepted procedure reference path: `Brain/procedures/proc-<slug>.md`. */

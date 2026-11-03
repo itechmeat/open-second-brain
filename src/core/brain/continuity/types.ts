@@ -133,7 +133,17 @@ export type ContinuityRecordKind =
    * name, and a receipt_compaction record never describes a context
    * operation.
    */
-  | "receipt_compaction";
+  | "receipt_compaction"
+  /**
+   * One completed benchmark-gated skill rewrite gate run
+   * (agent-presence, Lane A). The per-task verdicts of the dev and
+   * held-out arms, the rates they decided on, and the spec hash the run
+   * verified against - identifiers, numbers, booleans and check ids
+   * only, never task text and never transcript text. Written once per
+   * completed gate run, kept never-folded so an operator can audit why
+   * a rewrite landed or held.
+   */
+  | "skill_rewrite_eval_grade";
 
 /**
  * Every {@link ContinuityRecordKind} member as a runtime list, in union
@@ -173,6 +183,7 @@ export const CONTINUITY_RECORD_KINDS: ReadonlyArray<ContinuityRecordKind> = Obje
   "reply_presence",
   "session_entity_mention",
   "receipt_compaction",
+  "skill_rewrite_eval_grade",
 ]);
 
 /** Narrow an unvalidated record's `kind` to a {@link ContinuityRecordKind}. */

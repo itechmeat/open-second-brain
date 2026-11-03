@@ -1,0 +1,86 @@
+{
+  "skill": "example-skill",
+  "tasks": [
+    {
+      "id": "t-01",
+      "kind": "invocation_transcript",
+      "input": "File the meeting summary from today under Brain/notes/meetings and tag it with the project name.",
+      "expects": [
+        { "check": "tool_used", "tool": "note_write" },
+        { "check": "artifact_created", "path_prefix": "Brain/notes/meetings/" }
+      ]
+    },
+    {
+      "id": "t-02",
+      "kind": "invocation_transcript",
+      "input": "Look up the deployment runbook before touching the release checklist.",
+      "expects": [
+        { "check": "tool_used", "tool": "note_search" },
+        { "check": "step_order", "steps": ["search", "read", "edit"] }
+      ]
+    },
+    {
+      "id": "t-03",
+      "kind": "invocation_transcript",
+      "input": "Archive the retired preference without deleting any adjacent files.",
+      "expects": [
+        { "check": "forbidden_step", "step": "bulk_delete" },
+        { "check": "artifact_created", "path_prefix": "Brain/retired/" }
+      ]
+    },
+    {
+      "id": "t-04",
+      "kind": "invocation_transcript",
+      "input": "Record the benchmark verdict in the vault with a non-empty verdict field.",
+      "expects": [
+        { "check": "output_field", "field": "verdict", "value_class": "non_empty_string" }
+      ]
+    },
+    {
+      "id": "t-05",
+      "kind": "invocation_transcript",
+      "input": "Count how many pending proposals cite the current source and return the number.",
+      "expects": [{ "check": "output_field", "field": "count", "value_class": "number" }]
+    },
+    {
+      "id": "t-06",
+      "kind": "invocation_transcript",
+      "input": "List every skill directory under the configured skills root, one per line.",
+      "expects": [{ "check": "output_field", "field": "entries", "value_class": "non_empty_array" }]
+    },
+    {
+      "id": "t-07",
+      "kind": "invocation_transcript",
+      "input": "Rewrite the stale section of the skill instructions and stage it for review.",
+      "expects": [
+        { "check": "step_order", "steps": ["read", "edit", "stage"] },
+        { "check": "forbidden_step", "step": "direct_publish" }
+      ]
+    },
+    {
+      "id": "t-08",
+      "kind": "invocation_transcript",
+      "input": "Move the finished draft into the accepted folder and report the new path.",
+      "expects": [
+        { "check": "tool_used", "tool": "note_move" },
+        { "check": "artifact_created", "path_prefix": "Brain/skill-proposals/accepted/" }
+      ]
+    },
+    {
+      "id": "t-09",
+      "kind": "invocation_transcript",
+      "input": "Answer whether the flag is enabled, returning a strict boolean.",
+      "expects": [{ "check": "output_field", "field": "enabled", "value_class": "boolean" }]
+    },
+    {
+      "id": "t-10",
+      "kind": "invocation_transcript",
+      "input": "Summarize the invocation evidence for the skill and write it beside the task set.",
+      "expects": [
+        { "check": "tool_used", "tool": "note_write" },
+        { "check": "step_order", "steps": ["read", "summarize", "write"] },
+        { "check": "output_field", "field": "summary", "value_class": "non_empty_string" }
+      ]
+    }
+  ]
+}

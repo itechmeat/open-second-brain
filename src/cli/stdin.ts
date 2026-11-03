@@ -8,9 +8,22 @@
  * the read resolves. `echo body | o2b brain capture` then "succeeded"
  * without capturing anything, and `o2b brain secret set` stored nothing -
  * a silent data loss, not a crash. Draining `Bun.stdin.stream()` through a
- * `Response` holds a live stream reader, which keeps the loop alive on
- * every platform, and returns the same text.
+ * held stream reader keeps the loop alive on every platform, and returns
+ * the same text.
+ *
+ * The read runs to completion through the stream's own async iterator,
+ * which releases the stream when it ends: the CLI reads stdin once per
+ * process, but a long-lived embedder (the test runner among them) shares
+ * one stdin across callers, and a reader left holding the drained body
+ * locks it forever - the next event-listener reader in the same process,
+ * the y/N prompt, then fails with `ReadableStream is locked` instead of
+ * seeing the empty pipe the drained stdin is. A second call still refuses
+ * (`Bun.stdin`'s body is single-consumption), exactly as before.
  */
 export async function readStdinText(): Promise<string> {
-  return await new Response(Bun.stdin.stream()).text();
+  let text = "";
+  for await (const chunk of Bun.stdin.stream()) {
+    text += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
+  }
+  return text;
 }

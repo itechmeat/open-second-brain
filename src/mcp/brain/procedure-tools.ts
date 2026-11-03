@@ -12,9 +12,12 @@ import {
   discardUnreadableSkillAcceptJournals,
   learnSkillProposals,
   listPendingSkillProposals,
+  pendingSkillProposalPatternKind,
+  readSkillRewriteStatus,
   recoverSkillProposalAccepts,
   rejectSkillProposal,
   resolveSkillProposalEvidence,
+  SCORED_REWRITE_PATTERN_KIND,
   type SkillContractInput,
 } from "../../core/brain/skill-proposals.ts";
 import { commitSkillPageDraft, planSkillPageDrafts } from "../../core/brain/skill-page-drafts.ts";
@@ -66,6 +69,7 @@ async function toolBrainSkillProposals(
   }
   if (operation === "accept") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
+    refuseScoredRewriteAccept(ctx.vault, slug);
     const note = optionalStringArg("brain_skill_proposals", args, "note");
     const contract = readSkillContract(args);
     // Resolved from THIS server's config chain: a `mature_page` accept
@@ -187,6 +191,28 @@ function readSkillContract(args: Record<string, unknown>): SkillContractInput | 
   return { prerequisites, rollback, sideEffects, verification };
 }
 
+/**
+ * Refuse the one accept the design keeps out of the agent's reach
+ * (review security M1c): a `scored_rewrite` proposal OVERWRITES an
+ * incumbent SKILL.md, and its acceptance is the operator's step - MCP
+ * proposes, the human accepts on the command line. The sibling read tool
+ * `brain_skill_rewrite_status` states this in its own description; this
+ * guard is what makes it true for the whole surface family.
+ *
+ * Mined, declared and mature-page accepts are unchanged: they create or
+ * fill vault pages, they never overwrite, and the calling agent has always
+ * been able to write those trees directly.
+ */
+function refuseScoredRewriteAccept(vault: string, slug: string): void {
+  if (pendingSkillProposalPatternKind(vault, slug) !== SCORED_REWRITE_PATTERN_KIND) return;
+  throw new MCPError(
+    INVALID_PARAMS,
+    `brain_skill_proposals: '${slug}' is a ${SCORED_REWRITE_PATTERN_KIND} proposal, whose accept ` +
+      "OVERWRITES an incumbent skill; MCP never accepts a benchmark-gated rewrite - the " +
+      "operator reviews and accepts it on the command line: o2b brain skill-proposals accept",
+  );
+}
+
 async function toolBrainProceduralMemory(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -288,6 +314,21 @@ async function toolBrainRecurrence(
   );
 }
 
+async function toolBrainSkillRewriteStatus(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const skillName = requiredStringArg("brain_skill_rewrite_status", args, "skill_name");
+  const status = readSkillRewriteStatus(ctx.vault, skillName);
+  return {
+    skill: status.skill,
+    receipt: status.receipt,
+    grades: status.grades,
+    unreadable_grades: status.unreadable_grades,
+    pending_rewrite_slug: status.pending_rewrite_slug,
+  };
+}
+
 async function toolBrainProceduralGraph(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -364,7 +405,9 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         slug: {
           type: "string",
-          description: "Proposal slug for accept/reject/evidence.",
+          description:
+            "Proposal slug for accept/reject/evidence. scored_rewrite accepts are refused here: " +
+            "the operator accepts them on the command line.",
         },
         note: {
           type: "string",
@@ -424,6 +467,24 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainSkillProposals,
+  },
+  {
+    name: "brain_skill_rewrite_status",
+    kind: "read",
+    description:
+      "Read-only rewrite-lane status: the frozen benchmark receipt and whether the task set still verifies, completed gate runs' verdicts and rates, and any staged rewrite awaiting a human accept. MCP never accepts or scores.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_name: {
+          type: "string",
+          description: "Skill directory name: lowercase letters, digits, single hyphens.",
+        },
+      },
+      required: ["skill_name"],
+      additionalProperties: false,
+    },
+    handler: toolBrainSkillRewriteStatus,
   },
   {
     name: "brain_procedural_memory",

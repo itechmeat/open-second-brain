@@ -147,6 +147,13 @@ describe("BRAIN_* const enums", () => {
       "freeze",
       "unfreeze",
       "write-refused",
+      // operator-approved lesson promotion (t_1e952e43): the operator's
+      // approve / deny verdicts and a managed lessons block that a
+      // refresh-blocks apply actually rewrote. Operator CLI only - no
+      // agent-facing path can mint any of the three
+      "lessons-approved",
+      "lessons-denied",
+      "lessons-promoted",
       // who-wrote-what Task A (t_662f4e82) one vault note created, updated,
       // appended to or reverted - the event that makes the bulk of what an
       // agent produces attributable at all

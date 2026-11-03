@@ -94,6 +94,21 @@ const FIX_HINT = `o2b install --target ${TARGET} --apply`;
 const SERVER_NAMES: ReadonlyArray<string> = Object.freeze([OSB_KEY_FULL, OSB_KEY_WRITER]);
 
 /**
+ * ChatGPT desktop has no MCP registration of its own: it reads the same
+ * `$CODEX_HOME/config.toml` this adapter writes, so the codex
+ * registration serves it. It is named in the merge-lane detect note - a
+ * note, never a status or a target - because an operator on a machine
+ * with only the desktop app reads exactly this line in `o2b install`'s
+ * detect output and otherwise has no surface telling them this target is
+ * theirs. There is deliberately no ChatGPT install target id: a second
+ * target for one config file would claim bytes the codex target owns and
+ * report them as drift.
+ */
+const MERGE_LANE_NOTE =
+  "codex CLI not on PATH; registration goes through the config.toml merge, " +
+  "the same file ChatGPT desktop reads";
+
+/**
  * Codex's vendor token, combined with the operator's host segment into a
  * host-qualified identity by `../identity.ts` - so a Brain write made
  * through Codex says `codex-<host>-agent` instead of masquerading as the
@@ -319,7 +334,7 @@ export const codexAdapter: InstallAdapter = {
     const declared = declaredServers(readFileOrEmpty(path));
     const cliNote = activeRunner.available()
       ? "codex CLI present; registration goes through `codex mcp add`"
-      : "codex CLI not on PATH; registration goes through the config.toml merge";
+      : MERGE_LANE_NOTE;
     if (declared.length === SERVER_NAMES.length) {
       return { target: TARGET, status: "installed", configPath: path, notes: [cliNote] };
     }

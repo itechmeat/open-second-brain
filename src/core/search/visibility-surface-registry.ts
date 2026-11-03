@@ -782,6 +782,17 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "withheld.",
   },
   {
+    surface: "brain_skill_rewrite_status",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "reads one skill's benchmark-gated rewrite lane status: the frozen benchmark receipt, " +
+      "the grade ledger's verdict-and-rate rows for that skill, and the slug of a staged " +
+      "proposal awaiting a human accept. It names no note path, title or body at any reach - " +
+      "the same ids-and-rates discipline as the grade record itself - so there is no page " +
+      "content for a read root to withhold, and MCP never accepts or scores regardless.",
+  },
+  {
     surface: "brain_procedural_memory",
     kind: K.mcpTool,
     category: C.covered,

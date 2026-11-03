@@ -588,6 +588,35 @@ export const BRAIN_LOG_EVENT_KIND = {
    * target wrote nothing and records nothing.
    */
   noteWrite: "note-write",
+  /**
+   * `lessons-approved` (operator-approved lesson promotion, t_1e952e43) -
+   * the operator approved one preference-derived lesson for promotion into
+   * the managed lessons block of the agent rules files. Operator CLI only:
+   * no agent-facing path can mint this event, and the approval pins the
+   * approved text by its content hash. Payload carries the `pref` wikilink,
+   * the `targets` (the rules files the approval covers), the
+   * `approved_content_hash`, the `consent` verdict (`yes-flag` or
+   * `interactive-yes`), and the `agent`.
+   */
+  lessonsApproved: "lessons-approved",
+  /**
+   * `lessons-denied` (operator-approved lesson promotion, t_1e952e43) - the
+   * operator denied one lesson: the ledger keeps the record and the lesson
+   * is suppressed from every future promotion until re-approved. Payload
+   * carries the `pref` wikilink, the `consent` verdict, and the `agent`.
+   * No rules file is written on a denial.
+   */
+  lessonsDenied: "lessons-denied",
+  /**
+   * `lessons-promoted` (operator-approved lesson promotion, t_1e952e43) - a
+   * `refresh-blocks` apply rewrote the lessons block of at least one agent
+   * rules file from the qualified and approved lesson set. Payload carries
+   * the `targets` that changed, the promoted `prefs` (one wikilink per
+   * line), and the `agent`. Derived-state maintenance only: the write goes
+   * through the shared rules-block writer under a consent verdict, and a
+   * no-op refresh emits nothing.
+   */
+  lessonsPromoted: "lessons-promoted",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

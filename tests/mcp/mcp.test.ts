@@ -270,6 +270,9 @@ describe("tool listing", () => {
         "brain_session_expand",
         // Procedural-learning surfaces (v0.30.0).
         "brain_skill_proposals",
+        // Benchmark-gated rewrite status (agent-presence, t_635e3e72):
+        // read-only ids-and-rates status; MCP never accepts or scores.
+        "brain_skill_rewrite_status",
         "brain_procedural_memory",
         "brain_procedural_graph",
         "brain_recurrence",

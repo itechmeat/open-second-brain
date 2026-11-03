@@ -7,9 +7,11 @@ import {
   DEFAULT_BEGIN_MARKER,
   DEFAULT_END_MARKER,
 } from "../../../src/core/install/managed-block.ts";
+import { RULES_BLOCK_MARKERS } from "../../../src/core/install/rules-block.ts";
 
 import {
   AGENT_INSTRUCTION_FILES,
+  CANONICAL_WRITEBACK_BLOCK_BODY,
   HOST_INSTRUCTION_PRECEDENCE,
   WRITEBACK_CONTRACT_FINDING,
   WRITEBACK_CONTRACT_REQUIREMENTS,
@@ -556,5 +558,63 @@ describe("resolveShadowedInstructionContracts", () => {
     expect(
       resolveShadowedInstructionContracts(auditWorkspaceWritebackContract(tmp)).map((s) => s.host),
     ).toEqual(["claude-code"]);
+  });
+});
+
+describe("CANONICAL_WRITEBACK_BLOCK_BODY", () => {
+  test("satisfies every gate clause, so the installer can never ship a non-conforming block", () => {
+    expect([...missingWritebackGateClauses(CANONICAL_WRITEBACK_BLOCK_BODY)]).toEqual([]);
+  });
+
+  test("merges the cross-project-pointer usage content with the gate clauses", () => {
+    // The four usage surfaces K2 names, in the checker's own vocabulary.
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("Brain/active.md");
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("brain_feedback");
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("brain_apply_evidence");
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("dream");
+  });
+
+  test("is static text: no template placeholders, no vault path, no memory content", () => {
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toMatch(/\{\{?/);
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toContain("<absolute");
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toMatch(/\/(home|Users|mnt)\//);
+  });
+
+  test("a file carrying only the lessons pair still grades missing-block", () => {
+    // The audit reads only the settled default markers; a sibling block
+    // with its own spelling is invisible to the contract by design.
+    const lessonsOnly = [
+      RULES_BLOCK_MARKERS.lessons.begin,
+      "- prefer small commits",
+      RULES_BLOCK_MARKERS.lessons.end,
+    ].join("\n");
+    const path = join(tmp, "AGENTS.md");
+    writeFileSync(path, `# W\n\n${lessonsOnly}\n`);
+    expect(auditWritebackContractFile(path).finding).toBe(WRITEBACK_CONTRACT_FINDING.missingBlock);
+  });
+
+  test("a file with both blocks is graded by its own pair alone", () => {
+    const both = [
+      CONFORMING_BLOCK,
+      RULES_BLOCK_MARKERS.lessons.begin,
+      "- prefer small commits",
+      RULES_BLOCK_MARKERS.lessons.end,
+    ].join("\n");
+    const path = join(tmp, "AGENTS.md");
+    writeFileSync(path, `# W\n\n${both}\n`);
+    expect(auditWritebackContractFile(path).finding).toBe(WRITEBACK_CONTRACT_FINDING.conforming);
+  });
+
+  test("the canonical body renders a conforming block through the settled markers", () => {
+    const document = [
+      DEFAULT_BEGIN_MARKER,
+      CANONICAL_WRITEBACK_BLOCK_BODY,
+      DEFAULT_END_MARKER,
+    ].join("\n");
+    const path = join(tmp, "AGENTS.md");
+    writeFileSync(path, `${document}\n`);
+    const audit = auditWritebackContractFile(path);
+    expect(audit.finding).toBe(WRITEBACK_CONTRACT_FINDING.conforming);
+    expect(audit.missing).toEqual([]);
   });
 });

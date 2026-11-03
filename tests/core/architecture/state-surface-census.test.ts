@@ -61,6 +61,7 @@ import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import {
   STATE_SURFACE_SWEEP_EXCLUSIONS,
   STATE_SURFACES,
+  STATE_SURFACE_ID,
 } from "../../../src/core/state/surfaces.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
 
@@ -93,7 +94,16 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // verb LEFT the population - its runs dir was hoisted to `BENCH_RUNS_REL` in
 // `path-constants.ts`, so it no longer spells the directory - taking its now
 // stale exclusion with it.
-const SWEPT_POPULATION_SIZE = 30;
+// 30 -> 32, net, from the agent-presence wave: the approvals ledger writer
+// (`src/core/brain/lessons-promotion.ts`, t_1e952e43) spells the directory
+// for `lessons-approvals.json` and is answered by that surface's row, and
+// the instruction-block installer (`src/core/install/instruction-block.ts`,
+// t_ba41a78a) spells it for `instruction-block.lock.json` and is answered
+// by the `instruction_block_lock` row's `sources`.
+// 32 -> 33: the lessons-block readiness check
+// (`src/core/brain/doctor/lessons-block-check.ts`, t_1e952e43) joins with
+// the same wave, answered by the `lesson_approvals` row's `sources`.
+const SWEPT_POPULATION_SIZE = 33;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,
@@ -107,7 +117,15 @@ const SWEPT_POPULATION_SIZE = 30;
 // population with two rows - the signed attestation records (attestations)
 // and the operator's Ed25519 signing keypair (attestation_keys), the same
 // derived-store join the ingest checkpoints row made.
-const DECLARED_SURFACE_COUNT = 55;
+// 55 -> 56: the instruction-block lock row (t_ba41a78a Task B4) joins the
+// catalogue - the ownership record uninstall reads to remove exactly the
+// recorded pair, the same derived-store join the install manifest made.
+// 56 -> 57: the skill-benchmarks row (t_635e3e72 Task A5) joins the
+// catalogue - the preregistration a staged scored_rewrite proposal is
+// audited against, the same vault-content join the skills tree made.
+// 57 -> 58: the lesson_approvals row joins the catalogue with the lessons lane's final
+// commit (t_1e952e43), the same join the session-mining ledger made.
+const DECLARED_SURFACE_COUNT = 58;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;
@@ -247,6 +265,13 @@ describe("state surface census", () => {
     expect(unseen.toSorted().join("\n")).toBe("");
     // …and it has to have found something, or it is no alarm at all.
     expect(naivePathBuilders().length).toBeGreaterThan(5);
+  });
+  test("the lesson approvals row attributes the ledger writer (t_1e952e43)", () => {
+    const row = STATE_SURFACES.find((r) => r.id === STATE_SURFACE_ID.lessonApprovals);
+    expect(row).toBeDefined();
+    expect(row?.sources).toContain("src/core/brain/lessons-promotion.ts");
+    // ...and the writer sits inside the swept population it answers.
+    expect(sweepPopulation()).toContain("src/core/brain/lessons-promotion.ts");
   });
 
   test("the census is not vacuous", () => {

@@ -1549,8 +1549,25 @@ const DIRECT_WRITE_ROWS = 86;
  * (`src/core/brain/attestation/signing.ts`) writes the keypair halves the
  * same way - both committed through the shared writer, so both join the
  * shared-helper population.
+ *
+ * 135 -> 136, from the operator-approved lesson promotion lane
+ * (t_1e952e43) and nothing else: the approvals ledger writer
+ * (`src/core/brain/lessons-promotion.ts`) commits
+ * `.open-second-brain/lessons-approvals.json` through the shared atomic
+ * writer under the file's own lock - derived-store machine state, not a
+ * note, so it joins the shared class needing no exclusion. The lane's
+ * rules-file writes ride the shared rules-block writer
+ * (`src/core/install/rules-block.ts`), which carries its own row.
+ *
+ * 136 -> 137, from the agent-presence wave (t_ba41a78a) and nothing
+ * else: the instruction-block installer
+ * (`src/core/install/instruction-block.ts`) commits the vault-root
+ * agent-instruction file through the shared rules-block writer and the
+ * `instruction-block.lock.json` ownership record through the shared
+ * atomic writer - every byte it writes rides a shared helper, so it
+ * joins the shared class needing no exclusion.
  */
-const SHARED_HELPER_ROWS = 135;
+const SHARED_HELPER_ROWS = 137;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1732,8 +1749,20 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * 131 -> 130 is the same wave's mutation channel stamp: the shared
  * write-batch seam moved from the unstamped to the stamped shared class
  * when note mutations began stamping the writing process's channel.
+ * 130 -> 131, from the operator-approved lesson promotion lane
+ * (t_1e952e43) and nothing else: the approvals ledger writer
+ * (`src/core/brain/lessons-promotion.ts`) commits the
+ * `lessons-approvals.json` state table through the shared atomic writer -
+ * machine state in the derived store, carrying no origin channel.
+ * 131 -> 132, from the agent-presence wave (t_ba41a78a) and nothing
+ * else: the instruction-block installer
+ * (`src/core/install/instruction-block.ts`) commits the vault-root
+ * agent-instruction file through the shared rules-block writer and the
+ * `instruction-block.lock.json` ownership record through the shared
+ * atomic writer - both under the apply arm only, the plan and the dry
+ * run write nothing, and neither write stamps an origin channel.
  */
-const UNSTAMPED_SHARED_ROWS = 130;
+const UNSTAMPED_SHARED_ROWS = 132;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

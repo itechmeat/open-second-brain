@@ -408,6 +408,9 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_context_presets: "small preset list",
   brain_pre_compact_extract: "bounded extract; host injects it whole by design",
   brain_skill_proposals: "bounded proposal list",
+  brain_skill_rewrite_status:
+    "bounded status: one benchmark receipt plus at most ten grade verdict rows for one skill; " +
+    "ids and rates only, never task or transcript text",
   brain_procedural_memory: "bounded hint list",
   brain_procedural_graph: "bounded graph summary",
   brain_recurrence: "bounded recurrence records; learn/forget are writes",

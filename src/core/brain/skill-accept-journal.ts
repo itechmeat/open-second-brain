@@ -36,9 +36,36 @@
  * The field is optional: a marker written before it existed names the
  * procedure path implicitly, and the resolver falls back to that.
  *
+ * The same guess problem applies to the TREE the path sits in: a caller
+ * (CLI flag, MCP server config) can resolve the skills root differently
+ * from what recovery would resolve on its next run. So a skill
+ * materialization also records the root its accept resolved
+ * ({@link SkillAcceptJournalEntry.skillsRoot}); the field is optional and
+ * absent on legacy markers and on procedure materializations, which never
+ * consult the skills tree.
+ *
  * The journal is a repair marker, not history: it is removed as soon as
  * the sequence completes or is resolved. A journal left on disk means a
  * sequence is still outstanding.
+ *
+ * The marker file itself is agent-writable, and its `materializedPath`
+ * drives the rollback's deletion and the restore's rewrite, so the parser
+ * refuses (security audit M4, the deletion sink) a `materialized_path` the
+ * accept sequence cannot have produced on a marker whose target did not
+ * exist - the shape the rollback's `rmSync` reads with no at-use guard in
+ * front of it: a relative value (the module writes only absolute paths), or
+ * an absolute path resolving outside the vault and the skills root the
+ * materialize step used - the root the marker itself records when present,
+ * else the default resolution (a legacy marker names no root). On a legacy
+ * marker, the one shape left outside both roots stays admissible - a
+ * `mature_page` materialization under a caller's override skills root,
+ * which the marker cannot name - recognized as an absolute path ending in
+ * the skill page filename. On a marker whose target DID exist, the path
+ * reaches only the restore branch, which validates its own target at use;
+ * there the parser stays permissive so diagnosis can still read the marker.
+ * A refused marker is unreadable data, exactly like a corrupt one: named,
+ * retained, and blocking every accept until an operator removes it. A
+ * hand-edited journal is not a recovery input.
  *
  * A marker that cannot be READ is a third state, and it used to be a dead
  * end: the sweep runs before every accept, so one unparseable file blocked
@@ -50,12 +77,18 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
+import { resolveSkillsDir } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
+import { SKILL_FILE_NAME } from "../surface/skills.ts";
 import { requireNextStep } from "./next-step.ts";
-import { BRAIN_SKILL_ACCEPT_JOURNAL_REL, skillAcceptJournalPath } from "./paths.ts";
+import {
+  BRAIN_SKILL_ACCEPT_JOURNAL_REL,
+  skillAcceptJournalPath,
+  skillAcceptPriorContentPath,
+} from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Step the accept sequence was about to perform when the journal was stamped. */
@@ -76,6 +109,25 @@ export interface SkillAcceptJournalEntry {
    * slug derives.
    */
   readonly materializedPath?: string;
+  /**
+   * The skills root the accept sequence resolved for a skill
+   * materialization: the caller's override, the configured `skills_dir`,
+   * or the vault's own skills subtree. Recovery and the parse-time guard
+   * check the journal's materialized path against this root rather than
+   * re-deriving one. Absent on legacy markers and on procedure
+   * materializations, which never consult the skills tree; both fall back
+   * to the default resolved root.
+   */
+  readonly skillsRoot?: string;
+  /**
+   * Vault-side copy of the incumbent bytes, captured before a scored
+   * rewrite's materialize step OVERWRITES an existing SKILL.md. Present
+   * only when the sequence was about to displace content; the rollback
+   * restores the incumbent BODY from it, not just its existence. Absent
+   * on markers written before rewrites existed, and on sequences whose
+   * materialize target did not exist.
+   */
+  readonly priorContentPath?: string;
 }
 
 const JOURNAL_SCHEMA_VERSION = 1;
@@ -99,6 +151,8 @@ export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournal
     // is still readable by the build that shipped the key.
     procedure_existed: entry.materializedExisted,
     ...(entry.materializedPath !== undefined ? { materialized_path: entry.materializedPath } : {}),
+    ...(entry.skillsRoot !== undefined ? { skills_root: entry.skillsRoot } : {}),
+    ...(entry.priorContentPath !== undefined ? { prior_content_path: entry.priorContentPath } : {}),
   };
   atomicWriteFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -114,11 +168,16 @@ export function removeSkillAcceptJournalFile(vault: string, path: string): void 
   rmSync(ensureInsideVault(path, vault), { force: true });
 }
 
-/** Remove the journal for `slug`. Idempotent. */
+/**
+ * Remove the journal for `slug`, and the prior-content copy beside it
+ * when a rewrite captured one. Idempotent: both removals are forced, so
+ * clearing a journal that never captured anything is not an error.
+ */
 export function clearSkillAcceptJournal(vault: string, slug: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   rmSync(skillAcceptJournalPath(vault, slug), { force: true });
+  rmSync(skillAcceptPriorContentPath(vault, slug), { force: true });
 }
 
 /** Registry code for a marker file this module cannot parse. */
@@ -180,12 +239,16 @@ export function readSkillAcceptJournals(vault: string): SkillAcceptJournalState 
   if (!existsSync(dir)) {
     return Object.freeze({ entries: Object.freeze([]), unreadable: Object.freeze([]) });
   }
+  // Resolved once per read: the DEFAULT skills root, used by the
+  // parse-time materialized-path guard when a marker records no root of
+  // its own (legacy markers, procedure materializations).
+  const defaultSkillsRoot = resolveJournalSkillsRoot(vault);
   const entries: SkillAcceptJournalEntry[] = [];
   const unreadable: UnreadableSkillAcceptJournal[] = [];
   for (const name of readdirSync(dir).toSorted()) {
     if (!name.endsWith(JOURNAL_SUFFIX)) continue;
     const path = join(dir, name);
-    const parsed = parseJournal(path);
+    const parsed = parseJournal(path, vault, defaultSkillsRoot);
     if ("detail" in parsed) unreadable.push(parsed);
     else entries.push(parsed);
   }
@@ -205,7 +268,11 @@ export function listSkillAcceptJournals(vault: string): ReadonlyArray<SkillAccep
   return state.entries;
 }
 
-function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAcceptJournal {
+function parseJournal(
+  path: string,
+  vault: string,
+  defaultSkillsRoot: string,
+): SkillAcceptJournalEntry | UnreadableSkillAcceptJournal {
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -229,15 +296,109 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
     return Object.freeze({ path, detail: "a required field is missing or of the wrong type" });
   }
   const materializedPath = raw["materialized_path"];
+  const priorContentPath = raw["prior_content_path"];
+  const skillsRoot = raw["skills_root"];
+  const recordedSkillsRoot =
+    typeof skillsRoot === "string" && skillsRoot.length > 0 ? skillsRoot : undefined;
+  const materializedExisted = raw["procedure_existed"] === true;
+  // The rollback's rmSync is the one sink a hand-edited path reaches with
+  // no at-use guard in front of it. The restore branch validates its own
+  // target (security audit M4), and once the target existed mid-sequence
+  // the path feeds nothing else - so the parse boundary refuses an
+  // unproducible path exactly where the deletion sink reads it, against
+  // the skills root the marker itself records when present, else the
+  // default resolution.
+  if (!materializedExisted && typeof materializedPath === "string" && materializedPath.length > 0) {
+    const refusal = refusedMaterializedPathDetail(
+      materializedPath,
+      vault,
+      recordedSkillsRoot ?? defaultSkillsRoot,
+      recordedSkillsRoot !== undefined,
+    );
+    if (refusal !== null) return Object.freeze({ path, detail: refusal });
+  }
   return Object.freeze({
     slug,
     id,
     phase: phase as SkillAcceptPhase,
     startedAt,
     acceptedExisted: raw["accepted_existed"] === true,
-    materializedExisted: raw["procedure_existed"] === true,
+    materializedExisted,
     ...(typeof materializedPath === "string" && materializedPath.length > 0
       ? { materializedPath }
       : {}),
+    ...(recordedSkillsRoot !== undefined ? { skillsRoot: recordedSkillsRoot } : {}),
+    ...(typeof priorContentPath === "string" && priorContentPath.length > 0
+      ? { priorContentPath }
+      : {}),
   });
+}
+
+/**
+ * The DEFAULT skills root, used by the parse-time guard when a marker
+ * records no root of its own: the configured override, else the vault's
+ * own skills subtree. The same resolution a legacy accept performed, so
+ * the guard admits exactly the paths such an accept can write.
+ */
+function resolveJournalSkillsRoot(vault: string): string {
+  return resolveSkillsDir() ?? join(vault, "Brain", "skills");
+}
+
+/**
+ * The parse-time refusal for a journal-supplied `materialized_path` on a
+ * marker whose target did not exist (the rollback's deletion shape), or
+ * null when the accept sequence itself could have written it.
+ *
+ * `skillsRoot` is the root the marker itself recorded when it names one,
+ * else the default resolution; `skillsRootRecorded` says which. A value
+ * the module cannot have produced is refused at the boundary both readers
+ * share, before any recovery touches the filesystem: a relative value (the
+ * module writes only absolute paths), or an absolute path resolving
+ * outside the vault and that root - except on a LEGACY marker, where the
+ * one shape recovery cannot re-derive stays admissible: a `mature_page`
+ * materialization under a caller's override skills root the marker cannot
+ * name, recognized as an absolute path ending in the skill page filename
+ * (this also keeps legacy markers readable across a skills-dir config
+ * change between accept and recovery). A marker that records its root
+ * needs no such escape: its recorded root bounds the materialize tree, and
+ * only the module's own shape inside it is admitted.
+ */
+function refusedMaterializedPathDetail(
+  value: string,
+  vault: string,
+  skillsRoot: string,
+  skillsRootRecorded: boolean,
+): string | null {
+  if (!isAbsolute(value)) {
+    return (
+      `materialized_path '${value}' is not an absolute path; the accept sequence writes only ` +
+      "absolute paths, so this marker was hand-edited and is not a recovery input"
+    );
+  }
+  if (isLexicallyInside(value, vault)) return null;
+  if (isLexicallyInside(value, skillsRoot)) {
+    if (!skillsRootRecorded) return null;
+    if (basename(value) === SKILL_FILE_NAME) return null;
+  } else if (!skillsRootRecorded && basename(value) === SKILL_FILE_NAME) {
+    return null;
+  }
+  return skillsRootRecorded
+    ? `materialized_path '${value}' resolves outside the vault and the skills root the accept ` +
+        `recorded (${skillsRoot}) and is not a materialized ${SKILL_FILE_NAME} path; ` +
+        "a hand-edited journal is not a recovery input"
+    : `materialized_path '${value}' resolves outside the vault and the skills root ` +
+        `(${skillsRoot}) and is not a materialized ${SKILL_FILE_NAME} path; a hand-edited ` +
+        "journal is not a recovery input";
+}
+
+/**
+ * Lexical containment of `target` inside `root`, mirroring the rollback
+ * confinement predicate in `skill-proposals` (`isLexicallyInside` there):
+ * `path.resolve` normalisation plus the platform separator, so the
+ * parse-time guard and the at-use guard admit the same paths.
+ */
+function isLexicallyInside(target: string, root: string): boolean {
+  const resolvedTarget = resolve(target);
+  const resolvedRoot = resolve(root) + sep;
+  return resolvedTarget.startsWith(resolvedRoot);
 }

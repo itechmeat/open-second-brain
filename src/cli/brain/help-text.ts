@@ -154,6 +154,7 @@ Brain verbs (observing memory):
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queues (signals/notes/ingest): list | apply <id> | reject <id>
+  lessons             Operator-approved lesson promotion: candidates | approve <id> | deny <id> | refresh-blocks
   signal              Fact signal lifecycle: retire <id> --reason <text>
   capture             Stage one capture from the terminal: body, source, sender, guidance
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
@@ -1176,8 +1177,8 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain generation-reports show <report-id> [--vault <path>] [--json]\n" +
     "Inbound, opt-in LLM generation tracing. record is gated (default off) by --enable or generation_trace_enabled; only prompt_hash + counts are stored, never the prompt.\n",
   "skill-proposals":
-    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage|page-candidates|page-draft> [args]\n" +
-    "Proposal queue lifecycle, from continuity telemetry and from mature vault pages.\n" +
+    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage|page-candidates|page-draft|rewrite-plan|rewrite-score> [args]\n" +
+    "Proposal queue lifecycle, from continuity telemetry, from mature vault pages, and from benchmark-gated rewrite rounds.\n" +
     "  learn [--min-support <n>] [--vault <path>] [--json]\n" +
     "  list [--vault <path>] [--json]\n" +
     "  accept <slug> [--note <text>] [--vault <path>] [--json]\n" +
@@ -1186,8 +1187,11 @@ export const VERB_HELP: Record<string, string> = {
     "  usage [--vault <path>] [--json]\n" +
     "  page-candidates [--vault <path>] [--json]\n" +
     "  page-draft <page> (--payload <json> | --payload-file <path>) [--vault <path>] [--json]\n" +
+    "  rewrite-plan <skill> --candidate-file <path> [--skills-root <path>] [--vault <path>] [--json]\n" +
+    "  rewrite-score <skill> [--rounds-dir <dir>] [--candidate-file <path>] [--skills-root <path>] [--vault <path>] [--json]\n" +
     "page-candidates is read-only: it gates the vault's user pages on the page-meta trio (core tier, non-stale lifecycle, high confidence) and an observed-reuse floor, skips any page an installed skill already covers, and returns one needs-llm-step envelope per admitted page plus every skip with its reason. page-draft validates the returned draft and STAGES it as a pending mature_page proposal inside the vault; accept is what materializes the SKILL.md under the configured skills root.\n" +
-    "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n",
+    "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n" +
+    "rewrite-plan verifies the skill's benchmark task set against its frozen receipt and prints the receipt plus the dev-round envelopes: a baseline round over the incumbent body and a candidate round over --candidate-file, each with its transcript drop site under Brain/skill-benchmarks/<skill>/rounds/. Held-out members are never printed here. rewrite-score grades the submitted transcripts with structural predicates only, runs the preregistered selection gate (a candidate promotes only by strictly beating the baseline by the pinned margin with the dev n met), hands out the single held-out round on a promote, and stages a scored_rewrite pending proposal ONLY on a final promote after the held-out pass; a hold and a short dev arm write only the grade record. The optional judge (skill_rewrite_judge_cmd) is advisory and never moves the metric. An unknown skill_rewrite.mode refuses by name; MCP reads the same status read-only and never accepts or scores.\n",
   "procedural-memory":
     "usage: o2b brain procedural-memory <reconcile|list|mark-used> [args]\n" +
     "Procedural index reconciliation and usage tracking sidecar.\n" +
@@ -1259,6 +1263,23 @@ export const VERB_HELP: Record<string, string> = {
     "renders it into Brain/retired/ with retire-shaped frontmatter (the\n" +
     "same --dry-run honesty). Applying or rejecting a missing id exits 2\n" +
     "(never a silent no-op).\n",
+  lessons:
+    "usage: o2b brain lessons candidates [--vault <path>] [--json]\n" +
+    "       o2b brain lessons approve <pref-id> [--target <file>...] [--apply] [--yes] [--force]\n" +
+    "       o2b brain lessons deny <pref-id> [--apply] [--yes] [--vault <path>] [--json]\n" +
+    "       o2b brain lessons refresh-blocks [--apply] [--yes] [--force] [--vault <path>] [--json]\n" +
+    "Operator-approved lesson promotion into the managed lessons block of the\n" +
+    "agent rules files (AGENTS.md, CLAUDE.md, GEMINI.md). candidates is\n" +
+    "read-only: the promotable set plus every blocked lesson with its single\n" +
+    "named reason, and the resolved promotion scopes. approve follows the\n" +
+    "install consent ladder: plan-only by default, --apply executes, headless\n" +
+    "--apply without --yes refuses with exit 6; the ledger row is recorded\n" +
+    "only after the rules-file writes landed, and every byte goes through the\n" +
+    "shared rules-block writer. deny records without writing rules files.\n" +
+    "refresh-blocks re-renders blocks under management (dry run by default;\n" +
+    "never creates a block), drops a lesson whose approval went stale by\n" +
+    "name, and stamps lastPromotedAt on what it wrote. Operator-only: no MCP\n" +
+    "tool exposes these subcommands.\n",
   signal:
     "usage: o2b brain signal retire <id> --reason <text> [--superseded-by <id>] [--vault <path>] [--json]\n" +
     "Retire an extracted fact signal: move Brain/inbox/sig-*.md into\n" +

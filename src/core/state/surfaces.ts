@@ -88,6 +88,7 @@ import {
   DERIVED_STORE_FILE,
   HOOK_AUDIT_DIR,
 } from "../brain/path-constants.ts";
+import { SKILL_BENCHMARKS_DIR } from "../brain/skill-rewrite-tasks.ts";
 import { WATCHDOG_FALLBACK_AUDIT_DIR } from "../brain/audit-dirs.ts";
 import { JSONL_LEDGER_EXT, jsonlLedgerGrammar, parseShardedName } from "../brain/ledger-shards.ts";
 import { MAINTENANCE_JOURNAL_STEM } from "../brain/maintenance/journal.ts";
@@ -164,6 +165,9 @@ export const STATE_SURFACE_ID = Object.freeze({
   captureWatermark: "capture_watermark",
   decisionLedger: "decision_ledger",
   sourceArchives: "source_archives",
+  instructionBlockLock: "instruction_block_lock",
+  lessonApprovals: "lesson_approvals",
+  skillBenchmarks: "skill_benchmarks",
 } as const);
 
 export type StateSurfaceId = (typeof STATE_SURFACE_ID)[keyof typeof STATE_SURFACE_ID];
@@ -296,6 +300,8 @@ const SESSION_MINING_LEDGER_FILE = "session-mining-ledger.json";
 const SESSION_MINING_SURVEYS_FILE = "session-mining-surveys.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
+const INSTRUCTION_BLOCK_LOCK_FILE = "instruction-block.lock.json";
+const LESSONS_APPROVALS_LEDGER_FILE = "lessons-approvals.json";
 const BOOTSTRAP_RECEIPT_FILE = "bootstrap.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
@@ -1170,6 +1176,69 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "is untouched, which is exactly what separates it from a rebuildable derived store, and " +
       "there is no TTL to bring it back.",
     sources: ["src/core/brain/provenance/source-archive.ts"],
+  },
+  {
+    // K5 append-only placement: this row joins at the end of the
+    // catalogue because three lanes share this array this wave and the
+    // integrator re-freezes the by-root order.
+    id: STATE_SURFACE_ID.instructionBlockLock,
+    label: "instruction block lock",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(INSTRUCTION_BLOCK_LOCK_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Which vault-root agent instruction files carry an Open Second Brain write-gate block " +
+      "this tool wrote: per file, the block id, the begin marker and the applied time. " +
+      "Uninstall reads it to remove exactly the recorded pair, and the applied time is what " +
+      "makes the installer refuse a hand-edited block; without it the installer cannot prove " +
+      "a block is its own and refuses to rewrite any diverged one.",
+    sources: ["src/core/install/instruction-block.ts"],
+  },
+  {
+    // K5 append-only placement: rides the same tail the three lanes
+    // share; the integrator re-freezes the by-root order.
+    id: STATE_SURFACE_ID.lessonApprovals,
+    label: "lesson approvals ledger",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(LESSONS_APPROVALS_LEDGER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "One JSON table of the lesson-promotion decisions currently in force, keyed by preference " +
+      "id: which lessons the operator approved for promotion into agent rules files, which they " +
+      "refused, and the content hash each approval pinned. It lives in the derived store rather " +
+      "than under Brain/ so an agent cannot read its own approval state as a note surface. " +
+      "Nothing rebuilds it: deleting it lifts every approval and refusal at once - the " +
+      "fail-closed direction, since a lifted approval blocks a lesson rather than promoting it.",
+    sources: [
+      "src/core/brain/lessons-promotion.ts",
+      "src/core/brain/doctor/lessons-block-check.ts",
+    ],
+  },
+  {
+    id: STATE_SURFACE_ID.skillBenchmarks,
+    label: "skill benchmarks",
+    tier: STATE_TIER.vaultContent,
+    derive: (vault) => join(vault, BRAIN_ROOT_REL, SKILL_BENCHMARKS_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Each skill's benchmark task set, its frozen rewrite receipt, and the submitted gate-round " +
+      "transcripts under rounds/. This is the preregistration an operator audits a staged " +
+      "rewrite against: the spec hash on a pending scored_rewrite proposal is a claim about " +
+      "these files, and the grade ledger's verdicts are only as trustworthy as the task set " +
+      "they gated on. Operator-authored content in the same sense the skills tree is - the " +
+      "vault is the primary home so the receipt travels with the skills it gates.",
+    sources: [
+      "src/core/brain/skill-rewrite-tasks.ts",
+      "src/core/brain/skill-rewrite.ts",
+      "src/core/brain/skill-proposals.ts",
+      "src/core/brain/paths.ts",
+    ],
   },
 ]);
 

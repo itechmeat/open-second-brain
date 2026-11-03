@@ -115,6 +115,33 @@ import {
   SCHEMA_PACK_UNVERIFIED_REASONS,
 } from "../../../src/core/brain/schema-integrity.ts";
 import {
+  isSkillBenchCheck,
+  isSkillBenchTaskKind,
+  isSkillBenchValueClass,
+  SKILL_BENCH_CHECK,
+  SKILL_BENCH_CHECKS,
+  SKILL_BENCH_TASK_KIND,
+  SKILL_BENCH_TASK_KINDS,
+  SKILL_BENCH_VALUE_CLASS,
+  SKILL_BENCH_VALUE_CLASSES,
+} from "../../../src/core/brain/skill-rewrite-tasks.ts";
+import {
+  isSkillRewriteMode,
+  isSkillRewriteRoundArm,
+  isSkillRewriteVerdict,
+  SKILL_REWRITE_MODE,
+  SKILL_REWRITE_MODES,
+  SKILL_REWRITE_ROUND_ARM,
+  SKILL_REWRITE_ROUND_ARMS,
+  SKILL_REWRITE_VERDICT,
+  SKILL_REWRITE_VERDICTS,
+} from "../../../src/core/brain/skill-rewrite.ts";
+import {
+  isLessonsBlockState,
+  LESSONS_BLOCK_STATE,
+  LESSONS_BLOCK_STATES,
+} from "../../../src/core/brain/doctor/lessons-block-check.ts";
+import {
   isNegativeRecallState,
   isNegativeRecallUnknownReason,
   isRetractionEvidenceKind,
@@ -164,6 +191,11 @@ import {
   OPEN_DECISION_STATUS,
   OPEN_DECISION_STATUSES,
 } from "../../../src/core/brain/decisions/open-store.ts";
+import {
+  isLessonPromotionBlocked,
+  LESSON_PROMOTION_BLOCKED,
+  LESSON_PROMOTION_BLOCKED_MEMBERS,
+} from "../../../src/core/brain/lessons-promotion.ts";
 import {
   BRAIN_SNAPSHOT_REASON,
   BRAIN_SNAPSHOT_REASONS,
@@ -684,6 +716,16 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: OPEN_DECISION_STATUS,
     members: OPEN_DECISION_STATUSES,
     guard: isOpenDecisionStatus,
+  },
+  {
+    // Operator-approved lesson promotion (t_1e952e43). Why a lesson is not
+    // promotable: the reason rides the CLI candidates listing and the JSON
+    // surfaces, so a reader can tell a scope that was never enabled from an
+    // approval that went stale on content drift.
+    name: "LESSON_PROMOTION_BLOCKED",
+    values: LESSON_PROMOTION_BLOCKED,
+    members: LESSON_PROMOTION_BLOCKED_MEMBERS,
+    guard: isLessonPromotionBlocked,
   },
   {
     // U2. Three vocabularies, because a corpus verdict, the reason it
@@ -1768,6 +1810,70 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: CONTENT_CLASSES,
     guard: isContentClass,
   },
+  {
+    // agent-presence, Lane A (t_635e3e72): the three-arm rewrite verdict,
+    // copied from the decision-model eval vocabulary the gate generalizes.
+    // Leaves TypeScript in grade records and the CLI/MCP status surfaces.
+    name: "SKILL_REWRITE_VERDICT",
+    values: SKILL_REWRITE_VERDICT,
+    members: SKILL_REWRITE_VERDICTS,
+    guard: isSkillRewriteVerdict,
+  },
+  {
+    // The closed task-kind vocabulary of a benchmark task set. Leaves
+    // TypeScript in the tasks.json fixtures and their named parse errors.
+    name: "SKILL_BENCH_TASK_KIND",
+    values: SKILL_BENCH_TASK_KIND,
+    members: SKILL_BENCH_TASK_KINDS,
+    guard: isSkillBenchTaskKind,
+  },
+  {
+    // The closed structural-predicate vocabulary a task's expectations are
+    // written against; the check ids leave TypeScript in grade-record rows
+    // and the score output.
+    name: "SKILL_BENCH_CHECK",
+    values: SKILL_BENCH_CHECK,
+    members: SKILL_BENCH_CHECKS,
+    guard: isSkillBenchCheck,
+  },
+  {
+    // agent-presence, Lane C (t_1e952e43): the four states a managed
+    // lessons block grades to in the doctor readiness check - the shared
+    // writer's drift vocabulary plus the named stale-lessons extension.
+    // Leaves TypeScript in doctor findings and the per-file readiness
+    // rows, both of which the refresh verb's own surfaces read back.
+    name: "LESSONS_BLOCK_STATE",
+    values: LESSONS_BLOCK_STATE,
+    members: LESSONS_BLOCK_STATES,
+    guard: isLessonsBlockState,
+  },
+  {
+    // The closed value-class vocabulary an output_field expectation
+    // asserts over; leaves TypeScript in the fixtures and their named
+    // parse errors.
+    name: "SKILL_BENCH_VALUE_CLASS",
+    values: SKILL_BENCH_VALUE_CLASS,
+    members: SKILL_BENCH_VALUE_CLASSES,
+    guard: isSkillBenchValueClass,
+  },
+  {
+    // Which round an envelope belongs to: the baseline and candidate dev
+    // rounds and the single held-out check. Leaves TypeScript in the
+    // transcript drop-site paths and the round reports.
+    name: "SKILL_REWRITE_ROUND_ARM",
+    values: SKILL_REWRITE_ROUND_ARM,
+    members: SKILL_REWRITE_ROUND_ARMS,
+    guard: isSkillRewriteRoundArm,
+  },
+  {
+    // The rewrite gate mode: gated (one candidate per round) or iterative
+    // (a bounded dev-only edit loop, still gated before any write).
+    // Resolved from `skill_rewrite.mode`, refused by name on other values.
+    name: "SKILL_REWRITE_MODE",
+    values: SKILL_REWRITE_MODE,
+    members: SKILL_REWRITE_MODES,
+    guard: isSkillRewriteMode,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -2050,7 +2156,14 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
 // 107/108: RECEIPT_VERIFY_VERDICT and RECEIPT_VERIFY_UNAVAILABLE_REASON
 // (delivery-trust fix wave 1) - lane B's closed verify vocabularies ship
 // their membership lists and guards so the scanner can see them.
-const VOCABULARY_POPULATION = 108;
+// 109: LESSON_PROMOTION_BLOCKED (operator-approved lesson promotion,
+// t_1e952e43) - the named reason a lesson fails the promotion gate,
+// rendered by the candidates listing and the JSON surfaces.
+// 110-115: the agent-presence rewrite lane's six closed vocabularies
+// (t_635e3e72) - SKILL_REWRITE_VERDICT, SKILL_BENCH_TASK_KIND,
+// SKILL_BENCH_CHECK, SKILL_BENCH_VALUE_CLASS, SKILL_REWRITE_ROUND_ARM and
+// SKILL_REWRITE_MODE - join, each with its membership list and guard.
+const VOCABULARY_POPULATION = 115;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
@@ -2180,7 +2293,9 @@ describe("the census reads the tree", () => {
     // Adding a vocabulary therefore means bumping this number, which is
     // the point: the count is the measurement, and a measurement nobody
     // has to keep true is not one.
-    expect(SCANNED.length).toBe(VOCABULARY_POPULATION);
+    // 115 -> 116: the lessons-block state vocabulary (LESSONS_BLOCK_STATE) joins the
+    // population with the lessons lane's final commit (t_1e952e43).
+    expect(SCANNED.length).toBe(VOCABULARY_POPULATION + 1);
     expect(SOURCE_TREE.length).toBeGreaterThan(500);
   });
 

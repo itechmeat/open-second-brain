@@ -825,8 +825,23 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("knowledge-gaps", "Rank recurring queries the vault answers poorly"),
         command(
           "skill-proposals",
-          "Learn, list, review, and recover skill proposals, including drafts from mature pages",
+          "Learn, list, review, and recover skill proposals, including drafts from mature pages and benchmark-gated rewrites",
           [flag("vault", "string"), flag("payload", "string"), flag("payload-file", "string")],
+          [
+            command("rewrite-plan", "Print a rewrite round's frozen receipt and dev envelopes", [
+              flag("vault", "string"),
+              flag("candidate-file", "string"),
+              flag("skills-root", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("rewrite-score", "Score submitted rewrite rounds and gate the verdict", [
+              flag("vault", "string"),
+              flag("rounds-dir", "string"),
+              flag("candidate-file", "string"),
+              flag("skills-root", "string"),
+              flag("json", "boolean"),
+            ]),
+          ],
         ),
         command("procedural-memory", "Reconcile or list the procedural memory index and its usage"),
         command("procedural-graph", "Rebuild or show the procedural graph and hint projections"),
@@ -940,6 +955,40 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("stale", "Stale preferences, signals, and log files against configured thresholds"),
         command("daily", "Daily brief: events by kind, status transitions, vault delta"),
         command("weekly", "Seven-day synthesis: transitions, retired, contradictions, vault delta"),
+        // t_1e952e43: operator-approved lesson promotion into agent rules
+        // files. Operator-only; no MCP tool exposes these subcommands.
+        command(
+          "lessons",
+          "Operator-approved lesson promotion: candidates | approve <pref-id> | deny <pref-id> | refresh-blocks",
+          [flag("vault", "string"), flag("target", "string-array")],
+          [
+            command("candidates", "List promotable lessons and blocked ones with reasons", [
+              flag("vault", "string"),
+            ]),
+            command("approve", "Approve a lesson and write it into the named agent rules files", [
+              flag("target", "string-array"),
+              flag("apply", "boolean"),
+              flag("yes", "boolean"),
+              flag("force", "boolean"),
+              flag("vault", "string"),
+            ]),
+            command("deny", "Record a denial; the lesson is suppressed from promotion", [
+              flag("apply", "boolean"),
+              flag("yes", "boolean"),
+              flag("vault", "string"),
+            ]),
+            command(
+              "refresh-blocks",
+              "Re-render managed lessons blocks (dry run by default; never creates a block)",
+              [
+                flag("apply", "boolean"),
+                flag("yes", "boolean"),
+                flag("force", "boolean"),
+                flag("vault", "string"),
+              ],
+            ),
+          ],
+        ),
       ],
     ),
     command(
