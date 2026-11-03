@@ -25,9 +25,10 @@ explicit consent prompt, keeping every byte outside the block intact on
 every re-run. The installed block merges the usage content below with
 the memory write gate, and a later uninstall removes exactly the pair
 the tool wrote. The manual snippet stays for hosts you provision by
-hand, and the tool never touches a hand-provisioned file; inside a
-managed block the opposite holds - a hand edit makes the next re-run
-refuse with `user-modified-block` unless `--force` overwrites it.
+hand. Install only writes the vault-root instruction file of the target
+host; there, a pasted snippet or any hand edit inside the managed
+fences makes the run refuse with `user-modified-block` unless `--force`
+replaces it (a backup of the previous file is taken first).
 
 Replace `<absolute-vault-path>` with the absolute path of your
 Obsidian-compatible vault before pasting.
