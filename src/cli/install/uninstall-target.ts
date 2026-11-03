@@ -11,7 +11,8 @@
 import { homedir } from "node:os";
 
 import { parseFlags } from "../argparse.ts";
-import { defaultConfigPath, discoverConfig } from "../../core/config.ts";
+import { defaultConfigPath } from "../../core/config.ts";
+import { resolveInstallVault } from "./install.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/aider.ts";
 import "../../core/install/adapters/codex.ts";
@@ -92,10 +93,15 @@ export async function cmdUninstallTarget(argv: string[]): Promise<number> {
   }
 
   const dryRun = !flags["apply"];
+  // The vault resolves through the SAME chain the install verb uses
+  // (`resolveInstallVault`: --vault, then VAULT_DIR, the project pointer,
+  // the active profile, the config vault key). The old local chain here
+  // read the config key BEFORE VAULT_DIR - the exact split install.ts
+  // documents as fixed - so an install that resolved VAULT_DIR was
+  // uninstalled from the configured vault, where the install manifest is
+  // absent and the removal refuses while the real install state stays.
   const cfgPath = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const cfg = discoverConfig(cfgPath).data;
-  const vault =
-    (flags["vault"] as string | undefined) ?? cfg["vault"] ?? process.env["VAULT_DIR"] ?? "";
+  const vault = resolveInstallVault((flags["vault"] as string | null) ?? null, cfgPath);
   if (!vault) {
     process.stderr.write(
       "error: vault not configured. Pass --vault <path>, set VAULT_DIR, or run `o2b init`.\n",

@@ -280,6 +280,52 @@ describe("CLI uninstall", () => {
   });
 });
 
+describe("uninstall --target vault resolution", () => {
+  test("the vault resolves through the canonical chain: VAULT_DIR beats the config key", async () => {
+    // The install verb resolves through resolveInstallVault, whose chain
+    // puts VAULT_DIR first - install.ts documents the old order (config
+    // key, then VAULT_DIR) as the split-brain bug it fixed. The uninstall
+    // verb still carried that old order, so an install that resolved
+    // VAULT_DIR was uninstalled from the CONFIGURED vault: the manifest
+    // was not found there and the real install state stayed behind. The
+    // uninstall now resolves through the same chain, and this pins it
+    // end to end - install lands in the VAULT_DIR vault, then an
+    // uninstall with no --vault finds and plans the removal there.
+    const configured = join(tmp, "vault-configured");
+    const envVault = join(tmp, "vault-env");
+    const home = join(tmp, "home");
+    mkdirSync(configured, { recursive: true });
+    mkdirSync(envVault, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, `vault: "${configured}"\n`);
+    const env = {
+      HOME: home,
+      OPEN_SECOND_BRAIN_CONFIG: config,
+      VAULT_AGENT_NAME: "uninstall-test",
+      VAULT_TIMEZONE: "UTC",
+    };
+    const seeded = await runCli(
+      ["install", "--target", "cursor", "--vault", envVault, "--apply", "--yes", "--json"],
+      { env, subprocess: true },
+    );
+    expect(seeded.returncode).toBe(0);
+    expect(existsSync(join(envVault, ".open-second-brain", "install.lock.json"))).toBe(true);
+
+    const r = await runCli(["uninstall", "--target", "cursor", "--json"], {
+      env: { ...env, VAULT_DIR: envVault },
+      subprocess: true,
+    });
+    expect(r.returncode).toBe(0);
+    // The verb's --json output is the CLI's ok-envelope with the payload
+    // nested in its `stdout` string.
+    const envelope = JSON.parse(r.stdout) as { ok: boolean; code: number; stdout: string };
+    expect(envelope.ok).toBe(true);
+    const payload = JSON.parse(envelope.stdout) as { target: string };
+    expect(payload.target).toBe("cursor");
+  });
+});
+
 describe("safe names", () => {
   test("only canonical Open Second Brain names", () => {
     expect([...SAFE_CONFIG_DIR_NAMES].toSorted()).toEqual([
