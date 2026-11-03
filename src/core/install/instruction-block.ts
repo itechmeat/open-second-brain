@@ -337,7 +337,15 @@ export function applyInstructionBlock(
     // instead of taking the documented rewrite path. A file that cannot be
     // re-statted falls back to the wall clock at record time, which still
     // postdates the run start.
-    const landed = statSync(approved.path, { throwIfNoEntry: false })?.mtimeMs ?? Date.now();
+    let landed = Date.now();
+    try {
+      landed = statSync(approved.path, { throwIfNoEntry: false })?.mtimeMs ?? landed;
+    } catch {
+      // Keep the wall-clock fallback: the same posture the writer's own
+      // mtime probe takes, so any stat failure (EACCES, ELOOP, EIO)
+      // records a real post-write stamp instead of leaving the fresh
+      // write unrecorded.
+    }
     recordInstructionBlock(env.vault, name, {
       block_id: RULES_BLOCK_ID.usage,
       begin_marker: RULES_BLOCK_MARKERS.usage.begin,
