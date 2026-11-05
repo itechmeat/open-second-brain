@@ -1562,6 +1562,13 @@ async function reindexInto(
     // for the swap and removed once the swap succeeds; a crash between the
     // renames leaves it at `.old`, which the next Store.open restores in
     // preference to the older `.bak` (restoreFromBakIfMissing).
+    // Windows: a bun:sqlite connection with unfinalized statements survives
+    // close() as a zombie holding the staging DB handle until GC, so the
+    // rename swap below fails EBUSY against the process's OWN handle (POSIX
+    // is unaffected - rename(2) ignores open handles). Force collection to
+    // release finalizer-pending handles before the renames.
+    if (typeof Bun !== "undefined") Bun.gc(true);
+    else (globalThis as { gc?: () => void }).gc?.();
     progress.start(INDEX_STAGE.swap, 1);
     const keepBak = countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath);
     const parkPath = keepBak ? config.dbPath + ".old" : bakPath;

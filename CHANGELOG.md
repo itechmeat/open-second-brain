@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.98.1] - 2026-11-05
+
+### Fixed
+
+- **Windows: `o2b search reindex` no longer fails EBUSY against its own staging handle.** The rebuild closes its staging store before the rename swap, but a `bun:sqlite` connection with unfinalized statements survives `close(true)` as a zombie that keeps `brain.sqlite.new` open until garbage collection. POSIX never notices - `rename(2)` ignores open handles - but Windows refuses a rename while any handle without `FILE_SHARE_DELETE` is open, so the swap failed deterministically with `EBUSY: ... rename brain.sqlite.new -> brain.sqlite` on every attempt while `renameWithRetry`'s two-second budget rode out nothing: the holder was the reindex process itself, verified with the Restart Manager API (zero external holders at idle; the live `bun.exe` holding the staging file at swap time on every run). `reindexInto` now forces a collection cycle (`Bun.gc(true)`, or `globalThis.gc` under the Node-targeted bundle) immediately before the park/swap renames, releasing finalizer-pending handles so the swap lands on the first attempt. Diagnosed and verified on a Windows 11 host (v1.94.0): reindex failed 5/5 attempts before the change, passed with the full rebuild + vector backfill after it.
+
 ## [1.98.0] - 2026-11-02
 
 Open Second Brain 1.98.0 is the agent-presence and self-improvement release: the vault states its usage where the agents that read it actually look, and its skills improve only under evidence. The install path closes its own gap - `o2b install --target <host> --apply` now writes the brain-usage block into the agent-instruction file the installed host reads at the vault root, through a shared managed-block writer that preserves every byte outside the block, refuses a hand-edited block by name, and records its ownership so uninstall removes exactly the pair the tool wrote. The dream pass gains an operator-approved exit into those same files: a lesson promotes into a managed lessons block only when the full qualification holds and a fresh approval pins the approved text, every non-member carries one named blocked reason, and the doctor grades every block state it can name. The skill lane gains a benchmark-gated rewrite loop where a skill is rewritten only after a candidate beats the incumbent on scored dev tasks with full coverage and survives the one held-out check - Open Second Brain never calls a model, the calling agent executes the task envelopes, the scorer reads structural predicates and nothing the agent claims about its own work, the accept stays an operator step on the command line, and the incumbent's bytes ride a content-restoring rollback journal until the sequence settles. And ChatGPT desktop is named where its operators look for it: it reads the shared Codex config, and the detect output and install docs say so.
@@ -8816,6 +8822,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.98.1]: https://github.com/itechmeat/open-second-brain/compare/v1.98.0...v1.98.1
 [1.98.0]: https://github.com/itechmeat/open-second-brain/compare/v1.97.0...v1.98.0
 [1.97.0]: https://github.com/itechmeat/open-second-brain/compare/v1.96.0...v1.97.0
 [1.96.0]: https://github.com/itechmeat/open-second-brain/compare/v1.95.0...v1.96.0
