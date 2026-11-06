@@ -487,6 +487,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "NOT a snapshot-excluded entry, so the bytes the removal takes are inside that run's " +
         "recovery point even though this primitive never takes one of its own.",
     },
+    "src/core/brain/anticipatory-prune.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "prunes the anticipatory context cache under `Brain/.state/anticipatory/` by file age " +
+        "and a hard count cap, never the entry the calling refresh just wrote. Every entry is " +
+        "a derived context pack rebuilt from the vault it sits in, so removing one costs one " +
+        "recomputation on the next refresh or read and loses no content.",
+    },
     "src/core/brain/notes/write-record.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,

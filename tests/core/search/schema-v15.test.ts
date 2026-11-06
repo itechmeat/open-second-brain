@@ -91,11 +91,11 @@ function tableSql(): string | null {
 }
 
 describe("the v15 entry", () => {
-  test("appends to MIGRATIONS ahead of the later v16 entry", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(16);
-    expect(MIGRATIONS.length).toBe(16);
+  test("appends to MIGRATIONS ahead of the later v16 and v17 entries", () => {
+    // The latest version is pinned once, in the newest migration's test.
+    expect(MIGRATIONS.length).toBe(LATEST_SCHEMA_VERSION);
     expect(MIGRATIONS[14]!.version).toBe(15);
-    expect(MIGRATIONS[MIGRATIONS.length - 1]!.version).toBe(16);
+    expect(MIGRATIONS[15]!.version).toBe(16);
   });
 
   test("runs from a rewound v14 index and stamps the version", async () => {

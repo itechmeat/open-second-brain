@@ -13,7 +13,8 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
-import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
+import { resolveIndexPathForProbe, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
+import { resolveIndexedStoreProbe } from "./brain-store/location.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
 import { DEFAULT_RECENCY } from "./recency.ts";
@@ -856,9 +857,19 @@ export function resolveSearchConfig(opts: {
     ? discoverConfig(opts.configPath).data
     : {};
 
-  const dbPath = resolveIndexPath(
+  // The brain store the index catches up from, when one is in use; the
+  // index then lives in the store's device-local state (design D5).
+  const storeProbe = resolveIndexedStoreProbe({
+    vault: opts.vault,
+    config,
+    configPath: opts.configPath ?? null,
+  });
+  const brainStore = storeProbe.kind === "store" ? storeProbe.store : null;
+  // An `unknown` probe keeps the store index this machine last wrote.
+  const dbPath = resolveIndexPathForProbe(
     opts.vault,
     envOrConfig(env, config, SEARCH_DB_ENV, SEARCH_DB_CONFIG_KEY),
+    storeProbe,
   );
 
   const chunkSize = parseInteger(
@@ -1558,6 +1569,8 @@ export function resolveSearchConfig(opts: {
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
+    brainStore,
+    ...(storeProbe.kind === "unknown" ? { brainStoreUnknown: true } : {}),
     configPath: opts.configPath ?? null,
     scopeRules,
     chunkSize,

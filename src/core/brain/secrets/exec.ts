@@ -135,25 +135,33 @@ export async function runWithSecret(
   });
   const resolved = resolveSecretForExec(vault, name, ctx);
   if (!matchesAllowlist(resolved.allow, argv)) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
-      timestamp: ctx.now.toISOString(),
-      actor: ctx.agent,
-      action: "secret_exec_denied",
-      target: resolved.name,
-      ok: false,
-      details: { command: auditCommand, allow: resolved.allow },
-    });
+    appendAuditRecord(
+      join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR),
+      {
+        timestamp: ctx.now.toISOString(),
+        actor: ctx.agent,
+        action: "secret_exec_denied",
+        target: resolved.name,
+        ok: false,
+        details: { command: auditCommand, allow: resolved.allow },
+      },
+      vault,
+    );
     throw new SecretExecDeniedError(resolved.name, command, resolved.allow);
   }
 
-  appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
-    timestamp: ctx.now.toISOString(),
-    actor: ctx.agent,
-    action: "secret_exec_started",
-    target: resolved.name,
-    ok: true,
-    details: { command: auditCommand, env_var: resolved.env_var },
-  });
+  appendAuditRecord(
+    join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR),
+    {
+      timestamp: ctx.now.toISOString(),
+      actor: ctx.agent,
+      action: "secret_exec_started",
+      target: resolved.name,
+      ok: true,
+      details: { command: auditCommand, env_var: resolved.env_var },
+    },
+    vault,
+  );
 
   const childEnv: Record<string, string> = {};
   for (const key of SAFE_BASE_ENV) {

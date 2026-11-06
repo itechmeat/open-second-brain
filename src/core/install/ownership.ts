@@ -388,6 +388,48 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
       "carries numbers, names and timestamps - never vault text.",
     sources: ["src/core/decision-model/thresholds.ts", "src/core/decision-model/config.ts"],
   },
+  {
+    id: "brain_store",
+    label: "brain store",
+    location: WINDOWS
+      ? `%OPEN_SECOND_BRAIN_STORE_ROOT%, else the store_root config key, else (${describeBaseDir("data", "win32")})\\open-second-brain\\store\\`
+      : "${OPEN_SECOND_BRAIN_STORE_ROOT:-the store_root config key, else ${XDG_DATA_HOME:-~/.local/share}/open-second-brain/store}/",
+    carries_memory: true,
+    created_by:
+      "the first brain store dual write, only while the store_dual_write setting (a phase 1 trial, off by default) is on",
+    removed_by: "deleting that directory yourself; it is the store's only copy on this machine",
+    note:
+      "The documented append-only store of Open Second Brain machine data (FORMAT.md inside it), " +
+      "kept outside the vault on purpose: a store root inside the vault is refused. Its shared " +
+      "and private partition folders are what a user syncs between machines.",
+    sources: ["src/core/store/store-paths.ts"],
+  },
+  {
+    id: "brain_store_device_state",
+    label: "brain store device-local state",
+    location: WINDOWS
+      ? `(${describeBaseDir("state", "win32")})\\open-second-brain\\stores\\`
+      : "${XDG_STATE_HOME:-~/.local/state}/open-second-brain/stores/",
+    carries_memory: true,
+    created_by:
+      "the first write to a brain store from this machine, the first search index build while a " +
+      "brain store is in use, or the first failed or skipped dual write (dual-write.json)",
+    removed_by:
+      "deleting that directory yourself while nothing writes to the store; locks and the clock " +
+      "are recreated, the dual-write failure and skip counters the doctor reports start again " +
+      "from zero, and `o2b search index` rebuilds the search index",
+    note:
+      "Append locks, blob temp files, the persisted hybrid logical clock of this device and, " +
+      "while a brain store is in use, the search index (index/<vault key>/ under the store id, " +
+      "a copy of every indexed chunk), in one directory per store id, plus dual-write.json, the " +
+      "counter of failed or skipped dual writes the doctor reports. It is never synced and never " +
+      "lives inside the store, so another machine never sees a lock or a clock of this one.",
+    sources: [
+      "src/core/store/store-paths.ts",
+      "src/core/platform-dirs.ts",
+      "src/core/search/brain-store/location.ts",
+    ],
+  },
 ]);
 
 /**
@@ -615,6 +657,12 @@ export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new M
     "the native-Windows half of `install-cli`: it writes `.cmd` launchers into whichever bin " +
       "directory its caller hands it and builds no root of its own, so there is no home or XDG " +
       "token in the source to match on",
+  ],
+  [
+    "src/core/search/brain-store/location.ts",
+    "the store index path is `join(store.deviceStateDir, ...)`: the device-local state directory " +
+      "arrives from `deviceStateDirFor()` in src/core/store/store-paths.ts, which IS swept, so " +
+      "no home or XDG token appears in this file's own source",
   ],
   [
     "src/core/search/paths.ts",

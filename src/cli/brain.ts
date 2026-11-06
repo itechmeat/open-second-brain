@@ -110,6 +110,7 @@ import {
   cmdBrainPayload,
   cmdBrainReceipts,
   cmdBrainStorage,
+  cmdBrainChanges,
   cmdBrainSessionSummary,
   cmdBrainIdeaLineage,
   cmdBrainNoteHistory,
@@ -418,6 +419,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainReceipts(rest);
       case "storage":
         return await cmdBrainStorage(rest);
+      case "changes":
+        return await cmdBrainChanges(rest);
       case "session-summary":
         return await cmdBrainSessionSummary(rest);
       case "idea-lineage":

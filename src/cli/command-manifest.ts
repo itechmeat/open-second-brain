@@ -480,6 +480,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Render the vault storage report: usage per surface and the forecast tier against the cap",
           [flag("vault", "string"), flag("json", "boolean")],
         ),
+        command(
+          "changes",
+          "List brain store record ids new since a watermark, grouped by stream, scope and topic",
+          [
+            flag("vault", "string"),
+            flag("since", "string"),
+            flag("limit", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
         command("audit", "Render mutation audit trail"),
         command(
           "generation-reports",
@@ -1089,6 +1099,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("keyword-only", "boolean"),
           flag("match-mode", "string"),
           flag("kind", "string"),
+          flag("source", "string"),
           flag("path", "string"),
           flag("keyword-weight", "string"),
           flag("semantic-weight", "string"),
@@ -1276,6 +1287,18 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("yes", "boolean"),
             flag("json", "boolean"),
           ],
+        ),
+      ],
+    ),
+    command(
+      "store",
+      "Brain store verbs",
+      [],
+      [
+        command(
+          "init",
+          "Create the brain store (both partitions, or --partitions shared), or complete a half-created one",
+          [flag("partitions", "string"), flag("config", "string"), flag("json", "boolean")],
         ),
       ],
     ),

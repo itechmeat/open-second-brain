@@ -41,6 +41,8 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isFullSha } from "./reader.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 export interface GitCommitRecord {
   readonly kind: "commit";
@@ -290,18 +292,47 @@ export function appendGitRecords(
   const handle = acquireLockSyncWithRetry(commitsPath(vault, repoKey), undefined, {
     remedy: ingestLockRemedy,
   });
+  let result: LockedAppend;
   try {
-    return appendGitRecordsLocked(vault, repoKey, records);
+    result = appendGitRecordsLocked(vault, repoKey, records);
   } finally {
     handle.release();
   }
+  // Brain store dual write (task 1.11): off by default, never fails this
+  // append, and run after the ingest lock is released so a bulk history
+  // ingest does not hold it through one store append per line.
+  if (result.lines.length > 0) {
+    const lines = result.lines;
+    dualWrite(
+      () =>
+        lines.map((line) =>
+          ledgerRowRecord(
+            DUAL_WRITE_LEDGERS.gitCommits,
+            {
+              repo_key: repoKey,
+              record: JSON.parse(line) as unknown,
+            },
+            // Commit messages and paths can name private work.
+            "private-when-held",
+          ),
+        ),
+      { vault },
+    );
+  }
+  return result.result;
+}
+
+/** What the locked append wrote: the outcome, and the lines it appended. */
+interface LockedAppend {
+  readonly result: AppendGitRecordsResult;
+  readonly lines: ReadonlyArray<string>;
 }
 
 function appendGitRecordsLocked(
   vault: string,
   repoKey: string,
   records: ReadonlyArray<GitRecord>,
-): AppendGitRecordsResult {
+): LockedAppend {
   // Tag identity is (name, target): a RETARGETED tag (same name, new
   // commit after a force-move) appends a fresh record instead of being
   // silently dropped; listGitTags surfaces the latest record per name.
@@ -325,7 +356,7 @@ function appendGitRecordsLocked(
     mkdirSync(gitStoreDir(vault, repoKey), { recursive: true });
     appendFileSync(commitsPath(vault, repoKey), lines.join(""));
   }
-  return { appended: lines.length, appendedCommits, appendedTags, skipped };
+  return { result: { appended: lines.length, appendedCommits, appendedTags, skipped }, lines };
 }
 
 /** Commits oldest-first (file order, devices merged by commit time), optionally filtered. */

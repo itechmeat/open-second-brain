@@ -540,6 +540,7 @@ export async function captureSessionLifecycleEvent(
         ...counters,
       },
     },
+    vault,
   );
 
   return {

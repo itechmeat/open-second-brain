@@ -520,14 +520,18 @@ function auditBundle(
   action: string,
   details: Record<string, unknown>,
 ): void {
-  appendAuditRecord(joinBrainLog(vault), {
-    timestamp: ctx.now.toISOString(),
-    actor: ctx.agent,
-    action,
-    target: "bundle",
-    ok: true,
-    details,
-  });
+  appendAuditRecord(
+    joinBrainLog(vault),
+    {
+      timestamp: ctx.now.toISOString(),
+      actor: ctx.agent,
+      action,
+      target: "bundle",
+      ok: true,
+      details,
+    },
+    vault,
+  );
 }
 
 function joinBrainLog(vault: string): string {

@@ -22,11 +22,15 @@
  * version; the origin label makes any skew diagnosable per result.
  */
 
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { ORIGIN_REACH, ORIGIN_REACH_REASON } from "../brain/portability/origin-reach.ts";
 import { listSearchOrigins } from "../brain/portability/origins.ts";
+import { isStoreRecordPath } from "./brain-store/constants.ts";
+import { storeIndexPath } from "./brain-store/location.ts";
 import { resolveSearchConfig } from "./index.ts";
+import { resolveIndexPath } from "./paths.ts";
 import { RETRIEVAL_DEGRADATION, buildRetrievalTrail, noteDegradation } from "./retrieval-trail.ts";
 import { search } from "./search.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
@@ -43,6 +47,78 @@ import type {
   SearchOptions,
   SearchOutcome,
 } from "./types.ts";
+
+/**
+ * The config a read-only origin is searched with. The brain store is
+ * machine-wide, so every vault resolves the same one: its records are the
+ * active origin's to answer, and a read-only origin never catches up on
+ * it. Such an origin reads the index its vault already has: the
+ * store-aware one when this machine built it, else the legacy vault index.
+ */
+function readOnlyOriginConfig(base: ResolvedSearchConfig): ResolvedSearchConfig {
+  const store = base.brainStore;
+  if (store === null || store === undefined) return base;
+  const storeAware = storeIndexPath(store, base.vault);
+  const dbPath =
+    base.dbPath === storeAware && !existsSync(storeAware)
+      ? resolveIndexPath(base.vault, null, null)
+      : base.dbPath;
+  return Object.freeze({ ...base, brainStore: null, dbPath });
+}
+
+/**
+ * A read-only origin's answer without brain store records (the active
+ * origin carries them). Only `results` and `cards` are cut to `limit`;
+ * every other field (`total`, coverage, warnings, the retrieval trail)
+ * is the answer of the window that was searched, which after a refill
+ * round is the widest one. The union reads them as that origin's own
+ * measurements: `total` is a lower bound on the pool and coverage is
+ * folded by maximum, so a wider window cannot make either claim more
+ * than the origin found.
+ */
+function withoutStoreRecords(outcome: SearchOutcome, limit: number): SearchOutcome {
+  return {
+    ...outcome,
+    results: outcome.results.filter((r) => !isStoreRecordPath(r.path)).slice(0, limit),
+    ...(outcome.cards !== undefined
+      ? { cards: outcome.cards.filter((c) => !isStoreRecordPath(c.path)).slice(0, limit) }
+      : {}),
+  };
+}
+
+/** Rows an answer carries, in whichever collection its mode fills. */
+function rowCount(outcome: SearchOutcome): number {
+  return outcome.results.length + (outcome.cards?.length ?? 0);
+}
+
+/** Times a read-only origin is asked again, with its window doubled, to refill dropped rows. */
+const STORE_REFILL_ROUNDS = 3;
+
+/**
+ * Search a read-only origin and drop its brain store records. The records
+ * are dropped after the origin cut its answer to `limit`, so when its
+ * store-aware index ranked them in the window the origin is asked again
+ * with a wider one, until the window holds `limit` notes, the origin has
+ * nothing more to give, or the rounds run out.
+ */
+async function searchReadOnlyOrigin(
+  config: ResolvedSearchConfig,
+  opts: SearchOptions,
+  limit: number,
+): Promise<SearchOutcome> {
+  let window = limit;
+  for (let round = 0; ; round++) {
+    // eslint-disable-next-line no-await-in-loop -- each round depends on the last
+    const answered = await search(config, { ...opts, limit: window });
+    const kept = withoutStoreRecords(answered, limit);
+    const dropped = rowCount(answered) - rowCount(kept);
+    const exhausted = rowCount(answered) < window;
+    if (dropped === 0 || rowCount(kept) >= limit || exhausted || round >= STORE_REFILL_ROUNDS) {
+      return kept;
+    }
+    window *= 2;
+  }
+}
 
 function labelled(result: BrainSearchResult, label: string): BrainSearchResult {
   return Object.freeze({
@@ -187,10 +263,11 @@ export async function searchAcrossVaults(
       continue;
     }
     try {
-      const base =
+      const resolved =
         isActive && activeConfig !== undefined
           ? activeConfig
           : resolveSearchConfig({ vault: origin.vault, configPath });
+      const base = isActive ? resolved : readOnlyOriginConfig(resolved);
       // Never write cache rows into a read-only external index.
       const config = isActive
         ? base
@@ -199,12 +276,9 @@ export async function searchAcrossVaults(
             recall: Object.freeze({ ...base.recall, cacheEnabled: false }),
           });
       // eslint-disable-next-line no-await-in-loop -- per-origin stores, sequential by design
-      const outcome = await search(config, {
-        ...opts,
-        sessionFocus,
-        limit,
-        ...(isActive ? {} : { selfHeal: false }),
-      });
+      const outcome = await (isActive
+        ? search(config, { ...opts, sessionFocus, limit })
+        : searchReadOnlyOrigin(config, { ...opts, sessionFocus, selfHeal: false }, limit));
       merged.push(...outcome.results.map((result) => labelled(result, origin.label)));
       if (outcome.cards !== undefined) {
         mergedCards.push(...outcome.cards.map((card) => labelledCard(card, origin.label)));

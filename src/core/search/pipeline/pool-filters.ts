@@ -27,6 +27,8 @@ import {
   type FrontmatterCache,
 } from "../result-filters.ts";
 import type { Store } from "../store.ts";
+import { documentSourceFor, type DocumentSource } from "../brain-store/constants.ts";
+import { documentSources } from "../store/brain-records.ts";
 import type { DegreePredicate } from "../property-filter.ts";
 import type { BrainSearchResult, SearchOptions } from "../types.ts";
 
@@ -61,6 +63,8 @@ export interface PoolFilters {
   readonly reach: TransportReach;
   readonly agentScope: ReturnType<typeof normalizeAgentScope>;
   readonly scopeFilter: ReturnType<typeof normalizeScopeFilter> | null;
+  /** The document source the caller limited the search to, or null for both. */
+  readonly source: DocumentSource | null;
   /**
    * True when at least one requested filter can drop a ranked row, which
    * is what makes the candidate pool overfetch up front.
@@ -115,6 +119,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
     (normalizedScope.session !== null || normalizedScope.project !== null)
       ? normalizedScope
       : null;
+  const source = opts.source !== undefined ? documentSourceFor(opts.source) : null;
   return {
     properties,
     pushdown,
@@ -124,7 +129,9 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
     reach,
     agentScope,
     scopeFilter,
+    source,
     canDropRows:
+      source !== null ||
       properties !== null ||
       hasVisibilityRequest ||
       agentScope !== null ||
@@ -183,7 +190,10 @@ export function applyPoolFilters(
   // Belief lifecycle suite (t_7d5a3589): drop tombstoned (incl.
   // superseded-non-tip) memories before any other post-rank stage.
   // A vault with no tombstoned entries passes through unchanged.
-  const statusFiltered = applyStatusFilter(ranked, ctx.vault, ctx.frontmatterCache);
+  // Source (design D5) first: it reads only the index, and a row it drops
+  // costs no frontmatter read in the stages after it.
+  const sourced = filters.source !== null ? applySourceFilter(ranked, filters.source, ctx) : ranked;
+  const statusFiltered = applyStatusFilter(sourced, ctx.vault, ctx.frontmatterCache);
   const propFiltered =
     filters.properties !== null
       ? applyPropertyFilter(statusFiltered, filters.properties, ctx.vault, ctx.frontmatterCache)
@@ -266,6 +276,23 @@ export function applyPoolFilters(
     prePoolFilters: degreeFiltered.length,
     visible: compositeScoped,
   };
+}
+
+/**
+ * Keep the rows whose document has the requested source. A row whose
+ * document the index no longer holds is dropped: nothing says which side
+ * it belongs to.
+ */
+function applySourceFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  source: DocumentSource,
+  ctx: FilterContext,
+): ReadonlyArray<BrainSearchResult> {
+  const sources = documentSources(
+    ctx.store.brainRecordsConnection(),
+    ranked.map((r) => r.documentId),
+  );
+  return ranked.filter((r) => sources.get(r.documentId) === source);
 }
 
 /**

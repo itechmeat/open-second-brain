@@ -61,6 +61,9 @@ import type {
 } from "./types.ts";
 import { TRUTH_SCHEMA_VERSION } from "./types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { truthClaimRowRecord } from "../../store/dual-write-records.ts";
+import { claimSourceIsPrivate } from "../../store/reference-privacy.ts";
 
 /** Default cap on retained claim events (explicit sweep only). */
 export const CLAIM_EVENT_MAX_COUNT = 10000;
@@ -372,6 +375,12 @@ export function appendClaimEvent(
   mkdirSync(truthDir(vault), { recursive: true });
   const path = claimShardPath(vault, opts.configPath);
   appendFileSync(path, JSON.stringify(event) + "\n");
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // A claim taken from a private page goes to `private` only.
+  dualWrite(() => truthClaimRowRecord(event, claimSourceIsPrivate(vault, event.source)), {
+    vault,
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
   writeTruthState(vault, computeTruthState(readClaimEvents(vault).events));
   return Object.freeze({ path, event });
 }

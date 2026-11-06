@@ -43,6 +43,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { resolveAgentName } from "../../config.ts";
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
+import type { PrivacyVerdict } from "../../store/operation-privacy.ts";
 import { appendLogEvent } from "../log.ts";
 import {
   SHA256_HEX_RE,
@@ -207,6 +208,12 @@ export interface RecordNoteWriteInput {
    * on disk would be the wrong one.
    */
   readonly configPath?: string;
+  /**
+   * Brain store dual write: the privacy verdict of the operation this
+   * write belongs to (a write batch), which the event's store record
+   * inherits (`AppendLogEventOptions.storePrivate`).
+   */
+  readonly storePrivate?: PrivacyVerdict;
 }
 
 /**
@@ -262,21 +269,25 @@ export function recordNoteWrite(vault: string, input: RecordNoteWriteInput): Not
     // string[]` and nothing else, so the byte counts are rendered rather
     // than carried as numbers a reader would have to coerce back.
     const writeId = noteWriteId(idInput);
-    appendLogEvent(vault, {
-      timestamp,
-      eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
-      agent,
-      body: {
-        write_id: writeId,
-        op: idInput.op,
-        target: idInput.target,
-        hash_before: idInput.hash_before,
-        hash_after: idInput.hash_after,
-        bytes_before: String(bytesBefore),
-        bytes_after: String(bytesAfter),
+    appendLogEvent(
+      vault,
+      {
+        timestamp,
+        eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
         agent,
+        body: {
+          write_id: writeId,
+          op: idInput.op,
+          target: idInput.target,
+          hash_before: idInput.hash_before,
+          hash_after: idInput.hash_after,
+          bytes_before: String(bytesBefore),
+          bytes_after: String(bytesAfter),
+          agent,
+        },
       },
-    });
+      input.storePrivate !== undefined ? { storePrivate: input.storePrivate } : {},
+    );
     return { write_id: writeId };
   } catch (err) {
     return {

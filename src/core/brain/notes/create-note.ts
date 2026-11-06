@@ -87,6 +87,9 @@ import {
   type NoteTemplateVariables,
 } from "./note-template.ts";
 import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
+import type { PrivacyVerdict } from "../../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
+import { createNotePrivacy } from "./create-note-privacy.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
@@ -181,6 +184,11 @@ export interface CreateNoteInput {
    * config-derived subject.
    */
   readonly subject?: WriteSubject;
+  /**
+   * Brain store dual write: the privacy verdict of an enclosing operation
+   * (a write batch), which the note-write event's store record inherits.
+   */
+  readonly storePrivate?: PrivacyVerdict;
 }
 
 /** What a {@link createNote} call actually did. `staged` means the review gate parked the bytes in the queue. */
@@ -737,6 +745,15 @@ export function logWatchedNoteOwnerWrite(
  * refusal.
  */
 export function createNote(vault: string, input: CreateNoteInput): CreateNoteResult {
+  // One operation: every store record written below (the owner-write
+  // decision row, the review gate's row, the note-write event) carries the
+  // create's verdict (`store/operation-scope.ts`).
+  return withOperationPrivacy(createNotePrivacy(vault, input), () =>
+    createNoteInScope(vault, input),
+  );
+}
+
+function createNoteInScope(vault: string, input: CreateNoteInput): CreateNoteResult {
   // Vault-identity write guard (context-integrity-gates, Unit J). This
   // backs `brain_create_note`, `brain_append_note`, and
   // `brain_update_note` - the headline note writers.
@@ -879,6 +896,7 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
       before: null,
       after: { bytes: formatFrontmatter(frontmatter, body) },
       ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+      ...(input.storePrivate !== undefined ? { storePrivate: input.storePrivate } : {}),
     }),
   );
   return { path: relPath, outcome: "created", created: true, ...receipt };

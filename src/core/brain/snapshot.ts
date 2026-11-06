@@ -271,8 +271,22 @@ export interface CreateSnapshotOptions extends SnapshotStoreOptions {
 export interface SnapshotInfo {
   readonly run_id: string;
   readonly path: string;
-  /** ISO-8601 UTC mtime of the archive file. */
+  /**
+   * ISO-8601 UTC creation time: the `generated_at` the manifest sidecar
+   * recorded when the archive was taken, or the archive file's mtime when
+   * there is no readable sidecar. The manifest wins because an mtime is a
+   * property of the copy, not of the snapshot: `rsync -t`, `cp -p` or a
+   * stepped clock rewrite it, and retention orders by this field.
+   */
   readonly created_at: string;
+  /**
+   * Present only when the sidecar's `generated_at` was set aside for the
+   * mtime: why it was not believed (later than now, or earlier than the
+   * time the run id itself carries). A hand-edited sidecar or a broken
+   * clock would otherwise pin one archive as the newest forever, and every
+   * prune would then delete the genuinely newest ones.
+   */
+  readonly created_at_untrusted?: string;
   readonly size_bytes: number;
   /**
    * Absolute path of the sidecar manifest, or `null` when the
@@ -424,7 +438,9 @@ export interface PruneSnapshotsOptions {
   /**
    * Run ids this pass must never remove, whatever the ordering says.
    *
-   * The retention order is by MTIME, and the caller that most needs this
+   * The retention order was by MTIME when this was added (it is now the
+   * manifest's creation time, falling back to mtime for an archive with
+   * no readable sidecar), and the caller that most needs this
    * is the one that just wrote an archive: "the newest file is the newest
    * mtime" is an assumption about the filesystem, not arithmetic. `rsync
    * -t`, `cp -p`, an NFS server with clock skew, or a system clock
@@ -1507,7 +1523,8 @@ function runArchiveProducer(
 // ----- listSnapshots / pruneSnapshots --------------------------------------
 
 /**
- * Enumerate `.snapshots/*.tar.zst` in newest-first order (by mtime),
+ * Enumerate `.snapshots/*.tar.zst` in newest-first order (by the
+ * manifest's recorded creation time, see {@link SnapshotInfo.created_at}),
  * alongside the archive-shaped entries that could not be described.
  *
  * Files outside the canonical naming pattern are skipped and NOT reported:
@@ -1539,7 +1556,12 @@ export function listSnapshots(vault: string): SnapshotListing {
     throw new BrainSnapshotListingError(dirs.snapshots, err);
   }
   const infos: SnapshotInfo[] = [];
+  // Archive mtimes, kept beside the rows only to break a creation-time
+  // tie: the manifest records whole seconds, so two archives taken in
+  // the same second compare equal on `created_at`.
+  const mtimes = new Map<string, number>();
   const skipped: SnapshotEntrySkip[] = [];
+  const nowMs = Date.now();
   for (const name of entries) {
     if (!name.endsWith(SNAPSHOT_ARCHIVE_SUFFIX)) continue;
     const runId = name.slice(0, -SNAPSHOT_ARCHIVE_SUFFIX.length);
@@ -1579,10 +1601,13 @@ export function listSnapshots(vault: string): SnapshotListing {
     // the same file twice and could disagree if a peer rewrote it between
     // them.
     const manifest = readManifestSidecar(vault, runId);
+    mtimes.set(runId, st.mtimeMs);
+    const created = snapshotCreatedAt(manifest?.generated_at, st.mtimeMs, runId, nowMs);
     infos.push({
       run_id: runId,
       path: full,
-      created_at: new Date(st.mtimeMs).toISOString(),
+      created_at: created.at,
+      ...(created.untrusted !== null ? { created_at_untrusted: created.untrusted } : {}),
       size_bytes: st.size,
       manifest_path: existsSync(sidecar) ? sidecar : null,
       store_archive_path: existsSync(storeArchive) ? storeArchive : null,
@@ -1596,12 +1621,85 @@ export function listSnapshots(vault: string): SnapshotListing {
       reason: manifest?.snapshot_reason ?? null,
     });
   }
-  // Sort newest-first by mtime. We deliberately avoid lexicographic
-  // sort on the run_id because manual rollback runs might use a
-  // non-timestamped id and we still want them to land where the
-  // operator's mental model expects (most recent first).
-  infos.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  // Sort newest-first by recorded creation time, then by mtime within
+  // the same second, then by run id so the order is total. We avoid a
+  // lexicographic run_id sort as the primary key because manual rollback
+  // runs might use a non-timestamped id and we still want them to land
+  // where the operator's mental model expects (most recent first).
+  infos.sort(
+    (a, b) =>
+      Date.parse(b.created_at) - Date.parse(a.created_at) ||
+      (mtimes.get(b.run_id) ?? 0) - (mtimes.get(a.run_id) ?? 0) ||
+      (a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0),
+  );
   return { snapshots: infos, skipped };
+}
+
+/** How far ahead of now a sidecar stamp may be before it reads as a broken clock or an edit. */
+const SNAPSHOT_STAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+/** Slack below the run id's time: both are whole seconds, and the sidecar is written after. */
+const SNAPSHOT_STAMP_RUN_ID_SLACK_MS = 1000;
+
+/**
+ * The UTC time a run id carries (`<reason>-YYYY-MM-DD-HHMMSS`, with an
+ * optional `-<n>` collision suffix), or `null` for an id without one.
+ */
+function runIdStampMs(runId: string): number | null {
+  const m = /-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})(?:-\d+)?$/.exec(runId);
+  if (m === null) return null;
+  const [year, month, day, hour, minute, second] = m.slice(1).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * The creation time retention orders by: the manifest's `generated_at`
+ * when it parses as a date and is believable, else the archive's mtime.
+ * An unparseable stamp falls back rather than sorting as `NaN`, which
+ * would make the comparator inconsistent and the prune order undefined.
+ * A stamp later than now (beyond a small skew) or earlier than the run
+ * id's own time falls back too, and the reason is returned so the
+ * listing can report it.
+ */
+function snapshotCreatedAt(
+  generatedAt: string | undefined,
+  mtimeMs: number,
+  runId: string,
+  nowMs: number,
+): { readonly at: string; readonly untrusted: string | null } {
+  let untrusted: string | null = null;
+  if (generatedAt !== undefined) {
+    const ms = Date.parse(generatedAt);
+    if (Number.isFinite(ms)) {
+      const runMs = runIdStampMs(runId);
+      // Quoted as JSON: the stamp is printed, and a parseable one can still
+      // carry a newline or a terminal escape inside a `(...)` comment. JSON
+      // leaves DEL and the C1 controls (U+009B is a one-character CSI) as
+      // they are, so those are escaped too.
+      const shown = JSON.stringify(generatedAt).replace(
+        /[\u007f-\u009f]/g,
+        (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+      if (ms > nowMs + SNAPSHOT_STAMP_FUTURE_SKEW_MS) {
+        untrusted = `the manifest's generated_at ${shown} is later than now`;
+      } else if (runMs !== null && ms < runMs - SNAPSHOT_STAMP_RUN_ID_SLACK_MS) {
+        untrusted =
+          `the manifest's generated_at ${shown} is earlier than the run id's own time ` +
+          new Date(runMs).toISOString();
+      } else {
+        return { at: new Date(ms).toISOString(), untrusted: null };
+      }
+    }
+  }
+  return { at: new Date(mtimeMs).toISOString(), untrusted };
 }
 
 /**

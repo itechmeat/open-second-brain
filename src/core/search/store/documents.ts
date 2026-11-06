@@ -18,6 +18,7 @@ import {
   encodeDocumentVisibility,
 } from "../schema.ts";
 import { SearchError } from "../types.ts";
+import { STORE_RECORD_PATH_PREFIX } from "../brain-store/constants.ts";
 import { pathPrefixRange } from "./path-prefix.ts";
 import { nowIso } from "./sql.ts";
 import { purgeVecRowsForDocument } from "./vectors.ts";
@@ -127,7 +128,18 @@ export interface DocumentSummary {
   readonly size: number;
 }
 
+/**
+ * Every indexed VAULT document, keyed by path; never a brain store record
+ * (paths under {@link STORE_RECORD_PATH_PREFIX}). The indexers compare
+ * this map with a walk of the vault, where a store record never appears,
+ * so listing one would read as a deleted note and the sweep would remove
+ * it. The other callers (the link graph, communities, bridge discovery,
+ * belief clustering, index-root coverage) are vault views too and get
+ * vault documents only by the same rule. A caller that needs the store
+ * records reads them through `brain-records.ts`.
+ */
 export function listDocuments(db: Database): Map<string, DocumentSummary> {
+  const storePrefix = `${STORE_RECORD_PATH_PREFIX}/`;
   const rows = db
     .query<
       {
@@ -137,9 +149,9 @@ export function listDocuments(db: Database): Map<string, DocumentSummary> {
         mtime: number;
         size: number;
       },
-      []
-    >("SELECT id, path, content_hash, mtime, size FROM documents")
-    .all();
+      [number, string]
+    >("SELECT id, path, content_hash, mtime, size FROM documents WHERE substr(path, 1, ?) != ?")
+    .all(storePrefix.length, storePrefix);
   const map = new Map<string, DocumentSummary>();
   for (const r of rows) {
     map.set(r.path, {

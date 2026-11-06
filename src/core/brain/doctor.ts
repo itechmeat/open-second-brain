@@ -95,6 +95,7 @@ import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
 import { frozenVaultCheck } from "./doctor/frozen-check.ts";
+import { storeCheck } from "./doctor/store-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
@@ -258,6 +259,8 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   rerankHealthCheck,
   payloadRegistryCheck,
   permissionsDocumentCheck,
+  // The brain store section (task 1.11): silent unless the store is in use.
+  storeCheck,
   denyConsultedLanesCheck,
 ]);
 

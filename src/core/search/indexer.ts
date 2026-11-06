@@ -115,6 +115,9 @@ import {
 import { LATEST_SCHEMA_VERSION, documentAttributesFromFrontmatter } from "./schema.ts";
 import { chunkWindowDiagnosticCode, CHUNK_HOLD_REASON, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
+import { forgetCatchUpState, ingestStoreInto } from "./brain-store/catch-up.ts";
+import { purgeStoreRecords } from "./brain-store/ingest.ts";
+import { STORE_RECORD_PATH_PREFIX } from "./brain-store/constants.ts";
 import {
   callableVisibilitySurfaces,
   excludedCallableVisibilitySurfaces,
@@ -724,6 +727,18 @@ async function indexIntoRun(
         store.deleteDocument(path);
         stats.deleted++;
         opts?.onFile?.({ path, kind: "deleted" });
+      }
+    }
+    // Store records are left out of the sweep above; an index whose vault
+    // reads no store any more drops them here (design D5). A run that
+    // could not tell whether a store is in use keeps them: a store.json a
+    // sync tool is rewriting would otherwise cost a re-read of every shard.
+    if (!config.brainStore && config.brainStoreUnknown !== true) {
+      const purged = purgeStoreRecords(store);
+      if (purged !== null) {
+        forgetCatchUpState(config.dbPath);
+        if (purged > 0) markLinkResolutionPending();
+        stats.deleted += purged;
       }
     }
 
@@ -1534,12 +1549,36 @@ async function reindexInto(
     // `onProgress` is dropped from the forwarded options: the build
     // reports into THIS run's counter, passed explicitly, rather than
     // opening a second one over the same sink.
-    const stats = await indexInto(
+    let stats = await indexInto(
       tempConfig,
       { ...opts, force: !resume, onProgress: undefined },
       undefined,
       progress,
     );
+
+    // The brain store goes into the staging index too (design D5), every
+    // shard from offset 0, so the swapped-in index answers with the store
+    // from its first read instead of catching up on it afterwards. It is
+    // best effort: a store that cannot be read must not throw the note
+    // rebuild away. A shard whose watermark was not written is read from
+    // offset 0 by the next catch-up, so nothing is lost; the failure is
+    // reported among the run's errors.
+    if (config.brainStore) {
+      try {
+        await withStagingStore(tempConfig, (store) => ingestStoreInto(store, tempConfig));
+      } catch (e) {
+        stats = {
+          ...stats,
+          errors: [
+            ...stats.errors,
+            {
+              path: STORE_RECORD_PATH_PREFIX,
+              message: `brain store not ingested, the next catch-up reads it: ${e instanceof Error ? e.message : String(e)}`,
+            },
+          ],
+        };
+      }
+    }
 
     // Clear the marker so the swapped-in live index carries no staging
     // state. Only present when resume was enabled.

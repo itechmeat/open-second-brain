@@ -33,6 +33,7 @@ import {
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts-match-mode.ts";
 import { SEARCH_KINDS, isSearchKind } from "../../../core/search/property-pushdown.ts";
+import { SEARCH_SOURCES, isSearchSource } from "../../../core/search/brain-store/constants.ts";
 import {
   DISCLOSURE_MODE,
   DISCLOSURE_MODES,
@@ -128,6 +129,11 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     throw new CliError(`--kind must be one of ${SEARCH_KINDS.join(", ")}`);
   }
   const kind = kindRaw;
+  const sourceRaw = flagString(flags, "source");
+  if (sourceRaw !== undefined && !isSearchSource(sourceRaw)) {
+    throw new CliError(`--source must be one of ${SEARCH_SOURCES.join(", ")}`);
+  }
+  const source = sourceRaw;
 
   const cfg = resolveConfig(flags);
 
@@ -172,6 +178,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     keywordOnly: flagBoolean(flags, "keyword-only"),
     pathPrefix: flagString(flags, "path"),
     ...(kind !== undefined ? { kind } : {}),
+    ...(source !== undefined ? { source } : {}),
     ...(matchMode !== undefined ? { matchMode } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),

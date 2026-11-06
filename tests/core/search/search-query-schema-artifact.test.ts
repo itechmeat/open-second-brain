@@ -277,6 +277,7 @@ const SEARCH_OPTIONS_KEY_PROBE: Record<keyof SearchOptions, true> = {
   matchMode: true,
   properties: true,
   kind: true,
+  source: true,
   degreeFilters: true,
   mmrLambda: true,
   maxHops: true,

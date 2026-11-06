@@ -72,6 +72,12 @@ import {
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import {
+  auditRowRecord,
+  DUAL_WRITE_LEDGERS,
+  isPrivatePreference,
+} from "../store/dual-write-records.ts";
 
 /**
  * Opt-in audit sink threaded through a mutation chokepoint. When
@@ -98,6 +104,14 @@ export interface AppendPrefAuditInput {
   readonly revision_after: number | null;
   readonly hash_before: string | null;
   readonly hash_after: string | null;
+  /**
+   * Whether the preference is private (any privacy marker,
+   * `isPrivateFrontmatter`), or how to tell; a function is called only when
+   * the brain store dual write is on. Never written to the audit line; it
+   * keeps the store copy of the row in the `private` partition only, where
+   * the preference's own records go, even on a machine without it.
+   */
+  readonly private?: boolean | (() => boolean);
 }
 
 /** One warning raised while reading an audit JSONL file. */
@@ -172,6 +186,22 @@ export function appendPrefAudit(
   const path = prefAuditPath(vault, input.pref_id);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, renderPrefAuditLine(record), "utf8");
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // Audit rows go to `private` when this machine holds it, else `shared`
+  // (`auditRowRecord`). A private preference's trail is private only: the
+  // caller's flag (it knows the file it just wrote, merged or retired), or
+  // the preference file found on disk.
+  dualWrite(
+    () =>
+      auditRowRecord(
+        DUAL_WRITE_LEDGERS.preferenceAudit,
+        record,
+        record.agent,
+        (typeof input.private === "function" ? input.private() : input.private === true) ||
+          isPrivatePreference(vault, record.pref_id.replace(/^pref-/, "")),
+      ),
+    { vault },
+  );
   return true;
 }
 

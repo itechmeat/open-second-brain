@@ -48,6 +48,8 @@ import type { CompletenessVerdict } from "../search/types.ts";
 import { isRecallAdequacyLevel } from "./recall-adequacy.ts";
 import type { RecallAdequacyLevel, RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 
 /** Longest single normalized term kept; longer tokens are dropped as a
  * privacy guard (a 40+ char alnum run is far likelier a secret/id than a
@@ -266,6 +268,12 @@ export function recordQueryDemand(
   } finally {
     handle.release();
   }
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // The terms are what the user searched for, so they go to `private` when
+  // this machine holds it.
+  dualWrite(() => ledgerRowRecord(DUAL_WRITE_LEDGERS.queryDemand, record, "private-when-held"), {
+    vault,
+  });
   return record;
 }
 

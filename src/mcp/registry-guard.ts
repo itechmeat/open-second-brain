@@ -405,6 +405,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
     "bounded destination table: the handler caps the page at limit and total_matched reports " +
     "the pre-truncation count; the fold is recomputed per call, so a cursor pages one walk, " +
     "and the per-kind readers remain the full-record surface",
+  brain_changes:
+    "record ids only, bounded by limit; a cut page says truncated: true and carries the watermark to pass next, which a head preview would cut off",
   brain_context_presets: "small preset list",
   brain_pre_compact_extract: "bounded extract; host injects it whole by design",
   brain_skill_proposals: "bounded proposal list",

@@ -433,8 +433,8 @@ not enter through the correction door. The predicate in
 surfaces differ in what they serve, never in what the rule says.
 
 The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
-is the point rather than its size. One hundred and eight classified tools carry
-251 call recipes - one per mode, view or operation, because one executed view
+is the point rather than its size. One hundred and nine classified tools carry
+252 call recipes - one per mode, view or operation, because one executed view
 is not an executed classification. Every recipe runs TWICE against the same
 two-owner fixture, once with the gate closed and once with it open, and the
 classification decides what the open run must show: the 32 recipes classified

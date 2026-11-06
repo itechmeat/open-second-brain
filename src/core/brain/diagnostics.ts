@@ -182,6 +182,12 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        code: "store-missing",
+        issueClass: "brain store not created yet",
+        nextCommand: "o2b store init",
+        autoRepairable: false,
+      },
+      {
         code: "config-invalid",
         issueClass: "invalid Brain config",
         nextCommand: "o2b brain doctor",
@@ -338,6 +344,15 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // backing off; the dry run shows the pending change and the error.
         code: "self-heal-upgrade-failed",
         issueClass: "automatic Brain upgrade failed",
+        nextCommand: "o2b brain upgrade --dry-run",
+        autoRepairable: false,
+      },
+      {
+        // A synced managed file carries a newer template revision than this
+        // release ships: another device runs a newer release. This device
+        // keeps the file as it is; updating Open Second Brain here clears it.
+        code: "managed-file-from-newer-release",
+        issueClass: "Brain manual written by a newer release",
         nextCommand: "o2b brain upgrade --dry-run",
         autoRepairable: false,
       },

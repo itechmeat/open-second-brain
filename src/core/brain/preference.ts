@@ -33,6 +33,17 @@
  *      complete before the old one disappears.
  */
 
+import type { Authority } from "../store/constants.ts";
+import { authorityFromOrigin, dualWrite, type DualWriteRecord } from "../store/dual-write.ts";
+import { isPrivateFrontmatter, preferenceSetRecord } from "../store/dual-write-records.ts";
+import {
+  callerInput,
+  operationPrivacy,
+  PREFERENCE_OPAQUE_FIELDS,
+  type JudgedContent,
+  type OperationPrivacy,
+} from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
@@ -327,6 +338,14 @@ export interface WritePreferenceOptions {
    * config-derived identity.
    */
   readonly subject?: WriteSubject;
+  /**
+   * Who decided this write, for the brain store dual write (task 1.11):
+   * `human` (an operator command), `agent` (an agent or an automatic pass
+   * such as dream) or `model` (a decision-model verdict). Absent derives
+   * it from the process's origin channel (`authorityFromOrigin`). It does
+   * not change the legacy file.
+   */
+  readonly authority?: Authority;
 }
 
 export interface ParsePreferenceOptions {
@@ -373,6 +392,14 @@ export interface MoveToRetiredOptions {
    * pre-suite behaviour (no audit file).
    */
   readonly audit?: { readonly agent: string };
+  /**
+   * Who decided this write, for the brain store dual write (task 1.11):
+   * `human` (an operator command), `agent` (an agent or an automatic pass
+   * such as dream) or `model` (a decision-model verdict). Absent derives
+   * it from the process's origin channel (`authorityFromOrigin`). It does
+   * not change the legacy file.
+   */
+  readonly authority?: Authority;
 }
 
 export interface MoveToRetiredResult {
@@ -425,6 +452,35 @@ export function writePreference(
   const path = preferencePath(vault, slug);
   const id = `pref-${slug}`;
 
+  // Every store record written from here on (an owner-write decision row,
+  // the idempotency receipt, the preference's records, anything a writer
+  // below appends) carries one verdict (`store/operation-scope.ts`): the
+  // caller's fields as the page will carry them and its whole input, and
+  // the page the write lands on, as it reads when the first record is
+  // judged. Both sides of the merge a rewrite makes are so covered.
+  const privacy = operationPrivacy(vault, {
+    inherit: [
+      () =>
+        preferencePrivacy(vault, storeFieldsOf(preferenceFrontmatter(input, id)), [
+          callerInput(input, PREFERENCE_OPAQUE_FIELDS),
+        ])(),
+      () =>
+        existsSync(path) && preferencePrivacy(vault, storeFieldsOf(parseFrontmatter(path)[0]))(),
+    ],
+  });
+  return withOperationPrivacy(privacy, () =>
+    writeJudgedPreference(vault, input, options, slug, path, id),
+  );
+}
+
+function writeJudgedPreference(
+  vault: string,
+  input: WritePreferenceInput,
+  options: WritePreferenceOptions,
+  slug: string,
+  path: string,
+  id: string,
+): WritePreferenceResult {
   // Ownership (a-label-is-not-a-boundary, U1). Resolved BEFORE the
   // idempotency hash so a write that changes the owner cannot dedupe
   // against one that did not - the hash already folds `owner` in for
@@ -474,7 +530,10 @@ export function writePreference(
       const next = formatFrontmatter(metadata, body);
       const prev = readFileSync(path, "utf8");
       if (next === prev) {
-        recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path);
+        const unchanged = preferencePrivacy(vault, storeFieldsOf(metadata), [
+          callerInput(input, PREFERENCE_OPAQUE_FIELDS),
+        ]);
+        recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, unchanged);
         return { path, id };
       }
     } catch {
@@ -489,7 +548,18 @@ export function writePreference(
     vaultForRelativePath: vault,
   });
 
-  recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path);
+  // One privacy verdict for every store record this write produces: the
+  // idempotency receipt and the preference's human and derived records,
+  // judged from the fields they carry and the caller's whole input.
+  const written = storeFieldsOf(metadata);
+  const privacy = preferencePrivacy(vault, written, [callerInput(input, PREFERENCE_OPAQUE_FIELDS)]);
+  recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, privacy);
+  // Brain store dual write (task 1.11): off by default, never fails this write.
+  dualWrite(
+    () =>
+      preferenceStoreRecords(id, written, options.authority ?? authorityFromOrigin(), privacy()),
+    { vault, ...(options.configPath !== undefined ? { configPath: options.configPath } : {}) },
+  );
   return { path, id };
 }
 
@@ -764,6 +834,7 @@ function recordPreferenceKey(
   createdAt: string,
   id: string,
   path: string,
+  privacy: OperationPrivacy,
 ): void {
   if (!idKey || contentHash === undefined) return;
   rememberKey(vault, {
@@ -771,6 +842,7 @@ function recordPreferenceKey(
     contentHash,
     createdAt,
     ref: { id, path: relative(vault, path) },
+    private: privacy,
   });
 }
 
@@ -1085,6 +1157,82 @@ export function normalizeDerivedKeys(meta: Record<string, unknown>): Record<stri
       out[name] = out[prefixed];
       delete out[prefixed];
     }
+  }
+  return out;
+}
+
+/**
+ * A preference's frontmatter under the field names the brain store folds
+ * (dual writes, task 1.11): derived keys lose their on-disk `_` prefix and
+ * the textual `"null"` sentinel becomes `null`, so the store holds what
+ * the file means rather than how it is spelled.
+ */
+export function storeFieldsOf(meta: Record<string, unknown>): Record<string, unknown> {
+  const out = normalizeDerivedKeys(meta);
+  for (const name of DERIVED_FIELDS) if (out[name] === "null") out[name] = null;
+  return out;
+}
+
+const DERIVED_FIELD_SET: ReadonlySet<string> = new Set(DERIVED_FIELDS);
+
+/** The derived field a retire decides itself, at the retiring caller's authority. */
+const RETIRE_DECIDED_FIELDS: ReadonlyArray<string> = Object.freeze(["status"]);
+
+/**
+ * The single privacy verdict of a preference write
+ * (`store/operation-privacy.ts`), from the fields the store records carry:
+ * the frontmatter reserving the preference as private, or any content
+ * field (`principle`, `evidenced_by`, `supersedes` and the other
+ * relationship fields, ...) naming a private or unresolvable page or
+ * carrying a `<private>` region. `extra` is further content of the same
+ * operation (the writer's caller input, a pin's log event). Judged once,
+ * on first use.
+ */
+export function preferencePrivacy(
+  vault: string,
+  fields: Readonly<Record<string, unknown>>,
+  extra: ReadonlyArray<JudgedContent> = [],
+): OperationPrivacy {
+  return operationPrivacy(vault, {
+    target: () => isPrivateFrontmatter(fields),
+    content: [{ value: fields, opaque: PREFERENCE_OPAQUE_FIELDS }, ...extra],
+  });
+}
+
+/**
+ * The brain store records of one preference write (dual writes, task
+ * 1.11). Fields the fold resolves by authority first: when a human writes,
+ * only the fields the human decided carry human authority. The derived
+ * fields the dream pass owns ({@link DERIVED_FIELDS}, minus `decided`, the
+ * ones this write itself decides) go out in a second record at agent
+ * authority, so a later dream write can still win them, as it does on the
+ * file. Every record keeps the scope the whole preference has and the
+ * partition of the write's one privacy verdict (`isPrivate`).
+ */
+function preferenceStoreRecords(
+  id: string,
+  fields: Readonly<Record<string, unknown>>,
+  authority: Authority,
+  isPrivate: boolean,
+  decided: ReadonlyArray<string> = [],
+): DualWriteRecord[] | null {
+  const whole = preferenceSetRecord({ id, frontmatter: fields, authority, private: isPrivate });
+  if (whole === null) return null;
+  if (authority !== "human") return [whole];
+  const keep = new Set(decided);
+  const own: Record<string, unknown> = {};
+  const derived: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(fields)) {
+    if (DERIVED_FIELD_SET.has(name) && !keep.has(name)) derived[name] = value;
+    else own[name] = value;
+  }
+  const placement = { scope: whole.scope ?? null };
+  const out: DualWriteRecord[] = [];
+  for (const record of [
+    preferenceSetRecord({ id, frontmatter: own, authority, private: isPrivate }),
+    preferenceSetRecord({ id, frontmatter: derived, authority: "agent", private: isPrivate }),
+  ]) {
+    if (record !== null) out.push({ ...record, ...placement });
   }
   return out;
 }
@@ -1556,6 +1704,25 @@ export function moveToRetired(
   }
   unlinkSync(prefPath);
 
+  // Brain store dual write (task 1.11): a retire is a field change of the
+  // same preference id (`status: retired`), never a removal. The retired
+  // file's identity keys (`id: ret-<slug>`, `kind`, `aliases`) are not
+  // fields of `pref-<slug>`, so they stay out; the status is what a retire
+  // decides, at the caller's authority.
+  dualWrite(
+    () => {
+      const { id: _id, kind: _kind, aliases: _aliases, ...lifecycle } = storeFieldsOf(newMeta);
+      return preferenceStoreRecords(
+        oldId,
+        lifecycle,
+        opts.authority ?? authorityFromOrigin(),
+        preferencePrivacy(vault, lifecycle)(),
+        RETIRE_DECIDED_FIELDS,
+      );
+    },
+    { vault },
+  );
+
   // Per-preference mutation audit (opt-in, Brain lifecycle suite F1).
   // Keyed by the ORIGINAL `pref-<slug>` id so create -> ... -> retire
   // all land in one trail. A retire is a lifecycle transition, so it
@@ -1576,6 +1743,7 @@ export function moveToRetired(
         revision_after: null,
         hash_before: contentHash,
         hash_after: contentHash,
+        private: isPrivateFrontmatter(meta),
       },
       { now: opts.now },
     );

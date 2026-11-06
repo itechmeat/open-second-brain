@@ -80,6 +80,12 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   indexStale: "index-stale",
   /**
+   * The brain store catch-up before this read failed, so store records
+   * appended since the last good catch-up may be missing from the answer.
+   * The failure's own message rides the warning sentence, not the code.
+   */
+  storeCatchUpFailed: "store-catch-up-failed",
+  /**
    * The query tokenised to an empty FTS match, so the keyword lane never
    * ran. The purest silent empty in the tree: `fts.ts` returned no hits
    * and no warning, which reads exactly like a vault with nothing in it.
@@ -232,6 +238,7 @@ export type RetrievalDegradationCode =
 /** Membership list, ordered lane by lane along the pipeline. */
 export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode> = Object.freeze([
   RETRIEVAL_DEGRADATION.indexStale,
+  RETRIEVAL_DEGRADATION.storeCatchUpFailed,
   RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty,
   RETRIEVAL_DEGRADATION.keywordTrigramLaneFault,
   RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent,
@@ -431,6 +438,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
   switch (code) {
     case RETRIEVAL_DEGRADATION.indexStale:
       return "the index was last updated more than ten minutes ago, so notes changed since then may be missing";
+    case RETRIEVAL_DEGRADATION.storeCatchUpFailed:
+      return "the brain store catch-up before this read failed, so store records added since the last good catch-up may be missing";
     case RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty:
       return "the query carried no term the keyword index can match, so the keyword lane never ran";
     case RETRIEVAL_DEGRADATION.keywordTrigramLaneFault:

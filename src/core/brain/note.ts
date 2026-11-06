@@ -13,7 +13,15 @@ import { resolveAgentName } from "../config.ts";
 import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
 
-import { appendLogEvent } from "./log.ts";
+import {
+  callerInput,
+  opaqueFields,
+  operationPrivacy,
+  type OperationPrivacy,
+  type PrivacyVerdict,
+} from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { appendLogEvent, logEventPrivacyContent } from "./log.ts";
 import {
   mirrorNote,
   mirrorReportFields,
@@ -34,6 +42,11 @@ export interface AppendBrainNoteInput {
   readonly now?: Date;
   /** Config path for `resolveAgentName`. Optional. */
   readonly configPath?: string;
+  /**
+   * The privacy verdict of an enclosing operation (a write batch), which
+   * the event's store record inherits. See `AppendLogEventOptions.storePrivate`.
+   */
+  readonly storePrivate?: PrivacyVerdict;
 }
 
 export interface AppendBrainNoteResult {
@@ -59,19 +72,64 @@ export interface AppendBrainNoteResult {
   readonly mirror_reason?: string;
 }
 
+function sanitiseNoteText(text: string): string {
+  return sanitiseTextField(text, { maxLen: NOTE_TEXT_MAX_LEN, singleLine: true }).trim();
+}
+
+/**
+ * Fields of a note call's input that are local settings, not text: the
+ * vault, the clock, the config path and an enclosing verdict.
+ */
+const NOTE_INPUT_OPAQUE: ReadonlySet<string> = opaqueFields(
+  "vault",
+  "now",
+  "configPath",
+  "storePrivate",
+);
+
+/**
+ * The privacy verdict of the note event {@link appendBrainNote} would
+ * append for `input`: its whole input (the text, raw and as the event
+ * carries it, and the agent), judged as the log appender judges the
+ * event, plus `inherit` (an enclosing operation). A write batch judges
+ * its log lines with it before it commits.
+ */
+export function brainNotePrivacy(
+  vault: string,
+  input: Omit<AppendBrainNoteInput, "vault">,
+  inherit?: PrivacyVerdict,
+): OperationPrivacy {
+  return operationPrivacy(vault, {
+    content: [
+      logEventPrivacyContent({ text: sanitiseNoteText(input.text) }),
+      callerInput(input, NOTE_INPUT_OPAQUE),
+    ],
+    inherit: [inherit],
+  });
+}
+
 /**
  * Append one `note` event to `Brain/log/<today>.md` (and the JSONL
  * sidecar via `appendLogEvent`). Throws plain `Error` on empty text
  * — wrappers translate the error to their protocol's idiom.
  */
 export function appendBrainNote(input: AppendBrainNoteInput): AppendBrainNoteResult {
-  const sanitised = sanitiseTextField(input.text, {
-    maxLen: NOTE_TEXT_MAX_LEN,
-    singleLine: true,
-  }).trim();
+  const sanitised = sanitiseNoteText(input.text);
   if (!sanitised) {
     throw new Error("brain_note: text is required");
   }
+  // Every store record written from here on (the note event, a mirror
+  // copy, anything a writer below appends) carries this call's verdict
+  // (`store/operation-scope.ts`).
+  const privacy = brainNotePrivacy(input.vault, input, input.storePrivate);
+  return withOperationPrivacy(privacy, () => appendJudgedNote(input, sanitised, privacy));
+}
+
+function appendJudgedNote(
+  input: AppendBrainNoteInput,
+  sanitised: string,
+  privacy: OperationPrivacy,
+): AppendBrainNoteResult {
   const explicitAgent = normalizeAgentArgument(input.agent ?? null);
   const agent = explicitAgent ?? resolveAgentName(input.configPath);
   const timestamp = isoSecond(input.now ?? new Date());
@@ -80,7 +138,7 @@ export function appendBrainNote(input: AppendBrainNoteInput): AppendBrainNoteRes
     eventType: BRAIN_LOG_EVENT_KIND.note,
     body: { text: sanitised, agent },
   } as const;
-  const res = appendLogEvent(input.vault, entry);
+  const res = appendLogEvent(input.vault, entry, { storePrivate: privacy });
   // t_936a1a61: mirror AFTER the primary append succeeded; the mirror
   // is fail-soft and must never alter the primary result.
   const shared = resolveSharedNamespace(input.configPath ?? null);

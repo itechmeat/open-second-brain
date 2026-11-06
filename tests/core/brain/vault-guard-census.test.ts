@@ -100,6 +100,14 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "fail-open injection cache. The hook contract is that a degraded injection " +
     "still returns something; a refusal here would turn a cache miss into a " +
     "broken SessionStart.",
+  "src/core/brain/anticipatory-prune.ts":
+    "retention of a derived cache. Its only caller, `refreshAnticipatoryCache`, " +
+    "runs it right after its own guarded write, and a prune refused for want " +
+    "of a write intent would only let the cache grow without bound.",
+  "src/core/brain/log-append-io.ts":
+    "append primitive over a caller-supplied path, the same shape as the lock " +
+    "primitives above; its only caller, `appendLogEvent`, resolves the log " +
+    "directory through `brainDirsForWrite` before it calls in.",
   "src/core/brain/maintenance/lease.ts":
     "lock primitive. The lease file is how concurrent maintenance runs " +
     "serialize; the runs it protects are guarded at their own entry points, " +

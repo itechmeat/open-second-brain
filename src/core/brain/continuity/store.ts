@@ -24,6 +24,9 @@ import type {
   ContinuityRecordPage,
   ContinuitySourceRef,
 } from "./types.ts";
+import { dualWrite, type DualWriteRecord } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
 export type {
   AppendContinuityRecordInput,
@@ -223,6 +226,10 @@ export function appendContinuityRecords(
     } finally {
       handle.release();
     }
+    // Brain store dual write (task 1.11): off by default, never fails this append.
+    // A record flagged private (a `<private>` region was stripped, or the
+    // caller said so) stays out of `shared`, as the legacy reader withholds it.
+    dualWrite(() => records.map((r) => continuityRowRecord(vault, r)), { vault });
   }
 
   return Object.freeze(built.map((entry) => entry.record));
@@ -351,7 +358,22 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
   } finally {
     handle.release();
   }
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  dualWrite(() => continuityRowRecord(vault, record), { vault });
   return record;
+}
+
+/**
+ * The store copy of a continuity record: `private` only when the record is
+ * flagged private or its text names a page that is private or cannot be
+ * judged; a turn that names nothing private goes to `shared`.
+ */
+function continuityRowRecord(vault: string, record: ContinuityRecord): DualWriteRecord {
+  return ledgerRowRecord(
+    DUAL_WRITE_LEDGERS.continuity,
+    record,
+    record.private === true || rowNamesPrivatePage(vault, record) ? "private" : "shared",
+  );
 }
 
 /**

@@ -209,6 +209,9 @@ const SHARED_WRITE_CALLS: ReadonlyArray<string> = Object.freeze([
   "atomicCreateFileSyncExclusive",
   "writeFrontmatterAtomic",
   "writeFrontmatter",
+  // The Brain log's append writer (`src/core/brain/log-append-io.ts`):
+  // one append per event to a JSONL shard or its markdown twin.
+  "appendSeparated",
 ]);
 
 /** A dotted call name as a pattern that tolerates spacing around the dot. */
@@ -320,6 +323,15 @@ const C = WRITE_CATEGORY;
  */
 const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object.freeze({
   // --- The shared writers themselves ------------------------------------
+  "src/core/brain/log-append-io.ts": {
+    categories: [C.sharedWriterItself, C.appendOnlyLedger],
+    calls: ["ftruncateSync", "truncateSync", "writeSync"],
+    reason:
+      "this module IS the append writer the Brain log routes through: one write per event on a " +
+      "descriptor opened with the append flag, a truncate to drop trailing whitespace an editor " +
+      "left, so the shard ends byte-identical to the rewrite it replaced, and a truncate back to " +
+      "the old size when a write fails part way.",
+  },
   "src/core/fs-atomic.ts": {
     categories: [C.sharedWriterItself],
     calls: ["linkSync", "renameSync", "unlinkSync", "writeSync"],
@@ -730,6 +742,14 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "(`o2b brain payload gc --apply`). A removal has no shared-writer form; the rmSync runs " +
       "inside `withDestructiveSnapshot`, which the destructive-site census holds, and the " +
       "plan is re-measured inside that recovery point so a newly referenced payload survives.",
+  },
+  "src/core/brain/anticipatory-prune.ts": {
+    categories: [C.retentionDelete],
+    calls: ["unlinkSync"],
+    reason:
+      "prunes anticipatory cache entries by file age and a count cap. Every entry is a derived " +
+      "context pack rebuilt on the next refresh, so there is nothing for a shared writer to " +
+      "author on the way out, and the prune marker goes through `atomicWriteFileSync`.",
   },
   "src/core/brain/notes/write-record.ts": {
     categories: [C.retentionDelete],
@@ -1374,8 +1394,17 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 84 -> 85: the pledge intake's mid-batch rollback
  * (`src/core/brain/pledge-intake.ts`) - one rmSync that resets the vault to
  * the pre-intake state, its re-anchor rewrite still on the shared writer.
+ *
+ * 86 -> 87: the anticipatory cache prune
+ * (`src/core/brain/anticipatory-prune.ts`) - a retention delete by age and
+ * count whose marker write routes through the shared atomic writer.
+ *
+ * 87 -> 88: the Brain log's append writer
+ * (`src/core/brain/log-append-io.ts`) - the log appender stopped
+ * rewriting each day shard through the atomic writer and appends one
+ * event per write instead; the raw calls are that writer's implementation.
  */
-const DIRECT_WRITE_ROWS = 86;
+const DIRECT_WRITE_ROWS = 88;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1566,8 +1595,22 @@ const DIRECT_WRITE_ROWS = 86;
  * `instruction-block.lock.json` ownership record through the shared
  * atomic writer - every byte it writes rides a shared helper, so it
  * joins the shared class needing no exclusion.
+ *
+ * 137 -> 138: the anticipatory cache prune
+ * (`src/core/brain/anticipatory-prune.ts`) commits its rate-limit marker
+ * through the shared atomic writer - cache machine state, not a note.
+ *
+ * 138 -> 139: the Brain log's append writer
+ * (`src/core/brain/log-append-io.ts`) declares `appendSeparated`, which
+ * this census now names as a shared writer, so the module reads as a
+ * shared row the way `fs-atomic.ts` does for its own writers.
+ *
+ * 139 -> 140: the store-aware index location
+ * (`src/core/search/brain-store/location.ts`) records the store root it
+ * last read in device-local state, through the shared atomic writer, so
+ * an unknown probe keeps only an index of the same root.
  */
-const SHARED_HELPER_ROWS = 137;
+const SHARED_HELPER_ROWS = 140;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1666,8 +1709,14 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 83 -> 84: the pledge intake's mid-batch rollback
  * (`src/core/brain/pledge-intake.ts`) - a reset to the pre-intake state
  * stamps no channel either.
+ * 85 -> 86: the anticipatory cache prune
+ * (`src/core/brain/anticipatory-prune.ts`) - a retention delete of derived
+ * cache entries stamps nothing.
+ * 86 -> 87: the Brain log's append writer
+ * (`src/core/brain/log-append-io.ts`) - the stamp is applied by its caller,
+ * `log.ts`, which still reads as a stamped shared-helper row.
  */
-const UNSTAMPED_DIRECT_ROWS = 85;
+const UNSTAMPED_DIRECT_ROWS = 87;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1761,8 +1810,17 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * `instruction-block.lock.json` ownership record through the shared
  * atomic writer - both under the apply arm only, the plan and the dry
  * run write nothing, and neither write stamps an origin channel.
+ * 132 -> 133: the anticipatory cache prune's rate-limit marker
+ * (`src/core/brain/anticipatory-prune.ts`), written through the shared
+ * atomic writer, carries no origin channel.
+ * 133 -> 134: the Brain log's append writer
+ * (`src/core/brain/log-append-io.ts`) is a shared row by its own
+ * declaration and stamps nothing; `log.ts`, its caller, stamps.
+ * 134 -> 135: the store-aware index location's remembered store root
+ * (`src/core/search/brain-store/location.ts`) is device-local machine
+ * state, not a note, and carries no origin channel.
  */
-const UNSTAMPED_SHARED_ROWS = 132;
+const UNSTAMPED_SHARED_ROWS = 135;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

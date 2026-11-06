@@ -63,6 +63,9 @@ import { preferencePath, validateSlug } from "./paths.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { writeBatchPrivacy } from "./write-batch-privacy.ts";
+import type { OperationPrivacy } from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
 import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import {
@@ -498,36 +501,50 @@ export function applyWriteBatch(
   // op against the pre-batch disk state means a second op on the same file
   // would silently clobber the first at commit time. Refuse it loudly.
   const noteTargets = new Set<string>();
-  const planned: PlannedOperation[] = operations.map((operation, index) =>
-    projectOperation(vault, operation, index, noteTargets, opts),
-  );
+  // One privacy verdict for every store record the batch writes (its log
+  // events, note-write events, evidence records, inner receipts and its
+  // request receipt),
+  // judged from the operations only when the first record is written,
+  // after every operation validated (`write-batch-privacy.ts`).
+  const privacy = writeBatchPrivacy(vault, operations, requestId, opts.readable);
+  // Every store record written from here on, by the batch or by any
+  // writer it calls (a note's owner-write decision row included), carries
+  // this verdict (`operation-scope.ts`).
+  return withOperationPrivacy(privacy, () => {
+    const planned: PlannedOperation[] = operations.map((operation, index) =>
+      projectOperation(vault, operation, index, noteTargets, opts, privacy),
+    );
 
-  const results = planned.map((p) => p.commit());
-  const result: WriteBatchResult = { applied: operations.length, results, done: true };
-  if (idempotency !== undefined && requestId !== undefined) {
-    // Record AFTER the commit so a sequential retry dedupes against a
-    // durable receipt. `rememberKey` re-checks under its shard lock; the
-    // residual crash window between commit and record is the one the
-    // ledger documents for every writer that follows this pattern.
-    const stored: Readonly<Record<string, unknown>> = {
-      applied: result.applied,
-      results: result.results.map((opResult) => storedOpResult(vault, opResult)),
-      done: result.done,
-    };
-    const remembered = rememberKey(vault, {
-      key: requestId,
-      namespace: WRITE_BATCH_KEY_NAMESPACE,
-      contentHash: idempotency.contentHash,
-      ref: stored,
-    });
-    // The unlocked consult above can miss a concurrent call's record; the
-    // locked re-check's verdict is acted on, never dropped. Either way this
-    // call's writes have landed, so the verdict is a receipt status on the
-    // committed result, never an error that would read as "nothing
-    // written" and invite a second application under a fresh ID.
-    return { ...result, receipt: { requestId, status: RECEIPT_STATUS_FOR[remembered.status] } };
-  }
-  return result;
+    const results = planned.map((p) => p.commit());
+    const result: WriteBatchResult = { applied: operations.length, results, done: true };
+    if (idempotency !== undefined && requestId !== undefined) {
+      // Record AFTER the commit so a sequential retry dedupes against a
+      // durable receipt. `rememberKey` re-checks under its shard lock; the
+      // residual crash window between commit and record is the one the
+      // ledger documents for every writer that follows this pattern.
+      const stored: Readonly<Record<string, unknown>> = {
+        applied: result.applied,
+        results: result.results.map((opResult) => storedOpResult(vault, opResult)),
+        done: result.done,
+      };
+      // The receipt's coordinates do not say what the batch touched, so the
+      // batch hands the ledger its own verdict for the store copy.
+      const remembered = rememberKey(vault, {
+        key: requestId,
+        namespace: WRITE_BATCH_KEY_NAMESPACE,
+        contentHash: idempotency.contentHash,
+        ref: stored,
+        private: privacy,
+      });
+      // The unlocked consult above can miss a concurrent call's record; the
+      // locked re-check's verdict is acted on, never dropped. Either way this
+      // call's writes have landed, so the verdict is a receipt status on the
+      // committed result, never an error that would read as "nothing
+      // written" and invite a second application under a fresh ID.
+      return { ...result, receipt: { requestId, status: RECEIPT_STATUS_FOR[remembered.status] } };
+    }
+    return result;
+  });
 }
 
 /** The receipt status of a committed batch, by the locked re-check's verdict. */
@@ -607,19 +624,47 @@ function projectOperation(
   index: number,
   noteTargets: Set<string>,
   opts: ApplyWriteBatchOptions,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   const kind = (operation as { readonly kind?: unknown } | null | undefined)?.kind;
   switch (kind) {
     case "create_note":
-      return projectCreateNote(vault, operation as CreateNoteOperation, index, noteTargets, opts);
+      return projectCreateNote(
+        vault,
+        operation as CreateNoteOperation,
+        index,
+        noteTargets,
+        opts,
+        privacy,
+      );
     case "update_note":
-      return projectUpdateNote(vault, operation as UpdateNoteOperation, index, noteTargets, opts);
+      return projectUpdateNote(
+        vault,
+        operation as UpdateNoteOperation,
+        index,
+        noteTargets,
+        opts,
+        privacy,
+      );
     case "append_note":
-      return projectAppendNote(vault, operation as AppendNoteOperation, index, noteTargets, opts);
+      return projectAppendNote(
+        vault,
+        operation as AppendNoteOperation,
+        index,
+        noteTargets,
+        opts,
+        privacy,
+      );
     case "apply_evidence":
-      return projectApplyEvidence(vault, operation as ApplyEvidenceOperation, index, opts.readable);
+      return projectApplyEvidence(
+        vault,
+        operation as ApplyEvidenceOperation,
+        index,
+        opts.readable,
+        privacy,
+      );
     case "append_log_line":
-      return projectAppendLogLine(vault, operation as AppendLogLineOperation, index);
+      return projectAppendLogLine(vault, operation as AppendLogLineOperation, index, privacy);
     default:
       throw new WriteBatchError(
         "invalid_operation",
@@ -678,6 +723,7 @@ function projectCreateNote(
   index: number,
   noteTargets: Set<string>,
   opts: ApplyWriteBatchOptions,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
   // The owner gate at PROJECTION (write-side-trust, Task 13): a
@@ -714,6 +760,7 @@ function projectCreateNote(
           ...(op.content !== undefined ? { content: op.content } : {}),
           ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
           ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
+          storePrivate: privacy,
         });
         if (res.outcome === "staged") {
           // The review gate staged the create (write-side trust, Task 9).
@@ -845,6 +892,7 @@ function projectUpdateNote(
   index: number,
   noteTargets: Set<string>,
   opts: ApplyWriteBatchOptions,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   if (op.frontmatter === undefined && op.body === undefined) {
     throw new WriteBatchError(
@@ -954,6 +1002,7 @@ function projectUpdateNote(
         contents,
         NOTE_WRITE_OP.update,
         opts,
+        privacy,
       );
       // The warn row the projection's verdict asked for, logged only when
       // the write actually commits - never during projection, where a
@@ -1001,6 +1050,7 @@ function projectAppendNote(
   index: number,
   noteTargets: Set<string>,
   opts: ApplyWriteBatchOptions,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   if (typeof op.content !== "string" || op.content.trim().length === 0) {
     throw new WriteBatchError(
@@ -1037,6 +1087,7 @@ function projectAppendNote(
         contents,
         NOTE_WRITE_OP.append,
         opts,
+        privacy,
       );
       // Honest for the same reason the update's flag is: a rewrite whose
       // bytes already sit on disk (a hand-edited note that already
@@ -1104,6 +1155,7 @@ function commitNoteRewrite(
   contents: string,
   op: NoteWriteOp,
   opts: ApplyWriteBatchOptions,
+  privacy: OperationPrivacy,
 ): CommittedNoteRewrite {
   if (before === contents) return { wrote: false };
   storeBeforeImage(vault, before);
@@ -1117,6 +1169,7 @@ function commitNoteRewrite(
       before: { bytes: before },
       after: { bytes: contents },
       ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+      storePrivate: privacy,
     }),
   );
   return { wrote: true, ...audit };
@@ -1141,6 +1194,7 @@ function projectApplyEvidence(
   op: ApplyEvidenceOperation,
   index: number,
   readable: ((rel: string) => boolean) | undefined,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   const input = op.input;
   if (input === null || typeof input !== "object") {
@@ -1205,6 +1259,7 @@ function projectApplyEvidence(
       const res = appendApplyEvidence(vault, input, {
         ...op.options,
         ...(readable !== undefined ? { readable } : {}),
+        storePrivate: privacy,
       });
       return { kind: "apply_evidence", logged_at: res.logged_at, log_path: res.log_path };
     },
@@ -1220,6 +1275,7 @@ function projectAppendLogLine(
   vault: string,
   op: AppendLogLineOperation,
   index: number,
+  privacy: OperationPrivacy,
 ): PlannedOperation {
   const input = op.input;
   if (
@@ -1236,7 +1292,7 @@ function projectAppendLogLine(
   }
   return {
     commit: () => {
-      const res = appendBrainNote({ vault, ...input });
+      const res = appendBrainNote({ vault, ...input, storePrivate: privacy });
       return { kind: "append_log_line", logged_at: res.logged_at, log_path: res.log_path };
     },
   };

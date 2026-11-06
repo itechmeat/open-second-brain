@@ -25,6 +25,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { isPrivatePageFile, isPrivatePreference } from "../store/dual-write-records.ts";
+
 import { regenerateActiveQuiet } from "./active.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
@@ -274,6 +276,9 @@ export function mergePreferences(
         revision_after: keep.revision ?? null,
         hash_before: keepHash,
         hash_after: keepHash,
+        // The row names the drop too (`merged-in <drop>`): private when
+        // either side is. The drop is already in `retired/` by now.
+        private: () => isPrivatePageFile(keepPath) || isPrivatePreference(vault, dropSlug),
       },
       { now },
     );

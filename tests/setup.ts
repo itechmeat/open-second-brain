@@ -77,6 +77,20 @@ if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
 }
 
+// The brain store root defaults to a per-user data directory, and a store
+// found there moves the search index into the store's device-local state
+// (`src/core/search/brain-store/location.ts`). A developer machine that
+// holds a real store, or exports OPEN_SECOND_BRAIN_STORE_ROOT to one (a
+// documented user setting; an empty export falls back to the default
+// root), would then change where every search test's index lives. So the
+// suite always points the root at a directory that does not exist: no
+// store is in use unless a test creates one and sets the variable itself.
+{
+  const storeParent = mkdtempSync(join(tmpdir(), "osb-test-store-root-"));
+  afterAll(() => rmSync(storeParent, REMOVE_TREE));
+  process.env["OPEN_SECOND_BRAIN_STORE_ROOT"] = join(storeParent, "store");
+}
+
 // Windows keeps the per-user config/state/cache roots under
 // `%LOCALAPPDATA%` (and a few host-agent roots, e.g. Cursor's sessions,
 // under `%APPDATA%`) - see `src/core/platform-dirs.ts`. Suites isolate

@@ -59,7 +59,7 @@ import { BRAIN_PREFERENCES_REL, preferencePath, retiredPath, vaultRelative } fro
 import { planAction, type PlannedFile } from "../claude-memory-plan.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
 import { resolvedOwnerFor } from "../preference.ts";
-import { createSnapshot } from "../snapshot.ts";
+import { takeSnapshot } from "../snapshot-gate.ts";
 import { TagSyntaxError } from "../tag-syntax.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "../types.ts";
@@ -528,14 +528,13 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   // run still landed. The caller (CLI) uses the thrown error to exit 2.
   let snapshotRunId: string | null = null;
   if (filesToWrite.length > 0) {
-    // The run-id prefix and the recorded reason are one constant, so the
-    // archive's filename can never disagree with its stamped provenance.
-    const runId = `${BRAIN_SNAPSHOT_REASON.promoteHostMemory}-${promotedAt.replace(/:/g, "-")}`;
-    createSnapshot(opts.vault, runId, {
-      reason: BRAIN_SNAPSHOT_REASON.promoteHostMemory,
+    // Through the snapshot gate, like every other reason: the run id is
+    // derived from the reason (so the archive's filename cannot disagree
+    // with its stamped provenance) and `snapshots.retention_count` is
+    // enforced around the new archive.
+    snapshotRunId = takeSnapshot(opts.vault, BRAIN_SNAPSHOT_REASON.promoteHostMemory, {
       now,
-    });
-    snapshotRunId = runId;
+    }).runId;
   }
 
   const applied: PlannedFile[] = [];

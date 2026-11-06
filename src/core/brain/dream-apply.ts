@@ -23,6 +23,7 @@
  * knows where that point is.
  */
 
+import type { Authority } from "../store/constants.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename } from "node:path";
 
@@ -50,6 +51,13 @@ import {
   type BrainRetiredReason,
 } from "./types.ts";
 import { renameWithRetry } from "../fs-atomic.ts";
+
+/**
+ * The authority of every dream write under brain store dual writes: dream
+ * is an automatic pass, so it decides as an agent even when an operator
+ * started it from the CLI.
+ */
+const DREAM_AUTHORITY = "agent" satisfies Authority;
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -194,7 +202,7 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         ...(np.visibility.length > 0 ? { visibility: np.visibility } : {}),
       },
       [],
-      { overwrite: false },
+      { overwrite: false, authority: DREAM_AUTHORITY },
       historyOpts,
     );
   }
@@ -233,7 +241,7 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         ...(ct.owner ? { owner: ct.owner } : {}),
       },
       [],
-      { overwrite: false },
+      { overwrite: false, authority: DREAM_AUTHORITY },
       historyOpts,
     );
   }
@@ -290,7 +298,7 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         lenientScopeTags: true,
       },
       [],
-      { overwrite: true },
+      { overwrite: true, authority: DREAM_AUTHORITY },
       historyOpts,
     );
   }
@@ -376,6 +384,7 @@ function executeRetires(
     try {
       moveToRetired(vault, fromPath, r.reason, {
         now,
+        authority: DREAM_AUTHORITY,
         retired_by: wikilinkToRun,
         ...(r.supersededBy ? { superseded_by: r.supersededBy } : {}),
       });

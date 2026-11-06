@@ -328,19 +328,23 @@ function appendReceipt(
 ): string | null {
   if (opts.vault === null) return null;
   try {
-    return appendAuditRecord(hookAuditDir(opts.vault), {
-      timestamp: opts.now.toISOString(),
-      actor: opts.actor,
-      action: "host-settings-backup",
-      target: opts.target,
-      ok: true,
-      details: {
-        pid: process.pid,
-        before_hash: beforeHash,
-        summary: `backed up ${basename(opts.target)} (${contents.length} bytes) before an agent file write`,
-        backup: backupPath,
+    return appendAuditRecord(
+      hookAuditDir(opts.vault),
+      {
+        timestamp: opts.now.toISOString(),
+        actor: opts.actor,
+        action: "host-settings-backup",
+        target: opts.target,
+        ok: true,
+        details: {
+          pid: process.pid,
+          before_hash: beforeHash,
+          summary: `backed up ${basename(opts.target)} (${contents.length} bytes) before an agent file write`,
+          backup: backupPath,
+        },
       },
-    });
+      opts.vault,
+    );
   } catch {
     // The receipt is evidence, not the guard: a failed append must not
     // turn a completed backup into a deny (the orient precedent).

@@ -264,6 +264,7 @@ export async function applySchemaMutations(
           ...(opts.reason ? { reason: opts.reason } : {}),
         },
       },
+      vault,
     );
     return {
       applied: mutations.length,

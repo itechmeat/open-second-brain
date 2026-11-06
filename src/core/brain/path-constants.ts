@@ -106,6 +106,13 @@ export const BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
  */
 export const BRAIN_INTERNAL_STATE_DIR = ".state";
 export const BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INTERNAL_STATE_DIR);
+/**
+ * Anticipatory context cache: `Brain/.state/anticipatory/<key>.json`. One
+ * entry per lineage root and enforced owner scope, refreshed on hook
+ * events and pruned by age and count on write.
+ */
+export const BRAIN_ANTICIPATORY_DIR = "anticipatory";
+export const BRAIN_ANTICIPATORY_REL = posix.join(BRAIN_INTERNAL_STATE_REL, BRAIN_ANTICIPATORY_DIR);
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
 export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */

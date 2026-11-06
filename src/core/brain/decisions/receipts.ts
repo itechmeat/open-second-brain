@@ -38,6 +38,9 @@ import { appendLogEvent } from "../log.ts";
 import { decodeOffsetCursor, encodeOffsetCursor } from "../offset-cursor.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
 /** Schema tag stamped on every receipt line. */
 export const DECISION_CHANGE_SCHEMA_VERSION = "decision_change.v1";
@@ -316,6 +319,18 @@ export function appendDecisionChangeReceipt(
   mkdirSync(receiptsDir(vault), { recursive: true });
   const path = receiptShardPath(vault, input.configPath);
   appendFileSync(path, JSON.stringify(receipt) + "\n");
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // A receipt about a private item (its subject, evidence or rationale
+  // names a private or unjudgeable preference or page) stays out of `shared`.
+  dualWrite(
+    () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.decisionReceipts,
+        receipt,
+        rowNamesPrivatePage(vault, receipt) ? "private" : "shared",
+      ),
+    { vault },
+  );
   // Surface the change in the merged activity timeline. Emitted only on an
   // actual append, never on an idempotent replay, so the log never
   // double-counts a change. Fail-soft: a log hiccup must not lose the receipt.

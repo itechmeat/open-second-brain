@@ -47,6 +47,7 @@ import { DECISIONS_TOOLS } from "./brain/decisions-tools.ts";
 import { TENSION_TOOLS } from "./brain/tension-tools.ts";
 import { STORAGE_TOOLS } from "./brain/storage-tools.ts";
 import { RECEIPT_TOOLS } from "./brain/receipt-tools.ts";
+import { CHANGES_TOOLS } from "./brain/changes-tools.ts";
 import type { ToolDefinition } from "./tool-contract.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -93,4 +94,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   // metrics receipt ledgers.
   ...STORAGE_TOOLS,
   ...RECEIPT_TOOLS,
+  // Brain store change probe (design D5): new record ids since a watermark.
+  ...CHANGES_TOOLS,
 ]);

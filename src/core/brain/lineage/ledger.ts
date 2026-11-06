@@ -89,6 +89,8 @@ import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync, type LockHandle, removeStaleLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vault-identity.ts";
 import type { SessionLineage } from "./types.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 /** Crutch link window: a continuation must start this close to the
  * predecessor's compression evidence. CRUTCH(t_1459706f). */
@@ -917,6 +919,7 @@ export function recordLineageObservation(
   }
 
   let handle: LockHandle | undefined;
+  let appended: LedgerLine | undefined;
   try {
     const path = sessionLineageLedgerPath(vault);
     mkdirSync(dirname(path), { recursive: true });
@@ -960,14 +963,29 @@ export function recordLineageObservation(
       const retained = entries.slice(-RETAIN_LEDGER_LINES).map((entry) => entry.raw);
       retained.push(serialized);
       atomicWriteFileSync(path, `${retained.join("\n")}\n`);
+      appended = line;
       return { status: LINEAGE_RECORD_STATUS.appended, seq, compacted: true };
     }
     appendFileSync(path, `${serialized}\n`, "utf8");
+    appended = line;
     return { status: LINEAGE_RECORD_STATUS.appended, seq };
   } catch {
     return recordGap(vault, obs, LINEAGE_GAP_REASON.writeFailed);
   } finally {
     handle?.release();
+    // Brain store dual write (task 1.11): the new line only (the store never
+    // compacts it away), off by default and never failing this append. It
+    // runs after the release: this lock is taken without a retry, so every
+    // millisecond the store's own lock and fsync held it would turn a
+    // concurrent observation into a lockBusy gap.
+    if (appended !== undefined) {
+      const row = appended;
+      // Lineage says which sessions ran where (working directories, repos,
+      // branches): it goes to `private` when this machine holds it.
+      dualWrite(() => ledgerRowRecord(DUAL_WRITE_LEDGERS.lineage, row, "private-when-held"), {
+        vault,
+      });
+    }
   }
 }
 

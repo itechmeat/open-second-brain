@@ -54,6 +54,7 @@ import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
 import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
+import { handleStoreSubcommand } from "./store.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { installMcpFaultGuard } from "./mcp-fault-guard.ts";
 import { handleVaultSubcommand } from "./vault.ts";
@@ -1384,6 +1385,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleSearchSubcommand(rest);
       case "state":
         return await handleStateSubcommand(rest);
+      case "store":
+        return await handleStoreSubcommand(rest);
       case "vault":
         return await handleVaultSubcommand(rest);
       case "partner":

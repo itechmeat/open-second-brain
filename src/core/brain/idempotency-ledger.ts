@@ -51,6 +51,9 @@ import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
 /** Month-sharded JSONL root, distinct from `Brain/log/` (the human trail). */
 const IDEMPOTENCY_REL = `${BRAIN_ROOT_REL}/logs/idempotency`;
@@ -64,6 +67,22 @@ export const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: MONTH_BASE,
   extensions: Object.freeze([JSONL_LEDGER_EXT]),
 });
+
+/**
+ * Receipt fields whose values are opaque rather than page references: the
+ * client key, its namespace, the payload hash, the timestamps, and the
+ * write and review ids a write batch's results carry. The store copy's
+ * privacy judge skips them (see {@link rememberKey}).
+ */
+const RECEIPT_OPAQUE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "namespace",
+  "contentHash",
+  "createdAt",
+  "logged_at",
+  "write_id",
+  "pending_id",
+]);
 
 /** Hard cap on a client key. Long enough for `<session-id>:<slug>` joins. */
 const KEY_MAX_LEN = 256;
@@ -103,6 +122,17 @@ export interface RememberKeyInput {
    * month shard, so a backfilled write lands in its real month. */
   readonly createdAt?: string;
   readonly ref?: Readonly<Record<string, unknown>>;
+  /**
+   * The privacy verdict of the operation the key guards
+   * (`store/operation-privacy.ts`). Only the brain store copy reads it,
+   * and when given it is final: the receipt lands where the operation's
+   * other records land and is not judged again from its `ref`. Absent,
+   * the receipt is judged from its own `ref`. A function is the verdict
+   * judged lazily, inside the store copy's own dual write: it runs exactly
+   * when that copy is written, under the flag that copy reads, so the
+   * judge can never be skipped while the copy still lands.
+   */
+  readonly private?: boolean | (() => boolean);
 }
 
 export interface RememberKeyResult {
@@ -233,6 +263,7 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
   mkdirSync(join(vault, IDEMPOTENCY_REL), { recursive: true });
   const shardPath = idempotencyLogPath(vault, month);
   const handle = acquireLockSync(shardPath);
+  let inserted: IdempotencyRecord | undefined;
   try {
     // Re-scan under the lock so a same-shard concurrent insert is caught.
     // The lock is on THIS device's shard - the only file this call can
@@ -256,9 +287,45 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
       ...(input.ref !== undefined ? { ref: input.ref } : {}),
     });
     writeFileSync(shardPath, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a" });
+    inserted = record;
     return { status: REMEMBER_KEY_STATUS.inserted, record };
   } finally {
     handle.release();
+    // Brain store dual write (task 1.11): off by default, never fails this
+    // append, and run after the release so the store's own lock and fsync
+    // never lengthen this ledger's critical section.
+    if (inserted !== undefined) {
+      const row = inserted;
+      // A receipt that carries its operation's verdict follows it and is
+      // never judged again: the operation fixed one partition for every
+      // record it writes, and a second judge reading the vault later (a
+      // page turned private in between) would split them. A receipt with
+      // no verdict names the written item (its path, id or log entry) in
+      // its `ref` and is judged from it: one whose references name a page
+      // that is private or cannot be judged goes to `private` only. The
+      // key, hash and timestamps are opaque and never judged as
+      // references. Either way the dual-write entry point still raises a
+      // receipt carrying a `<private>` region; a region inside an
+      // operation's receipt is already in the content its verdict judged.
+      const verdict = input.private;
+      dualWrite(
+        () =>
+          ledgerRowRecord(
+            DUAL_WRITE_LEDGERS.idempotency,
+            row,
+            (
+              verdict === undefined
+                ? rowNamesPrivatePage(vault, row, RECEIPT_OPAQUE_FIELDS)
+                : typeof verdict === "function"
+                  ? verdict()
+                  : verdict
+            )
+              ? "private"
+              : "shared",
+          ),
+        { vault },
+      );
+    }
   }
 }
 

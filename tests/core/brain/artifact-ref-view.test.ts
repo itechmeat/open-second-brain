@@ -206,3 +206,32 @@ describe("a reference that leaves the vault", () => {
     expect(asked).toEqual(["notes/inside.md"]);
   });
 });
+
+describe("absolute and Windows spellings", () => {
+  test("an absolute path to the hidden page is judged where it is, and withheld", () => {
+    expect(hidingView().visible(join(vault, "Brain", "preferences", `${HIDDEN_ID}.md`))).toBe(
+      false,
+    );
+    expect(hidingView().visible(`[[${join(vault, "Brain", "preferences", HIDDEN_ID)}]]`)).toBe(
+      false,
+    );
+  });
+
+  test("an absolute path outside the vault is hidden without asking the rule", () => {
+    const asked: string[] = [];
+    const view = artifactRefView(vault, (rel) => {
+      asked.push(rel);
+      return true;
+    });
+    expect(view.visible(join(vault, "..", "outside.md"))).toBe(false);
+    expect(asked).toEqual([]);
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "a backslash path is the path it spells on Windows, not a bare id",
+    () => {
+      expect(hidingView().visible(`Brain\\preferences\\${HIDDEN_ID}`)).toBe(false);
+      expect(hidingView().visible(`Brain\\preferences\\${HIDDEN_ID}.md`)).toBe(false);
+    },
+  );
+});

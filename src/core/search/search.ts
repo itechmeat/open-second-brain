@@ -56,6 +56,7 @@ import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
 import type { SemanticEmbedTiming } from "./semantic-phase.ts";
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
+import { catchUpBrainStore, type CatchUpResult } from "./brain-store/catch-up.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
 import { detectHybridDegrade } from "./enrich.ts";
 import { isAbortError } from "./embeddings/http-util.ts";
@@ -422,10 +423,19 @@ export async function search(
   // Read-only origins (cross-vault search) disable self-healing: a
   // rebuild would write an index INTO the external vault. Default
   // (selfHeal absent) keeps the legacy heal-and-retry behaviour.
+  // Catch-up before reads (design D5): ingest what the brain store gained
+  // since the last check. Read-only origins never write their index. An
+  // index the open below has to build or upgrade first is caught up right
+  // after it, so the answer already includes the store.
+  const catchUps: CatchUpResult[] = [];
+  if (opts.selfHeal !== false) catchUps.push(await catchUpBrainStore(effectiveConfig));
   const store =
     opts.selfHeal === false
       ? await Store.open(effectiveConfig, { mode: "read" })
       : await openReadOrSelfHeal(effectiveConfig);
+  if (catchUps[0]?.skipped === "no-index" || catchUps[0]?.skipped === "not-current") {
+    catchUps.push(await catchUpBrainStore(effectiveConfig, { force: true }));
+  }
   try {
     const warnings: string[] = [];
     // The typed sink that rides beside `warnings` (evidence-at-the-boundary,
@@ -433,6 +443,11 @@ export async function search(
     // caller can tell an exhausted corpus from a broken embedder without
     // matching on prose.
     const degraded: RetrievalDegradationSink = [];
+    const failedCatchUp = catchUps.findLast((c) => c.skipped === "failed");
+    if (failedCatchUp !== undefined) {
+      warnings.push(`brain store catch-up failed, records may be missing: ${failedCatchUp.error}`);
+      noteDegradation(degraded, RETRIEVAL_DEGRADATION.storeCatchUpFailed);
+    }
     // Freshen on read: an index older than the interval starts one
     // background incremental run (never into a read-only origin); this
     // answer comes from the index as it is. A badly stale index is named

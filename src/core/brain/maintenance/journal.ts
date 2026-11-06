@@ -28,6 +28,9 @@ import type { StorageForecastTier } from "../storage/forecast.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
 import { isCustomLaneTask } from "./custom-task-id.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
 export const MAINTENANCE_JOURNAL_CAP = 500;
 
@@ -226,6 +229,19 @@ export function appendJournal(vault: string, entry: MaintenanceJournalEntry): vo
   // cap is enforced separately by `sweepJournal`, which runMaintenance
   // calls while it holds the lease - the only safe rewrite point.
   appendFileSync(path, JSON.stringify(entry) + "\n");
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // Task ids, verdicts and gate readings; a failed task's `error` text can
+  // carry a path, so a row naming a private or unjudgeable page goes to
+  // `private` only.
+  dualWrite(
+    () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.maintenanceJournal,
+        entry,
+        rowNamesPrivatePage(vault, entry) ? "private" : "shared",
+      ),
+    { vault },
+  );
 }
 
 /** Trim the journal to the newest `cap` lines. Lease-holder only. */
