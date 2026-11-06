@@ -2,6 +2,7 @@
 kind: brain-manual
 vault_name: {{vault_name}}
 schema_version: {{schema_version}}
+template_revision: {{template_revision}}
 ---
 
 # Brain — operating manual

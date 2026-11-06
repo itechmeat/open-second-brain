@@ -207,19 +207,23 @@ export async function executeRecompile(
     !dryRun &&
     (rederived.length > 0 || archived.length > 0 || manual.length > 0 || errors.length > 0)
   ) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR), {
-      timestamp: opts.now.toISOString(),
-      actor: opts.agent,
-      action: "targeted_recompile",
-      target: "Brain",
-      ok: errors.length === 0,
-      details: {
-        rederived: rederived.length,
-        archived: archived.length,
-        manual: manual.length,
-        errors: errors.length,
+    appendAuditRecord(
+      join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR),
+      {
+        timestamp: opts.now.toISOString(),
+        actor: opts.agent,
+        action: "targeted_recompile",
+        target: "Brain",
+        ok: errors.length === 0,
+        details: {
+          rederived: rederived.length,
+          archived: archived.length,
+          manual: manual.length,
+          errors: errors.length,
+        },
       },
-    });
+      vault,
+    );
   }
 
   return Object.freeze({

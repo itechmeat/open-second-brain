@@ -119,6 +119,9 @@ const REPORT_CAPS: Readonly<Record<string, string>> = {
     "Time-window paging by documented convention: rows are ascending assertion ts, so " +
     "tail-following paginates by advancing `since` (knowledge-tools.ts); a cursor would " +
     "duplicate a mechanism the surface already has.",
+  brain_changes:
+    "Watermark paging by contract: a cut page returns the watermark of its last record and " +
+    "`since` continues from it (brain-store/changes.ts); a cursor would duplicate the watermark.",
   brain_search:
     "Ranking stability: results are a ranked, index-dependent answer, not a stable set - " +
     "re-running the query for a second page races the index, and offset paging would present " +
@@ -167,11 +170,12 @@ describe("list-pagination census", () => {
   test("the populations are pinned as equalities", () => {
     // 24 -> 25: brain_write_destinations (actionable-now batch) carries
     // limit + cursor beside brain_writes, so the limit-bearing population
-    // grows by one.
-    expect(pagingTools().filter((tool) => tool.hasLimit)).toHaveLength(25);
-    // 10 recorded caps: eight Tier-B report/window caps and the two
-    // Tier-C ranked-retrieval non-goals.
-    expect(Object.keys(REPORT_CAPS)).toHaveLength(10);
+    // grows by one. 25 -> 26: brain_changes (brain store change probe)
+    // pages by its watermark.
+    expect(pagingTools().filter((tool) => tool.hasLimit)).toHaveLength(26);
+    // 11 recorded caps: eight Tier-B report/window caps, the watermark
+    // probe and the two Tier-C ranked-retrieval non-goals.
+    expect(Object.keys(REPORT_CAPS)).toHaveLength(11);
   });
 
   test("the census can fail", () => {

@@ -1132,6 +1132,18 @@ export class Store {
     return census.chunksOverTokenWindow(this.db, windowTokens);
   }
 
+  // ── brain store records (v17, design D5) ───────────────────────────────────
+
+  /**
+   * The connection the brain store tables are read and written through
+   * (`store/brain-records.ts`). Store-record documents and chunks still go
+   * through the typed document and chunk methods above; only the two v17
+   * tables, which no other caller touches, are handed the connection.
+   */
+  brainRecordsConnection(): Database {
+    return this.db;
+  }
+
   // ── direct accessors used by indexer/CLI/status ────────────────────────────
 
   /** Escape hatch for status queries that don't fit the typed API. */

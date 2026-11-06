@@ -20,9 +20,11 @@
  *     file is absent, it is created with a canonical frontmatter
  *     header (`kind: brain-log`, `date`, `tags`) and the title line.
  *     Subsequent appends preserve previous bytes verbatim — the
- *     log is append-only. Atomicity is achieved by reading the
- *     existing contents, appending the new block, and writing the
- *     result back through `fs-atomic` in one shot.
+ *     log is append-only. Each event is ONE append per file under the
+ *     log directory lock (`log-append-io.ts`): the appender reads only
+ *     the shard's tail (the previous chain link, the trailing
+ *     whitespace), never the whole day, which it used to read and
+ *     rewrite through a temp file for every event.
  *
  * Every appended event carries an `origin_channel` bullet beside the
  * `agent` one: the server-derived channel of the process that wrote it
@@ -40,9 +42,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 
-import lockfile from "proper-lockfile";
-
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { appendSeparated, scanLinesFromEnd } from "./log-append-io.ts";
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import {
   brainDirs,
@@ -55,6 +55,11 @@ import {
 import { WRITE_LANE } from "./freeze-marker.ts";
 import { isValidDeviceId } from "../config.ts";
 import { listShardedFiles, resolveAppendShardId } from "./ledger-shards.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { acquireDirLock } from "../store/local-lock.ts";
+import { logEventRecord } from "../store/dual-write-records.ts";
+import { operationPrivacy, type PrivacyVerdict } from "../store/operation-privacy.ts";
+import { logRefsNamePrivatePage } from "../store/reference-privacy.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 import { PREF_ID_PREFIX } from "./dream-plan.ts";
@@ -273,40 +278,38 @@ export function parseLogDayFile(vault: string, date: string, path: string): Pars
  * this function. That's the stability guarantee the test suite asks
  * for.
  */
+/** Longest wait for the log directory lock before an append gives up. */
+export const LOG_LOCK_WAIT_MS = 2_000;
+
 /**
- * Acquire the per-log-day directory lock with a bounded retry loop.
+ * Acquire the per-log-day directory lock with a bounded wait.
  *
- * `proper-lockfile`'s sync API refuses the `retries` option (it
- * cannot block the event loop on a callback), so the retry loop is
- * spelled out here: on `ELOCKED` the call sleeps for `SLEEP_MS` and
- * tries again, up to `MAX_ATTEMPTS`. Any non-`ELOCKED` error is
- * rethrown immediately (permission, fs corruption, …).
+ * `proper-lockfile`'s sync API refuses the `retries` option (it cannot
+ * block the event loop on a callback), so the wait is spelled out in
+ * `acquireDirLock` (`store/local-lock.ts`): jittered, growing sleeps
+ * while the lock is held, up to {@link LOG_LOCK_WAIT_MS}, then an
+ * `ELOCKED` refusal. A Windows lock directory still being deleted by the
+ * previous holder counts as held, not as a permission error. Any other
+ * error is rethrown immediately (permission, fs corruption, …).
  *
  * Exported so the fixtures that reproduce log-lock contention hold the
  * SAME lock the appender takes (the attestation digest and verify
  * suites): if this site or its options move, the fixtures fail loudly
  * instead of silently reproducing nothing.
  *
- * Total worst-case wait: `MAX_ATTEMPTS * SLEEP_MS` ≈ 500 ms — short
- * enough to feel synchronous to a coding agent, long enough to ride
- * out a sibling `appendLogEvent` call that landed within the same
- * millisecond.
+ * Two seconds is short enough to feel synchronous to a coding agent and
+ * long enough for a writer to get its turn among several agents
+ * appending at once on a host whose fsync is slow (Windows), where a
+ * fixed handful of 50 ms retries lost every round to the writers that
+ * re-took the lock the moment they released it.
  */
 export function acquireLogLock(logDir: string): () => void {
-  const MAX_ATTEMPTS = 10;
-  const SLEEP_MS = 50;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    try {
-      return lockfile.lockSync(logDir, { stale: 10_000, realpath: false });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ELOCKED") throw err;
-      lastErr = err;
-      if (attempt < MAX_ATTEMPTS - 1) Bun.sleepSync(SLEEP_MS);
-    }
-  }
-  throw lastErr;
+  return acquireDirLock(logDir, {
+    staleMs: 10_000,
+    budgetMs: LOG_LOCK_WAIT_MS,
+    label: "log lock",
+    remedy: "another process is appending to the Brain log; retry the write",
+  });
 }
 
 export interface AppendLogEventOptions {
@@ -321,6 +324,32 @@ export interface AppendLogEventOptions {
    * Passing the empty string here forces the legacy pair explicitly.
    */
   readonly deviceId?: string;
+  /**
+   * Brain store dual write: the privacy verdict of the operation this
+   * event belongs to (`store/operation-privacy.ts`). A private verdict
+   * sends the event's store record to `private` even when the event names
+   * no private page; an event that names one goes there regardless.
+   * Judged only when dual writes are on.
+   */
+  readonly storePrivate?: PrivacyVerdict;
+}
+
+/**
+ * Fields of a log event body that are stamps rather than page references:
+ * the server-derived origin channel. The writing `agent` is NOT opaque: a
+ * caller supplies it as a free string, so it is judged like any other
+ * field. An operation that judges the event it is about to append judges
+ * its body with these same opaque fields ({@link logEventPrivacyContent}),
+ * so its verdict covers the appender's own.
+ */
+export const LOG_EVENT_OPAQUE_FIELDS: ReadonlySet<string> = new Set([ORIGIN_CHANNEL_FIELD]);
+
+/** A log event body as content an operation's privacy verdict judges. */
+export function logEventPrivacyContent(body: Readonly<Record<string, unknown>>): {
+  readonly value: unknown;
+  readonly opaque: ReadonlySet<string>;
+} {
+  return { value: body, opaque: LOG_EVENT_OPAQUE_FIELDS };
 }
 
 export function appendLogEvent(
@@ -400,39 +429,46 @@ export function appendLogEvent(
     // One row per event. The row is a deterministic projection of the
     // markdown body so the markdown and JSONL representations describe
     // the same event byte-for-byte after JSON.parse.
-    // The chain (Task E) costs nothing extra here: the shard's bytes are
-    // already in hand under the directory lock, so the link to the
-    // previous line is one backward scan of text this append had to read
-    // anyway. Holding the lock is also what makes the link CORRECT - two
-    // appenders reading the same head would otherwise write two lines
-    // claiming the same predecessor.
-    const existingJsonl = existsSync(jsonlPath) ? readFileSync(jsonlPath, "utf8") : "";
-    const line = renderJsonlLine(diskEvent, lastChainHash(existingJsonl));
-    const nextJsonl =
-      existingJsonl === "" ? `${line}\n` : `${existingJsonl.replace(/\s+$/, "")}\n${line}\n`;
-    atomicWriteFileSync(jsonlPath, nextJsonl);
+    // The chain (Task E) needs only the previous link: the shard is read
+    // backwards from its end and the scan stops at the newest line that
+    // carries one, so the cost is the tail, not the day. Holding the lock
+    // is what makes the link CORRECT - two appenders reading the same
+    // head would otherwise write two lines claiming the same predecessor.
+    //
+    // A torn last line (a crash mid-append, no trailing newline) is
+    // skipped by the head scan exactly as before, and `appendSeparated`
+    // starts the new row on its own line, so the fragment stays one
+    // malformed line the reader warns about instead of corrupting the
+    // row written after it.
+    const line = renderJsonlLine(diskEvent, scanLinesFromEnd(jsonlPath, chainHashOfLine));
+    appendSeparated(jsonlPath, `${line}\n`, "\n", `${line}\n`);
 
     // ---- Markdown (human surface) -------------------------------------
-    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+    // One blank line between blocks and a single trailing newline, the
+    // same bytes the former whole-file rewrite produced; the block always
+    // ends in a newline, so the file always does too.
     const block = renderEventBlock(diskEvent, ts.hms);
-
-    let next: string;
-    if (existing === "") {
-      next = renderFileHeader(ts.date) + "\n" + block;
-    } else {
-      // Guarantee exactly one blank line between blocks; previous file
-      // may or may not end with a trailing newline.
-      const trimmed = existing.replace(/\s+$/, "");
-      next = `${trimmed}\n\n${block}`;
-    }
-    // Always finish with a single trailing newline — standard Markdown
-    // hygiene, and matches what `formatFrontmatter` emits elsewhere.
-    if (!next.endsWith("\n")) next += "\n";
-
-    atomicWriteFileSync(path, next);
+    appendSeparated(path, block, "\n\n", renderFileHeader(ts.date) + "\n" + block);
   } finally {
     release();
   }
+
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // An event that names a private page (a private preference's id and
+  // principle, a private note's link, in any field and inside free text),
+  // whose body carries a `<private>` region or the placeholder a stripped
+  // one leaves, or that belongs to a private operation goes to `private`
+  // only. A reconcile event's guessed preference is judged only when its
+  // page exists (`logRefsNamePrivatePage`).
+  const guessed = reconcileTopicPreferenceId(diskEvent);
+  const isPrivate = operationPrivacy(vault, {
+    inherit: [
+      opts.storePrivate,
+      () => guessed !== undefined && logRefsNamePrivatePage(vault, [guessed], guessed),
+    ],
+    content: [logEventPrivacyContent(diskEvent.body)],
+  });
+  dualWrite(() => logEventRecord(diskEvent, isPrivate()), { vault });
 
   return { logPath: path };
 }
@@ -574,19 +610,29 @@ export function logChainHash(
 function lastChainHash(jsonl: string): string | null {
   const lines = jsonl.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!;
-    if (line.trim() === "") continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (parsed === null || typeof parsed !== "object") continue;
-    const h = (parsed as Record<string, unknown>)[LOG_CHAIN_FIELDS.h];
-    if (typeof h === "string" && h !== "") return h;
+    const h = chainHashOfLine(lines[i]!);
+    if (h !== null) return h;
   }
   return null;
+}
+
+/**
+ * The chain hash one JSONL line carries, or `null` for a blank, an
+ * unparseable or a pre-chain line. The per-line rule of
+ * {@link lastChainHash}, shared with the appender's backward file scan
+ * so the two can never disagree about which line is the head.
+ */
+function chainHashOfLine(line: string): string | null {
+  if (line.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const h = (parsed as Record<string, unknown>)[LOG_CHAIN_FIELDS.h];
+  return typeof h === "string" && h !== "" ? h : null;
 }
 
 /**

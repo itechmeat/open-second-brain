@@ -73,6 +73,9 @@ import {
   type ContinuityRecord,
 } from "./continuity/store.ts";
 import type { ContinuityPayload } from "./continuity/types.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
 /**
  * Pattern kind stamped on a proposal an author DECLARED through an
@@ -361,12 +364,16 @@ export function learnSkillProposals(
       { minEvidence: minSupport },
     );
     if (!verdict.accepted) {
-      appendVerifierRejection(vault, {
-        id: proposalId,
-        name_key: nameKey,
-        reason: verdict.reason,
-        at: now.toISOString(),
-      });
+      appendVerifierRejection(
+        vault,
+        {
+          id: proposalId,
+          name_key: nameKey,
+          reason: verdict.reason,
+          at: now.toISOString(),
+        },
+        candidate.supportingRecords,
+      );
       verifierRejected.push(proposalId);
       continue;
     }
@@ -2292,14 +2299,34 @@ export function verifierRejectionLedgerPath(vault: string): string {
   );
 }
 
-/** Append one verifier-rejection record to the JSONL ledger. */
+/**
+ * Append one verifier-rejection record to the JSONL ledger. `sources` are
+ * the continuity records the rejected candidate was drawn from.
+ */
 function appendVerifierRejection(
   vault: string,
   entry: { id: string; name_key: string; reason: string; at: string },
+  sources: ReadonlyArray<ContinuityRecord>,
 ): void {
   const path = verifierRejectionLedgerPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // The proposal's name is drawn from session turns: a row whose turns are
+  // flagged private, or that names a private or unjudgeable page (in the
+  // row or in those turns), goes to `private` only.
+  dualWrite(
+    () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.verifierRejections,
+        entry,
+        sources.some((record) => record.private === true) ||
+          rowNamesPrivatePage(vault, [entry, sources])
+          ? "private"
+          : "shared",
+      ),
+    { vault },
+  );
 }
 
 function detectCandidates(

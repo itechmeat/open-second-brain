@@ -27,8 +27,8 @@ import { appendLogEvent } from "./log.ts";
 import { brainConfigPath, brainManualPath, vaultRelative } from "./paths.ts";
 import { BrainConfigError, loadBrainConfig } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
-import { createSnapshot } from "./snapshot.ts";
-import { renderBrainManualFor } from "./templates.ts";
+import { takeSnapshot } from "./snapshot-gate.ts";
+import { manualRevisionAhead, renderBrainManualFor } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -55,6 +55,8 @@ export interface UpgradeFilePlan {
    * and `update`.
    */
   readonly error: string;
+  /** Set only on a `noop` row for a file a newer template revision wrote. */
+  readonly aheadRevision?: number;
 }
 
 export interface UpgradePlan {
@@ -131,6 +133,7 @@ export function planUpgrade(vault: string): UpgradePlan {
       brainManualPath(vault),
       vaultRelative(brainManualPath(vault), vault),
       (existing) => renderBrainManualFor(vault, existing),
+      manualRevisionAhead,
     ),
     ...planCorruptedPreferences(vault),
   ];
@@ -155,8 +158,9 @@ export function planUpgrade(vault: string): UpgradePlan {
  *   3. Check every `update` row against the disk. A file that no
  *      longer holds the bytes (or the absence) the plan read refuses
  *      the whole run, naming each path, before anything is written.
- *   4. `createSnapshot(vault, run_id)` — sidecar manifest comes
- *      along automatically. The run id includes a `upgrade-` prefix
+ *   4. `takeSnapshot(vault, "upgrade")`: the sidecar manifest comes
+ *      along automatically and retention runs with this archive
+ *      protected. The run id includes a `upgrade-` prefix
  *      so the operator can spot upgrade snapshots in `--list`.
  *   5. Write each `update` file via `atomicWriteFileSync` with
  *      `expectBefore: file.before`, so an edit that landed during the
@@ -224,9 +228,15 @@ export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): Upg
   }
 
   const now = opts.now ?? new Date();
-  // One constant for the run-id prefix and the recorded reason.
-  const runId = `${BRAIN_SNAPSHOT_REASON.upgrade}-${isoSecondCompact(now)}`;
-  const snap = createSnapshot(vault, runId, { reason: BRAIN_SNAPSHOT_REASON.upgrade, now });
+  // Through the gate, not `createSnapshot` directly: the gate is what
+  // enforces `snapshots.retention_count` (with this archive protected).
+  // Calling `createSnapshot` here let upgrade archives bypass retention
+  // entirely; a live install that self-healed on every session start
+  // held 911 of them. The gate also mints a collision-safe run id under
+  // the same `upgrade-` prefix, so two applies in one second no longer
+  // refuse each other.
+  const snap = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.upgrade, { now });
+  const runId = snap.runId;
 
   const updated: string[] = [];
   for (const file of plan.files) {
@@ -323,6 +333,7 @@ function planManagedPath(
   absolutePath: string,
   relPath: string,
   renderTarget: (existing: string | null) => string,
+  revisionAhead: (existing: string) => number | null,
 ): UpgradeFilePlan {
   if (!existsSync(absolutePath)) {
     // File missing entirely: an upgrade should restore it. Treat as
@@ -335,6 +346,10 @@ function planManagedPath(
   } catch (err) {
     return makeError(relPath, `read failed: ${(err as Error).message}`);
   }
+  // A synced file from a newer release is never rewritten back: devices on
+  // two releases otherwise rewrote it in turn, a snapshot each time.
+  const ahead = revisionAhead(before);
+  if (ahead !== null) return Object.freeze({ ...makeNoop(relPath), aheadRevision: ahead });
   // The target is rendered against what is on disk, so a rendering that
   // may legitimately keep an existing spelling (the vault name on a
   // case-insensitive filesystem) can.
@@ -401,14 +416,6 @@ function midApplyDriftMessage(drifted: string, updated: ReadonlyArray<string>): 
     `${head} ${updated.length} file(s) already rewritten: ${updated.join(", ")}. ` +
     "Re-run `o2b brain upgrade --dry-run` to plan the rest against the edit, then apply it."
   );
-}
-
-/**
- * Compact ISO without colons or `Z` suffix so the run id is
- * filesystem-safe under every snapshot validator.
- */
-function isoSecondCompact(d: Date): string {
-  return isoSecond(d).replace(/[:Z]/g, "");
 }
 
 /**

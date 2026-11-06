@@ -39,6 +39,8 @@ import {
 import { BRAIN_ROOT_REL } from "../path-constants.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { PermissionAction } from "./document.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 /** Month-sharded JSONL root under `Brain/logs/`, beside the idempotency ledger. */
 const DECISIONS_REL = `${BRAIN_ROOT_REL}/logs/decisions`;
@@ -132,11 +134,16 @@ export function appendDecisionLedger(
     const dir = decisionLedgerDir(vault);
     mkdirSync(dir, { recursive: true });
     const shardPath = join(dir, decisionLedgerShardPath(month, shardId));
+    const stored = stripEmptyOptionals(row);
     withShardLock(shardPath, () => {
-      writeFileSync(shardPath, `${JSON.stringify(stripEmptyOptionals(row))}\n`, {
+      writeFileSync(shardPath, `${JSON.stringify(stored)}\n`, {
         encoding: "utf8",
         flag: "a",
       });
+    });
+    // Brain store dual write (task 1.11): off by default, never fails this append.
+    dualWrite(() => ledgerRowRecord(DUAL_WRITE_LEDGERS.permissions, stored, "private-when-held"), {
+      vault,
     });
     return { logged: true };
   } catch (err) {

@@ -56,6 +56,7 @@ const LEGACY_QUERY_FLAGS: Record<string, { type: string; default?: string }> = {
   "evidence-pack": { type: "boolean" },
   "include-superseded": { type: "boolean" },
   since: { type: "string" },
+  source: { type: "string" },
   until: { type: "string" },
   global: { type: "boolean" },
   "no-record-access": { type: "boolean" },

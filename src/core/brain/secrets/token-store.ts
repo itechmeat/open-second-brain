@@ -437,12 +437,16 @@ function auditToken(
   name: string,
   details: Record<string, unknown>,
 ): void {
-  appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
-    timestamp: new Date().toISOString(),
-    actor: "cli",
-    action,
-    target: name,
-    ok: true,
-    details,
-  });
+  appendAuditRecord(
+    join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR),
+    {
+      timestamp: new Date().toISOString(),
+      actor: "cli",
+      action,
+      target: name,
+      ok: true,
+      details,
+    },
+    vault,
+  );
 }

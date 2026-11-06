@@ -545,12 +545,16 @@ function audit(
   name: string,
   details: Record<string, unknown>,
 ): void {
-  appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
-    timestamp: ctx.now.toISOString(),
-    actor: ctx.agent,
-    action,
-    target: name,
-    ok: true,
-    details,
-  });
+  appendAuditRecord(
+    join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR),
+    {
+      timestamp: ctx.now.toISOString(),
+      actor: ctx.agent,
+      action,
+      target: name,
+      ok: true,
+      details,
+    },
+    vault,
+  );
 }

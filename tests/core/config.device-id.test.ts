@@ -8,12 +8,18 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveDeviceId } from "../../src/core/config.ts";
+import {
+  isUsableLocalDeviceId,
+  isValidDeviceId,
+  readDeviceId,
+  resolveDeviceId,
+} from "../../src/core/config.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 let configHome: string;
 let configPath: string;
@@ -61,5 +67,59 @@ describe("resolveDeviceId", () => {
     atomicWriteFileSync(configPath, 'device_id: "sync-conflict-x"\n');
     const id = resolveDeviceId(configPath);
     expect(id).toMatch(/^[a-f0-9]{8}$/);
+  });
+});
+
+describe("isValidDeviceId", () => {
+  test("accepts the names Windows reserves for devices: peers' data is judged alike everywhere", () => {
+    for (const name of ["con", "prn", "aux", "nul", "com1", "lpt9"]) {
+      expect(isValidDeviceId(name)).toBe(true);
+    }
+    expect(isValidDeviceId("sync-conflict-x")).toBe(false);
+    expect(isValidDeviceId("Upper")).toBe(false);
+  });
+});
+
+describe("isUsableLocalDeviceId", () => {
+  test("on Windows refuses the names Windows reserves for devices, and only those", () => {
+    for (const name of ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"]) {
+      expect(isUsableLocalDeviceId(name, "win32")).toBe(false);
+    }
+    for (const name of ["con1", "nul-box", "com10", "lpt0", "console", "aux-2"]) {
+      expect(isUsableLocalDeviceId(name, "win32")).toBe(true);
+    }
+  });
+
+  test("elsewhere a reserved Windows name stays a usable id", () => {
+    for (const name of ["con", "nul", "com1", "lpt9"]) {
+      expect(isUsableLocalDeviceId(name, "linux")).toBe(true);
+      expect(isUsableLocalDeviceId(name, "darwin")).toBe(true);
+    }
+  });
+
+  test("a reserved name in the config is replaced on Windows and kept elsewhere", () => {
+    atomicWriteFileSync(configPath, 'device_id: "nul"\n');
+    if (IS_WINDOWS) expect(resolveDeviceId(configPath)).toMatch(/^[a-f0-9]{8}$/);
+    else expect(resolveDeviceId(configPath)).toBe("nul");
+  });
+});
+
+describe("readDeviceId", () => {
+  test("answers the configured id and never mints one", () => {
+    expect(readDeviceId(configPath)).toBeNull();
+    expect(existsSync(configPath)).toBe(false);
+    atomicWriteFileSync(configPath, 'device_id: "vps-main"\n');
+    expect(readDeviceId(configPath)).toBe("vps-main");
+  });
+
+  test("agrees with resolveDeviceId on the env override, opt-out included", () => {
+    atomicWriteFileSync(configPath, 'device_id: "vps-main"\n');
+    process.env["O2B_DEVICE_ID"] = "laptop-1";
+    expect(readDeviceId(configPath)).toBe(resolveDeviceId(configPath));
+    // The empty string opts out of a device identity: the writers then
+    // write nothing, so a reader has no local device either.
+    process.env["O2B_DEVICE_ID"] = "";
+    expect(resolveDeviceId(configPath)).toBe("");
+    expect(readDeviceId(configPath)).toBeNull();
   });
 });

@@ -100,6 +100,16 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
   if (listing.skipped.length > 0) {
     process.stderr.write(renderSnapshotListingSkips(listing.skipped) + "\n");
   }
+  // A sidecar stamp that was not believed decides where retention puts the
+  // archive, so it is said out loud too.
+  for (const s of all) {
+    if (s.created_at_untrusted !== undefined) {
+      process.stderr.write(
+        `warning: ${s.run_id} is ordered by its file time ${s.created_at}: ` +
+          `${s.created_at_untrusted}\n`,
+      );
+    }
+  }
 
   // The reason filter compares against what the SIDECAR recorded, so a
   // snapshot whose reason is unknown is never swept into a named bucket by
@@ -153,6 +163,10 @@ function renderLogJson(s: SnapshotInfo): Record<string, unknown> {
   return {
     run_id: s.run_id,
     created_at: s.created_at,
+    // Present only when the sidecar's stamp was set aside for the mtime.
+    ...(s.created_at_untrusted !== undefined
+      ? { created_at_untrusted: s.created_at_untrusted }
+      : {}),
     // `null` is UNKNOWN provenance and stays null in the payload: a
     // consumer must be able to tell an unstamped snapshot from a stamped
     // one, which a substituted label would hide.

@@ -90,6 +90,7 @@ export { cmdBrainSgrep } from "./sgrep.ts";
 export { cmdBrainContinuity } from "./continuity.ts";
 export { cmdBrainReceipts } from "./receipts.ts";
 export { cmdBrainStorage } from "./storage.ts";
+export { cmdBrainChanges } from "./changes.ts";
 export { cmdBrainPayload } from "./payload.ts";
 export { cmdBrainSessionSummary } from "./session-summary.ts";
 export { cmdBrainIdeaLineage } from "./idea-lineage.ts";

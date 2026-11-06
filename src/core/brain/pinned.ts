@@ -1,8 +1,32 @@
+/**
+ * Pinned context: the transient current-task scratchpad at
+ * `Brain/pinned.md`, read, written, appended, cleared or batch-edited by
+ * the `brain_pinned_context` tool.
+ *
+ * Every mutation is a read-modify-write of one file, and several agents
+ * share it. The atomic rename only guarantees that no reader sees a torn
+ * file; it says nothing about a second writer that read the same "before"
+ * state, so two concurrent appends used to lose one of them. Every write
+ * therefore runs under the per-file sync lock (`pinned.md.lock`) and
+ * re-reads the current content inside it, the same discipline as the
+ * preference transaction (`preference-txn.ts`). The lock waits rather
+ * than refusing: a pinned write is short, and a refusal would hand the
+ * agent a retry for what is only ordinary contention.
+ *
+ * Under the brain store dual-write flag every committed state is also
+ * appended to the store as a full-text `pinned-set` (or a `pinned-clear`),
+ * with the authority of the process's origin (see `store/dual-write.ts`).
+ */
+
 import { existsSync, readFileSync } from "node:fs";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { pinnedRecord } from "../store/dual-write-records.ts";
+import { authorityFromOrigin, dualWrite, isDualWriteEnabled } from "../store/dual-write.ts";
+import { pinnedTextIsPrivate } from "../store/reference-privacy.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { brainPinnedPath } from "./paths.ts";
+import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const MAX_PINNED_CONTEXT_LEN = 20_000;
@@ -25,17 +49,38 @@ export function readPinnedContext(vault: string): PinnedContext {
   };
 }
 
+/**
+ * Run `fn` holding the pinned file's sync lock. Whatever `fn` reads of the
+ * current content it must read INSIDE this call, or the lock protects
+ * nothing.
+ */
+function withPinnedLock<T>(vault: string, fn: () => T): T {
+  const handle = acquireLockSyncWithRetry(brainPinnedPath(vault));
+  try {
+    return fn();
+  } finally {
+    handle.release();
+  }
+}
+
 export function writePinnedContext(vault: string, content: unknown): PinnedContext {
-  return commitPinnedContent(vault, normalisePinnedContentNoTruncate(content), "write");
+  const normalised = normalisePinnedContentNoTruncate(content);
+  // Vault-identity write guard (Unit J) BEFORE the lock, as clear and the
+  // batch path do: a refused vault gets no lock file and no lock wait.
+  assertVaultIdentityForWrite(vault);
+  return withPinnedLock(vault, () => commitPinnedContent(vault, normalised, "write"));
 }
 
 export function appendPinnedContext(vault: string, content: unknown): PinnedContext {
   const incoming = normalisePinnedContentNoTruncate(content);
   if (incoming.length === 0) return readPinnedContext(vault);
 
-  const current = readPinnedContext(vault).content;
-  const next = current.length > 0 ? `${current}\n\n${incoming}` : incoming;
-  return commitPinnedContent(vault, next, "append");
+  assertVaultIdentityForWrite(vault);
+  return withPinnedLock(vault, () => {
+    const current = readPinnedContext(vault).content;
+    const next = current.length > 0 ? `${current}\n\n${incoming}` : incoming;
+    return commitPinnedContent(vault, next, "append");
+  });
 }
 
 /**
@@ -57,6 +102,12 @@ function commitPinnedContent(
   assertWithinPinnedBudget(normalised, operation);
   const path = brainPinnedPath(vault);
   atomicWriteFileSync(path, normalised.length > 0 ? `${normalised}\n` : "");
+  // Brain store dual write (task 1.11), inside the pinned lock so the store
+  // sees replacements in the order the file did.
+  dualWrite(
+    () => pinnedRecord(normalised, authorityFromOrigin(), pinnedTextIsPrivate(vault, normalised)),
+    { vault },
+  );
   return { path, present: true, content: normalised };
 }
 
@@ -64,8 +115,24 @@ export function clearPinnedContext(vault: string): PinnedContext {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const path = brainPinnedPath(vault);
-  atomicWriteFileSync(path, "");
-  return { path, present: true, content: "" };
+  return withPinnedLock(vault, () => {
+    // A clear goes where a set of the text it clears goes, so it lands in
+    // the same partition register as that set. The text is read only for
+    // the dual write: with the flag off a clear never depends on reading
+    // the old file, and one that cannot be read is judged private (fail
+    // closed), never shared.
+    let namesPrivate = true;
+    if (isDualWriteEnabled()) {
+      try {
+        namesPrivate = pinnedTextIsPrivate(vault, readPinnedContext(vault).content);
+      } catch {
+        namesPrivate = true;
+      }
+    }
+    atomicWriteFileSync(path, "");
+    dualWrite(() => pinnedRecord(null, authorityFromOrigin(), namesPrivate), { vault });
+    return { path, present: true, content: "" };
+  });
 }
 
 /**
@@ -187,16 +254,30 @@ export function applyPinnedOperations(
     throw new PinnedBatchError("invalid_operation", -1, "operations must be a non-empty array");
   }
 
-  let projected = readPinnedContext(vault).content;
-  operations.forEach((operation, index) => {
-    projected = projectPinnedOperation(projected, operation, index);
+  return withPinnedLock(vault, () => {
+    // Projected from the content read under the lock, so a batch never
+    // overwrites a write that landed between its read and its commit.
+    let projected = readPinnedContext(vault).content;
+    operations.forEach((operation, index) => {
+      projected = projectPinnedOperation(projected, operation, index);
+    });
+
+    assertWithinPinnedBudget(projected, "batch");
+
+    const path = brainPinnedPath(vault);
+    atomicWriteFileSync(path, projected.length > 0 ? `${projected}\n` : "");
+    dualWrite(
+      () => pinnedRecord(projected, authorityFromOrigin(), pinnedTextIsPrivate(vault, projected)),
+      { vault },
+    );
+    return {
+      path,
+      present: true,
+      content: projected,
+      applied: operations.length,
+      done: true as const,
+    };
   });
-
-  assertWithinPinnedBudget(projected, "batch");
-
-  const path = brainPinnedPath(vault);
-  atomicWriteFileSync(path, projected.length > 0 ? `${projected}\n` : "");
-  return { path, present: true, content: projected, applied: operations.length, done: true };
 }
 
 function projectPinnedOperation(

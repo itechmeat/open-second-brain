@@ -50,6 +50,7 @@ import { DISCLOSURE_MODES } from "./disclosure-mode.ts";
 import { FTS_MATCH_MODES } from "./fts-match-mode.ts";
 import { RECALL_PROFILE_NAMES } from "./profiles.ts";
 import { SEARCH_KINDS } from "./property-pushdown.ts";
+import { SEARCH_SOURCES } from "./brain-store/constants.ts";
 
 /** The longest `query` the served brain_search schema advertises, enforced by its handler. */
 export const MCP_QUERY_MAX_CHARS = 2000;
@@ -110,7 +111,7 @@ export interface SearchOptionRow {
 
 /**
  * Every caller-facing field of the search language, in the order the
- * served schema declares them. The three cli-only rows close the table:
+ * served schema declares them. The cli-only rows close the table:
  * they back `SearchOptions` fields the served MCP schema omits, and their
  * fragments are documentation (they never reach the mcp projection).
  */
@@ -668,6 +669,20 @@ export const SEARCH_OPTION_ROWS: ReadonlyArray<SearchOptionRow> = Object.freeze(
     cliKind: "boolean",
     surfaces: ["cli"],
     default: "false",
+  },
+  {
+    name: "source",
+    option: "source",
+    schema: {
+      type: "string",
+      enum: [...SEARCH_SOURCES],
+      description:
+        "Limit results to the user's notes ('notes') or to brain records ('brain'). CLI-only for now: the served MCP schema is unchanged.",
+    },
+    cliFlag: "source",
+    cliKind: "string",
+    surfaces: ["cli"],
+    default: "absent: notes and brain records",
   },
 ] satisfies readonly SearchOptionRow[]);
 

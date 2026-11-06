@@ -257,10 +257,16 @@ describe("the dream pass runs behind the gate, not beside it", () => {
     // bootstrapped `_BRAIN.md` names the new directory. Verified before
     // updating: with `dream.archive_stale_signals: false` and the previous
     // manual template this branch reproduces the previous literal exactly.
+    //
+    // Re-measured a FIFTH time, for one named reason: the bootstrapped
+    // `_BRAIN.md` carries a `template_revision:` line in its frontmatter,
+    // so a release never rewrites a manual a newer release wrote. Verified
+    // before updating: with that one template line removed, this branch
+    // reproduces the previous literal exactly.
     seedSignal("tidy");
     dream(vault, { now: NOW, agentName: "tester" });
     expect(dreamOutputDigest(join(vault, "Brain"))).toBe(
-      "cc900f3916b844d2fb04f8156b04a5e0ee6f70115035f790580742e036477f61",
+      "044a18bcd0538c768e0c5d98e071125683805ceb6579f2acbadc96916a126210",
     );
   });
 

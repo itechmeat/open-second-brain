@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { brainPinnedPath } from "../../src/core/brain/paths.ts";
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { brainDirsForWrite, brainPinnedPath } from "../../src/core/brain/paths.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_MS } from "../../src/core/brain/sync-lockfile.ts";
+import {
+  resetVaultIdentityPins,
+  VaultIdentityMismatchError,
+  vaultIdentityPath,
+  writeVaultIdentity,
+} from "../../src/core/brain/vault-identity.ts";
 import {
   MAX_PINNED_CONTEXT_LEN,
   PinnedBatchError,
@@ -14,6 +22,7 @@ import {
   writePinnedContext,
 } from "../../src/core/brain/pinned.ts";
 import { PRIVATE_REGION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let vault: string;
 
@@ -65,6 +74,18 @@ describe("pinned context core", () => {
     expect(existsSync(brainPinnedPath(vault))).toBe(true);
     expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("");
   });
+
+  // POSIX modes only, and root reads a 0000 file anyway.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "with dual writes off a clear does not read the file it clears",
+    () => {
+      writePinnedContext(vault, "Temporary fact");
+      chmodSync(brainPinnedPath(vault), 0o000);
+      const pinned = clearPinnedContext(vault);
+      expect(pinned.content).toBe("");
+      expect(readFileSync(brainPinnedPath(vault), "utf8")).toBe("");
+    },
+  );
 });
 
 describe("pinned context single-op budget honesty", () => {
@@ -192,4 +213,30 @@ describe("pinned context batch operations", () => {
     expect(() => applyPinnedOperations(vault, [])).toThrow(PinnedBatchError);
     expect(existsSync(brainPinnedPath(vault))).toBe(false);
   });
+});
+
+describe("pinned context on a vault the identity guard refuses", () => {
+  // The guard runs before the pinned lock is taken, so a refused vault
+  // never waits on (or creates) that lock.
+  for (const [name, write] of [
+    ["write", (v: string) => writePinnedContext(v, "guarded")],
+    ["append", (v: string) => appendPinnedContext(v, "guarded")],
+  ] as const) {
+    test(`${name} refuses without waiting on a held lock`, () => {
+      resetVaultIdentityPins();
+      bootstrapBrain(vault);
+      brainDirsForWrite(vault);
+      rmSync(vaultIdentityPath(vault));
+      writeVaultIdentity(vault);
+      const held = acquireLockSync(brainPinnedPath(vault));
+      const started = Date.now();
+      try {
+        expect(() => write(vault)).toThrow(VaultIdentityMismatchError);
+      } finally {
+        held.release();
+        resetVaultIdentityPins();
+      }
+      expect(Date.now() - started).toBeLessThan(LOCK_WAIT_BUDGET_MS);
+    });
+  }
 });

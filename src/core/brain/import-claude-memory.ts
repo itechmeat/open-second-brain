@@ -5,7 +5,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { digestVerifies, sealWithDigest, sha256Hex } from "../integrity/digest.ts";
 import { appendLogEvent } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
-import { createSnapshot } from "./snapshot.ts";
+import { takeSnapshot } from "./snapshot-gate.ts";
 import { isoSecond } from "./time.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./policy/defaults.ts";
@@ -382,14 +382,13 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
 
   let snapshotRunId: string | null = null;
   if (filesToWrite.length > 0) {
-    // The run-id prefix and the recorded reason are one constant, so the
-    // archive's filename can never disagree with its stamped provenance.
-    const runId = `${BRAIN_SNAPSHOT_REASON.importClaudeMemory}-${importedAt.replace(/:/g, "-")}`;
-    createSnapshot(opts.vault, runId, {
-      reason: BRAIN_SNAPSHOT_REASON.importClaudeMemory,
+    // Through the gate rather than `createSnapshot`, so the archive obeys
+    // `snapshots.retention_count` like every other reason (it used to
+    // bypass retention). The gate derives the run id from the reason, so
+    // the archive's filename still cannot disagree with its provenance.
+    snapshotRunId = takeSnapshot(opts.vault, BRAIN_SNAPSHOT_REASON.importClaudeMemory, {
       now,
-    });
-    snapshotRunId = runId;
+    }).runId;
   }
 
   const applied: PlannedFile[] = [];

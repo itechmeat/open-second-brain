@@ -599,27 +599,31 @@ export function applyEntityMerge(
   const agent = opts.agent ?? "unknown";
   // Reliability audit record (the destructive-entity-verb template: the
   // hygiene audit directory under Brain/log/ carries week shards).
-  appendAuditRecord(join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR), {
-    timestamp: (opts.now ?? new Date()).toISOString(),
-    actor: agent,
-    action: "entity_merge",
-    target: plan.keep_id,
-    ok: true,
-    details: {
-      dropped: plan.drop_id,
-      category: plan.category,
-      alias_added: plan.alias_added ?? "",
-      // The full moved set, not just the display name: the aliases the
-      // dropped page held are nowhere else in the trail.
-      aliases_merged: JSON.stringify(plan.aliases_merged),
-      body_folded: String(plan.body_folded),
-      relations_absorbed: String(plan.relations_absorbed),
-      inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
-      cyclic_edges_removed: String(plan.cyclic_edges_removed),
-      plan_hash: verified,
-      snapshot_run_id: gated.snapshot.runId,
+  appendAuditRecord(
+    join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR),
+    {
+      timestamp: (opts.now ?? new Date()).toISOString(),
+      actor: agent,
+      action: "entity_merge",
+      target: plan.keep_id,
+      ok: true,
+      details: {
+        dropped: plan.drop_id,
+        category: plan.category,
+        alias_added: plan.alias_added ?? "",
+        // The full moved set, not just the display name: the aliases the
+        // dropped page held are nowhere else in the trail.
+        aliases_merged: JSON.stringify(plan.aliases_merged),
+        body_folded: String(plan.body_folded),
+        relations_absorbed: String(plan.relations_absorbed),
+        inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
+        cyclic_edges_removed: String(plan.cyclic_edges_removed),
+        plan_hash: verified,
+        snapshot_run_id: gated.snapshot.runId,
+      },
     },
-  });
+    vault,
+  );
 
   // Brain log event (the `merge` kind, entity payload), so the merge
   // surfaces in the activity timeline like every other lifecycle event.

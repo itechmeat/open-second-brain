@@ -6,6 +6,7 @@
  * calls these after `planUpgrade()` returns.
  */
 
+import { describeManualRevisionAhead } from "../../core/brain/templates.ts";
 import type { UpgradeFilePlan, UpgradePlan } from "../../core/brain/upgrade.ts";
 import { info, ok } from "../output.ts";
 
@@ -22,6 +23,7 @@ export function renderUpgradePlanJson(plan: UpgradePlan): {
     before_size: number;
     after_size: number;
     error?: string;
+    ahead_revision?: number;
   }>;
 } {
   return {
@@ -34,12 +36,17 @@ export function renderUpgradePlanJson(plan: UpgradePlan): {
       before_size: f.before?.length ?? 0,
       after_size: f.after.length,
       ...(f.error ? { error: f.error } : {}),
+      ...(f.aheadRevision !== undefined ? { ahead_revision: f.aheadRevision } : {}),
     })),
   };
 }
 
 export function printUpgradePlanText(plan: UpgradePlan): void {
   for (const f of plan.files) {
+    if (f.status === "noop" && f.aheadRevision !== undefined) {
+      info(`  ${describeManualRevisionAhead(f.path, f.aheadRevision)}`);
+      continue;
+    }
     if (f.status === "noop") {
       ok(`  ${f.path}: up to date`);
       continue;

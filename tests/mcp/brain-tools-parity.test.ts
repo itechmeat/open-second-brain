@@ -78,7 +78,10 @@
  * `brain_intake_pledges` (the agent-executed extraction intake over the
  * same family: typed pledge extractions posted against a source page,
  * validated whole before any write, counterparty names anchored
- * server-side against the canonical entity registry).
+ * server-side against the canonical entity registry); the brain store
+ * release added `brain_changes` (the change probe: record ids new since a
+ * watermark, grouped by partition, stream, scope and topic, answered from
+ * the index after catch-up, local reach only).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -105,6 +108,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_benchmark",
   "brain_bridges",
   "brain_brief",
+  "brain_changes",
   "brain_claims",
   "brain_clusters",
   "brain_codegraph_report",

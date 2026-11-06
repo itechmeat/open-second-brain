@@ -1,8 +1,11 @@
 /**
  * Resolve the on-disk location of the search index file.
  *
- * Default: `<vault>/.open-second-brain/brain.sqlite`. Overridable
- * through CLI `--db` or config `search_db_path`.
+ * Default: `<vault>/.open-second-brain/brain.sqlite`. When a brain store
+ * is in use (see `brain-store/location.ts`) the default is the store's
+ * device-local state instead: `<device state>/index/<vault key>/brain.sqlite`.
+ * Either default is overridable through CLI `--db` or config
+ * `search_db_path`.
  *
  * The two name components come from `brain/path-constants.ts`, the leaf
  * module that already owns every vault-relative name in this project.
@@ -18,6 +21,14 @@ import { join } from "node:path";
 import { DERIVED_STORE_DIR, DERIVED_STORE_FILE } from "../brain/path-constants.ts";
 import { defaultConfigPath, discoverConfig } from "../config.ts";
 import { envOrConfig } from "../validate.ts";
+import {
+  lastStoreIndexPath,
+  rememberStoreRoot,
+  resolveIndexedStoreProbe,
+  storeIndexPath,
+  type IndexedStore,
+  type StoreProbe,
+} from "./brain-store/location.ts";
 
 /** Environment variable that overrides the store location. */
 export const SEARCH_DB_ENV = "OPEN_SECOND_BRAIN_SEARCH_DB";
@@ -25,12 +36,40 @@ export const SEARCH_DB_ENV = "OPEN_SECOND_BRAIN_SEARCH_DB";
 /** Machine-config key that overrides the store location. */
 export const SEARCH_DB_CONFIG_KEY = "search_db_path";
 
-export function resolveIndexPath(vault: string, override: string | null): string {
+export function resolveIndexPath(
+  vault: string,
+  override: string | null,
+  store: IndexedStore | null = null,
+): string {
   if (override !== null) {
     const trimmed = override.trim();
     if (trimmed !== "") return trimmed;
   }
+  if (store !== null) return storeIndexPath(store, vault);
   return join(vault, DERIVED_STORE_DIR, DERIVED_STORE_FILE);
+}
+
+/**
+ * {@link resolveIndexPath} for a store probe. A probe that could not tell
+ * whether a store is in use keeps the store index this machine last wrote
+ * for the vault under a store last read at the same root
+ * (`lastStoreIndexPath`; a `store` probe records that root), so a passing failure to read
+ * store.json neither reads a stale legacy index nor rebuilds an empty one;
+ * the legacy location is used only when no such index exists. An explicit
+ * override wins as always.
+ */
+export function resolveIndexPathForProbe(
+  vault: string,
+  override: string | null,
+  probe: StoreProbe,
+): string {
+  const overridden = override !== null && override.trim() !== "";
+  if (probe.kind === "store") rememberStoreRoot(probe.store);
+  if (probe.kind === "unknown" && !overridden) {
+    const last = lastStoreIndexPath(vault, probe.root);
+    if (last !== null) return last;
+  }
+  return resolveIndexPath(vault, override, probe.kind === "store" ? probe.store : null);
 }
 
 /**
@@ -53,8 +92,9 @@ export function resolveIndexPath(vault: string, override: string | null): string
 export function resolveConfiguredIndexPath(vault: string, configPath?: string): string {
   const path = configPath ?? defaultConfigPath();
   const config = discoverConfig(path).data;
-  return resolveIndexPath(
+  return resolveIndexPathForProbe(
     vault,
     envOrConfig(process.env, config, SEARCH_DB_ENV, SEARCH_DB_CONFIG_KEY),
+    resolveIndexedStoreProbe({ vault, config, configPath: path }),
   );
 }

@@ -260,6 +260,8 @@ describe("tool listing", () => {
         "brain_receipts",
         // The vault storage report (storage-lifecycle).
         "brain_storage",
+        // The brain store change probe (brain store and topics, phase 1).
+        "brain_changes",
         // Observed-use verdict feeding recall ranking (Retrieval & Ranking Quality).
         "brain_observed_use",
         "brain_knowledge_gaps",

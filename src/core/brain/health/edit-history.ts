@@ -17,6 +17,9 @@ import { dirname } from "node:path";
 import { jsonlLedgerGrammar, readShardedLines } from "../ledger-shards.ts";
 import { preferenceHistoryPath, preferenceHistoryStem } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { dualWrite } from "../../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
 export interface EditHistoryEntry {
   /** ISO timestamp of the mutation. */
@@ -90,15 +93,34 @@ export function appendEditHistory(
   const path = preferenceHistoryPath(vault, slug);
   const seen = new Set(readEditHistory(vault, slug).map(dedupKey));
   const lines: string[] = [];
+  const appended: EditHistoryEntry[] = [];
   for (const e of entries) {
     const key = dedupKey(e);
     if (seen.has(key)) continue;
     seen.add(key);
     lines.push(JSON.stringify(e));
+    appended.push(e);
   }
   if (lines.length === 0) return 0;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, lines.join("\n") + "\n");
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // A private preference's history rows stay out of the shared store
+  // partition, as do rows about a preference whose page cannot be judged
+  // and rows whose values name a private or unjudgeable page.
+  dualWrite(
+    () => {
+      const prefPrivate = rowNamesPrivatePage(vault, `pref-${slug}`);
+      return appended.map((entry) =>
+        ledgerRowRecord(
+          DUAL_WRITE_LEDGERS.editHistory,
+          { slug, entry },
+          prefPrivate || rowNamesPrivatePage(vault, entry) ? "private" : "shared",
+        ),
+      );
+    },
+    { vault },
+  );
   return lines.length;
 }
 

@@ -25,6 +25,30 @@ function seedHealthyVault(): void {
 }
 
 describe("runBrainWatchdog", () => {
+  test("checks the search index where the search layer resolves it, not the vault default", () => {
+    // The vault and its relocated index share one temp parent, so nothing
+    // lands beside it in the shared temp directory.
+    const parent = mkdtempSync(join(tmpdir(), "o2b-watchdog-relocated-"));
+    const relocatedVault = join(parent, "vault");
+    mkdirSync(relocatedVault);
+    bootstrapBrain(relocatedVault);
+    const relocated = join(parent, "index", "brain.sqlite");
+    mkdirSync(join(parent, "index"));
+    writeFileSync(relocated, "sqlite placeholder", "utf8");
+    const previous = process.env.OPEN_SECOND_BRAIN_SEARCH_DB;
+    process.env.OPEN_SECOND_BRAIN_SEARCH_DB = relocated;
+    try {
+      const result = runBrainWatchdog(relocatedVault, { now: new Date("2026-05-30T12:00:00Z") });
+      expect(result.report.checks).toContainEqual(
+        expect.objectContaining({ name: "search-index", status: "ok" }),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.OPEN_SECOND_BRAIN_SEARCH_DB;
+      else process.env.OPEN_SECOND_BRAIN_SEARCH_DB = previous;
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test("reports healthy probes with backoff and audit metadata", () => {
     seedHealthyVault();
 

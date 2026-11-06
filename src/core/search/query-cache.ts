@@ -161,6 +161,8 @@ export function buildCacheKey(
     // promoted properties need no separate input - they are part of
     // `properties`, already canonicalized above.
     kind: opts.kind ?? undefined,
+    // The source filter (design D5) partitions the cache the same way; absent keeps the key.
+    source: opts.source ?? undefined,
     // Per-source-session pool cap override (t_bb6ce095) partitions the
     // cache: an explicit `0` forces the cap off for this query, which
     // differs from the config default. Dropped when absent, so a query

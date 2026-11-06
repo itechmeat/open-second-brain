@@ -15,7 +15,7 @@
  * than sinking the whole snapshot.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveSearchConfig } from "../search/index.ts";
@@ -30,10 +30,11 @@ import {
 } from "../maintenance/self-heal-upgrade-state.ts";
 import { runHygieneScan } from "./hygiene/scan.ts";
 import type { HygieneFinding } from "./hygiene/types.ts";
-import { brainConfigPath, brainDirs } from "./paths.ts";
+import { brainConfigPath, brainDirs, brainManualPath, vaultRelative } from "./paths.ts";
 import { loadTemporalConfigSafe } from "./policy.ts";
 import { listProfiles } from "./portability/profiles.ts";
 import { buildReviewCandidates } from "./review-candidates.ts";
+import { describeManualRevisionAhead, manualRevisionAhead } from "./templates.ts";
 import { buildTimelineIndex } from "./temporal/build-index.ts";
 import { findStaleEntries } from "./temporal/stale-watch.ts";
 
@@ -242,6 +243,14 @@ export async function buildOperatorSnapshot(
   const selfHealUpgradeFailure = readSelfHealUpgradeFailure(vault);
   if (selfHealUpgradeFailure !== null) {
     problem("self-heal-upgrade-failed", describeSelfHealUpgradeFailure(selfHealUpgradeFailure));
+  }
+  const manualAhead = readManualRevisionAhead(vault);
+  if (manualAhead !== null) {
+    problem(
+      "managed-file-from-newer-release",
+      `${describeManualRevisionAhead(vaultRelative(brainManualPath(vault), vault), manualAhead)}; ` +
+        "update Open Second Brain on this device",
+    );
   }
 
   // --- Doctor + semantic health ---
@@ -520,5 +529,17 @@ function renderStoreLine(store: SnapshotStore): string {
       );
     case WRITER_LOCK_STATE.unknown:
       return `store: writer lock state unknown (${store.writerLockReason ?? "reason unavailable"}); ${caller}`;
+  }
+}
+
+/**
+ * The manual's template revision when a newer release wrote it, else null.
+ * Fail-soft like every source here: an unreadable manual reads as current.
+ */
+function readManualRevisionAhead(vault: string): number | null {
+  try {
+    return manualRevisionAhead(readFileSync(brainManualPath(vault), "utf8"));
+  } catch {
+    return null;
   }
 }

@@ -86,23 +86,27 @@ function appendUnprotectReceipt(opts: {
   result: UnprotectResult;
 }): void {
   try {
-    appendAuditRecord(hookAuditDir(opts.vault), {
-      timestamp: new Date().toISOString(),
-      actor: opts.actor,
-      action: "brain-unprotect",
-      target: opts.result.destination,
-      ok: true,
-      details: {
-        pid: process.pid,
-        before_hash: `sha256:${createHash("sha256").update(opts.compute.before).digest("hex")}`,
-        summary: opts.result.changed
-          ? `removed OSB-managed rules from ${basename(opts.result.destination)}`
-          : `nothing OSB-managed to remove for ${opts.result.target}`,
-        consent: opts.consent,
-        changed: opts.result.changed,
-        ...(opts.result.backupPath ? { backup: opts.result.backupPath } : {}),
+    appendAuditRecord(
+      hookAuditDir(opts.vault),
+      {
+        timestamp: new Date().toISOString(),
+        actor: opts.actor,
+        action: "brain-unprotect",
+        target: opts.result.destination,
+        ok: true,
+        details: {
+          pid: process.pid,
+          before_hash: `sha256:${createHash("sha256").update(opts.compute.before).digest("hex")}`,
+          summary: opts.result.changed
+            ? `removed OSB-managed rules from ${basename(opts.result.destination)}`
+            : `nothing OSB-managed to remove for ${opts.result.target}`,
+          consent: opts.consent,
+          changed: opts.result.changed,
+          ...(opts.result.backupPath ? { backup: opts.result.backupPath } : {}),
+        },
       },
-    });
+      opts.vault,
+    );
   } catch {
     /* evidence, not the guard */
   }

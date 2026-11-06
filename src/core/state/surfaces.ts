@@ -940,7 +940,7 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "Pre-rendered context packs keyed by root and agent scope. Inside the Markdown tree and " +
       "still derived: deleting it costs one recomputation, and every byte in it came from the " +
       "vault it sits in.",
-    sources: ["src/core/brain/anticipatory-cache.ts"],
+    sources: ["src/core/brain/anticipatory-cache.ts", "src/core/brain/anticipatory-prune.ts"],
   },
   {
     id: STATE_SURFACE_ID.exactState,

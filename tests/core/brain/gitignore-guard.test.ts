@@ -403,6 +403,10 @@ function derivedStoreSites(): string[] {
  * paths outside the covered directory) fails the membership assertion.
  */
 const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
+  [
+    "core/search/brain-store/location.ts",
+    "names the legacy derived-store file to place the store-aware index outside the vault",
+  ],
   ["cli/bootstrap/receipt.ts", "bootstraps the bootstrap lockfile under the store"],
   ["cli/bootstrap/run.ts", "CLI bootstrap reporting that names the store"],
   ["cli/brain/help-text.ts", "help prose naming the store directory"],

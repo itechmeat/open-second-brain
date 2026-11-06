@@ -348,8 +348,9 @@ describe("the capability report states the ceiling it runs under", () => {
     // 118 registered tools through v1.90.0; the dated-commitments wave
     // added brain_pledge and brain_intake_pledges (120); the delivery-trust
     // wave added brain_attestations (121); the agent-presence wave added
-    // brain_skill_rewrite_status (122).
-    expect(evaluated.available_tool_count).toBe(122);
+    // brain_skill_rewrite_status (122); the brain-store wave added
+    // brain_changes (123).
+    expect(evaluated.available_tool_count).toBe(123);
     expect(evaluated.advertised_tool_count).toBe(7);
   });
 });

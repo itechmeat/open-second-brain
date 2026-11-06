@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { join, win32 } from "node:path";
+import { join, posix as posixPath, win32 } from "node:path";
 
 import {
   cacheBaseDir,
@@ -35,15 +35,15 @@ function windows(vars: Record<string, string> = { LOCALAPPDATA: LOCAL }): Platfo
 
 describe("POSIX defaults follow the XDG base directory layout", () => {
   test("config, data, state and cache", () => {
-    expect(configBaseDir(posix())).toBe(join(POSIX_HOME, ".config"));
-    expect(dataBaseDir(posix())).toBe(join(POSIX_HOME, ".local", "share"));
-    expect(stateBaseDir(posix())).toBe(join(POSIX_HOME, ".local", "state"));
-    expect(cacheBaseDir(posix())).toBe(join(POSIX_HOME, ".cache"));
+    expect(configBaseDir(posix())).toBe(posixPath.join(POSIX_HOME, ".config"));
+    expect(dataBaseDir(posix())).toBe(posixPath.join(POSIX_HOME, ".local", "share"));
+    expect(stateBaseDir(posix())).toBe(posixPath.join(POSIX_HOME, ".local", "state"));
+    expect(cacheBaseDir(posix())).toBe(posixPath.join(POSIX_HOME, ".cache"));
   });
 
   test("macOS keeps the XDG layout, not ~/Library", () => {
     const mac: PlatformDirsEnv = { platform: "darwin", home: "/Users/t", env: {} };
-    expect(configBaseDir(mac)).toBe(join("/Users/t", ".config"));
+    expect(configBaseDir(mac)).toBe(posixPath.join("/Users/t", ".config"));
   });
 
   test("each XDG variable wins over its default", () => {
@@ -60,7 +60,9 @@ describe("POSIX defaults follow the XDG base directory layout", () => {
   });
 
   test("an empty XDG variable counts as unset", () => {
-    expect(configBaseDir(posix({ XDG_CONFIG_HOME: "" }))).toBe(join(POSIX_HOME, ".config"));
+    expect(configBaseDir(posix({ XDG_CONFIG_HOME: "" }))).toBe(
+      posixPath.join(POSIX_HOME, ".config"),
+    );
   });
 });
 

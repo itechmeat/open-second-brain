@@ -299,8 +299,10 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
 // 106 -> 107 -> 108, the second hop the agent-presence wave (t_635e3e72):
 // brain_skill_rewrite_status joins driven beside brain_skill_proposals,
 // one ownerless recipe - ids and rates only, nothing owner-tagged to reach.
-export const PROBE_ENTRY_COUNT = 108;
-export const PROBE_RECIPE_COUNT = 251;
+// 108 -> 109, the brain store wave: brain_changes, one ownerless recipe -
+// record ids from the index, and store records carry no `owner:`.
+export const PROBE_ENTRY_COUNT = 109;
+export const PROBE_RECIPE_COUNT = 252;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -523,6 +525,13 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
         reason: REASON.ownerlessLane,
       },
     ],
+  },
+  {
+    // The brain store change probe answers record ids from the index; a
+    // store record envelope carries an `agent`, never an `owner:`, and the
+    // fixture vault holds no store at all, so the probe reports none.
+    name: "brain_changes",
+    calls: one({}, REASON.ownerlessLane),
   },
   {
     name: "brain_claims",

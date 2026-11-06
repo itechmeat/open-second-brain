@@ -29,6 +29,8 @@
 
 import { existsSync } from "node:fs";
 
+import { isPrivatePageFile } from "../store/dual-write-records.ts";
+
 import { computeContentHash } from "./content-hash.ts";
 import { appendEditHistory, type EditHistoryEntry } from "./health/edit-history.ts";
 import { appendPrefAudit, type PrefAuditSink } from "./pref-audit.ts";
@@ -270,6 +272,7 @@ export function writePreferenceTxn(
           revision_after: inputWithDefaults.revision ?? null,
           hash_before: existing ? computeContentHash(existing.principle, existing.scope) : null,
           hash_after: computeContentHash(inputWithDefaults.principle, inputWithDefaults.scope),
+          private: () => isPrivatePageFile(result.path),
         },
         { now: audit.now?.() ?? new Date() },
       );

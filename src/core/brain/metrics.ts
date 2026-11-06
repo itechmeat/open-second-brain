@@ -34,6 +34,9 @@ import {
 } from "./ledger-shards.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
 /** On-disk schema version stamped on every metric record. */
 export const METRICS_SCHEMA_VERSION = "o2b.metrics.v1";
@@ -165,6 +168,19 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
   } finally {
     handle.release();
   }
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // A sample is counts and timings, but its payload is caller-shaped: one
+  // that names a private page, or a page that cannot be judged, goes to
+  // `private` only.
+  dualWrite(
+    () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.metrics,
+        record,
+        rowNamesPrivatePage(vault, record) ? "private" : "shared",
+      ),
+    { vault },
+  );
 }
 
 /**

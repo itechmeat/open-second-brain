@@ -92,10 +92,9 @@ function columnOf(path: string): string | null {
 }
 
 describe("the v16 entry", () => {
-  test("appends to MIGRATIONS as the latest version and adds no DDL", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(16);
-    expect(MIGRATIONS.length).toBe(16);
-    expect(MIGRATIONS[MIGRATIONS.length - 1]!.version).toBe(16);
+  test("appends to MIGRATIONS after v15 and adds no DDL", () => {
+    expect(MIGRATIONS.length).toBe(LATEST_SCHEMA_VERSION);
+    expect(MIGRATIONS[15]!.version).toBe(16);
   });
 
   test("runs from a rewound v15 index and stamps the version", async () => {
@@ -104,7 +103,7 @@ describe("the v16 entry", () => {
     expect(migrate()).toBe(LATEST_SCHEMA_VERSION);
     const db = new Database(dbPath, { readonly: true });
     try {
-      expect(readSchemaVersion(db)).toBe(16);
+      expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
     } finally {
       db.close();
     }

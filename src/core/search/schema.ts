@@ -13,13 +13,20 @@ import { SearchError } from "./types.ts";
 import { hasPrivacyMarkerKey, remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { closeDatabase } from "../sqlite-close.ts";
+import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
+import { newUlid } from "../store/ulid.ts";
+import {
+  DOCUMENT_SOURCE,
+  STORE_INDEX_GENERATION_KEY,
+  STORE_RECORD_PATH_PREFIX,
+} from "./brain-store/constants.ts";
 
 /**
  * Latest schema version this code understands. A DB with a value above
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 16;
+export const LATEST_SCHEMA_VERSION = 17;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -787,7 +794,114 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       restampMarkerVisibility(db);
     },
   },
+  {
+    // v17 (brain store index, design D5, task 1.8) - what the index needs
+    // to read the brain store beside the vault:
+    //
+    //   - `store_watermarks`: one row per shard - its file identity, size,
+    //     mtime, the byte offset read so far and a hash of the verified
+    //     prefix - so catch-up reads only what was appended and re-reads a
+    //     replaced, shrunk or rewritten shard from the start;
+    //   - `records`: one row per store record (envelope fields, the shard
+    //     it was last read from, an ingest sequence the change probe pages
+    //     by, and the document its text was indexed under, if any);
+    //   - `documents.source`: a VIRTUAL generated column deriving `note` or
+    //     `brain` from the path alone (store records and the legacy
+    //     `Brain/` tree are brain), so no writer can forget to set it and
+    //     no backfill is needed;
+    //   - the index generation: a fresh ULID per index file, so a watermark
+    //     from a replaced index is recognised as stale.
+    //
+    // In place and reindex-safe: no existing row changes. The empty
+    // watermark table makes the next catch-up read every shard from offset
+    // 0, which is also what picks up records an older binary skipped for
+    // an unknown format version.
+    version: 17,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_xinfo(documents)").all();
+      if (!docCols.some((c) => c.name === DOCUMENT_SOURCE_COLUMN)) {
+        db.exec(
+          `ALTER TABLE documents ADD COLUMN ${DOCUMENT_SOURCE_COLUMN} TEXT ` +
+            `GENERATED ALWAYS AS (${documentSourceExpression()}) VIRTUAL`,
+        );
+      }
+      db.exec(DDL_V17_STORE);
+      db.query("INSERT OR IGNORE INTO index_state(key, value, updated_at) VALUES (?, ?, ?)").run(
+        STORE_INDEX_GENERATION_KEY,
+        newUlid(),
+        new Date().toISOString(),
+      );
+    },
+  },
 ]);
+
+/** The `documents` column naming where a document came from (v17). */
+export const DOCUMENT_SOURCE_COLUMN = "source";
+
+/** One row per store shard the index has read (v17). */
+export const STORE_WATERMARKS_TABLE = "store_watermarks";
+
+/** One row per store record the index has ingested (v17). */
+export const RECORDS_TABLE = "records";
+
+const DDL_V17_STORE = `
+CREATE TABLE IF NOT EXISTS ${STORE_WATERMARKS_TABLE} (
+  shard             TEXT PRIMARY KEY,
+  partition         TEXT NOT NULL,
+  identity          TEXT NOT NULL,
+  size              INTEGER NOT NULL,
+  mtime_ms          INTEGER NOT NULL,
+  byte_offset       INTEGER NOT NULL,
+  prefix_hash       TEXT NOT NULL,
+  unknown_versions  INTEGER NOT NULL DEFAULT 0,
+  corrupt_lines     INTEGER NOT NULL DEFAULT 0,
+  updated_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ${RECORDS_TABLE} (
+  id            TEXT PRIMARY KEY,
+  seq           INTEGER NOT NULL UNIQUE,
+  document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  partition     TEXT NOT NULL,
+  stream        TEXT NOT NULL,
+  ledger        TEXT,
+  kind          TEXT NOT NULL,
+  scope         TEXT,
+  topic         TEXT,
+  hlc           TEXT NOT NULL,
+  device        TEXT NOT NULL,
+  agent         TEXT NOT NULL,
+  authority     TEXT,
+  sum           TEXT NOT NULL,
+  shard         TEXT NOT NULL,
+  body_pending  INTEGER NOT NULL DEFAULT 0,
+  indexed_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_records_shard ON ${RECORDS_TABLE}(shard);
+CREATE INDEX IF NOT EXISTS idx_records_document ON ${RECORDS_TABLE}(document_id);
+CREATE INDEX IF NOT EXISTS idx_records_pending ON ${RECORDS_TABLE}(body_pending) WHERE body_pending = 1;
+`;
+
+/** SQL string literal of `value` (single quotes doubled). */
+function sqlLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * The generated-column expression of {@link DOCUMENT_SOURCE_COLUMN}: a
+ * store record (`.brain-store/...`) or a page of the legacy brain tree
+ * (`Brain` or `Brain/...`, compared case-sensitively) is `brain`, every
+ * other path is a user `note`.
+ */
+function documentSourceExpression(): string {
+  const storePrefix = `${STORE_RECORD_PATH_PREFIX}/`;
+  const brainPrefix = `${BRAIN_ROOT_REL}/`;
+  return (
+    `CASE WHEN substr(path, 1, ${storePrefix.length}) = ${sqlLiteral(storePrefix)} ` +
+    `OR path = ${sqlLiteral(BRAIN_ROOT_REL)} ` +
+    `OR substr(path, 1, ${brainPrefix.length}) = ${sqlLiteral(brainPrefix)} ` +
+    `THEN ${sqlLiteral(DOCUMENT_SOURCE.brain)} ELSE ${sqlLiteral(DOCUMENT_SOURCE.note)} END`
+  );
+}
 
 /**
  * The `documents` column holding what the index measured of a page's

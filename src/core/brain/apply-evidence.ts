@@ -41,7 +41,22 @@ import {
   REMEMBER_KEY_STATUS,
   rememberKey,
 } from "./idempotency-ledger.ts";
-import { appendLogEvent, type AppendLogEventResult, type BrainLogEntry } from "./log.ts";
+import {
+  appendLogEvent,
+  logEventPrivacyContent,
+  type AppendLogEventResult,
+  type BrainLogEntry,
+} from "./log.ts";
+import { dualWrite, isDualWriteEnabled } from "../store/dual-write.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { isPrivatePageFile, preferenceEvidenceRecord } from "../store/dual-write-records.ts";
+import {
+  callerInput,
+  opaqueFields,
+  operationPrivacy,
+  type OperationPrivacy,
+  type PrivacyVerdict,
+} from "../store/operation-privacy.ts";
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { isoSecond } from "./time.ts";
@@ -150,6 +165,11 @@ export interface AppendApplyEvidenceOptions {
    * every preference counts.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The privacy verdict of an enclosing operation (a write batch), which
+   * every store record of this call inherits (`store/operation-privacy.ts`).
+   */
+  readonly storePrivate?: PrivacyVerdict;
 }
 
 /**
@@ -179,26 +199,25 @@ export interface AppendApplyEvidenceResult {
   readonly deduped?: boolean;
 }
 
+/** A validated evidence call: its target and the event body it appends. */
+interface PreparedEvidence {
+  readonly prefFilePath: string;
+  readonly target: ReturnType<typeof parsePreference>;
+  /** The event body, as the call hands it to the log appender. */
+  readonly body: Record<string, string>;
+}
+
 /**
- * Append one `apply-evidence` event to today's log. Throws
- * {@link BrainPreferenceNotFoundError} when the preference id does not
- * resolve to a file under `Brain/preferences/`.
- *
- * The log file is created on the first event of the day (the appender
- * inside `log.ts` handles that transparently). Subsequent calls on the
- * same UTC day append.
+ * Validate one evidence call and render the event body it appends. Shared
+ * by {@link appendApplyEvidence} and {@link applyEvidencePrivacy}, so the
+ * privacy a write batch judges before it commits is judged from the very
+ * body the append writes.
  */
-export function appendApplyEvidence(
+function prepareEvidence(
   vault: string,
   input: AppendApplyEvidenceInput,
-  opts: AppendApplyEvidenceOptions = {},
-): AppendApplyEvidenceResult {
-  if (opts.role !== undefined) {
-    const verdict = checkRolePermission(opts.role, BRAIN_OPERATIONS.evidence_record);
-    if (!verdict.allowed) {
-      throw new BrainRolePermissionError(opts.role, verdict.reason ?? "denied");
-    }
-  }
+  readable: ((rel: string) => boolean) | undefined,
+): PreparedEvidence {
   if (!input.pref_id || !input.pref_id.trim()) {
     throw new Error("apply-evidence missing field: pref_id");
   }
@@ -245,7 +264,7 @@ export function appendApplyEvidence(
   }
   validateSlug(slug);
   const prefFilePath = preferencePath(vault, slug);
-  if (!isApplyEvidenceTargetPresent(vault, prefFilePath, opts.readable)) {
+  if (!isApplyEvidenceTargetPresent(vault, prefFilePath, readable)) {
     throw new BrainPreferenceNotFoundError(`pref-${slug}`, prefFilePath);
   }
   // Parse so a corrupted target produces a meaningful error rather
@@ -253,9 +272,6 @@ export function appendApplyEvidence(
   // The parsed pref also supplies the principle used to title the
   // wikilink we emit below.
   const target = parsePreference(prefFilePath);
-
-  const now = opts.now ?? new Date();
-  const timestamp = isoSecond(now);
   const wikilink = renderPrefLink({ id: target.id, principle: target.principle });
 
   // Render the canonical payload. Ordering is deliberate: the wikilink
@@ -277,66 +293,163 @@ export function appendApplyEvidence(
   }
   const trimmedNote = note?.trim();
   if (trimmedNote) body["note"] = trimmedNote;
+  return { prefFilePath, target, body };
+}
 
-  // Idempotency consult (C1): a repeat with the same key + same payload
-  // dedupes (no second row); the same key + a different payload throws
-  // before appending. The hash covers the rendered event body — exactly
-  // what would land in the log.
-  const idKey = input.idempotency_key?.trim();
-  let idContentHash: string | undefined;
-  if (idKey) {
-    idContentHash = computePayloadHash(body);
-    const existing = lookupKey(vault, idKey);
-    if (existing) {
-      if (existing.contentHash === idContentHash) {
-        const ref = (existing.ref ?? {}) as { logged_at?: string; log_path?: string };
+/**
+ * The privacy verdict of one evidence call (`store/operation-privacy.ts`):
+ * private when the target preference is private or cannot be judged, when
+ * the event body or any field of the caller's `input` (its idempotency
+ * key included) names a private or unresolvable page or carries a
+ * `<private>` region, or when `inherit` (an enclosing operation) is.
+ */
+function evidencePrivacy(
+  vault: string,
+  input: AppendApplyEvidenceInput,
+  prepared: PreparedEvidence,
+  inherit?: PrivacyVerdict,
+): OperationPrivacy {
+  return operationPrivacy(vault, {
+    target: () => isPrivatePageFile(prepared.prefFilePath),
+    content: [logEventPrivacyContent(prepared.body), callerInput(input, EVIDENCE_INPUT_OPAQUE)],
+    inherit: [inherit],
+  });
+}
+
+/** Opaque fields of an evidence call's input: its idempotency key. */
+const EVIDENCE_INPUT_OPAQUE: ReadonlySet<string> = opaqueFields();
+
+/**
+ * The privacy verdict {@link appendApplyEvidence} would give `input`, for
+ * an enclosing operation (a write batch) that judges itself before it
+ * commits. A call that would be refused cannot be judged and counts as
+ * private.
+ */
+export function applyEvidencePrivacy(
+  vault: string,
+  input: AppendApplyEvidenceInput,
+  readable?: (rel: string) => boolean,
+): OperationPrivacy {
+  let prepared: PreparedEvidence;
+  try {
+    prepared = prepareEvidence(vault, input, readable);
+  } catch {
+    return () => true;
+  }
+  return evidencePrivacy(vault, input, prepared);
+}
+
+/**
+ * Append one `apply-evidence` event to today's log. Throws
+ * {@link BrainPreferenceNotFoundError} when the preference id does not
+ * resolve to a file under `Brain/preferences/`.
+ *
+ * The log file is created on the first event of the day (the appender
+ * inside `log.ts` handles that transparently). Subsequent calls on the
+ * same UTC day append.
+ */
+export function appendApplyEvidence(
+  vault: string,
+  input: AppendApplyEvidenceInput,
+  opts: AppendApplyEvidenceOptions = {},
+): AppendApplyEvidenceResult {
+  if (opts.role !== undefined) {
+    const verdict = checkRolePermission(opts.role, BRAIN_OPERATIONS.evidence_record);
+    if (!verdict.allowed) {
+      throw new BrainRolePermissionError(opts.role, verdict.reason ?? "denied");
+    }
+  }
+  const prepared = prepareEvidence(vault, input, opts.readable);
+  const { target, body } = prepared;
+  // One privacy verdict for every store record this call writes: the log
+  // event, the idempotency receipt and the evidence record. It is judged
+  // once, before anything is appended, so it follows the preference as
+  // read here even if the file is rewritten or retired meanwhile. Judged
+  // only when the dual write is on (with it off nothing changes).
+  const privacy = evidencePrivacy(vault, input, prepared, opts.storePrivate);
+  if (isDualWriteEnabled()) privacy();
+  // Every store record written from here on, by this call or by any
+  // writer it calls, carries this verdict (`store/operation-scope.ts`).
+  return withOperationPrivacy(privacy, () => {
+    const now = opts.now ?? new Date();
+    const timestamp = isoSecond(now);
+
+    // Idempotency consult (C1): a repeat with the same key + same payload
+    // dedupes (no second row); the same key + a different payload throws
+    // before appending. The hash covers the rendered event body — exactly
+    // what would land in the log.
+    const idKey = input.idempotency_key?.trim();
+    let idContentHash: string | undefined;
+    if (idKey) {
+      idContentHash = computePayloadHash(body);
+      const existing = lookupKey(vault, idKey);
+      if (existing) {
+        if (existing.contentHash === idContentHash) {
+          const ref = (existing.ref ?? {}) as { logged_at?: string; log_path?: string };
+          return {
+            logged_at: ref.logged_at ?? timestamp,
+            log_path: ref.log_path ? join(vault, ref.log_path) : "",
+            deduped: true,
+          };
+        }
+        throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
+      }
+    }
+
+    const entry: BrainLogEntry = {
+      timestamp,
+      eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+      body,
+    };
+    const result: AppendLogEventResult = appendLogEvent(vault, entry, { storePrivate: privacy });
+
+    // Record the key AFTER the row lands so a future retry dedupes. Under a
+    // concurrent same-key race the unlocked lookupKey above can miss a rival
+    // write; rememberKey re-checks under its shard lock and returns the verdict,
+    // which we MUST act on (the ledger never throws — the writer decides).
+    if (idKey && idContentHash !== undefined) {
+      const remembered = rememberKey(vault, {
+        key: idKey,
+        contentHash: idContentHash,
+        createdAt: timestamp,
+        ref: { logged_at: timestamp, log_path: relative(vault, result.logPath) },
+        private: privacy,
+      });
+      if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
+        throw new IdempotencyPayloadMismatchError(
+          idKey,
+          remembered.record.contentHash,
+          idContentHash,
+        );
+      }
+      if (remembered.status === REMEMBER_KEY_STATUS.duplicate_match) {
+        // A rival process won the key with the same payload between our unlocked
+        // lookup and this locked record; report the winner's row as the deduped
+        // result instead of a second normal write.
+        const ref = (remembered.record.ref ?? {}) as { logged_at?: string; log_path?: string };
         return {
           logged_at: ref.logged_at ?? timestamp,
-          log_path: ref.log_path ? join(vault, ref.log_path) : "",
+          log_path: ref.log_path ? join(vault, ref.log_path) : result.logPath,
           deduped: true,
         };
       }
-      throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
     }
-  }
 
-  const entry: BrainLogEntry = {
-    timestamp,
-    eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
-    body,
-  };
-  const result: AppendLogEventResult = appendLogEvent(vault, entry);
+    // Brain store dual write (task 1.11): the log event above is dual-written
+    // by the log appender; the evidence record feeds the preference fold's
+    // counters. Off by default, never fails this append.
+    dualWrite(
+      () =>
+        preferenceEvidenceRecord({
+          id: target.id,
+          result: input.result,
+          artifact: body["artifact"]!,
+          agent: body["agent"]!,
+          private: privacy(),
+        }),
+      { vault },
+    );
 
-  // Record the key AFTER the row lands so a future retry dedupes. Under a
-  // concurrent same-key race the unlocked lookupKey above can miss a rival
-  // write; rememberKey re-checks under its shard lock and returns the verdict,
-  // which we MUST act on (the ledger never throws — the writer decides).
-  if (idKey && idContentHash !== undefined) {
-    const remembered = rememberKey(vault, {
-      key: idKey,
-      contentHash: idContentHash,
-      createdAt: timestamp,
-      ref: { logged_at: timestamp, log_path: relative(vault, result.logPath) },
-    });
-    if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
-      throw new IdempotencyPayloadMismatchError(
-        idKey,
-        remembered.record.contentHash,
-        idContentHash,
-      );
-    }
-    if (remembered.status === REMEMBER_KEY_STATUS.duplicate_match) {
-      // A rival process won the key with the same payload between our unlocked
-      // lookup and this locked record; report the winner's row as the deduped
-      // result instead of a second normal write.
-      const ref = (remembered.record.ref ?? {}) as { logged_at?: string; log_path?: string };
-      return {
-        logged_at: ref.logged_at ?? timestamp,
-        log_path: ref.log_path ? join(vault, ref.log_path) : result.logPath,
-        deduped: true,
-      };
-    }
-  }
-
-  return { logged_at: timestamp, log_path: result.logPath };
+    return { logged_at: timestamp, log_path: result.logPath };
+  });
 }

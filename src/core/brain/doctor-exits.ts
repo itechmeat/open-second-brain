@@ -52,6 +52,97 @@ export interface DoctorExitExclusion {
 }
 
 const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
+  // --- The brain store (task 1.11, a phase 1 trial) ------------------------
+  {
+    code: "store-dual-write-failures",
+    reason:
+      "a failed dual write names a cause outside the store itself (a full disk, a partition this " +
+      "machine does not hold, a refused root), and the legacy write it shadowed was kept; the " +
+      "fix is to remove that cause, which differs per failure and is named in the finding",
+  },
+  {
+    code: "store-dual-write-skipped",
+    reason:
+      "the store needs a device id this machine has not been given; choosing one is a decision " +
+      "about how this machine is named among the user's devices, which no command can make for them",
+  },
+  {
+    code: "store-root-invalid",
+    reason:
+      "the configured store root cannot be used (inside the vault, or holding partitions of two " +
+      "stores); where the store should live, and which store is the real one, is the user's choice",
+  },
+  {
+    code: "store-digest-divergent",
+    reason:
+      "two machines folded identical records into different state, which is a defect in the " +
+      "release that computed one of them; repairing it by rewriting records would destroy the " +
+      "evidence, so the finding asks for both store folders to be kept and the bug reported",
+  },
+  {
+    code: "store-digest-silent",
+    reason:
+      "a device that stopped publishing digests is either offline, waiting for sync, or gone for " +
+      "good; only the user knows which, and only a human device-retire record takes it off the roster",
+  },
+  {
+    code: "store-record-id-conflict",
+    reason:
+      "a record id arrived with two different contents, so a shard was edited or a writer is " +
+      "broken; every machine already keeps the same version, and deciding which content was " +
+      "meant needs a person reading both",
+  },
+  {
+    code: "store-dual-write-no-store",
+    reason:
+      "the skipped records never reached the store and no command can recreate them from the " +
+      "legacy tree; creating the store stops new skips, and the counter is reset by deleting a " +
+      "device-local file once the user has seen it",
+  },
+  {
+    code: "store-clock-ahead",
+    reason:
+      "the records carry the clock of the device that wrote them; the fix is the clock of that " +
+      "machine, which is outside the vault, and records already written are never rewritten",
+  },
+  {
+    code: "store-device-dir-reserved",
+    reason:
+      "a peer machine's device id is a name Windows reserves for a device, so its shard folder " +
+      "cannot exist on this Windows machine; the fix is that peer's device id, which is outside " +
+      "this machine",
+  },
+  {
+    code: "store-mode-loose",
+    reason:
+      "the looser mode was set outside Open Second Brain (a sync client, a restore, a manual " +
+      "chmod); the finding names the exact chmod command, and changing permissions on the " +
+      "user's files is left to the user",
+  },
+  {
+    code: "store-record-id-cross-partition",
+    reason:
+      "a record id appears in both partitions, so a peer copied or forged a record; the index " +
+      "keeps the first copy, and deciding which copy is genuine needs a person reading both",
+  },
+  {
+    code: "store-shard-tail-held",
+    reason:
+      "the held bytes are the unfinished last line of another device's shard; only that device's " +
+      "next append or a completed sync closes it, and no command on this machine can",
+  },
+  {
+    code: "store-shard-unreadable",
+    reason:
+      "a shard file this machine holds could not be read (permissions, a disk error, a sync " +
+      "client holding a lock); the cause is named in the finding and differs per machine",
+  },
+  {
+    code: "store-partition-unreadable",
+    reason:
+      "a partition folder this machine holds could not be read (permissions, a disk error, a " +
+      "sync client holding a lock); the cause is named in the finding and differs per machine",
+  },
   // --- Judgements over content -------------------------------------------
   {
     code: "active-budget-pressure",

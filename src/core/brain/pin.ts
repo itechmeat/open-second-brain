@@ -30,15 +30,22 @@
 import { existsSync } from "node:fs";
 
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import { authorityFromOrigin, dualWrite } from "../store/dual-write.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { preferenceSetRecord } from "../store/dual-write-records.ts";
+import { callerInput, opaqueFields } from "../store/operation-privacy.ts";
 import { regenerateActiveQuiet } from "./active.ts";
-import { appendLogEvent, type BrainLogEntry } from "./log.ts";
-import { parsePreference } from "./preference.ts";
+import { appendLogEvent, logEventPrivacyContent, type BrainLogEntry } from "./log.ts";
+import { parsePreference, preferencePrivacy, storeFieldsOf } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainPreference } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
 import { BrainPreferenceNotFoundError } from "./apply-evidence.ts";
+
+/** Fields of a pin call's input that are not text: its clock. */
+const PIN_INPUT_OPAQUE: ReadonlySet<string> = opaqueFields("now");
 
 export interface SetPinnedOptions {
   /** Override the wall clock used in the log event. */
@@ -118,7 +125,6 @@ export function setPinned(
     existsErrorKind: "preference",
     vaultForRelativePath: vault,
   });
-
   // Emit the log event only on a real transition.
   const now = opts.now ?? new Date();
   const entry: BrainLogEntry = {
@@ -132,10 +138,36 @@ export function setPinned(
       agent: (opts.agent ?? "cli").trim() || "cli",
     },
   };
-  appendLogEvent(vault, entry);
-  regenerateActiveQuiet(vault, { now });
+  // One privacy verdict for both store records of this call, the pinned
+  // field and the log event: the preference's own (its frontmatter, its
+  // content fields), the event's body and the caller's whole input.
+  const privacy = preferencePrivacy(vault, storeFieldsOf(newMeta), [
+    logEventPrivacyContent(entry.body),
+    callerInput({ prefId, ...opts }, PIN_INPUT_OPAQUE),
+  ]);
+  // Every store record written from here on, by this call or by any
+  // writer it calls, carries this verdict (`store/operation-scope.ts`).
+  return withOperationPrivacy(privacy, () => {
+    // Brain store dual write (task 1.11): the one field this call changed,
+    // filed under the preference's own scope.
+    dualWrite(
+      () => {
+        const record = preferenceSetRecord({
+          id: `pref-${slug}`,
+          frontmatter: { pinned: value },
+          authority: authorityFromOrigin(),
+          private: privacy(),
+        });
+        const scope = current.scope?.trim();
+        return record === null ? null : { ...record, scope: scope ? scope : null };
+      },
+      { vault },
+    );
+    appendLogEvent(vault, entry, { storePrivate: privacy });
+    regenerateActiveQuiet(vault, { now });
 
-  return { path, changed: true };
+    return { path, changed: true };
+  });
 }
 
 /**

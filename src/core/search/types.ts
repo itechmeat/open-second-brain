@@ -23,6 +23,8 @@ import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts"
 import type { NeedsLlmStep } from "../brain/llm-step.ts";
 import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
 import type { EmbeddingPriceOverride, EmbeddingPriceSource } from "./embeddings/pricing.ts";
+import type { IndexedStore } from "./brain-store/location.ts";
+import type { SearchSource } from "./brain-store/constants.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
@@ -1041,6 +1043,14 @@ export interface SearchOptions {
    */
   readonly kind?: "page" | "section";
   /**
+   * Source filter (design D5): `notes` keeps only the user's notes, `brain`
+   * only brain records (store records and pages of the legacy `Brain/`
+   * tree), judged by the index's `documents.source` column. Applied as a
+   * post-rank pool filter, so the pool overfetches when it is set. Absent =
+   * both, byte-identical to prior behaviour.
+   */
+  readonly source?: SearchSource;
+  /**
    * Graph-degree cardinality predicates (t_9bee8f0b). Each predicate
    * selects notes by backlink/outlink count (orphans `backlinks = 0`,
    * hubs `outlinks >= N`, etc.); predicates are ANDed and applied as a
@@ -1926,6 +1936,20 @@ export interface ResolvedFreshenConfig {
 export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
+  /**
+   * The brain store this index catches up from before every read (design
+   * D5), or null/absent when no store is in use: the index then holds the
+   * vault's notes only, exactly as before the store existed.
+   */
+  readonly brainStore?: IndexedStore | null;
+  /**
+   * `true` when this resolution could not tell whether a store is in use
+   * (the store root did not resolve, an identity file was unreadable, or
+   * the partitions disagreed), as opposed to finding none. The indexer
+   * then keeps the store records an index already holds instead of
+   * purging them over what may be a passing failure.
+   */
+  readonly brainStoreUnknown?: boolean;
   /**
    * The config file this resolution read, or null when it consulted no
    * file (env-only). Carried so a per-phase re-read (the relational

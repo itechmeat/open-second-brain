@@ -5,6 +5,9 @@ import { interleaveShardRows, jsonlLedgerGrammar, readShardLinesByShard } from "
 import { BRAIN_LOG_REL } from "./path-constants.ts";
 import { proceduralRecurrencePath, RECURRENCE_LEDGER_STEM } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { dualWrite } from "../store/dual-write.ts";
+import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
+import { claimSourceIsPrivate, rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
 /** The recurrence ledger's file-name layout, handed to the shared shard grammar. */
 const RECURRENCE_LEDGER_GRAMMAR = jsonlLedgerGrammar(RECURRENCE_LEDGER_STEM);
@@ -242,6 +245,20 @@ function appendEvent(vault: string, event: RecurrenceEvent): void {
   const path = proceduralRecurrencePath(vault);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });
+  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // `sourceId` and `scope` can name a page: a source that is a private
+  // page, or a page link that names none here, goes to `private` only.
+  dualWrite(
+    () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.recurrence,
+        event,
+        claimSourceIsPrivate(vault, event.sourceId) || rowNamesPrivatePage(vault, event)
+          ? "private"
+          : "shared",
+      ),
+    { vault },
+  );
 }
 
 /**

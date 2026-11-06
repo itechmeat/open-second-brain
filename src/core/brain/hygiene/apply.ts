@@ -248,18 +248,22 @@ export async function applyHygienePlan(
   }
 
   if (applied.length > 0 || errors.length > 0) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR), {
-      timestamp: opts.now.toISOString(),
-      actor: opts.agent,
-      action: "hygiene_apply",
-      target: "Brain",
-      ok: errors.length === 0,
-      details: {
-        applied: applied.length,
-        errors: errors.length,
-        actions: applied.map((action) => `${action.action}:${action.finding_id}`),
+    appendAuditRecord(
+      join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR),
+      {
+        timestamp: opts.now.toISOString(),
+        actor: opts.agent,
+        action: "hygiene_apply",
+        target: "Brain",
+        ok: errors.length === 0,
+        details: {
+          applied: applied.length,
+          errors: errors.length,
+          actions: applied.map((action) => `${action.action}:${action.finding_id}`),
+        },
       },
-    });
+      vault,
+    );
   }
 
   return Object.freeze({

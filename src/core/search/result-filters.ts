@@ -38,6 +38,7 @@ import {
   type RankAdjustVerdict,
 } from "./rank-adjust.ts";
 import type { BrainSearchResult } from "./types.ts";
+import { isStoreRecordPath } from "./brain-store/constants.ts";
 
 /**
  * A cached frontmatter read, plus whether the file could be read at all.
@@ -407,6 +408,12 @@ export function applyVisibilityScope(
  * ids, retired ids and evidence artifacts, and the page carries no
  * visibility that could say so. The log's dedicated readers render its
  * events per reader instead.
+ *
+ * A brain store record ({@link isStoreRecordPath}) answers `false` below
+ * local reach too: it is not a file in the vault, so no frontmatter can
+ * be measured for it, and its body may name the same reserved ids a log
+ * page does. Store records reach local callers only until the store has
+ * per-record visibility of its own.
  */
 export function isPathReadableAtReach(
   vault: string,
@@ -416,7 +423,10 @@ export function isPathReadableAtReach(
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
   if (!pathIsInside(join(vault, path), vault)) return false;
-  if (reach !== TRANSPORT_REACH.local && (isCompiledDigestRel(path) || isBrainLogRel(path))) {
+  if (
+    reach !== TRANSPORT_REACH.local &&
+    (isCompiledDigestRel(path) || isBrainLogRel(path) || isStoreRecordPath(path))
+  ) {
     return false;
   }
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);

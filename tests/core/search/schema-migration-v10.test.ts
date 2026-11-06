@@ -40,11 +40,8 @@ function hasColumn(db: Database, table: string, name: string): boolean {
 // v16 (privacy-marker visibility restamp): the marker-aware visibility
 // re-measurement joined (v15 (chunk skip-and-hold) had added the
 // chunk_embedding_holds table; v14 the chunk_kind column, taxonomy
-// indexes and document_attributes side table).
-test("latest schema version is 16", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(16);
-});
-
+// indexes and document_attributes side table). v17 (brain store index)
+// added the watermark and records tables and the source column.
 test("fresh migration reaches latest with the authored_at column", () => {
   const db = new Database(dbPath);
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);

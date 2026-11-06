@@ -24,7 +24,16 @@
  * identical files — a property exercised by the roundtrip test.
  */
 
-import { join, relative } from "node:path";
+import { dualWrite } from "../store/dual-write.ts";
+import { isPrivateFrontmatter, signalRecord } from "../store/dual-write-records.ts";
+import {
+  callerInput,
+  operationPrivacy,
+  SIGNAL_OPAQUE_FIELDS,
+  type OperationPrivacy,
+} from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { join, relative, resolve } from "node:path";
 
 import type { WriteSubject } from "./write-disposition.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -351,6 +360,44 @@ export function writeSignal(
     validateSignalInput(sanitiseSignalInput(resolvedInput)),
   );
 
+  // One privacy verdict for every store record this write produces (the
+  // review gate's decision row, the signal and its idempotency receipt),
+  // judged lazily so dual writes off judge nothing: the frontmatter
+  // reserving the page as private, or any content field (`principle`,
+  // `source`, `raw`, ...) naming a private or unresolvable page or carrying
+  // a `<private>` region, or any field of the caller's input (its
+  // idempotency key included) doing so. Judged from the frontmatter the
+  // signal will carry; its final id (a collision suffix) is opaque, so the
+  // first candidate's id judges the same. Every record written from here
+  // on, by this call or any writer it calls, carries it
+  // (`store/operation-scope.ts`).
+  const candidate = renderSignalDocument(
+    sanitised,
+    `${signalPrefix(sanitised.date)}-${sanitised.slug}`,
+  ).metadata;
+  const privacy = operationPrivacy(vault, {
+    target: () => isPrivateFrontmatter(candidate),
+    content: [
+      {
+        value: { frontmatter: candidate, raw: sanitised.raw ?? null },
+        opaque: SIGNAL_OPAQUE_FIELDS,
+      },
+      callerInput(input, SIGNAL_OPAQUE_FIELDS),
+    ],
+  });
+  return withOperationPrivacy(privacy, () =>
+    writeJudgedSignal(vault, input, options, resolvedInput, sanitised, privacy),
+  );
+}
+
+function writeJudgedSignal(
+  vault: string,
+  input: WriteSignalInput,
+  options: WriteSignalOptions,
+  resolvedInput: WriteSignalInput,
+  sanitised: WriteSignalInput,
+  privacy: OperationPrivacy,
+): WriteSignalResult {
   // Idempotency consult (C1): when a client key is supplied, hash the
   // semantic payload and check the ledger BEFORE allocating a slug or
   // touching disk. A prior write with the same key short-circuits here —
@@ -444,6 +491,8 @@ export function writeSignal(
     ),
   );
 
+  const frontmatter = renderSignalDocument(sanitised, id).metadata;
+
   // Record the key AFTER the file lands so a future retry dedupes. `ref`
   // stores the vault-relative path + id so the dedupe branch above can
   // return the original coordinates without re-deriving them.
@@ -455,9 +504,30 @@ export function writeSignal(
         contentHash: hash,
         createdAt: sanitised.created_at,
         ref: { id, path: relative(vault, allocated.path) },
+        private: privacy,
       }),
     );
   }
+
+  // Brain store dual write (task 1.11): off by default, never fails this write.
+  // `staged` says where the file landed: the review gate's staging, or an
+  // explicit target that is the pending directory (`stagePendingSignal`).
+  const landedStaged =
+    gateStaged ||
+    (options.targetDir !== undefined && resolve(options.targetDir) === resolve(dirs.pending));
+  dualWrite(
+    () =>
+      signalRecord({
+        vault,
+        path: allocated.path,
+        id,
+        staged: landedStaged,
+        frontmatter,
+        raw: sanitised.raw,
+        private: privacy(),
+      }),
+    { vault },
+  );
 
   return { path: allocated.path, id, staged: gateStaged };
 }

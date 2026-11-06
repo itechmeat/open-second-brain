@@ -215,10 +215,10 @@ function attributesFor(path: string): ReadonlyArray<{ key: string; value: string
 
 describe("the v14 entry", () => {
   test("remains in the frozen array once later entries append after it", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(16);
-    expect(MIGRATIONS.length).toBe(16);
-    expect(MIGRATIONS[MIGRATIONS.length - 2]!.version).toBe(15);
-    expect(MIGRATIONS[MIGRATIONS.length - 3]!.version).toBe(14);
+    // The latest version is pinned once, in the newest migration's test.
+    expect(MIGRATIONS.length).toBe(LATEST_SCHEMA_VERSION);
+    expect(MIGRATIONS[13]!.version).toBe(14);
+    expect(MIGRATIONS[14]!.version).toBe(15);
   });
 
   test("runs from a rewound v13 index and stamps the version", async () => {
