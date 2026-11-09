@@ -43,6 +43,13 @@ export const BRAIN_SKILL_ACCEPT_JOURNAL_REL = posix.join(
   BRAIN_SKILL_PROPOSALS_REL,
   "accept-journal",
 );
+/**
+ * Shard stem of the verifier-rejection JSONL ledger inside the proposals
+ * root. Here rather than in `skill-proposals.ts` because the migration's
+ * lane map needs it too, and that module's import graph reaches the dream
+ * pass, which reads the lane map.
+ */
+export const VERIFIER_REJECTION_LEDGER_STEM = "verifier-rejections";
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");

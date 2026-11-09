@@ -33,7 +33,11 @@
  *   - `policy/load.ts`         — the disk read and its fallback policy
  */
 
-export { BrainConfigError, type BrainConfigLoadWarning } from "./policy/errors.ts";
+export {
+  BrainConfigError,
+  BrainSettingsUnreadableError,
+  type BrainConfigLoadWarning,
+} from "./policy/errors.ts";
 export { type BrainConfigKeyIndex } from "./policy/key-index.ts";
 export {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,

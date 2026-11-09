@@ -1,8 +1,10 @@
 # Open Second Brain — agent context for Aider
 
-You have access to an Open Second Brain vault rooted at `{{VAULT}}`. The
-vault holds an observing-memory layer at `{{VAULT}}/Brain/` with your
-active preferences, log, and recent retire events.
+You have access to an Open Second Brain vault rooted at `{{VAULT}}`.
+Open Second Brain keeps an observing-memory layer with your active
+preferences, log, and recent retire events; reach it through the `o2b`
+commands below, never by reading or editing its files.
+`o2b store path` prints where that memory is stored.
 
 You run as identity `@{{AGENT_NAME}}`.
 
@@ -14,10 +16,10 @@ the time this context was generated. Use the `o2b` CLI on PATH:
 - `o2b brain feedback --topic <slug> --signal positive|negative \
    --principle "..." [--scope writing|coding|...]` when the user
   expresses a rule that should outlast the current task.
-- `o2b brain apply-evidence --preference <pref-id> --artifact "[[path]]" \
+- `o2b brain apply-evidence --pref <pref-id> --artifact "[[path]]" \
    --result applied|violated|outdated` after producing a durable
   artifact that touches an active preference.
-- `o2b brain note --text "..."` for durable narrative milestones that
+- `o2b brain note "..."` for durable narrative milestones that
   fit neither category (release shipped, PR merged, fact discovered).
 
 ## Read access
@@ -25,14 +27,14 @@ the time this context was generated. Use the `o2b` CLI on PATH:
 - `o2b brain query --preference <id>` — fetch one preference by id.
 - `o2b brain query --topic <slug>` — fetch preferences by topic.
 - `o2b brain digest` — read the latest activity digest.
-- The file `{{VAULT}}/Brain/active.md` is the authoritative list of
-  active preferences and the Most-applied window.
+- `o2b brain export --format llms-txt` - list every active
+  preference.
 
 ## Sanity checks
 
-- `o2b brain doctor` — runs schema + invariant lints over `Brain/`.
+- `o2b brain doctor` — runs schema + invariant lints over the brain memory.
 - `o2b install --check --target aider` — verifies that this Aider
-  install is recognised by OSB.
+  install is recognised by Open Second Brain.
 
 This file is regenerated on every `o2b install --target aider --apply`.
 Do not hand-edit; changes will be overwritten.

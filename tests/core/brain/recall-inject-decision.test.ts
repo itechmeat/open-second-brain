@@ -58,6 +58,8 @@ afterEach(() => {
 
 function tempVault(): string {
   const vault = mkdtempSync(join(tmpdir(), "o2b-recall-dm-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   vaults.push(vault);
   const write = (rel: string, text: string): void => {
     const abs = join(vault, rel);

@@ -269,8 +269,12 @@ describe("o2b brain storage", () => {
     },
   );
 
+  // A vault with a legacy `Brain/` tree and no `_brain.yaml`. A vault with
+  // no `Brain/` at all is store-only and reads its settings from the store
+  // (design D14 item 3), so it has no missing config to name.
   test("a vault with no brain config fails by name", async () => {
     const bare = mkdtempSync(join(tmpdir(), "o2b-cli-storage-bare-"));
+    mkdirSync(join(bare, "Brain"));
     try {
       const { captured, code } = await drive(["--json", "--vault", bare]);
       expect(code).toBe(1);

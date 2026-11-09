@@ -37,11 +37,12 @@
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 import type { CheckResult } from "../types.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /** Marker file name inside the per-device `.open-second-brain/` directory. */
 export const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
@@ -77,7 +78,7 @@ export interface SelfHealUpgradeFailure {
 }
 
 export function selfHealUpgradeMarkerPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, SELF_HEAL_UPGRADE_MARKER_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, SELF_HEAL_UPGRADE_MARKER_FILE);
 }
 
 /** Cooldown after `consecutiveFailures` failures in a row. */
@@ -256,7 +257,7 @@ export const SELF_HEAL_UPGRADE_LOCK_FILE = "self-heal-upgrade.lock";
  * depended on it would be a different lock in each of them.
  */
 export function selfHealUpgradeLockPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, SELF_HEAL_UPGRADE_LOCK_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, SELF_HEAL_UPGRADE_LOCK_FILE);
 }
 
 /**

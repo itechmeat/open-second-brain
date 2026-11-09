@@ -42,15 +42,25 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { FileAlreadyExistsError } from "../../fs-atomic.ts";
+import { join, posix, relative } from "node:path";
 
 import { ensureInsideVault } from "../../path-safety.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { redactRawOutput } from "../../redactor.ts";
-import { listVaultNotePaths, parseFrontmatter } from "../../vault.ts";
+import { listVaultNotePaths } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { BRAIN_ARCHIVES_REL, BRAIN_PENDING_REL, BRAIN_SOURCES_REL } from "../path-constants.ts";
+import {
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  listLaneTree,
+  parseLanePage,
+  readLaneText,
+  writeLaneText,
+  laneFileBytes,
+  removeLanePage,
+} from "../../store/lane-pages.ts";
 
 /**
  * Largest input an archive entry will hold, in UTF-8 bytes: 1 MiB, the
@@ -191,17 +201,21 @@ export function putSourceArchive(vault: string, bytes: Uint8Array | string): Arc
   }
   const hash = createHash("sha256").update(redacted, "utf8").digest("hex");
   const path = sourceArchivePath(vault, hash);
-  if (!existsSync(path)) {
-    mkdirSync(sourceArchivesDir(vault), { recursive: true });
+  if (!lanePageExists(vault, path)) {
     // Identical bytes persist once: the write happens only when no entry
     // with this address is already there, so a re-ingest never churns the
-    // entry's mtime (and never doubles it under concurrency - the bytes
-    // an idempotent re-land would write are the bytes already on disk).
-    atomicWriteFileSync(path, redacted);
-  } else if (entryMismatched(path, hash)) {
+    // entry's mtime. The create is exclusive, so of two concurrent puts of
+    // one content one writes and the other finds it persisted (a store
+    // record is never doubled; the address names the same bytes).
+    try {
+      writeLaneText(vault, path, redacted, { exclusive: true });
+    } catch (err) {
+      if (!(err instanceof FileAlreadyExistsError)) throw err;
+    }
+  } else if (entryMismatched(vault, path, hash)) {
     // The repair arm: same address, disagreeing bytes. Written with the
     // store's atomic write, so the entry is never observed half-replaced.
-    atomicWriteFileSync(path, redacted);
+    writeLaneText(vault, path, redacted);
   }
   return { hash, bytes: persisted.length };
 }
@@ -211,8 +225,9 @@ export function putSourceArchive(vault: string, bytes: Uint8Array | string): Arc
  * by? A file that vanished mid-check is no mismatch - there is nothing
  * here to repair, and the next put will find the store empty.
  */
-function entryMismatched(path: string, hash: string): boolean {
-  const text = readFileSync(path, "utf8");
+function entryMismatched(vault: string, path: string, hash: string): boolean {
+  const text = readLaneText(vault, path);
+  if (text === null) return false;
   return createHash("sha256").update(text, "utf8").digest("hex") !== hash;
 }
 
@@ -257,8 +272,8 @@ export interface SourceArchiveEntry {
  */
 export function readSourceArchiveEntry(vault: string, hash: string): SourceArchiveEntry | null {
   const path = sourceArchivePath(vault, hash);
-  if (!existsSync(path)) return null;
-  const text = readFileSync(path, "utf8");
+  const text = readLaneText(vault, path);
+  if (text === null) return null;
   const actual = createHash("sha256").update(text, "utf8").digest("hex");
   return {
     state: actual === hash ? ARCHIVE_VERIFICATION.verified : ARCHIVE_VERIFICATION.mismatched,
@@ -283,17 +298,15 @@ export interface ArchiveStats {
  */
 export function sourceArchiveStats(vault: string): ArchiveStats {
   const root = sourceArchivesDir(vault);
-  if (!existsSync(root)) return { entries: 0, totalBytes: 0 };
+  if (!lanePageExists(vault, root)) return { entries: 0, totalBytes: 0 };
   let entries = 0;
   let totalBytes = 0;
-  for (const name of readdirSync(root).toSorted()) {
+  for (const name of listLaneFiles(vault, root, "").toSorted()) {
     if (!name.endsWith(ARCHIVE_ENTRY_EXT)) continue;
     if (!isArchiveHash(name.slice(0, -ARCHIVE_ENTRY_EXT.length))) continue;
     let size: number;
     try {
-      const stat = statSync(join(root, name));
-      if (!stat.isFile()) continue;
-      size = stat.size;
+      size = laneFileBytes(vault, join(root, name));
     } catch {
       continue; // Vanished or unreadable mid-walk: not an entry this run counted.
     }
@@ -310,8 +323,8 @@ export function sourceArchiveStats(vault: string): ArchiveStats {
  */
 export function discardSourceArchive(vault: string, hash: string): boolean {
   const path = sourceArchivePath(vault, hash);
-  if (!existsSync(path)) return false;
-  rmSync(path);
+  if (!lanePageExists(vault, path)) return false;
+  removeLanePage(vault, path);
   return true;
 }
 
@@ -334,14 +347,16 @@ function walkStampedPages(
 ): void {
   for (const root of STAMP_ROOTS) {
     const dir = join(vault, root);
-    if (!existsSync(dir)) continue;
-    for (const rel of listVaultNotePaths(dir)) {
+    // A store-only machine holds these pages as lane records, not files:
+    // the walk reads the lane fold there, the tree on an unswitched one.
+    const rels = stampRootRels(vault, dir);
+    for (const rel of rels) {
       const abs = join(dir, rel);
       // `parseFrontmatter` never throws (it reads inside its own try and
       // answers an empty map for a failed read), so a page that will not
       // parse falls out as citing nothing - the fail-safe answer for an
       // entry-removal decision.
-      const [meta] = parseFrontmatter(abs);
+      const [meta] = parseLanePage(vault, abs);
       visit(root, rel, meta);
     }
   }
@@ -372,14 +387,14 @@ export function sourceArchiveCitingPages(vault: string, hash: string): ReadonlyA
  */
 export function sourceArchiveEntryHashes(vault: string): ReadonlyArray<string> {
   const root = sourceArchivesDir(vault);
-  if (!existsSync(root)) return [];
+  if (!lanePageExists(vault, root)) return [];
   const hashes: string[] = [];
-  for (const name of readdirSync(root)) {
+  for (const name of listLaneFiles(vault, root, "")) {
     if (!name.endsWith(ARCHIVE_ENTRY_EXT)) continue;
     const stem = name.slice(0, -ARCHIVE_ENTRY_EXT.length);
     if (!isArchiveHash(stem)) continue;
     try {
-      if (!statSync(join(root, name)).isFile()) continue;
+      laneFileBytes(vault, join(root, name));
     } catch {
       continue; // Vanished or unreadable mid-walk: not an entry this run named.
     }
@@ -405,4 +420,11 @@ export function sourceArchiveUncitedHashes(vault: string): ReadonlyArray<string>
     if (typeof value === "string") cited.add(value);
   });
   return sourceArchiveEntryHashes(vault).filter((hash) => !cited.has(hash));
+}
+
+/** The pages below one stamp root, relative to it: the lane fold once switched, the tree before. */
+function stampRootRels(vault: string, dir: string): string[] {
+  if (lanePagesInStore(vault)) return listLaneTree(vault, dir).map((abs) => relative(dir, abs));
+  if (lanePageExists(vault, dir)) return listVaultNotePaths(dir);
+  return [];
 }

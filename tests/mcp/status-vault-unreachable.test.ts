@@ -25,6 +25,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
@@ -62,7 +63,8 @@ afterEach(() => {
 });
 
 async function status(vault: string): Promise<Record<string, unknown>> {
-  const server = new MCPServer({ vault, configPath });
+  // A local caller: the config path is compared with the host path it holds.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   const r = (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,
@@ -73,7 +75,8 @@ async function status(vault: string): Promise<Record<string, unknown>> {
 }
 
 async function queryError(vault: string): Promise<string> {
-  const server = new MCPServer({ vault, configPath });
+  // A local caller: the refusal names the vault path it holds.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   const r = (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,

@@ -37,6 +37,10 @@ import { ATTEST_TOOLS } from "../../src/mcp/brain/attest-tools.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const DATE = "2026-06-03";
 

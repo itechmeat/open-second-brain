@@ -111,9 +111,13 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
             renderGenericText,
           );
         }
+        const reason = flags["reason"] as string | undefined;
         const result = await applySchemaAdminMutations(vault, mutations, {
           actor: flags["actor"] as string,
-          reason: flags["reason"] as string | undefined,
+          ...(reason !== undefined ? { reason } : {}),
+          // The operator's own change (store-only machines write it as a
+          // human-authority settings record).
+          authority: "human",
         });
         return writeResult(result, Boolean(flags["json"]), renderGenericText);
       }

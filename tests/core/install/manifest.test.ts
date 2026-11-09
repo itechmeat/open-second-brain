@@ -13,6 +13,9 @@ import type { ManifestEntry } from "../../../src/core/install/types.ts";
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-manifest-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => {
   try {

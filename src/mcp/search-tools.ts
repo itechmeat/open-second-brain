@@ -56,7 +56,7 @@ import { deliveryView, UNPROBED_DELIVERY_REL } from "./brain/reach-events.ts";
 import { LOCAL_ORIGIN } from "../core/brain/portability/origins.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolErrorCode } from "./tool-error-codes.ts";
-import { contextReach } from "./tool-contract.ts";
+import { contextReach, contextVault } from "./tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import {
   AGENT_SCOPE_SCHEMA,
@@ -850,6 +850,10 @@ async function toolBrainSearch(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the index holds the brain store only,
+  // keyed by the store id (D14 item 14). A cross-vault union reads
+  // `ctx.vault`, which refuses with `vault_required` there.
+  const vault = contextVault(ctx);
   const query = args["query"];
   if (typeof query !== "string" || query.trim() === "") {
     throw new MCPError(INVALID_PARAMS, "missing required argument: query");
@@ -991,7 +995,7 @@ async function toolBrainSearch(
   const reinforce = parseReinforceArgument(args["reinforce"]);
 
   const config = resolveSearchConfig({
-    vault: ctx.vault,
+    vault: vault,
     configPath: ctx.configPath ?? undefined,
   });
 
@@ -1002,7 +1006,7 @@ async function toolBrainSearch(
   // search.
   if (reinforce !== undefined && reinforce.length > 0) {
     try {
-      recordReinforce(ctx.vault, reinforce);
+      recordReinforce(vault, reinforce);
     } catch {
       // Ledger persistence is best-effort.
     }
@@ -1061,7 +1065,7 @@ async function toolBrainSearch(
     // Lazy emit kernel (t_5d7aa7c5): a throwing telemetry write inside
     // this catch can no longer mask the original search error.
     emitGatedTelemetry(telemetry || undefined, () =>
-      emitRecallTelemetry(ctx.vault, {
+      emitRecallTelemetry(vault, {
         ...telemetryEnvelope,
         mode: "search",
         status: e instanceof MCPError && e.message.includes("timeout") ? "timeout" : "error",
@@ -1099,7 +1103,7 @@ async function toolBrainSearch(
     // single comparison runs. `search()` has already returned and its
     // outcome and rows are frozen, so this lane can only read them.
     const signals = searchRecallSignals(outcome);
-    return emitRecallTelemetry(ctx.vault, {
+    return emitRecallTelemetry(vault, {
       ...telemetryEnvelope,
       mode: "search",
       status: surfaced.length > 0 ? "ok" : "empty",
@@ -1129,7 +1133,7 @@ async function toolBrainSearch(
   // surfaced as unmet-demand knowledge gaps. Gated behind the same
   // telemetry opt-in and fail-open — a log write never breaks search.
   emitGatedTelemetry(telemetry || undefined, () =>
-    recordQueryDemand(ctx.vault, {
+    recordQueryDemand(vault, {
       query,
       resultCount: surfaced.length,
       coverage: outcome.evidencePack?.idfWeightedCoverage ?? null,
@@ -1990,7 +1994,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_recall_feedback",
     kind: "write",
     description:
-      "Record explicit recall feedback (up/down) for one search result. Feeds the deterministic learned-weight fold; events land under Brain/search/feedback/.",
+      "Record explicit recall feedback (up/down) for one search result. Feeds the deterministic learned-weight fold; each event is recorded as recall feedback.",
     inputSchema: RECALL_FEEDBACK_INPUT_SCHEMA,
     outputSchema: RECALL_FEEDBACK_OUTPUT_SCHEMA,
     handler: toolBrainRecallFeedback,
@@ -2017,7 +2021,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // the fail-soft-appends carve-out and gate the write path.
     kind: "write",
     description:
-      "Full-text search across the vault. Optional semantic layer when configured. Persists access events and opt-in reinforce/telemetry ledgers under Brain/search/. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
+      "Full-text search across the vault. Optional semantic layer when configured. Persists access events and the opt-in reinforce and telemetry ledgers. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,

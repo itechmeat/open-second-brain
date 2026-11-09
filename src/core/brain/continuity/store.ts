@@ -1,3 +1,4 @@
+import { legacyVaultOf } from "../no-vault.ts";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,9 +25,12 @@ import type {
   ContinuityRecordPage,
   ContinuitySourceRef,
 } from "./types.ts";
-import { dualWrite, type DualWriteRecord } from "../../store/dual-write.ts";
+import type { DualWriteRecord } from "../../store/dual-write.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { routeWrite, storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
-import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
+import { type RowPrivacyJudge, rowPrivacyJudge } from "../../store/reference-privacy.ts";
 
 export type {
   AppendContinuityRecordInput,
@@ -149,7 +153,7 @@ export function continuityLogPath(
 }
 
 export function appendContinuityRecord(
-  vault: string,
+  vault: string | null,
   input: AppendContinuityRecordInput,
 ): ContinuityRecord {
   return appendRecord(vault, buildContinuityRecord(input));
@@ -183,11 +187,50 @@ export function buildContinuityRecord(input: AppendContinuityRecordInput): Conti
  * before any write) and within a single shard.
  */
 export function appendContinuityRecords(
-  vault: string,
+  vault: string | null,
   inputs: ReadonlyArray<AppendContinuityRecordInput>,
 ): ReadonlyArray<ContinuityRecord> {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("appendContinuityRecords: inputs must be a non-empty array");
+  }
+
+  // Phase 1 — build + validate ALL records before any disk mutation.
+  // buildRecord sanitises payloads; the month prefix is checked here, so a
+  // malformed createdAt aborts the batch with nothing written.
+  const built = inputs.map((input) => {
+    const record = buildRecord(input);
+    const month = record.createdAt.slice(0, 7);
+    if (!MONTH_RE.test(month)) throw new Error(`invalid continuity month: ${month}`);
+    return record;
+  });
+
+  // One privacy verdict for the whole batch, so every row of it lands in
+  // one partition: `private` when any record is flagged private (a
+  // `<private>` region was stripped, or the caller said so) or names a
+  // page that is private or cannot be judged. A machine without `private`
+  // then refuses the batch at its first row, before anything is appended.
+  // The verdict is worked out when the first store record is built, and
+  // only then: an unswitched machine with dual writes off writes no store
+  // record, and judging every row of a large batch it never stores cost
+  // milliseconds per record on the SessionStart path.
+  let partition: "private" | "shared" | undefined;
+  const rowsOf = (records: ReadonlyArray<ContinuityRecord>): DualWriteRecord[] => {
+    if (partition === undefined) {
+      const judge = rowPrivacyJudge(vault);
+      partition = built.some((record) => continuityRecordIsPrivate(record, judge))
+        ? "private"
+        : "shared";
+    }
+    const verdict = partition;
+    return records.map((record) => ledgerRowRecord(DUAL_WRITE_LEDGERS.continuity, record, verdict));
+  };
+
+  // A store-only machine (design D14 item 1) appends the whole batch as
+  // `continuity` ledger rows in one store write; an unswitched one writes
+  // its month shards.
+  if (vault === null || isStoreOnly({ vault })) {
+    storeWrite(() => rowsOf(built), { vault });
+    return Object.freeze(built);
   }
 
   // Vault-identity write guard (context-integrity-gates, Unit J),
@@ -195,19 +238,10 @@ export function appendContinuityRecords(
   // and every telemetry writer that funnels through the continuity log.
   assertVaultIdentityForWrite(vault);
 
-  // Phase 1 — build + validate ALL records before any disk mutation.
-  // buildRecord sanitises payloads; continuityLogPath validates the month
-  // prefix and throws on a malformed createdAt. Any throw here aborts the
-  // batch with nothing written.
-  const built = inputs.map((input) => {
-    const record = buildRecord(input);
-    const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
-    return { record, path };
-  });
-
   // Phase 2 — group by shard path, preserving first-seen order.
   const shards = new Map<string, { path: string; records: ContinuityRecord[] }>();
-  for (const { record, path } of built) {
+  for (const record of built) {
+    const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
     let bucket = shards.get(path);
     if (!bucket) {
       bucket = { path, records: [] };
@@ -216,23 +250,26 @@ export function appendContinuityRecords(
     bucket.records.push(record);
   }
 
-  // Phase 3 — write each shard under a single lock acquisition.
-  mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
+  // Phase 3 — write each shard under a single lock acquisition, each
+  // followed by its dual write (off by default, never fails this append).
   for (const { path, records } of shards.values()) {
-    const handle = acquireLockSync(path);
-    try {
-      const payload = records.map((record) => `${JSON.stringify(record)}\n`).join("");
-      writeFileSync(path, payload, { encoding: "utf8", flag: "a" });
-    } finally {
-      handle.release();
-    }
-    // Brain store dual write (task 1.11): off by default, never fails this append.
-    // A record flagged private (a `<private>` region was stripped, or the
-    // caller said so) stays out of `shared`, as the legacy reader withholds it.
-    dualWrite(() => records.map((r) => continuityRowRecord(vault, r)), { vault });
+    routeWrite({
+      legacy: () => {
+        mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
+        const handle = acquireLockSync(path);
+        try {
+          const payload = records.map((record) => `${JSON.stringify(record)}\n`).join("");
+          writeFileSync(path, payload, { encoding: "utf8", flag: "a" });
+        } finally {
+          handle.release();
+        }
+      },
+      store: () => rowsOf(records),
+      context: { vault },
+    });
   }
 
-  return Object.freeze(built.map((entry) => entry.record));
+  return Object.freeze(built);
 }
 
 export function appendContinuitySourceInvalidation(
@@ -290,7 +327,7 @@ export function clipPayloadToBudget(
 }
 
 export function listContinuityRecords(
-  vault: string,
+  vault: string | null,
   filter: ContinuityRecordFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
   return Object.freeze(readAllRecords(vault, filter).filter((record) => matches(record, filter)));
@@ -342,24 +379,31 @@ function buildRecord(
   });
 }
 
-function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord {
-  // Vault-identity write guard (context-integrity-gates, Unit J). The
-  // single-record funnel: guarding here covers every public entry point
-  // that appends one record rather than a batch.
-  assertVaultIdentityForWrite(vault);
-  const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
-  mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
-  const handle = acquireLockSync(path);
-  try {
-    writeFileSync(path, `${JSON.stringify(record)}\n`, {
-      encoding: "utf8",
-      flag: "a",
-    });
-  } finally {
-    handle.release();
-  }
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  dualWrite(() => continuityRowRecord(vault, record), { vault });
+function appendRecord(vault: string | null, record: ContinuityRecord): ContinuityRecord {
+  // One `continuity` ledger row on a store-only machine (design D14 item
+  // 1), the month shard plus the dual write otherwise.
+  routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J). The
+      // single-record funnel: guarding here covers every public entry point
+      // that appends one record rather than a batch.
+      const root = legacyVaultOf(vault, "appendContinuityRecord");
+      assertVaultIdentityForWrite(root);
+      const path = continuityLogPath(root, record.createdAt.slice(0, 7));
+      mkdirSync(join(root, CONTINUITY_REL), { recursive: true });
+      const handle = acquireLockSync(path);
+      try {
+        writeFileSync(path, `${JSON.stringify(record)}\n`, {
+          encoding: "utf8",
+          flag: "a",
+        });
+      } finally {
+        handle.release();
+      }
+    },
+    store: () => continuityRowRecord(vault, record),
+    context: { vault },
+  });
   return record;
 }
 
@@ -368,12 +412,24 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
  * flagged private or its text names a page that is private or cannot be
  * judged; a turn that names nothing private goes to `shared`.
  */
-function continuityRowRecord(vault: string, record: ContinuityRecord): DualWriteRecord {
+export function continuityRowRecord(
+  vault: string | null,
+  record: ContinuityRecord,
+): DualWriteRecord {
   return ledgerRowRecord(
     DUAL_WRITE_LEDGERS.continuity,
     record,
-    record.private === true || rowNamesPrivatePage(vault, record) ? "private" : "shared",
+    continuityRecordIsPrivate(record, rowPrivacyJudge(vault)) ? "private" : "shared",
   );
+}
+
+/**
+ * Whether one continuity record belongs in `private`: flagged private, or
+ * its text names a page that is private or cannot be judged. The one rule
+ * the single-record, batch and migration writers share.
+ */
+function continuityRecordIsPrivate(record: ContinuityRecord, judge: RowPrivacyJudge): boolean {
+  return record.private === true || judge(record);
 }
 
 /**
@@ -398,7 +454,50 @@ function continuityRowRecord(vault: string, record: ContinuityRecord): DualWrite
  * the last resort, and because it is a content hash a single-shard vault
  * reads back in exactly the order it always did.
  */
-function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): ContinuityRecord[] {
+function readAllRecords(
+  vault: string | null,
+  filter: ContinuityRecordFilter = {},
+): ContinuityRecord[] {
+  // A store-only machine reads the `continuity` ledger rows (design D14
+  // item 1). Fold order is append order on every machine, so a stable sort
+  // by `createdAt` gives the legacy order's meaning: time first, then the
+  // order the rows were written in. The legacy read is already in that
+  // order and is returned as it is.
+  let legacy = false;
+  const rows = readLedgerRows<unknown>(
+    DUAL_WRITE_LEDGERS.continuity,
+    (legacyVault) => {
+      legacy = true;
+      return readLegacyRecords(legacyVault, filter);
+    },
+    { vault },
+  );
+  if (legacy) return rows as ContinuityRecord[];
+  // The store holds every month: drop the rows outside the asked window
+  // before the sort, as the legacy read skips whole month shards.
+  return rows
+    .filter(isContinuityRow)
+    .filter(
+      (row) =>
+        (filter.since === undefined || row.createdAt >= filter.since) &&
+        (filter.until === undefined || row.createdAt <= filter.until),
+    )
+    .toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+}
+
+/** Whether a store row has the fields every continuity reader relies on. */
+function isContinuityRow(row: unknown): row is ContinuityRecord {
+  if (row === null || typeof row !== "object" || Array.isArray(row)) return false;
+  const r = row as Partial<Record<keyof ContinuityRecord, unknown>>;
+  return (
+    typeof r.id === "string" &&
+    typeof r.kind === "string" &&
+    typeof r.createdAt === "string" &&
+    Array.isArray(r.sourceRefs)
+  );
+}
+
+function readLegacyRecords(vault: string, filter: ContinuityRecordFilter): ContinuityRecord[] {
   const dir = continuityLogDir(vault);
   const sinceMonth = filter.since ? filter.since.slice(0, 7) : undefined;
   const untilMonth = filter.until ? filter.until.slice(0, 7) : undefined;
@@ -421,11 +520,17 @@ function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): Con
     let line = 0;
     for (const raw of text.split("\n")) {
       if (!raw.trim()) continue;
+      let value: unknown;
       try {
-        rows.push({ value: JSON.parse(raw) as ContinuityRecord, shardId: shard.shardId, line });
+        value = JSON.parse(raw);
       } catch {
         continue;
       }
+      // A line that parses but holds no record (a damaged or hand-edited
+      // shard: `null`, a number, a wrong shape) is skipped like one that
+      // does not parse, as the store read skips it.
+      if (!isContinuityRow(value)) continue;
+      rows.push({ value, shardId: shard.shardId, line });
       line++;
     }
   }

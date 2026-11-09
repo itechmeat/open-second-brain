@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { existingPreferencePageText, writePreferencePageText } from "./preference-page-write.ts";
+import { preferencesStoreOnly } from "./preference-store.ts";
+
 import { digestVerifies, sealWithDigest, sha256Hex } from "../integrity/digest.ts";
 import { appendLogEvent } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
@@ -16,7 +18,7 @@ import { assertSafeMemoryPath, homeRelativePath } from "./claude-memory-paths.ts
 import { claudeMemoryBackend } from "./agent-backend/claude.ts";
 import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
-import { resolvedOwnerFor } from "./preference.ts";
+import { preferencePresence, resolvedOwnerFor } from "./preference.ts";
 import { TagSyntaxError } from "./tag-syntax.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -218,6 +220,9 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   };
 
   const plans: PlannedFile[] = [];
+  // Store-only (task 2.10): the preferences are records of the store's
+  // fold, not pages under `Brain/`.
+  const storeOnly = preferencesStoreOnly(opts.vault);
   const skipped: Array<{ basename: string; reason: string }> = [];
   const filesToWrite: Array<{ plan: PlannedFile; body: string; sha256: string; slug: string }> = [];
   // The content binding per plan row, keyed by the row's basename: the
@@ -270,6 +275,17 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
       }
       // preferencePath adds pref- prefix itself, so pass just the slug
       const prefFile = preferencePath(opts.vault, slug);
+      // Once switched the preference is a record of the store's fold, and
+      // its active and retired lives are one entry: a write would revive a
+      // retired one (an unswitched machine keeps the retired page apart).
+      const presence = storeOnly ? preferencePresence(opts.vault, slug) : null;
+      if (presence === "retired") {
+        skipped.push({
+          basename: entryKey,
+          reason: `a retired copy exists (ret-${slug}); restore or delete it first`,
+        });
+        return;
+      }
       // Render BEFORE any plan row exists. A render that refuses THIS entry -
       // a name whose slug fails the one shared tag rule, e.g. a purely
       // numeric memory name (t_11ee559f) - is a per-entry data problem like a
@@ -324,7 +340,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
         prefId,
         sha256: parsed.bodySha256,
         inManifest: manifestEntry ? { sha256: manifestEntry.sha256 } : null,
-        prefExists: existsSync(prefFile),
+        prefExists: presence !== null ? presence === "active" : existsSync(prefFile),
       });
       plans.push(plan);
       if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
@@ -381,7 +397,9 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   // of the run still landed.
 
   let snapshotRunId: string | null = null;
-  if (filesToWrite.length > 0) {
+  // Store-only: the append-only store needs no snapshot (design D14 item
+  // 9), and no page is written under `Brain/`.
+  if (filesToWrite.length > 0 && !storeOnly) {
     // Through the gate rather than `createSnapshot`, so the archive obeys
     // `snapshots.retention_count` like every other reason (it used to
     // bypass retention). The gate derives the run id from the reason, so
@@ -392,17 +410,32 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   }
 
   const applied: PlannedFile[] = [];
-  if (filesToWrite.length > 0) {
+  if (filesToWrite.length > 0 && !storeOnly) {
     mkdirSync(join(opts.vault, BRAIN_PREFERENCES_REL), { recursive: true });
   }
   for (const { plan, body: freshBody, sha256, slug } of filesToWrite) {
-    const prefFile = preferencePath(opts.vault, slug);
     let finalBody = freshBody;
     if (plan.action === "UPDATE") {
-      // Preserve evidence fields by merging frontmatter.
-      finalBody = mergePreservingEvidence(readFileSync(prefFile, "utf8"), freshBody);
+      // Preserve evidence fields by merging frontmatter: the page, or the
+      // preference the store's fold holds once switched.
+      const existing = existingPreferencePageText(opts.vault, slug, (path) =>
+        readFileSync(path, "utf8"),
+      );
+      // Once switched, a preference the plan saw that is gone (or retired)
+      // since would lose its evidence under a fresh body, or be revived:
+      // the row is skipped, as the host-memory promotion skips it.
+      if (existing === null && storeOnly) {
+        skipped.push({
+          basename: plan.basename,
+          reason: `${plan.prefId} is no longer active; it was not rewritten`,
+        });
+        continue;
+      }
+      if (existing !== null) finalBody = mergePreservingEvidence(existing, freshBody);
     }
-    atomicWriteFileSync(prefFile, finalBody);
+    // The page on an unswitched machine (plus the dual write), the
+    // preference's records only once switched.
+    writePreferencePageText(opts.vault, slug, finalBody);
     newImports[plan.basename] = { pref_id: plan.prefId, sha256, imported_at: importedAt };
     applied.push(plan);
   }

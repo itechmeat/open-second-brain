@@ -48,14 +48,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import lockfile from "proper-lockfile";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatterText } from "../../vault.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   isTriggerKind,
   isTriggerStatus,
@@ -70,6 +68,16 @@ import {
   type TriggerRecord,
   type TriggerStatus,
 } from "./types.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  readLaneFile,
+  vaultOfBrainPath,
+  withLaneLock,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 export const TRIGGER_TTL_DAYS = 14;
 export const TRIGGER_COOLDOWN_DAYS = 7;
@@ -606,7 +614,9 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
   const path = join(triggersDir(vault), fileName);
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    // A file gone between the listing and the read is an ENOENT the
+    // caller reports, never an empty page skipped in silence.
+    raw = readLaneFile(vault, path);
   } catch (err) {
     throw new TriggerFileError(path, (err as Error).message ?? String(err));
   }
@@ -700,7 +710,7 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
 
 function writeRecord(record: TriggerRecord): void {
   const { effectiveStatus: _ignored, ...stored } = record;
-  atomicWriteFileSync(record.path, renderTrigger(stored));
+  writeLaneText(vaultOfBrainPath(record.path), record.path, renderTrigger(stored));
 }
 
 // ── Listing ─────────────────────────────────────────────────────────────────
@@ -775,10 +785,10 @@ function asUnreadable(err: unknown): UnreadableTrigger | null {
  */
 export function readTriggers(vault: string, opts: ListTriggersOptions): TriggerScan {
   const dir = triggersDir(vault);
-  if (!existsSync(dir)) return EMPTY_SCAN;
+  if (!lanePageExists(vault, dir)) return EMPTY_SCAN;
   const records: TriggerRecord[] = [];
   const unreadable: UnreadableTrigger[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(TRIGGER_FILE_EXT)) continue;
     let record: TriggerRecord | null;
     try {
@@ -1244,6 +1254,9 @@ function wakeSnoozed(record: TriggerRecord, now: Date): TriggerRecord {
  */
 function withTriggerDirLock<T>(vault: string, body: () => T): T {
   const dir = triggersDir(vault);
+  // A store-only machine holds the same lock device-locally: no lock file
+  // and no trigger directory land in the vault.
+  if (lanePagesInStore(vault)) return withLaneLock(vault, dir, body);
   mkdirSync(dir, { recursive: true });
   const release = lockfile.lockSync(dir, { stale: TRIGGER_LOCK_STALE_MS, realpath: false });
   try {
@@ -1260,7 +1273,7 @@ export function createTriggers(
   opts: CreateTriggersOptions,
 ): CreateTriggersResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   return withTriggerDirLock(vault, () => createTriggersLocked(vault, candidates, opts));
 }
 
@@ -1341,7 +1354,7 @@ function createTriggersLocked(
     const hash = createHash("sha256").update(key).digest("hex").slice(0, 10);
     let id = `tr-${hash}-${createdAt.slice(0, 10)}`;
     let suffix = 2;
-    while (existsSync(join(dir, `${id}${TRIGGER_FILE_EXT}`))) {
+    while (lanePageExists(vault, join(dir, `${id}${TRIGGER_FILE_EXT}`))) {
       id = `tr-${hash}-${createdAt.slice(0, 10)}-${suffix}`;
       suffix += 1;
     }
@@ -1458,7 +1471,7 @@ export function transitionTrigger(
   opts: TransitionOptions,
 ): TriggerRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   return withTriggerDirLock(vault, () => transitionTriggerLocked(vault, id, action, opts));
 }
 
@@ -1675,7 +1688,7 @@ export function markTriggersDelivered(
 ): void {
   if (ids.length === 0) return;
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   withTriggerDirLock(vault, () => markTriggersDeliveredLocked(vault, ids, opts));
 }
 

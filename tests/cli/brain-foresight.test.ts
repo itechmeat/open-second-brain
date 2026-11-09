@@ -9,6 +9,8 @@ import { join } from "node:path";
 
 import { applyRecurrenceEvidence } from "../../src/core/brain/recurrence.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { switchDevice } from "../core/brain/store-only/fixtures.ts";
+import { makeStoreEnv } from "../core/store/fixtures/store-env.ts";
 
 let tmp: string;
 let vault: string;
@@ -55,4 +57,20 @@ test("foresight projects a routine and --write persists the note", async () => {
 test("invalid horizon exits 2", async () => {
   const res = await runCli(["brain", "foresight", "--vault", vault, "--horizon-days", "zero"]);
   expect(res.returncode).toBe(2);
+});
+
+test("--write on a store-only machine names the stored page, not a vault path", async () => {
+  const env = makeStoreEnv("o2b-cli-foresight-store-", { dualWrite: false });
+  try {
+    switchDevice(env.storeRoot);
+    const res = await runCli(["brain", "foresight", "--vault", env.vault, "--write", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: env.configPath },
+    });
+    expect(res.returncode).toBe(0);
+    const body = JSON.parse(res.stdout) as { written_path: string };
+    expect(body.written_path).toMatch(/^store:Brain\/foresight\/\d{4}-\d{2}-\d{2}\.md$/);
+    expect(existsSync(join(env.vault, "Brain", "foresight"))).toBe(false);
+  } finally {
+    env.cleanup();
+  }
 });

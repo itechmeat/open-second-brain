@@ -21,9 +21,7 @@
  */
 
 import {
-  AUTHORITY_FIELD,
   DAY_MS,
-  DEVICE_RETIRE_KIND,
   DIGEST_COMPARE_WINDOW_DAYS,
   DIGEST_ROSTER_WINDOW_DAYS,
   DIGEST_SILENCE_DAYS,
@@ -32,7 +30,7 @@ import {
   type StateDigestFold,
   type StorePartition,
 } from "./constants.ts";
-import { isValidDeviceId } from "../config.ts";
+import { latestRetirements, wroteAfter } from "./device-retirement.ts";
 import { compareRecords, type StoreRecord } from "./envelope.ts";
 import { prepareRecords } from "./fold.ts";
 import { parseHlc } from "./hlc.ts";
@@ -91,18 +89,15 @@ export function computeRoster(
     if (entry === undefined) seen.set(record.device, { first: ms, last: record });
     else entry.last = record; // fold order: later records come later
   }
-  const retiredAt = new Map<string, StoreRecord>();
-  for (const record of prepareRecords(retireRecords).records) {
-    if (record.kind !== DEVICE_RETIRE_KIND || record.body[AUTHORITY_FIELD] !== "human") continue;
-    const device = record.body["device"];
-    if (typeof device === "string" && isValidDeviceId(device)) retiredAt.set(device, record);
-  }
+  // The one retirement rule (`device-retirement.ts`): retired unless it
+  // wrote again after its latest human retirement.
+  const retiredAt = latestRetirements(prepareRecords(retireRecords).records);
   const devices: RosterDevice[] = [];
   const retired: string[] = [];
   for (const device of [...seen.keys()].toSorted()) {
     const { first, last } = seen.get(device)!;
     const retire = retiredAt.get(device);
-    if (retire !== undefined && compareRecords(last, retire) < 0) {
+    if (retire !== undefined && !wroteAfter(last, retire)) {
       retired.push(device);
       continue;
     }

@@ -9,6 +9,10 @@ import {
   summarizeMcpRouteLatency,
 } from "../../../src/core/brain/mcp-route-metrics.ts";
 import type { RouteStageTiming } from "../../../src/core/route-scope.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

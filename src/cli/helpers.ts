@@ -14,10 +14,23 @@ export const NO_VAULT_ERROR =
   "`o2b init --vault <path> ...` first to persist a default.";
 
 export class NoVaultConfiguredError extends Error {
-  constructor() {
-    super(NO_VAULT_ERROR);
+  constructor(message: string = NO_VAULT_ERROR) {
+    super(message);
     this.name = "NoVaultConfiguredError";
   }
+}
+
+/**
+ * The refusal of a command that needs a vault on a machine with none
+ * (design D14): it names the command, so the operator knows which verb
+ * asked and that the rest of the CLI works without one.
+ */
+export function vaultRequiredMessage(command: string): string {
+  return (
+    `\`${command}\` needs a vault, and none is configured. Pass --vault <path>, ` +
+    "set VAULT_DIR in the environment, or run `o2b init --vault <path> ...` to persist one; " +
+    "commands that work on the brain store alone run without a vault."
+  );
 }
 
 /**
@@ -40,6 +53,28 @@ export function normalizeFlagString(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * The vault a command may use, or `null` when none is configured (design
+ * D14: the vault is optional). An explicit `--vault ""` is still a user
+ * error, never "no vault".
+ */
+export function resolveOptionalVault(
+  flagVal: string | undefined,
+  configPath: string | null,
+): string | null {
+  const explicit = normalizeFlagString(flagVal);
+  if (flagVal !== undefined && explicit === null) {
+    throw new NoVaultConfiguredError();
+  }
+  return explicit ?? resolveVault(configPath ?? undefined) ?? null;
+}
+
+/** `vault`, or the {@link vaultRequiredMessage} refusal for `command` when there is none. */
+export function requireVaultFor(vault: string | null, command: string): string {
+  if (vault === null) throw new NoVaultConfiguredError(vaultRequiredMessage(command));
+  return vault;
 }
 
 export function requireVault(flagVal: string | undefined, configPath: string | null): string {

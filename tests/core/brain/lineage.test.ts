@@ -26,6 +26,8 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-lineage-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

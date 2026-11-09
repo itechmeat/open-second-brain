@@ -25,10 +25,12 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { isStoreOnly } from "../store/store-only.ts";
 import { toPosix } from "../path-safety.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { hostPathFreeReason } from "./host-path-free.ts";
-import { parsePreference } from "./preference.ts";
+import { legacyMemoryPage, storeMemoryPages } from "./memory-pages.ts";
+import { parsePreferenceMeta } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
 import { vaultDisplayName } from "./templates.ts";
 import { isoSecond } from "./time.ts";
@@ -39,7 +41,6 @@ import {
   PRIVACY_MARKER_KEYS,
 } from "../graph/privacy-markers.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, normToken, pageVisibility } from "../graph/visibility.ts";
-import { parseFrontmatter } from "../vault.ts";
 
 export const BRAIN_EXPORT_SCHEMA_VERSION = 1 as const;
 
@@ -343,16 +344,19 @@ export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferen
  */
 export function collectPreferenceRows(vault: string): PreferenceCollection {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return { rows: [], failures: [], denied: [] };
+  // D14 item 12: an export reads the folds once the machine is switched,
+  // and keeps the legacy page layout as its interchange format.
+  const stored = storeMemoryPages(vault, "preferences");
+  if (stored === null && !existsSync(dir)) return { rows: [], failures: [], denied: [] };
   const rows: ExportedPreferenceRow[] = [];
   const failures: PreferenceParseFailure[] = [];
   const denied: PreferenceDenial[] = [];
   let entries: ReadonlyArray<string>;
   try {
-    entries = readdirSync(dir);
+    entries = stored === null ? readdirSync(dir) : stored.map((page) => page.name);
   } catch (err) {
-    // The directory exists - `existsSync` just said so - so a listing
-    // failure is a permission or filesystem fault, not an empty Brain.
+    // The directory exists (or the store answered), so a listing failure
+    // is a permission or filesystem fault, not an empty Brain.
     // Returning `[]` here reported the second while the first was true.
     // Named vault-relative for the same reason the per-file failures are:
     // this collector is reachable from an MCP error path. Forward-slash on
@@ -362,9 +366,11 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
       cause: err,
     });
   }
+  const storedByName = stored === null ? null : new Map(stored.map((p) => [p.name, p] as const));
   for (const name of entries) {
     if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
     const abs = join(dir, name);
+    const page = storedByName?.get(name) ?? legacyMemoryPage(vault, "preferences", name);
     const record = (err: unknown): void => {
       const rel = toPosix(relative(vault, abs));
       // The parser's own message carries the absolute host path
@@ -376,7 +382,7 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     };
     let pref: BrainPreference;
     try {
-      pref = parsePreference(abs);
+      pref = parsePreferenceMeta(page.read()[0], abs);
     } catch (err) {
       record(err);
       continue;
@@ -392,14 +398,16 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     let body = "";
     let meta: FrontmatterMap = {};
     try {
-      const [parsedMeta, parsedBody] = parseFrontmatter(abs);
+      const [parsedMeta, parsedBody] = page.read();
       meta = parsedMeta;
       body = parsedBody;
     } catch (err) {
       record(err);
       continue;
     }
-    const denyKey = deniedReservationKey(meta);
+    // A record the store holds in `private` is reserved whatever its
+    // fields say (`store-record-visibility.ts`): fail closed.
+    const denyKey = deniedReservationKey(meta) ?? (page.private ? "visibility" : null);
     if (denyKey !== null) {
       denied.push({ id: pref.id, reason: PREFERENCE_DENY_REASON, denied_by: denyKey });
     }
@@ -537,12 +545,22 @@ export interface LlmsTxtExport {
 export function exportPreferencesLlmsTxtDetailed(vault: string): LlmsTxtExport {
   const { rows, denied } = collectSharedExportRows(vault);
   const name = vaultDisplayName(vault);
+  // A store-only machine keeps its preferences as brain store records, so
+  // the header points at the store, not at a directory nothing writes.
+  const where = isStoreOnly({ vault })
+    ? [
+        `> by \`o2b brain export --format llms-txt\`. The canonical records`,
+        `> live in the brain store (\`o2b store path\`).`,
+      ]
+    : [
+        `> by \`o2b brain export --format llms-txt\`. The canonical files`,
+        `> live under \`<vault>/Brain/preferences/\`.`,
+      ];
   const lines: string[] = [
     `# ${name} — Brain preferences`,
     "",
     `> Active preferences captured by Open Second Brain. Auto-generated`,
-    `> by \`o2b brain export --format llms-txt\`. The canonical files`,
-    `> live under \`<vault>/Brain/preferences/\`.`,
+    ...where,
     "",
   ];
   for (const status of LLMS_TXT_SECTION_ORDER) {

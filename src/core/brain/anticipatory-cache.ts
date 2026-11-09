@@ -19,7 +19,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 
 import { resolveModelContextWindowEnvTokens } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -32,10 +32,10 @@ import { packStampRefusal, packStampTokens, type ContextPackStamp } from "./pack
 import { resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { BRAIN_ANTICIPATORY_REL } from "./path-constants.ts";
-import { ensureInsideVault } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { searchSessionRecall, type SessionRecallHit } from "./session-recall.ts";
 import { loadBrainConfig } from "./policy.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /**
  * Cache-file schema token. Bumped to `v2` by context-integrity-gates
@@ -225,7 +225,7 @@ export function anticipatoryCachePath(
 ): string {
   const scope = resolveOwnerScopeDelivery(vault, agentScope ?? undefined).enforcedScope;
   const key = safeCacheKey(scope === null ? rootSessionId : `${rootSessionId}\u0000${scope}`);
-  return ensureInsideVault(join(vault, BRAIN_ANTICIPATORY_REL, `${key}.json`), vault);
+  return machineStatePath(vault, BRAIN_ANTICIPATORY_REL, `${key}.json`);
 }
 
 function resolveRootId(vault: string, sessionId: string): string {
@@ -445,7 +445,8 @@ export function refreshAnticipatoryCache(
       stamp: toCacheStamp(bundle.stamp),
       context: bundle.context,
     };
-    mkdirSync(join(vault, BRAIN_ANTICIPATORY_REL), { recursive: true });
+    // The file's own parent: one resolution of the state root per write.
+    mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, `${JSON.stringify(cache, null, 2)}\n`);
     // Retention rides on the write, never on the read path: entries are
     // one per session and nothing else deletes them (rate-limited inside).

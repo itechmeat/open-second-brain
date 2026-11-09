@@ -42,10 +42,8 @@
  * derivation itself offers none.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import {
   deriveDatasetHash,
   readDerivedArtifact,
@@ -54,12 +52,16 @@ import {
 } from "../derived-artifact.ts";
 import { formatFrontmatter } from "../../vault.ts";
 import { isoSecond } from "../time.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { OPERATION, type Safeguard } from "../safeguard.ts";
 import { progressCounter, withProgress, type ProgressSink } from "../progress.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
 import { listContinuityRecords } from "../continuity/store.ts";
 import { SESSION_ENTITY_MENTION_KIND } from "./session-mining.ts";
+import {
+  acquireLaneLock,
+  assertLaneWrite,
+  readLaneText,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 export const HALLWAYS_SCHEMA_VERSION = "o2b.hallways.v1";
 
@@ -480,7 +482,7 @@ export function writeHallwaysProposals(
     readonly dismissed?: ReadonlySet<string>;
   },
 ): string {
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const minSessions = Math.max(1, Math.floor(opts.minSessions ?? DEFAULT_PROMOTION_MIN_SESSIONS));
   const dismissed = opts.dismissed ?? new Set<string>();
   const candidates = result.keys.filter((k) => k.sessionCount >= minSessions);
@@ -531,17 +533,17 @@ export function writeHallwaysProposals(
     },
     lines.join("\n"),
   );
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, content);
+  writeLaneText(vault, path, content);
   return path;
 }
 
 /** Persisted dismissals, as family-scoped key ids. Fail-soft read. */
 export function readDismissedHallwayKeys(vault: string): Set<string> {
   const path = join(vault, HALLWAYS_DISMISSED_REL);
-  if (!existsSync(path)) return new Set();
+  const text = readLaneText(vault, path);
+  if (text === null) return new Set();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     const keys = (parsed as { keys?: unknown }).keys;
     if (!Array.isArray(keys)) return new Set();
     return new Set(keys.filter((k): k is string => typeof k === "string"));
@@ -560,10 +562,10 @@ export function readDismissedHallwayKeys(vault: string): Set<string> {
  * turn; an expired wait is a loud refusal, never an unlocked write.
  */
 export function dismissHallwayKey(vault: string, family: string, key: string): boolean {
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const id = hallwaysKeyId(family, key);
   const path = join(vault, HALLWAYS_DISMISSED_REL);
-  const lock = acquireLockSyncWithRetry(path);
+  const lock = acquireLaneLock(vault, path);
   try {
     const dismissed = readDismissedHallwayKeys(vault);
     if (dismissed.has(id)) return false;
@@ -571,7 +573,7 @@ export function dismissHallwayKey(vault: string, family: string, key: string): b
     // Through the shared atomic writer, not a raw writeFileSync: an
     // interrupted swap leaves the old dismissal set or the new one, and
     // the file stays out of the direct-fs write-site census population.
-    atomicWriteFileSync(path, `${JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2)}\n`);
+    writeLaneText(vault, path, `${JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2)}\n`);
     return true;
   } finally {
     lock.release();

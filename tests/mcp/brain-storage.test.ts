@@ -231,8 +231,11 @@ describe("brain_storage", () => {
     expect(surfaces.find((s) => s.surface === "derived_store")?.bytes).toBe(12_345);
   });
 
+  // A legacy `Brain/` tree without `_brain.yaml`; with no `Brain/` the
+  // vault is store-only and its settings come from the store (D14 item 3).
   test("a vault with no brain config surfaces the named config error", async () => {
     const bare = mkdtempSync(join(tmpdir(), "o2b-mcp-storage-bare-"));
+    mkdirSync(join(bare, "Brain"));
     try {
       const bareCtx: ServerContext = {
         vault: bare,

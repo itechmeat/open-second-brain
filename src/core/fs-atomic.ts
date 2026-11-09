@@ -575,3 +575,15 @@ function withTempFile(
     throw err;
   }
 }
+
+/**
+ * Whether `name` is a temporary file an atomic write of this module is
+ * making (`.<target>.<pid>.<ms>.<hex>.tmp`): transient, renamed onto its
+ * target or removed when the write ends, so a walk over a folder that
+ * writers are using never reads it as data.
+ */
+export function isAtomicWriteTemp(name: string): boolean {
+  return ATOMIC_TEMP_RE.test(name);
+}
+
+const ATOMIC_TEMP_RE = /^\..+\.\d+\.\d+\.[0-9a-f]*\.tmp$/;

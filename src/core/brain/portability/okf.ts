@@ -50,7 +50,7 @@
  * are writable - keys on the operator's explicit `--trusted` instead.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -59,7 +59,6 @@ import {
   extractWikilinks,
   formatFrontmatter,
   parseFrontmatterText,
-  writeFrontmatterAtomic,
 } from "../../vault.ts";
 import type { FrontmatterMap, FrontmatterValue } from "../../types.ts";
 import {
@@ -77,11 +76,24 @@ import {
 } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { ORIGIN_CHANNEL_FIELD, isOriginChannelStamp } from "../../origin-channel.ts";
 import { contentClassCreationStamp } from "../provenance/content-class.ts";
 import { KNOWLEDGE_PACK_FIELD, KNOWLEDGE_PACK_SHA_FIELD } from "./pack-stamp.ts";
 import { OPEN_SECOND_BRAIN_VERSION } from "../../version.ts";
+import {
+  assertLaneWrite,
+  laneEntryClockMs,
+  laneEntryInPrivate,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneTree,
+  readLaneFile,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
+import { storeLogDays } from "../log-days.ts";
+import { renderLogDayHeader, renderLogEntryBlock } from "../log.ts";
+import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 
 export const OKF_SCHEMA_VERSION = "1";
 export const OKF_PRODUCER = "open-second-brain";
@@ -380,16 +392,14 @@ function okfStatusOf(meta: FrontmatterMap): OkfStatus {
   return "stable";
 }
 
-function freshnessOf(meta: FrontmatterMap, absPath: string): string | null {
+function freshnessOf(vault: string, meta: FrontmatterMap, absPath: string): string | null {
   for (const field of FRESHNESS_FIELDS) {
     const stamp = stringField(meta, field);
     if (stamp !== null) return stamp;
   }
-  try {
-    return isoSecond(statSync(absPath).mtime);
-  } catch {
-    return null;
-  }
+  // A file's mtime, or a lane record's clock on a store-only machine.
+  const ms = laneEntryClockMs(vault, absPath);
+  return ms === null ? null : isoSecond(new Date(ms));
 }
 
 function producerMeta(meta: FrontmatterMap): Record<string, string> {
@@ -427,11 +437,12 @@ export function collectOkfPages(vault: string): ReadonlyArray<OkfPage> {
   const consider = (abs: string, forceClass?: OkfPageClass): void => {
     let raw: string;
     try {
-      raw = readFileSync(abs, "utf8");
+      raw = readLaneFile(vault, abs);
     } catch {
       return;
     }
-    const [meta, body] = parseFrontmatterText(raw);
+    const [parsed, body] = parseFrontmatterText(raw);
+    const meta = privateStamped(vault, abs, parsed);
     const kind = stringField(meta, "kind") ?? DEFAULT_KIND;
     const cls = forceClass ?? classifyKind(kind);
     const path = vaultRel(vault, abs);
@@ -453,7 +464,7 @@ export function collectOkfPages(vault: string): ReadonlyArray<OkfPage> {
       citations: collectCitations(meta, body),
       status: okfStatusOf(meta),
       aliases: aliasField(meta),
-      freshness: freshnessOf(meta, abs),
+      freshness: freshnessOf(vault, meta, abs),
       foreign_type: stringField(meta, FOREIGN_TYPE_KEY),
       producer_meta: producerMeta(meta),
       frontmatter: meta,
@@ -463,13 +474,33 @@ export function collectOkfPages(vault: string): ReadonlyArray<OkfPage> {
 
   // 1. User pages (outside Brain). listing is sorted by path below.
   for (const abs of listMarkdown(vault, [...EXCLUDED_DIRS, BRAIN_ROOT_REL])) consider(abs);
-  // 2. References: Brain/sources/*.md.
-  for (const abs of listMarkdown(join(vault, BRAIN_SOURCES_REL), [])) consider(abs, "reference");
-  // 3. Queries: Brain/reports/*.md.
-  for (const abs of listMarkdown(join(vault, BRAIN_REPORTS_REL), [])) consider(abs, "query");
+  // 2. References: Brain/sources/*.md (lane records once switched).
+  for (const abs of laneMarkdown(vault, join(vault, BRAIN_SOURCES_REL))) consider(abs, "reference");
+  // 3. Queries: Brain/reports/*.md (lane records once switched).
+  for (const abs of laneMarkdown(vault, join(vault, BRAIN_REPORTS_REL))) consider(abs, "query");
 
   out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return out;
+}
+
+/**
+ * A page read from a lane entry of the `private` partition carries the
+ * remote-deny token in the bundle (review finding F333). Such an entry can
+ * be private by partition alone, with no `visibility:` of its own, and
+ * would otherwise land in another vault as an ordinary shared page. The
+ * token is added to the tokens the page already declares, never in place
+ * of them.
+ */
+function privateStamped(vault: string, abs: string, meta: FrontmatterMap): FrontmatterMap {
+  if (!laneEntryInPrivate(vault, abs)) return meta;
+  const tokens = pageVisibility(meta);
+  if (tokens.includes(REMOTE_DENY_VISIBILITY_TOKEN)) return meta;
+  return { ...meta, visibility: [...tokens, REMOTE_DENY_VISIBILITY_TOKEN] };
+}
+
+/** The `.md` pages under a `Brain/` lane folder, in both modes. */
+function laneMarkdown(vault: string, root: string): string[] {
+  return lanePagesInStore(vault) ? listLaneTree(vault, root) : listMarkdown(root, []);
 }
 
 /** Recursively list `.md` files under `root`, skipping `skipDirs` names. */
@@ -569,7 +600,23 @@ const LOG_BULLET_RE = /^-\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/;
 export function buildLog(vault: string, filter?: OkfLogFilter): OkfLog {
   const bodiesByDate = new Map<string, string[]>();
   let droppedEntries = 0;
-  for (const shard of listLogShardFiles(vault)) {
+  // A store-only machine keeps no day files: each day of the store's log
+  // events is rendered the way the day file renders it (header, then one
+  // block per entry), so the bundle's `log.md` reads the same.
+  const storedDays = storeLogDays(vault);
+  for (const day of storedDays ?? []) {
+    const body = [renderLogDayHeader(day.date), ...day.entries.map(renderLogEntryBlock)]
+      .join("\n")
+      .trimEnd();
+    const text =
+      filter === undefined || filter.includePromptDerived
+        ? body
+        : filterLogShard(body, filter, (dropped) => {
+            droppedEntries += dropped;
+          });
+    if (text.length > 0) bodiesByDate.set(day.date, [text]);
+  }
+  for (const shard of storedDays === null ? listLogShardFiles(vault) : []) {
     // The bundle is markdown; the JSONL sidecar of a day carries the same
     // entries in machine form and would duplicate every line.
     if (shard.ext !== "md") continue;
@@ -1595,8 +1642,13 @@ export function importOkfBundle(
   bundle: ParsedOkfBundle,
   opts: OkfImportOptions = {},
 ): OkfImportResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Lane write guard: the vault identity guard on an unswitched machine.
+  // Every page this import writes lands in the user's vault (OKF Review/
+  // or a trusted user path), so a store-only machine runs the vault
+  // adapter's guard once up front too: a frozen or swapped vault is
+  // refused before the walk, as it is unswitched.
+  assertLaneWrite(vault);
+  if (lanePagesInStore(vault)) assertNoteVaultForWrite(vault, "okf import");
   const trusted = opts.trusted === true;
   const nowIso = isoSecond(opts.now ?? new Date());
   const written: string[] = [];
@@ -1620,7 +1672,7 @@ export function importOkfBundle(
       errors.push({ path: targetRel, message: (exc as Error).message ?? String(exc) });
       continue;
     }
-    if (!trusted && existsSync(abs)) {
+    if (!trusted && lanePageExists(vault, abs)) {
       skipped.push(targetRel);
       continue;
     }
@@ -1629,11 +1681,12 @@ export function importOkfBundle(
       ...opts.provenance,
     };
     try {
-      mkdirSync(dirname(abs), { recursive: true });
       // overwrite: trusted closes the TOCTOU window in review mode: if a
-      // file appears between the existsSync check above and this write,
-      // the exclusive create throws EEXIST instead of clobbering it.
-      writeFrontmatterAtomic(abs, meta, page.body, { overwrite: trusted });
+      // file appears between the existence check above and this write,
+      // the exclusive create throws EEXIST instead of clobbering it. A
+      // `Brain/` page is a lane record once switched; a user page is a
+      // file, behind the vault adapter's guard.
+      writeLanePage(vault, abs, meta, page.body, { overwrite: trusted });
       written.push(targetRel);
     } catch (exc) {
       if (!trusted && (exc as NodeJS.ErrnoException).code === "EEXIST") {

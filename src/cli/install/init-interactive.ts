@@ -6,6 +6,12 @@
  * answer flow. Input comes from stdin (or an injected reader for
  * tests); commands are dispatched via the same `main()` entry as a
  * real CLI invocation.
+ *
+ * A vault with no legacy `Brain/` tree is a fresh install (design D14
+ * item 1): `o2b init` creates the brain store and binds the vault to it,
+ * and the brain lives in the store from the first write. The wizard then
+ * neither asks about nor queues `o2b brain init`, which would scaffold a
+ * legacy tree into the vault and turn the machine back into a legacy one.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -13,6 +19,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { validateTimezoneName } from "../../core/config.ts";
+import { hasLegacyTree } from "../../core/store/store-only.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/aider.ts";
 import "../../core/install/adapters/codex.ts";
@@ -236,10 +243,20 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
     }
   }
 
-  // 6. Brain init?
-  const brainInit = (await ask(opts, "Scaffold Brain layer with `o2b brain init`?", "y"))
-    .toLowerCase()
-    .startsWith("y");
+  // 6. Brain init? Only for a vault that already holds a legacy tree; a
+  // fresh vault keeps its brain in the store (see the module docblock).
+  const legacyVault = hasLegacyTree(vault);
+  if (!legacyVault) {
+    opts.stdout.write(
+      "\nThe vault has no Brain/ tree: `o2b init` creates the brain store, which holds the " +
+        "brain from the first write, so no Brain layer is scaffolded into the vault.\n",
+    );
+  }
+  const brainInit =
+    legacyVault &&
+    (await ask(opts, "Scaffold Brain layer with `o2b brain init`?", "y"))
+      .toLowerCase()
+      .startsWith("y");
   const starter = brainInit
     ? (await ask(opts, "Include starter preferences (--starter)?", "n"))
         .toLowerCase()

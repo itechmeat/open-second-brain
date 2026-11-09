@@ -85,13 +85,14 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
     """Fetch tools/list from a live ``o2b mcp`` and project the curated subset.
 
-    The server is given ``vault`` explicitly. It refuses to start with no
-    vault configured - "no vault configured. Pass --vault ..." - so on a
-    machine with no Open Second Brain config the handshake sees EOF and the
-    caller skips. That is every continuous-integration runner, and it is why
-    this test has never actually run there: it passed on a developer machine
-    because that machine happened to have a vault, and skipped everywhere
-    else. A throwaway directory is enough - ``tools/list`` reads nothing.
+    The server is given ``vault`` explicitly. ``o2b mcp`` also starts with
+    no vault configured (a store-only machine needs none; tools that need a
+    vault refuse per call with ``vault_required``), but this test pins the
+    surface a configured install advertises, so it hands the server one. It
+    used to be the only way to get a handshake at all: the server once
+    refused to start without a vault, so on a machine with no Open Second
+    Brain config (every continuous-integration runner) the test skipped. A
+    throwaway directory is enough - ``tools/list`` reads nothing.
 
     ``diagnostics`` is an open file the server's standard error is written
     to, so a skip can name why the server went away instead of discarding

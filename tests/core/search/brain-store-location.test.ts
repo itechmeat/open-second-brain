@@ -5,7 +5,7 @@
  * way.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { DERIVED_STORE_DIR, DERIVED_STORE_FILE } from "../../../src/core/brain/path-constants.ts";
@@ -15,7 +15,11 @@ import {
   resolveIndexedStore,
   storeIndexPath,
 } from "../../../src/core/search/brain-store/location.ts";
-import { resolveConfiguredIndexPath, resolveIndexPath } from "../../../src/core/search/paths.ts";
+import {
+  NoIndexLocationError,
+  resolveConfiguredIndexPath,
+  resolveIndexPath,
+} from "../../../src/core/search/paths.ts";
 import {
   STORE_IDENTITY_FILE,
   STORE_ROOT_CONFIG_KEY,
@@ -62,6 +66,25 @@ describe("index location", () => {
     expect(path.endsWith(DERIVED_STORE_FILE)).toBe(true);
     const other = storeIndexPath(store!, join(fx.parent, "other-vault"));
     expect(other).not.toBe(path);
+  });
+
+  test("with no vault the index is keyed by the store id", () => {
+    fx.open(LOCAL_DEVICE);
+    const store = resolveIndexedStore({
+      vault: null,
+      config: { [STORE_ROOT_CONFIG_KEY]: fx.root },
+      dirs: fx.dirs(LOCAL_DEVICE),
+    })!;
+    const path = resolveIndexPath(null, null, store);
+    expect(path).toBe(join(store.deviceStateDir, "index", store.storeId, DERIVED_STORE_FILE));
+    expect(path).not.toBe(storeIndexPath(store, fx.vault));
+  });
+
+  test("with no vault and no store there is no index location", () => {
+    expect(() => resolveIndexPath(null, null, null)).toThrow(NoIndexLocationError);
+    expect(resolveIndexPath(null, join(fx.parent, "x.sqlite"), null)).toBe(
+      join(fx.parent, "x.sqlite"),
+    );
   });
 
   test("one vault reached through a link keeps one index", () => {
@@ -168,6 +191,19 @@ describe("resolveSearchConfig", () => {
     process.env["LOCALAPPDATA"] = env["LOCALAPPDATA"];
     writeFileSync(join(fx.root, "shared", STORE_IDENTITY_FILE), "{");
     expect(resolveSearchConfig({ vault: fx.vault }).dbPath).toBe(legacyPath(fx.vault));
+  });
+
+  test("a partition this machine held that lost its identity file says the store is unknown", () => {
+    process.env[STORE_ROOT_ENV] = fx.root;
+    fx.open(LOCAL_DEVICE); // initialised on this machine: both partitions listed
+    expect(resolveSearchConfig({ vault: fx.vault }).brainStore?.partitions).toEqual([
+      "shared",
+      "private",
+    ]);
+    rmSync(join(fx.root, "private", STORE_IDENTITY_FILE));
+    const config = resolveSearchConfig({ vault: fx.vault });
+    expect(config.brainStore).toBeNull();
+    expect(config.brainStoreUnknown).toBe(true);
   });
 
   test("an identity file it cannot read says the store is unknown, not absent", () => {

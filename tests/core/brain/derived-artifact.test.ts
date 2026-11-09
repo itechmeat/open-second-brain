@@ -60,6 +60,8 @@ beforeEach(() => {
   // in one process, so every test starts unpinned.
   resetVaultIdentityPins();
   vault = mkdtempSync(join(tmpdir(), "o2b-derived-artifact-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

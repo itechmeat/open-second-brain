@@ -116,7 +116,7 @@ function fenceWarningValue(value: string): string {
  * every append-only ledger in the vault now shares; this declaration is
  * the log's own base and extensions and nothing more.
  */
-const LOG_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const LOG_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: "\\d{4}-\\d{2}-\\d{2}",
   extensions: Object.freeze(["jsonl", "md"]),
 });

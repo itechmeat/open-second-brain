@@ -55,8 +55,11 @@ import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.t
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { WriteRefusedError } from "../../../src/core/brain/write-disposition.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
-import { withDeviceId } from "../../helpers/device-id.ts";
+import { withDeviceId, useUnshardedLegacyLog } from "../../helpers/device-id.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = new Date("2026-09-25T00:00:00Z");
 

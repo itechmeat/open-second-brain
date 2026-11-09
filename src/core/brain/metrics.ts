@@ -23,6 +23,7 @@
  * consumers in `docs/metrics.md`.
  */
 
+import { legacyVaultOf } from "./no-vault.ts";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -34,7 +35,8 @@ import {
 } from "./ledger-shards.ts";
 import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { routeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
@@ -136,9 +138,7 @@ const METRIC_APPEND_LOCK_WAIT_MS = 1_000;
  * Append one run-level metric record to the surface's JSONL file.
  * Creates `Brain/metrics/` on first write.
  */
-export function appendMetric(vault: string, input: AppendMetricInput): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+export function appendMetric(vault: string | null, input: AppendMetricInput): void {
   assertSurface(input.surface);
   if (!ISO_RE.test(input.runAt)) {
     throw new MetricSurfaceError(
@@ -151,7 +151,31 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
     run_at: input.runAt,
     payload: input.payload,
   };
-  const path = surfacePath(vault, input.surface);
+  // One `metrics` ledger row on a store-only machine (design D14 item 1),
+  // the surface file plus the dual write otherwise. A sample is counts and
+  // timings, but its payload is caller-shaped: one that names a private
+  // page, or a page that cannot be judged, goes to `private` only.
+  routeWrite({
+    legacy: () => appendLegacyMetric(legacyVaultOf(vault, "appendMetric"), record),
+    store: () =>
+      ledgerRowRecord(
+        DUAL_WRITE_LEDGERS.metrics,
+        record,
+        rowNamesPrivatePage(vault, record) ? "private" : "shared",
+      ),
+    context: { vault },
+    // Best-effort telemetry: a store failure is counted in the device-local
+    // write status (doctor reports it) instead of being thrown and dropped
+    // by the caller's catch.
+    failOpen: true,
+  });
+}
+
+/** The legacy append: one line in the surface's file under the vault. */
+function appendLegacyMetric(vault: string, record: MetricRecord): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const path = surfacePath(vault, record.surface);
   mkdirSync(dirname(path), { recursive: true });
   // The same per-file lock the continuity appender holds: a bare O_APPEND
   // write interleaves with other APPENDS, but a shard REWRITE (the receipt
@@ -168,19 +192,6 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
   } finally {
     handle.release();
   }
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // A sample is counts and timings, but its payload is caller-shaped: one
-  // that names a private page, or a page that cannot be judged, goes to
-  // `private` only.
-  dualWrite(
-    () =>
-      ledgerRowRecord(
-        DUAL_WRITE_LEDGERS.metrics,
-        record,
-        rowNamesPrivatePage(vault, record) ? "private" : "shared",
-      ),
-    { vault },
-  );
 }
 
 /**
@@ -189,26 +200,21 @@ export function appendMetric(vault: string, input: AppendMetricInput): void {
  * dir/file reads as empty; torn or non-object lines are skipped.
  */
 export function listMetrics(vault: string, filter: ListMetricsFilter = {}): MetricRecord[] {
-  let surfaces: string[];
-  if (filter.surface !== undefined) {
-    assertSurface(filter.surface);
-    surfaces = [filter.surface];
-  } else {
-    // Every surface that has at least one shard, sharded or not. The
-    // grammar strips a device suffix, so one surface written by three
-    // devices is discovered once.
-    surfaces = [
-      ...new Set(listShardedFiles(metricsDir(vault), ANY_SURFACE_GRAMMAR).map((f) => f.base)),
-    ].toSorted();
-  }
-
+  if (filter.surface !== undefined) assertSurface(filter.surface);
+  // The `metrics` ledger rows in fold order on a store-only machine (design
+  // D14 item 1), the surface files otherwise.
+  const rows = readLedgerRows<unknown>(
+    DUAL_WRITE_LEDGERS.metrics,
+    (legacyVault) => readLegacyMetrics(legacyVault, filter.surface),
+    { vault },
+  );
   const out: Array<{ record: MetricRecord; seq: number }> = [];
   let seq = 0;
-  for (const surface of surfaces) {
-    for (const record of readSurface(vault, surface)) {
-      if (filter.since !== undefined && record.run_at < filter.since) continue;
-      out.push({ record, seq: seq++ });
-    }
+  for (const row of rows) {
+    if (!isMetricRecord(row)) continue;
+    if (filter.surface !== undefined && row.surface !== filter.surface) continue;
+    if (filter.since !== undefined && row.run_at < filter.since) continue;
+    out.push({ record: row, seq: seq++ });
   }
   // Newest first; stable on equal timestamps via file/line order.
   out.sort((a, b) =>
@@ -220,6 +226,35 @@ export function listMetrics(vault: string, filter: ListMetricsFilter = {}): Metr
   );
   const records = out.map((e) => e.record);
   return filter.limit !== undefined ? records.slice(0, Math.max(0, filter.limit)) : records;
+}
+
+/** The legacy records of one surface, or of every surface in name order. */
+function readLegacyMetrics(vault: string, surface: string | undefined): MetricRecord[] {
+  // Every surface that has at least one shard, sharded or not. The
+  // grammar strips a device suffix, so one surface written by three
+  // devices is discovered once.
+  const surfaces =
+    surface !== undefined
+      ? [surface]
+      : [
+          ...new Set(listShardedFiles(metricsDir(vault), ANY_SURFACE_GRAMMAR).map((f) => f.base)),
+        ].toSorted();
+  return surfaces.flatMap((name) => readSurface(vault, name));
+}
+
+/** Whether a parsed line or a store row has the shape of a metric record. */
+function isMetricRecord(parsed: unknown): parsed is MetricRecord {
+  return (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    typeof (parsed as { schema?: unknown }).schema === "string" &&
+    typeof (parsed as { surface?: unknown }).surface === "string" &&
+    typeof (parsed as { run_at?: unknown }).run_at === "string" &&
+    (parsed as { payload?: unknown }).payload !== null &&
+    typeof (parsed as { payload?: unknown }).payload === "object" &&
+    !Array.isArray((parsed as { payload?: unknown }).payload)
+  );
 }
 
 /**
@@ -246,19 +281,7 @@ function readSurface(vault: string, surface: string): MetricRecord[] {
       if (line.trim().length === 0) continue;
       try {
         const parsed: unknown = JSON.parse(line);
-        if (
-          parsed !== null &&
-          typeof parsed === "object" &&
-          !Array.isArray(parsed) &&
-          typeof (parsed as { schema?: unknown }).schema === "string" &&
-          typeof (parsed as { surface?: unknown }).surface === "string" &&
-          typeof (parsed as { run_at?: unknown }).run_at === "string" &&
-          (parsed as { payload?: unknown }).payload !== null &&
-          typeof (parsed as { payload?: unknown }).payload === "object" &&
-          !Array.isArray((parsed as { payload?: unknown }).payload)
-        ) {
-          out.push(parsed as MetricRecord);
-        }
+        if (isMetricRecord(parsed)) out.push(parsed);
       } catch {
         // Fail-soft: a torn line never breaks the metrics read.
       }

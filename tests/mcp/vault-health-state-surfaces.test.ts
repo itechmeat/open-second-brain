@@ -23,9 +23,11 @@ import {
 } from "../../src/core/state/surfaces.ts";
 import { createSandboxVault } from "../helpers/fixtures.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 async function health(vault: string): Promise<Record<string, unknown>> {
-  const server = new MCPServer({ vault });
+  // A local caller: the inventory is compared with the host paths it holds.
+  const server = new MCPServer({ vault }, { reach: TRANSPORT_REACH.local });
   const r = (await server.handleRequest({
     jsonrpc: "2.0",
     id: 1,

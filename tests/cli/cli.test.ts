@@ -18,6 +18,7 @@ import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { FAKE_GITHUB_SECRET } from "../helpers/fake-credentials.ts";
+import { makeTestStore } from "../helpers/test-store.ts";
 
 const GITHUB_REF = "$secret:GITHUB_TOKEN";
 
@@ -498,30 +499,36 @@ describe("secrets", () => {
     writeFileSync(config, 'probe_dash: "$secret:tg-token"\n');
     const vault = join(tmp, "vault");
     mkdirSync(vault, { recursive: true });
+    // A bare vault is store-only: the custody audit of `secret set` goes to
+    // a store of this test's own.
+    const store = makeTestStore();
+    try {
+      const before = await runCli(
+        ["secrets", "list", "--config", config, "--vault", vault, "--json"],
+        { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+      );
+      expect(before.returncode).toBe(0);
+      expect(JSON.parse(before.stdout).secrets).toEqual([
+        { config_key: "probe_dash", name: "tg-token", available: false },
+      ]);
 
-    const before = await runCli(
-      ["secrets", "list", "--config", config, "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(before.returncode).toBe(0);
-    expect(JSON.parse(before.stdout).secrets).toEqual([
-      { config_key: "probe_dash", name: "tg-token", available: false },
-    ]);
+      const stored = await runCli(["brain", "secret", "set", "tg-token", "--vault", vault], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+        stdin: "fake-stored-value-9d11c2\n",
+      });
+      expect(stored.returncode).toBe(0);
 
-    const stored = await runCli(["brain", "secret", "set", "tg-token", "--vault", vault], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-      stdin: "fake-stored-value-9d11c2\n",
-    });
-    expect(stored.returncode).toBe(0);
-
-    const after = await runCli(
-      ["secrets", "list", "--config", config, "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-    );
-    expect(after.returncode).toBe(0);
-    expect(JSON.parse(after.stdout).secrets).toEqual([
-      { config_key: "probe_dash", name: "tg-token", available: true },
-    ]);
+      const after = await runCli(
+        ["secrets", "list", "--config", config, "--vault", vault, "--json"],
+        { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+      );
+      expect(after.returncode).toBe(0);
+      expect(JSON.parse(after.stdout).secrets).toEqual([
+        { config_key: "probe_dash", name: "tg-token", available: true },
+      ]);
+    } finally {
+      store.cleanup();
+    }
   });
 
   test("well-formed reference rows carry no invalid key (additive-only shape)", async () => {
@@ -553,13 +560,33 @@ describe("secrets", () => {
 });
 
 describe("mcp subcommand", () => {
-  test("errors when no vault anywhere", async () => {
+  test("starts with no vault anywhere and refuses a vault tool with vault_required", async () => {
     const cfg = join(tmp, "config.yaml");
+    const requests = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t" } },
+      },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "second_brain_query" } },
+    ];
     const r = await runCli(["mcp"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: cfg, VAULT_DIR: "" },
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: cfg,
+        VAULT_DIR: "",
+        HOME: tmp,
+        XDG_STATE_HOME: join(tmp, "state"),
+        LOCALAPPDATA: join(tmp, "state"),
+      },
+      stdin: requests.map((req) => JSON.stringify(req)).join("\n") + "\n",
     });
-    expect(r.returncode).not.toBe(0);
-    expect(r.stderr.toLowerCase()).toContain("no vault configured");
-    expect(r.stderr).toContain("o2b init");
+    expect(r.returncode).toBe(0);
+    const responses = r.stdout
+      .split("\n")
+      .filter((line) => line.trim().startsWith("{"))
+      .map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown });
+    expect(responses.find((res) => res.id === 1)?.result).toBeDefined();
+    expect(JSON.stringify(responses.find((res) => res.id === 2))).toContain("vault_required");
   });
 });

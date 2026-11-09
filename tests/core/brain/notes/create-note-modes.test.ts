@@ -134,6 +134,8 @@ const GOLDEN_SKIPPED_RESULT_KEYS: ReadonlyArray<string> = Object.freeze([
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-create-note-modes-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 

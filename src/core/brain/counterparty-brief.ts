@@ -55,7 +55,7 @@
  * that is not a calendar date renders as `undated`.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { posix } from "node:path";
 
@@ -83,7 +83,13 @@ import {
   emitDegradationNotice,
   type DegradationNotice,
 } from "../integrity/degradation.ts";
-import { parseFrontmatterTextWithNotices, parseFrontmatterWithNotices } from "../vault.ts";
+import {
+  formatFrontmatter,
+  parseFrontmatterTextWithNotices,
+  parseFrontmatterWithNotices,
+} from "../vault.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { laneEntryInPrivate, readLaneText } from "../store/lane-pages.ts";
 
 /**
  * The most items one brief may carry. Three dated lines is the injection
@@ -312,13 +318,21 @@ function isoDateHead(value: unknown): string {
  * reports dropped lines, is treated as carrying the token - an unreadable
  * record is not shareable, so it may neither match nor block a match.
  */
-function entityCarriesReservedToken(entity: BrainEntity): boolean {
-  let text: string;
+function entityCarriesReservedToken(vault: string, entity: BrainEntity): boolean {
+  // The page file on an unswitched machine, the lane record once switched
+  // (no file exists there); a page that cannot be read is reserved.
+  let text: string | null;
   try {
-    text = readFileSync(entity.path, "utf8");
+    // Once switched, a record the store holds in `private` is reserved
+    // whatever its fields say: it can be private by partition alone (it
+    // names a private page, or a merge's one verdict put it there), as
+    // the preferences half of the brief already honours.
+    if (laneEntryInPrivate(vault, entity.path)) return true;
+    text = readLaneText(vault, entity.path);
   } catch {
     return true;
   }
+  if (text === null) return true;
   const [meta, , notices] = parseFrontmatterTextWithNotices(text);
   if (notices.length > 0) return true;
   // The full union (declared tokens plus any informal marker's
@@ -360,7 +374,7 @@ function matchExactlyOneEntity(
   // The reserved-token gate is applied AFTER the matching, so only the
   // pages that actually matched are read for it - and it removes a private
   // record from the set instead of letting it block the match beside it.
-  const shareable = matched.filter((entity) => !entityCarriesReservedToken(entity));
+  const shareable = matched.filter((entity) => !entityCarriesReservedToken(vault, entity));
   if (shareable.length === 1) return shareable[0]!;
   return { abstain: shareable.length === 0 ? "no_match" : "ambiguous" };
 }
@@ -509,26 +523,28 @@ function preferenceItems(
   anchorOpts: ValidateEntityLabelOptions,
   input: CounterpartyBriefInput,
 ): PreferenceWalk {
-  const dir = join(vault, BRAIN_PREFERENCES_REL);
   const notices: DegradationNotice[] = [];
-  if (!existsSync(dir)) return { items: [], skippedReads: 0, notices };
+  // The preference pages: files when unswitched, the fold's once switched (task 2.10).
+  const pages = memoryFolderPages(vault, "preferences", { regularFilesOnly: true });
   const read: Array<{ item: CounterpartyBriefItem; date: string; name: string }> = [];
   let reads = 0;
   let skippedReads = 0;
   // Code-unit name order, the same order listPledges walks its directory
   // in: the read window - and so the brief - must not depend on the host's
   // ICU locale.
-  for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
-    compareCodeUnits(a.name, b.name),
-  )) {
+  for (const entry of pages.toSorted((a, b) => compareCodeUnits(a.name, b.name))) {
     if (reads >= BRIEF_PAGE_READ_CAP) break;
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (!entry.name.endsWith(".md")) continue;
     const rel = posix.join(BRAIN_PREFERENCES_REL, entry.name);
     if (input.readable !== undefined && !input.readable(rel)) continue;
+    // A record the store holds in `private` is withheld whatever its
+    // frontmatter says, as the reserved token would withhold it: the
+    // rendered block leaves the machine.
+    if (entry.private) continue;
     reads += 1;
     let text: string;
     try {
-      text = readFileSync(join(dir, entry.name), "utf8");
+      text = entry.stored ? formatFrontmatter(...entry.read()) : readFileSync(entry.path, "utf8");
     } catch (err) {
       // A page that cannot be read is skipped, but never silently: the
       // skip is counted and reported through the typed degradation

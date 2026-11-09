@@ -416,6 +416,17 @@ export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): 
 }
 
 /**
+ * The machine config's own `vault` key (`~` expanded), or null when it
+ * sets none: unlike {@link resolveVault}, never `VAULT_DIR`, a project
+ * pointer or a profile, which name a vault for one session only. For a
+ * writer that would persist the answer back as the machine's vault.
+ */
+export function configuredVaultKey(configPath?: string): string | null {
+  const value = discoverConfig(configPath).data["vault"];
+  return value ? expandTilde(value) : null;
+}
+
+/**
  * The identity every install writes under until one is configured.
  *
  * It is a placeholder, not a name: two unconfigured installs write under

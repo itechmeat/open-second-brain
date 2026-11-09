@@ -28,7 +28,10 @@ fi
 printf '%s\n' "$changed"
 
 prose='^(docs/.*\.(md|txt|png|jpe?g|gif|svg|webp)|[^/]+\.md|\.github/.*\.md)$'
-if printf '%s\n' "$changed" | grep -qvE "$prose"; then
+# No `grep -q` here: it exits at the first match, the printf then dies of
+# SIGPIPE on a long list, and under pipefail the pipeline reads as "no
+# code file", which skipped the Windows shards of a large code change.
+if printf '%s\n' "$changed" | grep -vE "$prose" > /dev/null; then
   echo "code=true" >> "$out"
 else
   echo "code=false" >> "$out"

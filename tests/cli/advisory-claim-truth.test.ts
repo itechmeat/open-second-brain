@@ -25,6 +25,7 @@ import { NEXT_COMMAND_KEY, resolveNextStep } from "../../src/core/brain/next-ste
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
+import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -182,15 +183,22 @@ describe("search-index-missing claims the index is not built", () => {
 
   test("o2b init on a vault that already has one does not", async () => {
     // Build the index where the resolver will look for it, then re-init.
-    // The indexer refuses a vault directory that does not exist.
+    // The indexer refuses a vault directory that does not exist. A first
+    // init creates the brain store of this fresh vault (design D14 item 1),
+    // which is where the index of a store-only vault lives.
     mkdirSync(vault, { recursive: true });
+    const storeRoot = join(tmp, "store");
+    const first = await runCli(["init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [STORE_ROOT_ENV]: storeRoot },
+    });
+    expect(first.returncode).toBe(0);
     const built = await runCli(["search", "index", "--vault", vault], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [STORE_ROOT_ENV]: storeRoot },
     });
     expect(built.returncode).toBe(0);
 
     const r = await runCli(["init", "--vault", vault], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, [STORE_ROOT_ENV]: storeRoot },
     });
 
     expect(r.returncode).toBe(0);

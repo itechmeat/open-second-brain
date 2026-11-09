@@ -1257,7 +1257,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_tune",
     kind: "write",
     description:
-      "Opt-in self-tuning recall: run grid-evaluates bounded parameters (pool multiplier, traversal depth, learned weights, expansion) against a benchmark dataset and persists the winner to Brain/search/tuning.json; status shows the validated state; reset deletes it. Search honors it only when enabled.",
+      "Opt-in self-tuning recall: run grid-evaluates bounded parameters (pool multiplier, traversal depth, learned weights, expansion) against a benchmark dataset and persists the winner as the tuning state; status shows the validated state; reset deletes it. Search honors it only when enabled.",
     inputSchema: {
       type: "object",
       properties: {

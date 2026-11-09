@@ -141,7 +141,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
 }
 
 export interface FilterContext {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly store: Store;
   readonly frontmatterCache: FrontmatterCache;
 }

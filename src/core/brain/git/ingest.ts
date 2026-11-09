@@ -22,8 +22,8 @@
  * construction, and the only writes land inside the vault.
  */
 
-import { rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { renderGitDigest } from "./digest.ts";
@@ -32,12 +32,11 @@ import { readCommits, readTags, revListRange, shaExists } from "./reader.ts";
 import type { GitCommit, GitTag } from "./reader.ts";
 import {
   appendGitRecords,
-  DIGEST_FILE_NAME,
-  gitStoreDir,
+  gitDigestPath,
+  gitStatePath,
   listGitCommits,
   listGitTags,
   readGitState,
-  STATE_FILE_NAME,
   writeGitState,
 } from "./store.ts";
 import type { GitCommitRecord, GitRecord, GitTagRecord } from "./store.ts";
@@ -195,17 +194,18 @@ export function ingestGitHistory(
   if (newest !== null) {
     writeGitState(vault, key, { repoPath: repo, lastSha: newest, lastIngestedAt: now });
   } else if (mode === "rescan") {
-    rmSync(join(gitStoreDir(vault, key), STATE_FILE_NAME), { force: true });
+    rmSync(gitStatePath(vault, key), { force: true });
   }
 
   // Regenerate the digest projection from the FULL store.
-  const digestPath = join(gitStoreDir(vault, key), DIGEST_FILE_NAME);
+  const digestPath = gitDigestPath(vault, key);
   const digest = renderGitDigest({
     repoKey: key,
     repoPath: repo,
     commits: listGitCommits(vault, key),
     tags: listGitTags(vault, key),
   });
+  mkdirSync(dirname(digestPath), { recursive: true });
   atomicWriteFileSync(digestPath, digest);
 
   return Object.freeze({

@@ -524,6 +524,8 @@ beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-lessons-promotion-"));
   vault = join(tmp, "vault");
   mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

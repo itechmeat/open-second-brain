@@ -6,7 +6,7 @@
  */
 
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { pathIsInside, posixRel } from "../path-safety.ts";
@@ -30,6 +30,8 @@ import { deriveTrust, hasSupersededRelation } from "./enrich.ts";
 import { KNOWLEDGE_PACK_FIELD, parseKnowledgePackStamp } from "../brain/portability/pack-stamp.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
 import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
+import { storeRecordPages, type StoreMemoryPage } from "../brain/memory-pages.ts";
+import { memoryFromStore } from "../store/read/memory-ids.ts";
 import { SUPERSEDE_FADE_MULTIPLIER } from "./ranker.ts";
 import {
   keepVerdict,
@@ -66,7 +68,7 @@ export type FrontmatterCache = Map<string, CachedFrontmatter>;
  */
 export function readCachedFrontmatterEntry(
   cache: FrontmatterCache,
-  vault: string,
+  vault: string | null,
   path: string,
 ): CachedFrontmatter {
   // One spelling per (vault, rel): fold Windows separators before the
@@ -85,13 +87,33 @@ export function readCachedFrontmatterEntry(
   // the vault walk that produced the rel saw it. The refusal is the
   // unreadable verdict every caller of this helper already fails closed
   // on.
-  if (!pathIsInside(join(vault, rel), vault)) {
+  if (vault === null ? !isPlainRel(rel) : !pathIsInside(join(vault, rel), vault)) {
     const refusal: CachedFrontmatter = Object.freeze({ meta: {}, unreadable: true });
     cache.set(rel, refusal);
     return refusal;
   }
   const cached = cache.get(rel);
   if (cached !== undefined) return cached;
+  // No vault (design D14): a memory page the store's folds rebuild
+  // answers; any other path names no file, and reads as the missing file
+  // it would be on a vault.
+  if (vault === null) {
+    const page = storedPageAt(cache, null, rel);
+    const entry = page === null ? MISSING_PAGE : storedPageEntry(page);
+    cache.set(rel, entry);
+    return entry;
+  }
+  // A memory page on a store-only machine is no file (task 2.10): the page
+  // the store's folds rebuild answers, and a page the store holds as
+  // private reads as reserved, the fail-closed side of the page rule. The
+  // store answers first: a legacy file left in the vault until removal is
+  // stale once the machine switched (`memoryPageNamed` reads the same way).
+  const stored = storedPageAt(cache, vault, rel);
+  if (stored !== null) {
+    const entry = storedPageEntry(stored);
+    cache.set(rel, entry);
+    return entry;
+  }
   const [meta, , notices] = parseFrontmatterWithNotices(join(vault, rel), {
     site: FRONTMATTER_CACHE_SITE,
   });
@@ -101,6 +123,74 @@ export function readCachedFrontmatterEntry(
   });
   cache.set(rel, entry);
   return entry;
+}
+
+/** The cache entry of a page the store's folds rebuilt; a private one reads as reserved. */
+function storedPageEntry(page: StoreMemoryPage): CachedFrontmatter {
+  const [meta] = page.read();
+  return Object.freeze({ meta: page.private ? reservedMeta(meta) : meta, unreadable: false });
+}
+
+/**
+ * The store's memory pages by vault-relative path, built once per search
+ * call (one cache) and vault: `null` on an unswitched machine. A lookup per
+ * candidate would rebuild every memory page of the store each time.
+ */
+const STORED_PAGES = new WeakMap<
+  FrontmatterCache,
+  Map<string, ReadonlyMap<string, StoreMemoryPage> | null>
+>();
+
+function storedPageAt(
+  cache: FrontmatterCache,
+  vault: string | null,
+  rel: string,
+): StoreMemoryPage | null {
+  let byVault = STORED_PAGES.get(cache);
+  if (byVault === undefined) {
+    byVault = new Map();
+    STORED_PAGES.set(cache, byVault);
+  }
+  const key = vault ?? "";
+  let pages = byVault.get(key);
+  if (pages === undefined) {
+    pages = memoryFromStore(vault)
+      ? new Map(storeRecordPages(vault, { signalStates: "all" }).map((p) => [p.rel, p] as const))
+      : null;
+    byVault.set(key, pages);
+  }
+  return pages?.get(rel) ?? null;
+}
+
+/**
+ * The text of the memory page at `path` as the store's folds rebuild it on
+ * a store-only machine (or with no vault), from the same once-per-search
+ * build as the frontmatter; `null` when the store holds no such page (or
+ * the machine reads the legacy tree).
+ */
+export function storedMemoryPageText(
+  cache: FrontmatterCache,
+  vault: string | null,
+  path: string,
+): string | null {
+  return storedPageAt(cache, vault, posixRel(path))?.text ?? null;
+}
+
+/** The entry of a path that names no page: unreadable, as a missing file reads. */
+const MISSING_PAGE: CachedFrontmatter = Object.freeze({ meta: {}, unreadable: true });
+
+/** A relative path that stays where it is put: no root, no `..` segment. */
+function isPlainRel(rel: string): boolean {
+  return rel !== "" && !isAbsolute(rel) && !rel.split("/").includes("..");
+}
+
+/** `meta` with the reserved visibility token added. */
+function reservedMeta(meta: FrontmatterMap): FrontmatterMap {
+  const current = meta["visibility"];
+  let tokens: ReadonlyArray<string> = [];
+  if (Array.isArray(current)) tokens = current;
+  else if (typeof current === "string") tokens = [current];
+  return { ...meta, visibility: [...tokens, REMOTE_DENY_VISIBILITY_TOKEN] };
 }
 
 /** Attribution recorded on the notices this cache's reads produce. */
@@ -113,7 +203,7 @@ const FRONTMATTER_CACHE_SITE = "search.result-filters";
  */
 export function readCachedFrontmatter(
   cache: FrontmatterCache,
-  vault: string,
+  vault: string | null,
   path: string,
 ): FrontmatterMap {
   return readCachedFrontmatterEntry(cache, vault, path).meta;
@@ -148,7 +238,7 @@ export function applyExactStateBarrier(
  * status words.
  */
 export function buildTerminalPaths(
-  vault: string,
+  vault: string | null,
   results: ReadonlyArray<BrainSearchResult>,
   frontmatterCache: FrontmatterCache,
 ): ReadonlySet<string> {
@@ -176,7 +266,7 @@ export function buildTerminalPaths(
  */
 export function applyStatusFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => {
@@ -192,7 +282,7 @@ export function applyStatusFilter(
 export function applyPropertyFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   filters: ReadonlyMap<string, ReadonlyArray<string>>,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   const reader = (path: string): Record<string, unknown> | null => {
@@ -214,13 +304,15 @@ export function applyPropertyFilter(
  * bogus age.
  */
 export function attachTrustMetadata(
-  vault: string,
+  vault: string | null,
   results: ReadonlyArray<BrainSearchResult>,
   frontmatterCache: FrontmatterCache = new Map(),
 ): ReadonlyArray<BrainSearchResult> {
   const nowMs = Date.now();
   return results.map((r) => {
     let mtimeMs: number;
+    // No vault: a store record has no file, as a missing one reads.
+    if (vault === null) return r;
     try {
       mtimeMs = statSync(join(vault, r.path)).mtimeMs;
     } catch {
@@ -319,7 +411,7 @@ export function applyDegreeFilter(
 export function applyReachFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   reach: TransportReach,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
   store: Pick<Store, "indexedVisibilityByPaths">,
 ): ReadonlyArray<BrainSearchResult> {
@@ -347,7 +439,7 @@ export function applyReachFilter(
 export function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: ReadonlySet<string>,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) =>
@@ -416,13 +508,13 @@ export function applyVisibilityScope(
  * per-record visibility of its own.
  */
 export function isPathReadableAtReach(
-  vault: string,
+  vault: string | null,
   path: string,
   reach: TransportReach,
   frontmatterCache: FrontmatterCache,
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
-  if (!pathIsInside(join(vault, path), vault)) return false;
+  if (vault !== null && !pathIsInside(join(vault, path), vault)) return false;
   if (
     reach !== TRANSPORT_REACH.local &&
     (isCompiledDigestRel(path) || isBrainLogRel(path) || isStoreRecordPath(path))
@@ -455,7 +547,7 @@ const UNMEASURABLE_VISIBILITY: ReadonlyArray<string> = Object.freeze([
 export function applyScopeFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   requested: CompositeScope,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => {
@@ -489,7 +581,7 @@ export function applyScopeFilter(
  * because agent-scope is an isolation boundary.
  */
 export function isPathOwnerVisible(
-  vault: string,
+  vault: string | null,
   path: string,
   scope: string,
   frontmatterCache: FrontmatterCache,
@@ -502,7 +594,7 @@ export function isPathOwnerVisible(
 export function applyAgentScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: string,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => isPathOwnerVisible(vault, r.path, scope, frontmatterCache));

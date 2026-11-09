@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   importSessionRecall,
   searchSessionRecall,
 } from "../../../src/core/brain/session-recall.ts";
+import * as continuityStore from "../../../src/core/brain/continuity/store.ts";
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
 import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
@@ -17,6 +18,8 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-session-recall-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -33,6 +36,43 @@ function turn(turnId: string, role: SessionTurn["role"], text: string): SessionT
 }
 
 describe("session recall DAG", () => {
+  test("an import lists the continuity store a fixed number of times, whatever its turns", () => {
+    // A lookup per turn that re-read the whole log made an import
+    // quadratic in its turns: a few hundred turns cost seconds of a
+    // capture hook on a store-only machine, where every read verifies
+    // every record.
+    const listings = (sessionId: string, count: number): number => {
+      const turns = Array.from({ length: count }, (_, i) =>
+        turn(`t${i}`, i % 2 === 0 ? "user" : "assistant", `turn ${i} of ${sessionId}`),
+      );
+      const spy = spyOn(continuityStore, "listContinuityRecords");
+      try {
+        importSessionRecall(vault, { sessionId, turns, createdAt: "2026-05-20T17:00:00.000Z" });
+        return spy.mock.calls.length;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const small = listings("session-small", 2);
+    expect(small).toBeGreaterThan(0);
+    expect(listings("session-large", 60)).toBe(small);
+  });
+
+  test("a turn repeated within one import is written once", () => {
+    const repeated = turn("t1", "user", "Need receipt search.");
+    const imported = importSessionRecall(vault, {
+      sessionId: "session-r",
+      turns: [repeated, turn("t2", "assistant", "Noted."), repeated],
+      createdAt: "2026-05-20T17:00:00.000Z",
+    });
+    expect(imported.rawTurns[2]!.id).toBe(imported.rawTurns[0]!.id);
+    expect(
+      continuityStore
+        .listContinuityRecords(vault, { kind: "session_turn" })
+        .filter((record) => record.payload["session_id"] === "session-r"),
+    ).toHaveLength(2);
+  });
+
   test("imports raw turns and deterministic two-depth summary nodes idempotently", () => {
     const turns = [
       turn("t1", "user", "Need receipt search."),

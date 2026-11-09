@@ -20,7 +20,7 @@ import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { brainDirs } from "./paths.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget } from "./recall-budget.ts";
-import { readLogDay } from "./log-jsonl.ts";
+import { logDayReader } from "./log-days.ts";
 import { reconcileTopicPreferenceId } from "./log.ts";
 import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
 import { isoDate, relativeAge } from "./time.ts";
@@ -135,9 +135,13 @@ function scanRecentLog(
   const dayMs = 24 * 60 * 60 * 1000;
   // Newest day and newest same-day entries first so dedup keeps the most recent
   // open question per topic.
+  const log = logDayReader(vault, {
+    from: isoDate(new Date(now.getTime() - lookbackDays * dayMs)),
+    to: isoDate(now),
+  });
   for (let i = 0; i <= lookbackDays; i++) {
     const date = isoDate(new Date(now.getTime() - i * dayMs));
-    const entries = readLogDay(vault, date).entries;
+    const entries = log.day(date).entries;
     for (let j = entries.length - 1; j >= 0; j--) {
       const e = entries[j]!;
       const ts = typeof e.timestamp === "string" ? e.timestamp : "";

@@ -5,9 +5,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import {
   addRerankProviderProfile,
@@ -23,6 +23,9 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "rerank-registry-"));
+  // A legacy vault: its registry lives in the vault. A vault with no
+  // `Brain/` is store-only and keeps it in device-local state.
+  mkdirSync(join(vault, "Brain"));
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
@@ -130,5 +133,51 @@ describe("rerank registry", () => {
       envKey: "JINA_API_KEY",
     });
     expect(expandRegisteredRerankProvider("missing", registry)).toBeNull();
+  });
+});
+
+describe("rerank registry without the legacy tree", () => {
+  // Each test gets its own device-local state base, so the registry a test
+  // writes there (and the folders the relocation creates) never meets
+  // another test's, and teardown removes all of it.
+  const STATE_VARS = ["XDG_STATE_HOME", "LOCALAPPDATA"] as const;
+  let stateBase: string;
+  let savedState: Array<string | undefined>;
+  beforeEach(() => {
+    stateBase = mkdtempSync(join(tmpdir(), "o2b-rerank-state-"));
+    savedState = STATE_VARS.map((name) => process.env[name]);
+    for (const name of STATE_VARS) process.env[name] = stateBase;
+  });
+  afterEach(() => {
+    STATE_VARS.forEach((name, i) => {
+      const saved = savedState[i];
+      if (saved === undefined) delete process.env[name];
+      else process.env[name] = saved;
+    });
+    rmSync(stateBase, { recursive: true, force: true });
+  });
+
+  test("a store-only vault keeps the registry device-local and writes nothing under it", () => {
+    const bare = mkdtempSync(join(tmpdir(), "o2b-rerank-bare-"));
+    try {
+      addRerankProviderProfile(bare, {
+        name: "jina",
+        baseUrl: "https://api.jina.ai/v1",
+        defaultModel: "jina-reranker-v2",
+        envKey: "JINA_API_KEY",
+      });
+      expect(loadRerankRegistry(bare).map((p) => p.name)).toEqual(["jina"]);
+      expect(rerankRegistryPath(bare).startsWith(bare)).toBe(false);
+      expect(rerankRegistryPath(bare).startsWith(stateBase)).toBe(true);
+      expect(readdirSync(bare)).toEqual([]);
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("with no vault the registry path is device-local and reads empty", () => {
+    expect(isAbsolute(rerankRegistryPath(null))).toBe(true);
+    expect(rerankRegistryPath(null).startsWith(stateBase)).toBe(true);
+    expect(loadRerankRegistry(null)).toEqual([]);
   });
 });

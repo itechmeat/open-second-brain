@@ -43,6 +43,10 @@ import { moveToRetired, writePreference } from "../../../src/core/brain/preferen
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { BRAIN_RETIRED_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = new Date("2026-06-05T12:00:00Z");
 const SIGNAL_DAY = "2026-06-01";

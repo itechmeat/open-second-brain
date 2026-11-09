@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { parseWindow, cmdBrainDigest } from "../../src/cli/brain/verbs/digest.ts";
+import { makeTestVault, type TestVault } from "../helpers/test-vault.ts";
 
 describe("parseWindow", () => {
   test("parses day windows with or without the d suffix", () => {
@@ -21,6 +22,15 @@ describe("parseWindow", () => {
 });
 
 describe("cmdBrainDigest --window exit codes", () => {
+  // The verb resolves the vault before it reads its flags.
+  let tv: TestVault;
+  beforeEach(() => {
+    tv = makeTestVault();
+  });
+  afterEach(() => {
+    tv.cleanup();
+  });
+
   test("invalid --window exits with code 2", async () => {
     const code = await cmdBrainDigest(["--window", "abc"]);
     expect(code).toBe(2);

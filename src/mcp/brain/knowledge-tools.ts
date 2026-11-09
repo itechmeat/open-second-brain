@@ -7,7 +7,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolveAgentName, resolveTriggerCooldownDays } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { Store } from "../../core/search/store.ts";
@@ -27,7 +27,6 @@ import {
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
-import { parseFrontmatter } from "../../core/vault.ts";
 import { createTriggers } from "../../core/brain/triggers/store.ts";
 import {
   deepSynthesis,
@@ -57,7 +56,9 @@ import {
   type StatedClaim,
 } from "../../core/brain/truth/stated-claims.ts";
 import { listDeadEnds, recordDeadEnd } from "../../core/brain/dead-ends.ts";
-import { buildCodegraphReport } from "../../core/partner/codegraph-report.ts";
+import { lanePath, laneVault } from "./lane-vault.ts";
+import { buildCodegraphReport, type CodegraphReport } from "../../core/partner/codegraph-report.ts";
+import { toolPath } from "./device-path.ts";
 import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../../core/brain/temporal/foresight.ts";
 import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
@@ -88,7 +89,7 @@ import {
   type ClaimNode,
 } from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import { contextReach } from "../tool-contract.ts";
+import { contextReach, contextVault } from "../tool-contract.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -101,9 +102,26 @@ import {
   unknownOperationError,
 } from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard, vaultRelativeSafe } from "./shared.ts";
-import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { isOperatorRuleItem, isRuleOnlyInjection } from "./pack-tools.ts";
 import { resolveTimeBounds } from "./time-bounds.ts";
+import {
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  parseLanePage,
+} from "../../core/store/lane-pages.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+
+/**
+ * Who may see a lane page by its vault-relative path: the reach view of
+ * the vault's files on an unswitched machine, the store-aware predicate
+ * (the page's record fields) once switched or with no vault.
+ */
+function laneVisible(ctx: ServerContext, vault: string): (rel: string) => boolean {
+  if (lanePagesInStore(vault)) return readableAtContextReach(ctx);
+  const view = reachView(vault, contextReach(ctx));
+  return (rel) => view.visible(rel);
+}
 
 /**
  * Vault-relative locations these two handlers read BY PATH, rather than
@@ -184,16 +202,18 @@ async function toolBrainBridges(
     }
   }
   if (op === "list") {
+    const vault = laneVault(ctx);
     const rel = join(BRAIN_PROPOSALS_REL, BRIDGE_PROPOSALS_FILE);
-    const path = join(ctx.vault, rel);
+    const path = join(vault, rel);
     // Root closure: this reads a vault page BY PATH without going through
     // one of the three read roots, so it asks the rule here. A reserved
     // proposals page answers exactly as an absent one - the same shape
-    // the by-path read primitives hold.
-    if (!existsSync(path) || !reachView(ctx.vault, contextReach(ctx)).visible(rel)) {
+    // the by-path read primitives hold. A lane page (a store record once
+    // switched) is read through the lane page store.
+    if (!lanePageExists(vault, path) || !laneVisible(ctx, vault)(rel)) {
       return { exists: false, proposals: 0 };
     }
-    const [meta] = parseFrontmatter(path);
+    const [meta] = parseLanePage(vault, path);
     return {
       exists: true,
       path: rel,
@@ -284,20 +304,19 @@ async function toolBrainClusters(
     throw unknownOperationError("brain_clusters: operation must be run|list");
   }
   if (op === "list") {
-    const dir = join(ctx.vault, BRAIN_CLUSTERS_REL);
-    if (!existsSync(dir)) return { clusters: [] };
+    const vault = laneVault(ctx);
+    const dir = join(vault, BRAIN_CLUSTERS_REL);
+    if (!lanePageExists(vault, dir)) return { clusters: [] };
     // Root closure: a directory listing by path, outside the three read
     // roots, so the rule is asked per page here. A withheld cluster is
     // dropped and nothing counts it - the caller cannot tell this listing
     // from one over a vault that never held the page.
-    const view = reachView(ctx.vault, contextReach(ctx));
-    const clusters = readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .toSorted()
+    const visible = laneVisible(ctx, vault);
+    const clusters = listLaneFiles(vault, dir)
       .map((f) => {
         const rel = join(BRAIN_CLUSTERS_REL, f);
-        if (!view.visible(rel)) return null;
-        const [meta] = parseFrontmatter(join(dir, f));
+        if (!visible(rel)) return null;
+        const [meta] = parseLanePage(vault, join(dir, f));
         return meta["kind"] === "brain-cluster"
           ? {
               path: rel,
@@ -888,13 +907,20 @@ function toolBrainDeadEnds(
   // A dead-end page the caller cannot read at its reach is treated as
   // absent: `list` leaves it out of the entries and the warnings.
   const readable = readableAtContextReachOrUndefined(ctx);
+  const vault = laneVault(ctx);
   if (op === "list") {
-    const { entries, warnings } = listDeadEnds(ctx.vault);
-    if (readable === undefined) return { entries, warnings };
-    const shown = (path: string): boolean => readable(vaultRelativeSafe(ctx.vault, path));
+    const listed = listDeadEnds(vault);
+    // With no vault a dead-end page is a store record: named `Brain/...`.
+    const named = <T extends { path: string }>(row: T): T =>
+      contextVault(ctx) === null ? { ...row, path: lanePath(ctx, row.path) } : row;
+    // The reach filter judges the absolute paths, before any is renamed:
+    // a renamed `Brain/...` path would resolve against the working
+    // directory, not the vault.
+    const shown = (row: { path: string }): boolean =>
+      readable === undefined || readable(vaultRelativeSafe(vault, row.path));
     return {
-      entries: entries.filter((entry) => shown(entry.path)),
-      warnings: warnings.filter((warning) => shown(warning.path)),
+      entries: listed.entries.filter(shown).map(named),
+      warnings: listed.warnings.filter(shown).map(named),
     };
   }
   const approach = args["approach"];
@@ -909,7 +935,7 @@ function toolBrainDeadEnds(
   const agent =
     normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
     resolveAgentName(ctx.configPath ?? undefined);
-  const result = recordDeadEnd(ctx.vault, {
+  const result = recordDeadEnd(vault, {
     approach,
     reason,
     ...(typeof args["context"] === "string" ? { context: args["context"] as string } : {}),
@@ -923,7 +949,7 @@ function toolBrainDeadEnds(
   return {
     ok: true,
     id: result.entry.id,
-    path: result.entry.path,
+    path: contextVault(ctx) === null ? lanePath(ctx, result.entry.path) : result.entry.path,
     ...(readable === undefined ? { archived: result.archived } : {}),
   };
 }
@@ -941,7 +967,21 @@ function toolBrainCodegraphReport(
   _args: Record<string, unknown>,
 ): Record<string, unknown> {
   const report = buildCodegraphReport({ cwd: process.cwd(), vault: ctx.vault });
-  return report as unknown as Record<string, unknown>;
+  // The CLI binary, the project and the Cargo manifest are host paths
+  // that may sit outside every root the server's egress pass knows (a
+  // package manager's bin folder, a checkout under /srv): each is named
+  // at the caller's reach here, as `toolPath` names any host path.
+  const at = (path: string): string => toolPath(ctx, path);
+  const named: CodegraphReport = {
+    ...report,
+    project: report.project === null ? null : at(report.project),
+    cli: { ...report.cli, path: report.cli.path === null ? null : at(report.cli.path) },
+    cargo_workspace:
+      report.cargo_workspace === null
+        ? null
+        : { ...report.cargo_workspace, manifestPath: at(report.cargo_workspace.manifestPath) },
+  };
+  return named as unknown as Record<string, unknown>;
 }
 
 // ----- brain_claims (Belief lifecycle suite, A3) -----------------------------
@@ -1283,7 +1323,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_bridges",
     kind: "write",
     description:
-      "Bridge discovery over the vec index: discover proposes links between embedding-near notes that share no edge (orphan-first, regenerates Brain/proposals/bridges.md, records a metric); accept writes one related wikilink into the source note; dismiss silences a pair; list reads the artifact back.",
+      "Bridge discovery over the vec index: discover proposes links between embedding-near notes that share no edge (orphan-first, regenerates the bridge proposals page, records a metric); accept writes one related wikilink into the source note; dismiss silences a pair; list reads the artifact back.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1312,7 +1352,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_clusters",
     kind: "write",
     description:
-      "Graph-wide community detection: run applies deterministic label propagation, materializes one note per community of size >= min_size under Brain/clusters/, removes stale notes, records a metric; list reads them back. Optional batch_size chunks work with isolated, reported per-batch failures.",
+      "Graph-wide community detection: run applies deterministic label propagation, materializes one note per community of size >= min_size, removes stale notes, records a metric; list reads them back. Optional batch_size chunks work with isolated, reported per-batch failures.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1525,7 +1565,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_dead_ends",
     kind: "write",
     description:
-      "Negative-knowledge registry (Brain/dead-ends/): record one tried-and-failed approach with why it failed, or list the bounded active set so recall surfaces avoid-X alongside prefer-Y.",
+      "Negative-knowledge registry (dead-ends): record one tried-and-failed approach with why it failed, or list the bounded active set so recall surfaces avoid-X alongside prefer-Y.",
     inputSchema: {
       type: "object",
       properties: {

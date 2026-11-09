@@ -53,6 +53,10 @@ import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 /**
  * Whether `sqlite-vec` loaded in THIS process: the spend-surface tests

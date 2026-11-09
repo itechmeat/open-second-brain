@@ -31,6 +31,10 @@ import {
 } from "../../../src/core/brain/upgrade.ts";
 import { sealWithDigest } from "../../../src/core/integrity/digest.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

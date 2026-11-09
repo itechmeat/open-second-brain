@@ -34,6 +34,18 @@
  * `node:fs` + `node:zlib`, so the cost is one subprocess per archive
  * operation.
  *
+ * ## On a switched machine
+ *
+ * Once this machine is switched to the brain store (design D14 item 9),
+ * the store needs no snapshot: its shards are append-only with record
+ * sums and partition digests. What a snapshot covers then is this
+ * machine's device-local state, which keeps the same `Brain/` layout
+ * under its own root (`state/machine-state.ts`). Every public entry point
+ * below maps its `vault` argument to that root first, so the archive is
+ * of `<device state>/migration/local/Brain/`, it lives in that tree's
+ * `.snapshots/`, and a restore replaces that tree. Nothing under the vault
+ * is read or written. An unswitched machine maps to the vault itself.
+ *
  * ## Derived-store coverage, and why it is off by default
  *
  * The derived SQLite store (`<vault>/.open-second-brain/brain.sqlite`)
@@ -130,7 +142,9 @@ import { loadSnapshotDerivedStorePolicySafe, type BrainDerivedStorePolicy } from
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import type { WriteLane } from "./freeze-marker.ts";
 import { closeDatabase } from "../sqlite-close.ts";
+import { machineStateRoot } from "../state/machine-state.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -258,6 +272,13 @@ export interface CreateSnapshotOptions extends SnapshotStoreOptions {
    * said - so there is none, and the compiler asks each caller instead.
    */
   readonly reason: BrainSnapshotReason;
+  /**
+   * The write lane the guard checks. Content by default, so a frozen vault
+   * refuses a snapshot like any content write. The store migration takes
+   * its recovery point after it froze the legacy writers, on the audit
+   * lane, because an archive of a tree still being written is not one.
+   */
+  readonly lane?: WriteLane;
   /**
    * Clock for the `snapshot` audit line's timestamp. Defaults to wall
    * clock. A caller that already has an injected clock passes it, so a
@@ -454,6 +475,8 @@ export interface PruneSnapshotsOptions {
    * that point lands. Both are named here rather than trusted to sort.
    */
   readonly protectRunIds?: ReadonlyArray<string>;
+  /** The write lane the prune's guard checks; see {@link CreateSnapshotOptions.lane}. */
+  readonly lane?: WriteLane;
 }
 
 export interface PruneSnapshotsResult {
@@ -546,6 +569,12 @@ export interface RecoveryPointEvidence {
 }
 
 export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
+  /**
+   * The write lane the restore is guarded on (default: content), as the
+   * recovery point taken before it is: a restore that passes `audit` on a
+   * frozen vault is not refused after its recovery point was taken.
+   */
+  readonly lane?: WriteLane;
   /**
    * Called once, AFTER the archive has been extracted into a temp
    * directory and BEFORE the first live entry is removed. That ordering
@@ -767,8 +796,11 @@ export function createSnapshot(
   runId: string,
   opts: CreateSnapshotOptions,
 ): CreateSnapshotResult {
+  // The log event names the caller's vault; the archive is of the state root.
+  const logVault = vault;
+  vault = machineStateRoot(vault);
   validateRunId(runId);
-  const dirs = brainDirsForWrite(vault);
+  const dirs = brainDirsForWrite(vault, undefined, opts.lane);
   ensureSnapshotsDirectory(dirs.snapshots, runId);
 
   const outPath = snapshotPath(vault, runId);
@@ -784,7 +816,7 @@ export function createSnapshot(
   // refusal must leave nothing behind - running it before the tar is
   // written is what makes "no partial archive" a property of the order
   // rather than of a cleanup path that could be forgotten.
-  const derivedStore = coverDerivedStore(vault, runId, tools, opts);
+  const derivedStore = coverDerivedStore(vault, logVault, runId, tools, opts);
 
   // List top-level entries of Brain/ that we want to capture. Sort the
   // result so the resulting archive's contents are deterministic
@@ -866,6 +898,7 @@ export function createSnapshot(
       vault,
       runId,
       buildManifest(dirs.brain, { derivedStore, snapshotReason: opts.reason }),
+      opts.lane,
     );
   } catch (err) {
     process.stderr.write(
@@ -875,7 +908,7 @@ export function createSnapshot(
     );
   }
 
-  logSnapshotEvent(vault, runId, opts.reason, outPath, opts.now ?? new Date());
+  logSnapshotEvent(logVault, runId, opts.reason, outPath, opts.now ?? new Date());
   return { path: outPath, derived_store: derivedStore };
 }
 
@@ -985,13 +1018,17 @@ function liveDerivedStorePath(vault: string): string {
  */
 function coverDerivedStore(
   vault: string,
+  liveVault: string,
   runId: string,
   tools: ToolAvailability,
   opts: SnapshotStoreOptions,
 ): BrainManifestDerivedStore {
-  const policy = opts.derivedStore ?? loadSnapshotDerivedStorePolicySafe(vault);
+  // The policy and the live store are the caller's vault's (the search
+  // index is keyed by the real vault), never the mapped state root's; the
+  // archive lands beside the tree it goes with (`vault`).
+  const policy = opts.derivedStore ?? loadSnapshotDerivedStorePolicySafe(liveVault);
   // Resolved through the search layer's resolver, never re-derived here.
-  const sourcePath = opts.derivedStorePath ?? liveDerivedStorePath(vault);
+  const sourcePath = opts.derivedStorePath ?? liveDerivedStorePath(liveVault);
   const liveSize = fileSizeOrNull(sourcePath);
 
   const excluded = (reason: SnapshotStoreExclusionReason): BrainManifestDerivedStore =>
@@ -1547,6 +1584,7 @@ function runArchiveProducer(
  *     to say about it, but it can no longer fail to know.
  */
 export function listSnapshots(vault: string): SnapshotListing {
+  vault = machineStateRoot(vault);
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.snapshots)) return { snapshots: [], skipped: [] };
   let entries: string[];
@@ -1734,11 +1772,12 @@ export function pruneSnapshots(
   retentionCount: number,
   opts: PruneSnapshotsOptions = {},
 ): PruneSnapshotsResult {
+  vault = machineStateRoot(vault);
   // Vault-identity write guard (context-integrity-gates, Unit J). This is
   // the most destructive operation in the module - an `rmSync` over
   // archives - and it was the only one of the three without the guard
   // its `createSnapshot` and `restoreSnapshot` siblings carry.
-  assertVaultIdentityForWrite(vault);
+  assertVaultIdentityForWrite(vault, undefined, opts.lane);
   if (!Number.isInteger(retentionCount)) {
     throw new Error(`pruneSnapshots: retentionCount must be an integer; got ${retentionCount}`);
   }
@@ -1842,6 +1881,7 @@ export interface ExtractSnapshotResult {
  * host lacks the required external tool.
  */
 export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnapshotResult {
+  vault = machineStateRoot(vault);
   validateRunId(runId);
   const archive = snapshotPath(vault, runId);
   if (!existsSync(archive)) {
@@ -2052,7 +2092,9 @@ export function restoreSnapshot(
   runId: string,
   opts: RestoreSnapshotOptions = {},
 ): RestoreSnapshotResult {
-  const dirs = brainDirsForWrite(vault);
+  const liveVault = vault;
+  vault = machineStateRoot(vault);
+  const dirs = brainDirsForWrite(vault, undefined, opts.lane);
 
   // Everything a restore needs is checked before anything is replaced.
   //
@@ -2140,7 +2182,7 @@ export function restoreSnapshot(
       cpSync(from, to, { recursive: true, verbatimSymlinks: true });
       restoredFiles += countFiles(to);
     }
-    const derivedStore = restoreDerivedStore(vault, runId, opts);
+    const derivedStore = restoreDerivedStore(vault, liveVault, runId, opts);
     return {
       restored_files: restoredFiles,
       derived_store: derivedStore,
@@ -2238,6 +2280,7 @@ function assertDerivedStoreRestorable(vault: string, runId: string): void {
 
 function restoreDerivedStore(
   vault: string,
+  liveVault: string,
   runId: string,
   opts: SnapshotStoreOptions,
 ): RestoreDerivedStoreResult {
@@ -2280,7 +2323,8 @@ function restoreDerivedStore(
   // is where it is now. They differ when the operator moved the vault or
   // set a `search_db_path` override after the snapshot, and the live
   // answer is the one a restore must write to.
-  const target = opts.derivedStorePath ?? liveDerivedStorePath(vault);
+  // The index the search layer opens: resolved from the caller's vault.
+  const target = opts.derivedStorePath ?? liveDerivedStorePath(liveVault);
   swapDerivedStore(archive, target, runId);
   return Object.freeze({
     replaced: true,

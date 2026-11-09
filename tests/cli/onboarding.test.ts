@@ -73,3 +73,13 @@ test("the checklist renders a human-readable block with checkboxes and commands"
   expect(text).toContain("[ ]"); // pending steps
   expect(text).toContain("o2b search index");
 });
+
+test("each optional step is tagged once, and the feedback command spells out its flags", () => {
+  for (const vaultDir of [vault, null]) {
+    const text = renderOnboardingChecklist(
+      buildOnboardingChecklist(vaultDir, { configPath, env: {} }),
+    );
+    expect(text).not.toContain("(optional) (optional)");
+    expect(text).toContain("o2b brain feedback --signal positive --topic <topic> --principle");
+  }
+});

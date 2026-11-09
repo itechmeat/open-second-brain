@@ -5,7 +5,8 @@ import { interleaveShardRows, jsonlLedgerGrammar, readShardLinesByShard } from "
 import { BRAIN_LOG_REL } from "./path-constants.ts";
 import { proceduralRecurrencePath, RECURRENCE_LEDGER_STEM } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { routeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 import { claimSourceIsPrivate, rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
@@ -239,17 +240,20 @@ function commitmentForSupport(
 }
 
 function appendEvent(vault: string, event: RecurrenceEvent): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  // This device's shard (t_774dea61); the path helper confines it to the vault.
-  const path = proceduralRecurrencePath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });
-  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // One `recurrence` ledger row on a store-only machine (design D14 item
+  // 1), this device's legacy shard plus the dual write otherwise.
   // `sourceId` and `scope` can name a page: a source that is a private
   // page, or a page link that names none here, goes to `private` only.
-  dualWrite(
-    () =>
+  routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J).
+      assertVaultIdentityForWrite(vault);
+      // This device's shard (t_774dea61); the path helper confines it to the vault.
+      const path = proceduralRecurrencePath(vault);
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });
+    },
+    store: () =>
       ledgerRowRecord(
         DUAL_WRITE_LEDGERS.recurrence,
         event,
@@ -257,8 +261,8 @@ function appendEvent(vault: string, event: RecurrenceEvent): void {
           ? "private"
           : "shared",
       ),
-    { vault },
-  );
+    context: { vault },
+  });
 }
 
 /**
@@ -281,6 +285,14 @@ function parseEvent(line: string): RecurrenceEvent | null {
 }
 
 function readEvents(vault: string): RecurrenceEvent[] {
+  // A store-only machine reads the `recurrence` ledger rows in fold order,
+  // the one order every machine agrees on (design D3).
+  return readLedgerRows<RecurrenceEvent>(DUAL_WRITE_LEDGERS.recurrence, readLegacyEvents, {
+    vault,
+  }).filter((event) => event !== null && typeof event === "object");
+}
+
+function readLegacyEvents(vault: string): RecurrenceEvent[] {
   // Merged read over every device's shard (t_774dea61), interleaved by
   // event time with each shard keeping its own file order. The fold is
   // order-sensitive (`purge-source` deletes, `forget` decrements), so a

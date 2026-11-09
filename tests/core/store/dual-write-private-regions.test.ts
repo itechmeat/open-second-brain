@@ -29,6 +29,7 @@ import {
 import type { StoreRecord } from "../../../src/core/store/envelope.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
@@ -134,7 +135,7 @@ describe("log events", () => {
   });
 
   test("on a machine without the private partition the event is refused, not shared", () => {
-    rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+    neverHeld(storeRoot);
     appendBrainNote({ vault, text: "a <private>secret</private> note", agent: "claude" });
     expect(logEvents("shared")).toEqual([]);
   });
@@ -190,7 +191,7 @@ describe("other dual-written records", () => {
   });
 
   test("a claim whose value carries a <private> region is refused, not shared, on a machine without private", () => {
-    rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+    neverHeld(storeRoot);
     appendClaimEvent(vault, {
       ts: "2026-06-01T10:00:00Z",
       agent: "claude",

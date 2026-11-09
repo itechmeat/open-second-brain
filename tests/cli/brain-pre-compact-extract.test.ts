@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { partitionRecords } from "../core/brain/store-only/fixtures.ts";
+import { makeTestStore, type TestStore } from "../helpers/test-store.ts";
 
 let vault: string;
+// A bare vault is store-only (design D14 item 1): the records land in a
+// store of this test's own.
+let store: TestStore;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-cli-pre-compact-extract-"));
+  store = makeTestStore();
 });
 
 afterEach(() => {
+  store.cleanup();
   rmSync(vault, { recursive: true, force: true });
 });
 
@@ -64,6 +71,9 @@ test("brain pre-compact-extract --dry-run previews without writing to the vault"
   expect(preview.returncode).toBe(0);
   const previewBody = JSON.parse(preview.stdout);
   expect(previewBody).toMatchObject({ count: 1, dry_run: true, errors: [] });
+  // The preview wrote nothing: not in the vault, not in the store.
+  expect(readdirSync(vault)).toEqual([]);
+  const storeBefore = storeRecords().length;
 
   // The preview's timestamp-independent dedupe_key matches the record the
   // real run appends — the preview predicts real extraction. (record `id`
@@ -73,4 +83,11 @@ test("brain pre-compact-extract --dry-run previews without writing to the vault"
   const realBody = JSON.parse(real.stdout);
   expect(realBody).toMatchObject({ count: 1, dry_run: false });
   expect(previewBody.records[0].payload.dedupe_key).toBe(realBody.records[0].payload.dedupe_key);
+  // The real run wrote its record to the store and no byte under the vault.
+  expect(readdirSync(vault)).toEqual([]);
+  expect(storeRecords().length).toBe(storeBefore + 1);
 });
+
+function storeRecords(): unknown[] {
+  return [...partitionRecords(store.root, "shared"), ...partitionRecords(store.root, "private")];
+}

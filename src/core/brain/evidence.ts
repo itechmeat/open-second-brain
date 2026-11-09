@@ -8,7 +8,7 @@
  * Pure read: no I/O outside reading log files.
  */
 
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
+import { logDayReader } from "./log-days.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
@@ -33,7 +33,7 @@ export function listLogDays(vault: string): string[] {
   // every log filename shape, legacy and sharded.
   let days: string[];
   try {
-    days = [...listLogDates(vault)];
+    days = [...logDayReader(vault).dates];
   } catch {
     return [];
   }
@@ -71,7 +71,7 @@ export interface CollectedEvidence {
  * Stops early once both quotas are full.
  */
 export function collectEvidenceForSlug(
-  vault: string,
+  vault: string | null,
   slug: string,
   opts: CollectEvidenceOptions,
 ): CollectedEvidence {
@@ -83,9 +83,20 @@ export function collectEvidenceForSlug(
   const applied: BrainEvidenceSummary[] = [];
   const violated: BrainEvidenceSummary[] = [];
 
-  for (const day of listLogDays(vault)) {
+  // An unreadable log is no evidence, as it always was: never a throw out
+  // of a reader the dream pass calls once per preference. Only the days
+  // from the cutoff on are read.
+  let log: ReturnType<typeof logDayReader>;
+  let dates: ReadonlyArray<string>;
+  try {
+    log = logDayReader(vault, cutoff !== null ? { from: cutoff.slice(0, 10) } : {});
+    dates = log.dates;
+  } catch {
+    return { applied, violated };
+  }
+  for (const day of dates.toReversed()) {
     if (cutoff && day < cutoff.slice(0, 10)) break;
-    const { entries } = readLogDay(vault, day);
+    const { entries } = log.day(day);
     // readLogDay returns entries in merged order (oldest first). We want
     // newest first across the whole vault, so iterate in reverse.
     for (let i = entries.length - 1; i >= 0; i--) {

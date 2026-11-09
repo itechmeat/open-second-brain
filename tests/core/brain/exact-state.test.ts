@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { readdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   clearExactState,
@@ -18,6 +19,9 @@ beforeEach(() => {
   const v = createTempVault("exact-state");
   vault = v.vault;
   cleanup = v.cleanup;
+  // A legacy vault: with no `Brain/` tree the machine is store-only and the
+  // lane lives in the store (tests/core/brain/store-only-device-state.test.ts).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

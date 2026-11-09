@@ -44,6 +44,7 @@ import {
   type StorePartition,
 } from "./constants.ts";
 import { writeFormatDoc } from "./format-doc.ts";
+import { recordHeldPartitions } from "./held-ledger.ts";
 import { heldPartitions, readStoreId, StoreIdentityError, StoreOpenError } from "./store-open.ts";
 import { partitionDir } from "./store-paths.ts";
 import { newUlid } from "./ulid.ts";
@@ -257,6 +258,7 @@ export function initStore(options: InitStoreOptions): InitStoreResult {
         `${absent.join(", ") || "none"}); run it again`,
     );
   }
+  recordHeldPartitions(root, after.held);
   return {
     // `created` only when this run minted the id: an init that lost the
     // race for the first identity file completed the winner's store.

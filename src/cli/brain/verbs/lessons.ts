@@ -326,7 +326,11 @@ function appendLessonsEvent(
   body: Record<string, string>,
 ): void {
   try {
-    appendLogEvent(vault, { timestamp: isoSecond(new Date()), eventType, body });
+    appendLogEvent(
+      vault,
+      { timestamp: isoSecond(new Date()), eventType, body },
+      { failOpen: true },
+    );
   } catch (err) {
     process.stderr.write(`warning: append ${eventType} log failed: ${(err as Error).message}\n`);
   }

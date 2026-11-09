@@ -23,7 +23,7 @@ const FIELDS = ["principle", "status", "scope", "applied_count"];
 const SETTINGS: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
   ["topics.new_min_records", [1, 3, 8, 0]],
   ["view.language", ["en", "ru", "not a tag"]],
-  ["view.writer", ["dev-a", "dev-b"]],
+  ["topics.new_min_sessions", [1, 2, -1]],
   ["future.knob", [true, { n: 1 }]],
 ];
 

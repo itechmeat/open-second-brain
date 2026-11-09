@@ -13,7 +13,9 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainDirs } from "../../paths.ts";
-import { parsePreference } from "../../preference.ts";
+import { memoryFromStore, storePagesIn } from "../../memory-pages.ts";
+import { parsePreference, parsePreferenceMeta } from "../../preference.ts";
+import type { BrainPreference } from "../../types.ts";
 import { listRecallTelemetry } from "../../recall-telemetry.ts";
 import { hygieneFindingId } from "./id.ts";
 import type { HygieneDetectorContext, HygieneFinding } from "../types.ts";
@@ -43,15 +45,22 @@ export function detectUsefulness(
   ctx: HygieneDetectorContext,
 ): ReadonlyArray<HygieneFinding> {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return Object.freeze([]);
+  // Store-only (task 2.10): the fold's records by their page, in name order.
+  const fromStore = memoryFromStore(vault);
+  if (!fromStore && !existsSync(dir)) return Object.freeze([]);
+  const reads: ReadonlyArray<() => BrainPreference> = fromStore
+    ? storePagesIn(vault, dir).map((page) => () => parsePreferenceMeta(page.meta, page.path))
+    : readdirSync(dir)
+        .toSorted()
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => () => parsePreference(join(dir, name)));
   const recalled = recalledArtifactIds(vault);
   const cutoffMs = ctx.now.getTime() - USEFULNESS_MIN_AGE_DAYS * DAY_MS;
   const findings: HygieneFinding[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const read of reads) {
     let pref;
     try {
-      pref = parsePreference(join(dir, name));
+      pref = read();
     } catch {
       continue; // malformed preferences belong to doctor, not hygiene
     }

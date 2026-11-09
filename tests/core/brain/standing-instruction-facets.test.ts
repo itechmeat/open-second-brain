@@ -42,7 +42,7 @@ import {
   evaluateAttentionFlow,
   renderAttentionFlow,
 } from "../../../src/core/brain/attention-flows.ts";
-import { changedPaths, digestVaultFiles, digestVaultTree } from "../../helpers/vault-digest.ts";
+import { changedPaths, treeEntries, digestVaultTree } from "../../helpers/vault-digest.ts";
 
 const CLAUDE = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
 const NOW = new Date("2026-06-01T00:00:00Z");
@@ -302,7 +302,7 @@ describe("standing-instruction facets: lane invariants", () => {
     // behavior outside this lane; settle it BEFORE the guarded window.
     evaluateAttentionFlow(vault, "loops");
 
-    const beforeFiles = digestVaultFiles(vault);
+    const beforeFiles = treeEntries(vault);
     const before = digestVaultTree(vault);
     evaluateAttentionFlow(vault, "loops");
     evaluateAttentionFlow(vault, "loops", { standingInstructionFacets: true });
@@ -312,7 +312,7 @@ describe("standing-instruction facets: lane invariants", () => {
     // path name, so a created, deleted, or edited file anywhere under
     // the vault fails this assertion - including the standing rules,
     // the scoped rule, and any preference file.
-    expect(changedPaths(beforeFiles, digestVaultFiles(vault))).toEqual([]);
+    expect(changedPaths(beforeFiles, treeEntries(vault))).toEqual([]);
     expect(digestVaultTree(vault)).toBe(before);
   });
 

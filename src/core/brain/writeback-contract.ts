@@ -200,15 +200,14 @@ export const WRITEBACK_CONTRACT_REQUIREMENTS: ReadonlyArray<WritebackContractReq
  * Content, by contract (t_ba41a78a K2): the same-turn atomic-fact write
  * gate - the `marker_writeback` guardrail token verbatim, the same-turn
  * rule, the atomic-fact rule - merged with the cross-project-pointer
- * usage content (read `Brain/active.md` at session start, `brain_feedback`,
+ * usage content (read the active preferences at session start, `brain_feedback`,
  * `brain_apply_evidence`, the do-not-dream rule). One body, one block:
  * the editor holds exactly one pair per spelling, so the docs' pointer
  * block and the write gate must be the same block or they fight.
  *
- * Static by design. Paths are spelled relative to the file, which the
- * installer writes at the vault root - the same workspace the readiness
- * probe audits - so the body is byte-identical in every vault and a
- * vault move never drifts an installed block. It quotes no vault memory
+ * Static by design. It names tools and commands, never a path (design
+ * D12), so the body is byte-identical in every vault and a vault move or
+ * a store-only switch never drifts an installed block. It quotes no vault memory
  * content, ever: it is instructions, not memory.
  */
 export const CANONICAL_WRITEBACK_BLOCK_BODY: string = [
@@ -216,15 +215,15 @@ export const CANONICAL_WRITEBACK_BLOCK_BODY: string = [
   "",
   "This project shares an Obsidian-compatible vault with an active",
   "observing-memory layer. At session start, read the current preferences",
-  "from Brain/active.md (paths are relative to this file, the vault root).",
+  "with `brain_context` (MCP) or `o2b brain export --format llms-txt` (CLI).",
   "",
   "Record taste signals via `brain_feedback` (MCP) or `o2b brain feedback`",
   "(CLI). After producing a durable artifact, call `brain_apply_evidence`",
   "with `result: applied | violated | outdated` for any preference whose",
   "`scope` matches.",
   "",
-  "Do not run `o2b brain dream` here: the vault declares its primary",
-  "dream-running agent in `Brain/_brain.yaml` (key `primary_agent`).",
+  "Do not run `o2b brain dream` here: the brain settings name its primary",
+  "dream-running agent (key `primary_agent`).",
   "",
   "Memory write gate: apply the marker_writeback guardrail. Record memory",
   "as atomic facts in the same turn each fact is learned, never batched.",

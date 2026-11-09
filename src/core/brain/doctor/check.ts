@@ -87,6 +87,25 @@ export interface DoctorFindings {
   readonly uncertain: DoctorUncertainEntry[];
 }
 
+/**
+ * The context a store-side check reads (design D14, task 2.10): the parts
+ * of {@link DoctorCheckContext} that do not come from a vault, with the
+ * vault itself `null` when none is configured. A store-side check runs in
+ * the vault pass and in the no-vault pass alike.
+ */
+export interface StoreSideCheckContext extends Pick<
+  DoctorCheckContext,
+  "now" | "dbPath" | "configPath" | "readable" | "reach"
+> {
+  readonly vault: string | null;
+}
+
+/** A check over the brain store and this machine's state, not the vault's files. */
+export interface StoreSideDoctorCheck {
+  readonly failSoft: boolean;
+  run(ctx: StoreSideCheckContext, out: DoctorFindings): void;
+}
+
 export interface DoctorCheck {
   /**
    * True when a throw from `run` is swallowed by the pass, so one

@@ -148,16 +148,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "`writeFrontmatterAtomic` and refuses an occupied retired name before the " +
         "staged copy goes, preserving every original field beside the retire stamps.",
     },
-    "src/core/brain/intake/extract-intake.ts": {
-      calls: ["unlinkSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "the stage arm of the intake's disposition contract moves each CREATED entity page " +
-        "into the review queue: `stageForReview` lands the page's exact bytes on the staged " +
-        "entry FIRST and the canonical copy is unlinked second, so a crash between the two " +
-        "leaves both copies - the queue's apply names the occupied target - and never zero; " +
-        "the update arm never reaches this call.",
-    },
     "src/core/brain/preference.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,
@@ -185,14 +175,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "the cross-device fallback and runs only after `atomicWriteText` has written " +
         "the archived copy from bytes already read into memory.",
     },
-    "src/core/brain/dead-ends.ts": {
-      calls: ["renameSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "moves dead-end notes past the active cap into `archive/` under their own id. " +
-        "A rename inside one directory tree keeps the inode, so nothing is read back " +
-        "from a copy and there is nothing to lose to a partial write.",
-    },
     "src/core/brain/dream-apply.ts": {
       calls: ["renameSync"],
       recovery: UNARCHIVED_BRAIN,
@@ -210,47 +192,14 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "already proved free, so an existing history entry can never be renamed over. " +
         "The `rmSync` is the cross-device fallback's source half.",
     },
-    "src/core/brain/obligations.ts": {
-      calls: ["renameSync", "rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "archives a closed obligation the same way, with the fallback arm writing the " +
-        "copy through `atomicWriteFileSync` from bytes already in memory before the " +
-        "source is removed.",
-    },
-    "src/core/brain/pledges.ts": {
-      calls: ["renameSync", "rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "archives a removed pledge into `Brain/pledges/archive/` under a collision-suffixed " +
-        "name, so an existing archive entry can never be renamed over; the `rmSync` is the " +
-        "cross-device fallback's source half, after the copy went through " +
-        "`atomicWriteFileSync` from bytes already read.",
-    },
-    "src/core/brain/pledge-intake.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "rolls back the pages THIS intake created when a later create fails mid-batch, " +
-        "restoring the pre-intake state the no-partial-batches promise names. The removed " +
-        "bytes were written by this same call from source text already in memory, and the " +
-        "refusal reports every slug it removed and any it could not.",
-    },
     "src/core/brain/recompile.ts": {
-      calls: ["renameSync"],
+      calls: ["renameSync", "rmSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
         "moves an orphaned GENERATED page into the cleanup directory under a suffixed " +
         "free name. The page is reproducible from its inputs by definition, and the " +
-        "move is what lets an operator see what was orphaned rather than guess.",
-    },
-    "src/core/brain/dream-stage.ts": {
-      calls: ["renameSync", "rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "renames a staged bundle DIRECTORY into `applied/`, and discards a bundle the " +
-        "operator explicitly dropped. A discarded bundle was never applied to the " +
-        "vault, so its removal loses a proposal rather than any vault state.",
+        "move is what lets an operator see what was orphaned rather than guess. Across " +
+        "volumes the move is a copy, then the source's removal.",
     },
 
     // --- Files whose whole content is their existence --------------------
@@ -261,6 +210,14 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "clears one aspect's exact-state file. Absence IS the cleared state, so the " +
         "removal is the state transition rather than a loss of one.",
     },
+    "src/core/brain/skill-accept-journal.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "clears a skill accept journal and its prior-content copy, device-local repair " +
+        "markers whose absence is the state 'no accept outstanding'; the transaction they " +
+        "recorded is resolved before they go.",
+    },
     "src/core/brain/checkpoint-store.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,
@@ -268,18 +225,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "clears one checkpoint - an ingest plan's or a session import's - once that run " +
         "reached its terminal state. A checkpoint exists to let an interrupted run resume; " +
         "after the run is done there is nothing it could resume into.",
-    },
-    "src/core/brain/skill-accept-journal.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "removes the accept-journal marker once the accept committed, and the " +
-        "prior-content copy beside it when a scored rewrite captured one - both " +
-        "forced, so clearing a journal that never captured anything is not an " +
-        "error. The journal is a crash-recovery record for the accept it " +
-        "describes, so keeping it past the commit would make the NEXT run try " +
-        "to roll back finished work; the same holds for the copy, whose only " +
-        "reader is the rollback the completed accept has just made moot.",
     },
     "src/core/brain/lineage/identity.ts": {
       calls: ["unlinkSync"],
@@ -299,14 +244,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
     },
 
     // --- Regenerable derivations -----------------------------------------
-    "src/core/brain/link-graph/communities.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "removes generated cluster notes the current run no longer expects, and only " +
-        "those whose own frontmatter declares the generated kind - so a hand-written " +
-        "note that happens to sit in the directory is never a candidate.",
-    },
     "src/core/brain/truth/store.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,
@@ -314,30 +251,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "removes a claim-event shard only when compaction has filtered every line out " +
         "of it, so the file removed is provably empty of surviving events at the moment " +
         "it goes.",
-    },
-    "src/core/brain/write-session/store.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "deletes write-session files individually and by sweep, and the sweep removes " +
-        "only sessions in a terminal status or names outside the session-id grammar, " +
-        "which can never become a live session.",
-    },
-    "src/core/brain/gaps/gap-loop.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "prunes gap tasks that are both CLOSED and past a fixed retention window, read " +
-        "from each task's own `closed_at`; a task with an unparseable or recent " +
-        "`closed_at` is skipped rather than removed.",
-    },
-    "src/core/brain/ingest/sources-registry.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "deletes a source page only after re-reading its frontmatter and confirming " +
-        "from the file itself that it is one, so a caller cannot aim it at an arbitrary " +
-        "note by passing the wrong path.",
     },
 
     // --- Bootstrap: a tree that did not exist a moment ago ---------------
@@ -397,13 +310,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "sees either the full journal or the capped one, never a torn file.",
     },
     "src/core/brain/secrets/store.ts": {
-      calls: ["renameSync"],
+      calls: ["renameSync", "rmSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
         "the tmp-plus-rename half of a hand-rolled atomic write that must land at mode " +
         "0600, which no shared writer expresses. The store holds encrypted secrets and " +
         "is deliberately outside every snapshot archive, so its safety comes from the " +
-        "atomicity of the swap and not from a recovery point.",
+        "atomicity of the swap and not from a recovery point. The rmSync removes only " +
+        "this process's own staging copy of the vault-secrets adoption, whose source " +
+        "stays in the vault untouched.",
     },
     "src/core/brain/secrets/envelope.ts": {
       calls: ["renameSync", "unlinkSync"],
@@ -429,13 +344,12 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
 
     // --- Two-phase accept with a journalled rollback ---------------------
     "src/core/brain/skill-proposals.ts": {
-      calls: ["rmSync", "rmdirSync", "unlinkSync"],
+      calls: ["rmdirSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "unlinks the pending proposal only after the accepted copy landed through " +
-        "`writeFrontmatterAtomic` and the journal recorded the commit phase; the " +
-        "`rmSync` arm is the rollback, and it removes the accepted copy and the " +
-        "artifact the accept materialised only when the journal recorded that neither " +
+        "the pending, accepted and materialised pages are removed through the lane " +
+        "page store (task 2.10 WP6), after the accepted copy landed and the journal " +
+        "recorded the commit phase, and only when the journal recorded that neither " +
         "existed beforehand. The `rmdirSync` finishes that rollback for a `mature_page` " +
         "accept, which creates a directory to hold its SKILL.md: `rmdirSync` refuses a " +
         "non-empty directory, so only the empty shell this sequence made is removed. " +
@@ -474,18 +388,6 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "originals and manifest lists are all empty and the loops remove nothing. Recovery is " +
         "PARTIAL rather than covered because `--include-originals` removes the imported file " +
         "outside `Brain/`, which no archive has ever held.",
-    },
-    "src/core/brain/provenance/source-archive.ts": {
-      calls: ["rmSync"],
-      recovery: UNARCHIVED_BRAIN,
-      reason:
-        "`discardSourceArchive` removes one content-addressed entry from `Brain/.archives/` " +
-        "only when delete-by-source has established that its LAST citing page is in the same " +
-        "confirmed deletion - the caller owns that decision and this module cannot check it, " +
-        "which is the claim written down here. The confirmed delete-by-source run beside which " +
-        "the discard fires takes its D1 snapshot first, and `Brain/.archives/` is deliberately " +
-        "NOT a snapshot-excluded entry, so the bytes the removal takes are inside that run's " +
-        "recovery point even though this primitive never takes one of its own.",
     },
     "src/core/brain/anticipatory-prune.ts": {
       calls: ["unlinkSync"],

@@ -10,9 +10,10 @@
 
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { closeDatabase } from "../../sqlite-close.ts";
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 export const MAINTENANCE_LEASE_NAME = "maintenance";
 
@@ -35,7 +36,7 @@ export interface LeaseState {
 }
 
 function leaseDbPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, "maintenance.sqlite");
+  return machineStatePath(vault, DERIVED_STORE_DIR, "maintenance.sqlite");
 }
 
 function openLeaseDb(vault: string): Database {

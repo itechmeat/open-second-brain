@@ -31,7 +31,7 @@ import { existsSync } from "node:fs";
 
 import { appendMetric } from "../brain/metrics.ts";
 import { brainConfigPath } from "../brain/paths.ts";
-import { applyUpgrade, planUpgrade } from "../brain/upgrade.ts";
+import { applyUpgrade, BrainUpgradeStoreOnlyError, planUpgrade } from "../brain/upgrade.ts";
 import {
   claimSelfHealUpgradeLock,
   clearSelfHealUpgradeFailure,
@@ -59,7 +59,11 @@ export const SELF_HEAL_UPGRADE_OUTCOME = Object.freeze({
   backoff: "backoff",
   /** Another worker holds this vault's lock. */
   running: "running",
-  /** The vault is not (or no longer) initialised; nothing was touched. */
+  /**
+   * The vault is not (or no longer) initialised, or the machine writes to
+   * the brain store only (no managed files to upgrade); nothing was
+   * touched and no failure recorded.
+   */
   notInitialized: "not_initialized",
 } as const);
 
@@ -82,6 +86,11 @@ export interface RunSelfHealUpgradeOptions {
    * Absent, the run claims the lock itself.
    */
   readonly lockToken?: string;
+  /**
+   * The machine config the store-only check reads (default: the resolved
+   * one), so the apply judges by the config its caller judged by.
+   */
+  readonly configPath?: string;
 }
 
 function message(e: unknown): string {
@@ -128,10 +137,10 @@ export function runSelfHealUpgrade(
     // part of the run whose end the lock's release announces.
     const held = token;
     process.once("exit", () => releaseSelfHealUpgradeLock(vault, held));
-    return attempt(vault, now);
+    return attempt(vault, now, opts.configPath);
   }
   try {
-    return attempt(vault, now);
+    return attempt(vault, now, opts.configPath);
   } finally {
     releaseSelfHealUpgradeLock(vault, token);
   }
@@ -148,7 +157,7 @@ function vaultGone(vault: string): boolean {
   return !existsSync(brainConfigPath(vault));
 }
 
-function attempt(vault: string, now: Date): SelfHealUpgradeRun {
+function attempt(vault: string, now: Date, configPath: string | undefined): SelfHealUpgradeRun {
   if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
   if (selfHealUpgradeBackoffActive(readSelfHealUpgradeFailure(vault), now)) {
     return run(SELF_HEAL_UPGRADE_OUTCOME.backoff);
@@ -166,7 +175,11 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
     if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     // The plan just computed, so the attempt plans once and a file edited
     // since is refused as drift rather than overwritten.
-    const applied = applyUpgrade(vault, { plan, now });
+    const applied = applyUpgrade(vault, {
+      plan,
+      now,
+      ...(configPath !== undefined ? { configPath } : {}),
+    });
     // The metrics row creates its directory: a vault removed during the
     // rewrite would come back for it.
     if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
@@ -180,7 +193,11 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
   } catch (e) {
     // A plan or an apply that failed because the vault went away under it
     // is not a failure to record: there is no vault left to record it in.
-    if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+    // Nor is the refusal of a machine that switched to the store meanwhile:
+    // it has no managed files, and a record would write under `Brain/`.
+    if (vaultGone(vault) || e instanceof BrainUpgradeStoreOnlyError) {
+      return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+    }
     const error = message(e);
     try {
       recordSelfHealUpgradeFailure(vault, error, pending, now);

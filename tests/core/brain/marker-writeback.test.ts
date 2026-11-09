@@ -20,6 +20,10 @@ import {
   MarkerWritebackGuardrailError,
 } from "../../../src/core/brain/marker-writeback.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = new Date("2026-07-17T12:34:56Z");
 const LOG_DATE = "2026-07-17";

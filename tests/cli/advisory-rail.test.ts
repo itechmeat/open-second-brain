@@ -37,6 +37,10 @@ import { writeJson } from "../../src/cli/output.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 /** A code the registry carries, with a multi-flag structural command. */
 const REGISTERED_CODE = "wal-gap";

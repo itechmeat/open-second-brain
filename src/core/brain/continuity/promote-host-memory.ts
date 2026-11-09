@@ -41,7 +41,9 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { existingPreferencePageText, writePreferencePageText } from "../preference-page-write.ts";
+import { preferencesStoreOnly } from "../preference-store.ts";
+
 import { resolveAgentName } from "../../config.ts";
 import { EGRESS_REDACTION_OPTIONS } from "../../egress/guard.ts";
 import { redactStructured } from "../../redactor.ts";
@@ -58,7 +60,7 @@ import { appendLogEvent } from "../log.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath, retiredPath, vaultRelative } from "../paths.ts";
 import { planAction, type PlannedFile } from "../claude-memory-plan.ts";
 import { renderPreferenceFromMemory, slugifyMemoryName } from "../claude-memory-render.ts";
-import { resolvedOwnerFor } from "../preference.ts";
+import { preferencePresence, resolvedOwnerFor } from "../preference.ts";
 import { takeSnapshot } from "../snapshot-gate.ts";
 import { TagSyntaxError } from "../tag-syntax.ts";
 import { isoSecond } from "../time.ts";
@@ -311,6 +313,10 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   const privateCount = rawRows.filter((record) => record.private === true).length;
 
   const manifest = loadPromotionsManifest(opts.vault);
+  // Store-only (task 2.10): the preferences are records in the append-only
+  // store, which needs no snapshot (design D14 item 9), and no page is
+  // written under `Brain/`.
+  const storeOnly = preferencesStoreOnly(opts.vault);
   const newPromotions: Record<string, HostMemoryPromotionEntry> = { ...manifest.promotions };
 
   const plans: PlannedFile[] = [];
@@ -404,12 +410,21 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
       continue;
     }
     const prefFile = preferencePath(opts.vault, slug);
-    if (existsSync(retiredPath(opts.vault, slug))) {
+    // Once switched the preference lives in the store's fold, not in the
+    // page files: ask the fold whether it is active or retired.
+    const presence = storeOnly ? preferencePresence(opts.vault, slug) : null;
+    const retired =
+      presence !== null ? presence === "retired" : existsSync(retiredPath(opts.vault, slug));
+    if (retired) {
       // A deliberately retired page must not resurrect through a
       // re-run of the promotion: the retirement outlives the record.
+      const where =
+        presence !== null
+          ? `ret-${slug}`
+          : vaultRelative(retiredPath(opts.vault, slug), opts.vault);
       skipped.push({
         id: record.id,
-        reason: `a retired copy exists (${vaultRelative(retiredPath(opts.vault, slug), opts.vault)}); restore or delete it first`,
+        reason: `a retired copy exists (${where}); restore or delete it first`,
       });
       continue;
     }
@@ -466,7 +481,7 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
       prefId,
       sha256: contentSha256,
       inManifest: manifestEntry ? { sha256: manifestEntry.sha256 } : null,
-      prefExists: existsSync(prefFile),
+      prefExists: presence !== null ? presence === "active" : existsSync(prefFile),
     });
     plans.push(plan);
     if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
@@ -527,7 +542,7 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   // at the end if any CONFLICT was detected, so the applied side of the
   // run still landed. The caller (CLI) uses the thrown error to exit 2.
   let snapshotRunId: string | null = null;
-  if (filesToWrite.length > 0) {
+  if (filesToWrite.length > 0 && !storeOnly) {
     // Through the snapshot gate, like every other reason: the run id is
     // derived from the reason (so the archive's filename cannot disagree
     // with its stamped provenance) and `snapshots.retention_count` is
@@ -538,17 +553,31 @@ export function promoteHostMemory(opts: PromoteHostMemoryOpts): PromoteHostMemor
   }
 
   const applied: PlannedFile[] = [];
-  if (filesToWrite.length > 0) {
+  if (filesToWrite.length > 0 && !storeOnly) {
     mkdirSync(join(opts.vault, BRAIN_PREFERENCES_REL), { recursive: true });
   }
   for (const { plan, body: freshBody, sha256, slug } of filesToWrite) {
-    const prefFile = preferencePath(opts.vault, slug);
     let finalBody = freshBody;
     if (plan.action === "UPDATE") {
-      // Preserve evidence fields by merging frontmatter.
-      finalBody = mergePreservingEvidence(readFileSync(prefFile, "utf8"), freshBody);
+      // Preserve evidence fields by merging frontmatter: the page, or the
+      // preference the store's fold holds once switched.
+      const existing = existingPreferencePageText(opts.vault, slug, (path) =>
+        readFileSync(path, "utf8"),
+      );
+      // The plan saw the preference: one gone (or retired) since would
+      // lose its evidence under a fresh body, so the row is skipped.
+      if (existing === null) {
+        skipped.push({
+          id: plan.basename,
+          reason: `${plan.prefId} is no longer active; it was not rewritten`,
+        });
+        continue;
+      }
+      finalBody = mergePreservingEvidence(existing, freshBody);
     }
-    atomicWriteFileSync(prefFile, finalBody);
+    // The page on an unswitched machine (plus the dual write), the
+    // preference's records only once switched.
+    writePreferencePageText(opts.vault, slug, finalBody);
     newPromotions[plan.basename] = { pref_id: plan.prefId, sha256, promoted_at: promotedAt };
     applied.push(plan);
   }

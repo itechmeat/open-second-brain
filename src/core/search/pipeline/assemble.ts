@@ -613,12 +613,14 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
 
 /** Declared event time, falling back to storage mtime. */
 function eventTimeOrMtimeMs(
-  vault: string,
+  vault: string | null,
   path: string,
   declaredEventTimeMs: (path: string) => number | null,
 ): number {
   const declared = declaredEventTimeMs(path);
   if (declared !== null) return declared;
+  // No vault: a store record has no file, as a missing one reads.
+  if (vault === null) return Number.NEGATIVE_INFINITY;
   try {
     return statSync(join(vault, path)).mtimeMs;
   } catch {

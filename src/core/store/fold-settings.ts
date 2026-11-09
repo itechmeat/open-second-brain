@@ -24,10 +24,8 @@ import {
   SETTING_TOPIC_MIN_SESSIONS,
   SETTING_UNSET_KIND,
   SETTING_VIEW_LANGUAGE,
-  SETTING_VIEW_WRITER,
   type SettingKey,
 } from "./constants.ts";
-import { isValidDeviceId } from "../config.ts";
 import type { StoreRecord } from "./envelope.ts";
 import {
   prepareRecords,
@@ -56,11 +54,6 @@ const LANGUAGE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
 
 /** The keys this version knows: what a valid value is, and the default. */
 export const SETTING_RULES: Readonly<Record<SettingKey, SettingRule>> = Object.freeze({
-  [SETTING_VIEW_WRITER]: {
-    valid: (value) => typeof value === "string" && isValidDeviceId(value),
-    expected: "a device id",
-    fallback: null,
-  },
   [SETTING_VIEW_LANGUAGE]: {
     valid: (value) => typeof value === "string" && LANGUAGE_RE.test(value),
     expected: "a language tag such as en or pt-BR",

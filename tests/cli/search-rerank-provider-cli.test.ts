@@ -22,6 +22,9 @@ beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-rerank-provider-cli-"));
   vault = join(tmp, "vault");
   mkdirSync(vault, { recursive: true });
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   config = join(tmp, "config.yaml");
   writeFileSync(config, `vault: "${vault}"\n`);
 });

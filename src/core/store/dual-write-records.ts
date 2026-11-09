@@ -22,11 +22,6 @@ import { existsSync } from "node:fs";
 import { relative, sep } from "node:path";
 
 import { preferencePath, retiredPath } from "../brain/paths.ts";
-import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
-import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
-import type { FrontmatterMap } from "../types.ts";
-import { DEGRADATION_CODE } from "../integrity/degradation.ts";
-import { parseFrontmatterWithNotices } from "../vault.ts";
 import {
   AUTHORITY_FIELD,
   LEDGER_ROW_KIND,
@@ -43,6 +38,10 @@ import {
 import type { DualWriteRecord } from "./dual-write.ts";
 import type { RecordBody } from "./envelope.ts";
 import { PREFERENCE_FIELD_RE } from "./fold-preferences.ts";
+import { isPrivatePageFile } from "./private-page.ts";
+import { judgesFromStore, storePreferenceIdIsPrivate } from "./store-privacy.ts";
+
+export { isPrivateFrontmatter, isPrivatePageFile } from "./private-page.ts";
 
 const COUNTERS = new Set<string>(PREFERENCE_COUNTER_FIELDS);
 
@@ -50,8 +49,9 @@ function plain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null)) as T;
 }
 
-function vaultRel(vault: string, path: string): string {
-  return relative(vault, path).split(sep).join("/");
+/** `path` relative to `vault`; with no vault (`null`) it is already vault-relative. */
+function vaultRel(vault: string | null, path: string): string {
+  return (vault === null ? path : relative(vault, path)).split(sep).join("/");
 }
 
 function textOf(value: unknown): string | null {
@@ -59,37 +59,14 @@ function textOf(value: unknown): string | null {
 }
 
 /**
- * Whether a page's frontmatter reserves it as private, by the same rule
- * search and remote reads use: the reserved `visibility` token, or an
- * informal marker such as `access: private` (`graph/privacy-markers.ts`).
- * Such a page's records go to the `private` partition.
- */
-export function isPrivateFrontmatter(frontmatter: Readonly<Record<string, unknown>>): boolean {
-  return remoteDenyVisibilityTokens(frontmatter as FrontmatterMap).includes(
-    REMOTE_DENY_VISIBILITY_TOKEN,
-  );
-}
-
-/**
- * {@link isPrivateFrontmatter} for a page on disk. Every brain writer that
- * decides a record's partition from a file goes through here, so one rule
- * decides privacy everywhere. A file that exists but cannot be read or
- * parsed counts as private, the partition that leaks nothing.
- */
-export function isPrivatePageFile(path: string): boolean {
-  // The parser reports a failed read as a notice with an empty map, which
-  // would read as open, so the notice is what decides here.
-  const [frontmatter, , notices] = parseFrontmatterWithNotices(path);
-  if (notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable)) return true;
-  return isPrivateFrontmatter(frontmatter);
-}
-
-/**
  * Whether the preference `pref-<slug>` (active or retired) is private, so
  * the log events and ledger rows that name it stay out of `shared`. A
- * preference with no file reads as not private.
+ * preference with no file reads as not private. On a store-only machine,
+ * or with no vault, the preference fold decides instead, and a preference
+ * the fold does not hold is private (design D14 item 18).
  */
-export function isPrivatePreference(vault: string, slug: string): boolean {
+export function isPrivatePreference(vault: string | null, slug: string): boolean {
+  if (vault === null || judgesFromStore(vault)) return storePreferenceIdIsPrivate(`pref-${slug}`);
   for (const path of [preferencePath(vault, slug), retiredPath(vault, slug)]) {
     if (existsSync(path) && isPrivatePageFile(path)) return true;
   }
@@ -101,12 +78,14 @@ export function isPrivatePreference(vault: string, slug: string): boolean {
  * single privacy verdict (`operation-privacy.ts`).
  */
 export function signalRecord(input: {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly path: string;
   readonly id: string;
   readonly staged: boolean;
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly raw: string | undefined;
+  /** What `raw` holds (FORMAT.md, `signal`): the captured text (default) or an imported page body. */
+  readonly rawShape?: SignalRawShape;
   readonly private: boolean;
 }): DualWriteRecord {
   const frontmatter = plain(input.frontmatter) as Record<string, unknown>;
@@ -122,8 +101,29 @@ export function signalRecord(input: {
       staged: input.staged,
       frontmatter,
       raw: input.raw ?? null,
+      ...(input.raw !== undefined ? { [SIGNAL_RAW_SHAPE_FIELD]: input.rawShape ?? "bare" } : {}),
     },
   };
+}
+
+/** What a `signal` record's `raw` holds: the captured text, or an imported page's body. */
+export type SignalRawShape = "bare" | "page";
+
+/** Body field of a `signal` record naming its {@link SignalRawShape}. */
+export const SIGNAL_RAW_SHAPE_FIELD = "raw_shape";
+
+/**
+ * The {@link SignalRawShape} of a `signal` record's body: its `raw_shape`,
+ * or, for a record written before the field existed, `page` when one of
+ * the first three lines of `raw` is the `## Raw` heading.
+ */
+export function signalRawShape(body: Readonly<Record<string, unknown>>): SignalRawShape {
+  const marked = body[SIGNAL_RAW_SHAPE_FIELD];
+  if (marked === "bare" || marked === "page") return marked;
+  const raw = body["raw"];
+  return typeof raw === "string" && /^\s*## Raw\s*$/m.test(raw.split("\n", 3).join("\n"))
+    ? "page"
+    : "bare";
 }
 
 /** One Brain log event, as the legacy appender wrote it. */
@@ -193,15 +193,29 @@ export function preferenceEvidenceRecord(input: {
   readonly artifact: string;
   readonly agent: string;
   readonly private: boolean;
+  /** The evidence record this one copies (a merge moving a drop's evidence to the keep). */
+  readonly mergedFrom?: string;
 }): DualWriteRecord {
   return {
     stream: "events",
     kind: PREFERENCE_EVIDENCE_KIND,
     agent: input.agent,
     private: input.private,
-    body: { preference: input.id, result: input.result, artifact: input.artifact },
+    body: {
+      preference: input.id,
+      result: input.result,
+      artifact: input.artifact,
+      ...(input.mergedFrom !== undefined ? { [MERGED_FROM_FIELD]: input.mergedFrom } : {}),
+    },
   };
 }
+
+/**
+ * Body field of a `preference-evidence` record a merge copied from the
+ * dropped preference: the id of the record it copies, so a merge retried
+ * after a partial run copies each record once.
+ */
+export const MERGED_FROM_FIELD = "merged_from";
 
 /**
  * The pinned context after a legacy write: its full text, or `null` for a

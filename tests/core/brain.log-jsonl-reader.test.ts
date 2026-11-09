@@ -6,11 +6,17 @@ import { join } from "node:path";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { readLogDay } from "../../src/core/brain/log-jsonl.ts";
 import { brainDirs, logJsonlPath, logPath } from "../../src/core/brain/paths.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-brain-log-jsonl-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

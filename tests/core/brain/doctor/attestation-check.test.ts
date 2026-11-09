@@ -46,6 +46,10 @@ import type {
 import { acquireLogLock, appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { writeVaultIdentity } from "../../../../src/core/brain/vault-identity.ts";
+import { useUnshardedLegacyLog } from "../../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const DATE = "2026-06-03";
 

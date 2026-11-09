@@ -166,3 +166,13 @@ export function describeBaseDir(kind: BaseKind, platform: string = process.platf
   if (platform === "win32") return `%${xdg}% if set, else %LOCALAPPDATA%`;
   return `\${${xdg}:-~/${POSIX_DEFAULT[kind].join("/")}}`;
 }
+
+/**
+ * The stand-in vault path of a machine with no vault (task 2.10): a path
+ * below the state root that is never created. Code that takes a vault
+ * string is handed it so every store-only branch runs; a resolver of
+ * machine state treats it as no vault at all.
+ */
+export function noVaultRoot(): string {
+  return join(stateRootDir(processDirsEnv()), "no-vault");
+}

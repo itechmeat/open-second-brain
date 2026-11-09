@@ -45,6 +45,8 @@ import {
   releaseSelfHealUpgradeLock,
   selfHealUpgradeBackoffActive,
 } from "./self-heal-upgrade-state.ts";
+import { configuredStore } from "../store/read/store-entities.ts";
+import { storeOnlyMode } from "../store/store-only.ts";
 
 /**
  * The flag that tells the child to record its own terminal outcome. It
@@ -332,9 +334,25 @@ export async function ensureVaultCurrent(
   let reindexSpawn: SelfHealSpawnDecision | null = null;
   let freshen: FreshenDecision | null = null;
 
-  // Only an already-initialised vault is an upgrade target. A missing
-  // `_brain.yaml` means "not set up yet" - that is `o2b init`'s job, not ours.
-  if (!existsSync(brainConfigPath(vault))) {
+  // A store-only machine (switched, or a vault with no legacy tree) writes
+  // no byte under `Brain/` (design D14 item 1): there is no managed-file
+  // upgrade to run, and creating `Brain/` would send it back to the legacy
+  // layout. Its index steps still run once a store is set up.
+  const mode = storeOnlyMode({
+    vault,
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
+  const switched = mode.storeOnly;
+
+  // Only an already-initialised vault is a target: `_brain.yaml`, or a
+  // configured store on a store-only machine. Either is enough: a switched
+  // machine whose store cannot be read for a moment (sync removed or has
+  // not delivered a partition) still keeps its search index current, as
+  // its legacy `_brain.yaml` says it was set up. Anything else is "not set
+  // up yet" - that is `o2b init`'s job, not ours.
+  const initialized =
+    existsSync(brainConfigPath(vault)) || (switched && configuredStore(opts.configPath) !== null);
+  if (!initialized) {
     return {
       brainUpgraded: [],
       brainUpgradeSpawn: null,
@@ -352,19 +370,25 @@ export async function ensureVaultCurrent(
   //    and the plan is clean (a half-mergeable plan is left for the operator).
   //    In the background it runs in a detached worker; a failure is recorded
   //    by the worker and backs off the next automatic attempt.
-  try {
-    if (background) {
-      brainUpgradeSpawn = startSelfHealUpgrade(vault, opts.configPath, new Date());
-    } else {
-      const upgrade = runSelfHealUpgrade(vault);
-      brainUpgradeOutcome = upgrade.outcome;
-      brainUpgraded = upgrade.filesUpdated;
-      if (upgrade.outcome === SELF_HEAL_UPGRADE_OUTCOME.failed) {
-        errors.push(`brain-upgrade: ${upgrade.error ?? "failed"}`);
+  if (!switched) {
+    try {
+      if (background) {
+        brainUpgradeSpawn = startSelfHealUpgrade(vault, opts.configPath, new Date());
+      } else {
+        // The same machine config this run judged store-only mode by.
+        const upgrade = runSelfHealUpgrade(
+          vault,
+          opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+        );
+        brainUpgradeOutcome = upgrade.outcome;
+        brainUpgraded = upgrade.filesUpdated;
+        if (upgrade.outcome === SELF_HEAL_UPGRADE_OUTCOME.failed) {
+          errors.push(`brain-upgrade: ${upgrade.error ?? "failed"}`);
+        }
       }
+    } catch (e) {
+      errors.push(`brain-upgrade: ${message(e)}`);
     }
-  } catch (e) {
-    errors.push(`brain-upgrade: ${message(e)}`);
   }
 
   // 2. Search index - an older schema is migrated in place (the stored

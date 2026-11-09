@@ -200,8 +200,8 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       {
         tools: ["brain_apply_evidence"],
         text:
-          "brain_apply_evidence right after producing a durable artifact a preference " +
-          "in `Brain/preferences/` scopes to (result: applied | violated | outdated)",
+          "brain_apply_evidence right after producing a durable artifact an active " +
+          "preference scopes to (result: applied | violated | outdated)",
         separator: CLAUSE,
       },
       {
@@ -216,7 +216,7 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       },
       {
         tools: ["brain_context"],
-        text: "brain_context bootstraps a session when the host injects no active.md hook",
+        text: "brain_context bootstraps a session when the host injects no active-preferences hook",
         separator: SENTENCE,
       },
       unconditional(
@@ -305,7 +305,7 @@ const WRITER_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       {
         tools: ["brain_pinned_context"],
         text:
-          `${BULLET}brain_pinned_context  — read/write/append/clear Brain/pinned.md for\n` +
+          `${BULLET}brain_pinned_context  — read/write/append/clear the pinned context for\n` +
           "                            current-task facts that should survive context\n" +
           "                            rotation without becoming permanent preferences.",
         separator: LINE_BREAK,
@@ -313,12 +313,12 @@ const WRITER_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       {
         tools: ["brain_context"],
         text:
-          `${BULLET}brain_context         — pull the current Brain/active.md body plus\n` +
+          `${BULLET}brain_context         — pull the active-preferences digest plus\n` +
           "                            pinned context and active-preference counts.\n" +
           "                            Read-only. Use at session\n" +
           "                            start when the host runtime lacks a SessionStart\n" +
           "                            hook (Cursor, Aider, raw Claude API). Runtimes that\n" +
-          "                            already inject active.md via a hook can skip this.",
+          "                            already inject the digest via a hook can skip this.",
       },
     ],
   },

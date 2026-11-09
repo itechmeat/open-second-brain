@@ -30,12 +30,12 @@ import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { redactErrorForCaller } from "../error-redaction.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { findingRefs } from "./hygiene-tools.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
-import { contextReach } from "../tool-contract.ts";
+import { contextReach, contextVault } from "../tool-contract.ts";
 import { computeTrustVerdict } from "../../core/brain/trust/compute-trust-verdict.ts";
 
 /**
@@ -57,7 +57,7 @@ function issueView(ctx: ServerContext, issue: DoctorIssue): Record<string, unkno
     severity: issue.severity,
     code: issue.code,
     message: issue.message,
-    ...(issue.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, issue.path) } : {}),
+    ...(issue.path !== undefined ? { path: toolPath(ctx, issue.path) } : {}),
     ...(issue.field !== undefined ? { field: issue.field } : {}),
     ...(issue.target !== undefined ? { target: issue.target } : {}),
     ...(issue.sources !== undefined ? { sources: issue.sources } : {}),
@@ -77,6 +77,10 @@ async function toolBrainDoctor(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the pass runs the store-side checks
+  // (design D14). A repair rewrites the legacy tree and reads `ctx.vault`,
+  // which refuses with `vault_required` there.
+  const vault = contextVault(ctx);
   const strict = coerceBool(args, "strict");
   const format = coerceFormat(args);
 
@@ -131,10 +135,9 @@ async function toolBrainDoctor(
     return { format, repair: outcome };
   }
 
-  const result = runDoctor(ctx.vault, {
+  const result = runDoctor(vault, {
     strict,
-    dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
-      .dbPath,
+    dbPath: resolveSearchConfig({ vault: vault, configPath: ctx.configPath ?? undefined }).dbPath,
     // Same reason as the CLI verb: a check that reads a config gate must read
     // the config this server was started against, not whatever default
     // discovery would find.
@@ -159,12 +162,12 @@ async function toolBrainDoctor(
   // malformed private preference answers as an absent one.
   const reach = contextReach(ctx);
   const view = everyArtifactRefView(
-    gatedOwnerScopeView(ctx.vault, ctx.agentName),
-    reachView(ctx.vault, reach),
+    gatedOwnerScopeView(vault, ctx.agentName),
+    reachView(vault, reach),
   );
   /** Generic over the three streams: they share the naming fields, not a type. */
   const visibleIssues = <T extends DoctorIssueNaming>(issues: ReadonlyArray<T>): ReadonlyArray<T> =>
-    view.keep(issues, (i) => doctorIssueRefs(ctx.vault, i));
+    view.keep(issues, (i) => doctorIssueRefs(vault, i));
   const errors = visibleIssues(result.errors);
   // `tier-drift` names no page, so the view cannot judge it; the doctor
   // counted it over `readable` instead, the rows `brain_tiers check`
@@ -189,9 +192,12 @@ async function toolBrainDoctor(
   // so we mirror that semantic here: with `strict`, warnings demote ok
   // to false. Errors always do.
   const ok = errors.length === 0 && (!strict || warnings.length === 0);
-  const aliasVerdicts = await annotateEntityAliasIssues(ctx.vault, warnings, {
-    configPath: ctx.configPath,
-  });
+  // Entity aliases and maintenance actions read vault pages; with no vault
+  // there are none to annotate or suggest.
+  const aliasVerdicts =
+    vault === null
+      ? null
+      : await annotateEntityAliasIssues(vault, warnings, { configPath: ctx.configPath });
 
   // Why a reported code carries no `next_command`. Without it the field's
   // absence has two readings - a class no single command resolves, and a
@@ -230,10 +236,12 @@ async function toolBrainDoctor(
     // a visible one could fill.
     suggested_actions: view
       .keep(
-        collectMaintenanceActions(ctx.vault, {
-          onError: (e) => collectErrors.push(e),
-          visible: view.visible,
-        }),
+        vault === null
+          ? []
+          : collectMaintenanceActions(vault, {
+              onError: (e) => collectErrors.push(e),
+              visible: view.visible,
+            }),
         (a) => [a.target],
       )
       .map((a) => ({
@@ -281,7 +289,7 @@ async function toolBrainDoctor(
       ? {
           uncertain: uncertain.map((u) => ({
             code: u.code,
-            ...(u.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, u.path) } : {}),
+            ...(u.path !== undefined ? { path: toolPath(ctx, u.path) } : {}),
             message: u.message,
             ...nextCommandField(u.code),
           })),
@@ -448,7 +456,7 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_doctor",
     kind: "write",
     description:
-      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes (WAL gaps, orphaned references) with a per-file diff; `repair`+`apply` applies them as machine consent (`caller-apply` in each fix's event).",
+      "Validate brain memory invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes (WAL gaps, orphaned references) with a per-file diff; `repair`+`apply` applies them as machine consent (`caller-apply` in each fix's event).",
     inputSchema: {
       type: "object",
       properties: {

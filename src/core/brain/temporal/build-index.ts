@@ -4,9 +4,11 @@
  *
  * Walks `Brain/log/<YYYY-MM-DD>.jsonl` (via the public `readLogDay`
  * reader, which prefers JSONL with a Markdown fallback) for every date
- * intersecting the requested window. Also walks `Brain/retired/*.md`
- * frontmatter to emit synthetic `retire` events at each retired
- * entry's `retired_at` timestamp. Returns a frozen `TimelineIndex` so
+ * intersecting the requested window; on a store-only machine the log
+ * events come from the store through the log reader facade instead. Also
+ * reads the retired pages (`Brain/retired/*.md`, or the retired
+ * preferences the store's fold rebuilds once switched) to emit synthetic
+ * `retire` events at each retired entry's `retired_at` timestamp. Returns a frozen `TimelineIndex` so
  * all downstream projections (`selectEvents`, `buildBeliefEvolution`,
  * `findStaleEntries`, `buildDailyBrief`, `buildWeeklySynthesis`)
  * observe the same window semantics.
@@ -15,13 +17,15 @@
  * Task 2 in `docs/brainstorm/temporal-synthesis/plan.md`.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { BrainLogEntry } from "./../log.ts";
 import { listLogDates, readLogDay } from "./../log-jsonl.ts";
+import { readLogEvents } from "../../store/read/log-events.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
 import { brainDirs } from "./../paths.ts";
-import { parseFrontmatter } from "../../vault.ts";
+import { memoryFolderPages } from "./../memory-pages.ts";
 import { vaultRelative } from "../../path-safety.ts";
 import { parseWikilink } from "./../wikilink.ts";
 import {
@@ -59,6 +63,9 @@ export interface BuildTimelineIndexOptions {
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO_DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}/;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The audit pointer of a store log event: the store's log stream and the event's day. */
+export const STORE_LOG_POINTER_PREFIX = "store:log/";
 
 /**
  * Build the timeline index. Pure single-pass scan; the resulting index
@@ -164,14 +171,31 @@ function addDays(day: string, delta: number): string {
 }
 
 function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEvent[]): void {
-  const logDir = brainDirs(vault).log;
-  if (!existsSync(logDir)) return;
   const sinceDay = dateKeyFromIso(window.since);
   const untilDay = dateKeyFromIso(window.until);
   // Err permissive by one day on each side (timezone safety - the
   // same convention `digest.ts:readLogsInWindow` uses).
   const lowerBound = addDays(sinceDay, -1);
   const upperBound = addDays(untilDay, 1);
+  // A store-only machine (design D14 item 1) keeps its log in the store:
+  // the events come from the log reader facade, and the audit pointer
+  // names the store's log stream and the event's day.
+  if (isStoreOnly({ vault })) {
+    const entries = readLogEvents({ from: lowerBound, to: upperBound }, { vault });
+    for (const entry of entries) {
+      if (entry.timestamp < window.since) continue;
+      if (entry.timestamp >= window.until) continue;
+      out.push(
+        normaliseLogEntry(entry, {
+          path: `${STORE_LOG_POINTER_PREFIX}${dateKeyFromIso(entry.timestamp)}`,
+          line: null,
+        }),
+      );
+    }
+    return;
+  }
+  const logDir = brainDirs(vault).log;
+  if (!existsSync(logDir)) return;
   // Shard-aware (Memory Integrity Suite): listLogDates recognises the
   // legacy pair AND `<date>.<deviceId>.jsonl` / `.md` shard names.
   const sortedDates = listLogDates(vault);
@@ -338,15 +362,13 @@ function readWikilinkId(value: unknown): string | undefined {
 }
 
 function collectRetiredEvents(vault: string, window: TimelineWindow, out: TemporalEvent[]): void {
-  const retiredDir = brainDirs(vault).retired;
-  if (!existsSync(retiredDir)) return;
-  for (const entry of readdirSync(retiredDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("ret-")) continue;
-    const path = join(retiredDir, entry.name);
+  // The retired pages: the folder on an unswitched machine, the retired
+  // preferences the fold rebuilds on a store-only one (no file there).
+  for (const page of memoryFolderPages(vault, "retired", { regularFilesOnly: true })) {
+    if (!page.name.endsWith(".md") || !page.name.startsWith("ret-")) continue;
     let meta: Record<string, unknown>;
     try {
-      const [parsed] = parseFrontmatter(path);
+      const [parsed] = page.read();
       meta = parsed;
     } catch {
       continue;
@@ -355,7 +377,7 @@ function collectRetiredEvents(vault: string, window: TimelineWindow, out: Tempor
     if (retiredAt === undefined) continue;
     if (retiredAt < window.since) continue;
     if (retiredAt >= window.until) continue;
-    const id = readScalar(meta["id"]) ?? entry.name.slice(0, -".md".length);
+    const id = readScalar(meta["id"]) ?? page.name.slice(0, -".md".length);
     const topic = readScalar(meta["topic"]);
     const reason = readScalar(meta["reason"]);
     const validFrom = readScalar(meta["valid_from"]);
@@ -365,7 +387,7 @@ function collectRetiredEvents(vault: string, window: TimelineWindow, out: Tempor
       Object.freeze({
         at: retiredAt,
         kind: BRAIN_LOG_EVENT_KIND.retire,
-        source: { path: vaultRelative(path, vault), line: null },
+        source: { path: page.rel, line: null },
         prefId: id,
         ...(topic !== undefined ? { topic } : {}),
         ...(reason !== undefined ? { reason } : {}),

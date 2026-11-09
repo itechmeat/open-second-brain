@@ -13,15 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -33,6 +25,7 @@ import {
   detectFrontmatterTags,
 } from "../../../src/core/brain/hygiene/detectors/frontmatter-tags.ts";
 import type { HygieneFinding } from "../../../src/core/brain/hygiene/types.ts";
+import { treeEntries } from "../../helpers/vault-digest.ts";
 
 let vault: string;
 
@@ -54,21 +47,6 @@ function writeNote(rel: string, frontmatter: string, body = "clean body"): void 
 
 function findings(): HygieneFinding[] {
   return [...detectFrontmatterTags(vault)];
-}
-
-/** Recursive [relative path -> bytes] snapshot, for the read-only pin. */
-function treeSnapshot(dir: string, prefix = ""): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const entry of readdirSync(dir)) {
-    const abs = join(dir, entry);
-    const rel = prefix === "" ? entry : `${prefix}/${entry}`;
-    if (statSync(abs).isDirectory()) {
-      for (const [k, v] of treeSnapshot(abs, rel)) out.set(k, v);
-    } else {
-      out.set(rel, readFileSync(abs, "utf8"));
-    }
-  }
-  return out;
 }
 
 describe("frontmatter-tags detector - malformed values", () => {
@@ -164,10 +142,10 @@ describe("frontmatter-tags detector - parse-shaped tags", () => {
 describe("frontmatter-tags detector - read-only and shared rule", () => {
   test("the detector never mutates the vault", () => {
     writeNote("Brain/notes/a.md", "tags: [bad tag, ok]");
-    const before = treeSnapshot(vault);
+    const before = treeEntries(vault);
     findings();
     runHygieneScan(vault, { detectors: ["frontmatter-tags"], now: NOW });
-    expect(treeSnapshot(vault)).toEqual(before);
+    expect(treeEntries(vault)).toEqual(before);
   });
 
   test("the detector consumes the ONE shared predicate, never a local copy", () => {

@@ -11,7 +11,6 @@
  * failure, 2 on usage errors.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -36,11 +35,11 @@ import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
-import { parseFrontmatter } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { lanePageExists, parseLanePage } from "../../../core/store/lane-pages.ts";
 
 const USAGE =
   "usage: o2b brain bridges discover [--max N] [--min-similarity X] [--progress] | list | " +
@@ -92,7 +91,7 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
 
     if (action === "list") {
       const path = join(vault, "Brain", "proposals", "bridges.md");
-      if (!existsSync(path)) {
+      if (!lanePageExists(vault, path)) {
         // no-dead-ends, phase 3: the rail suppresses its line here and
         // returns the step so this payload can carry it. Nothing did.
         if (asJson) {
@@ -102,7 +101,7 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         emitNextStep("bridge-proposals-absent", stream);
         return 0;
       }
-      const [meta, body] = parseFrontmatter(path);
+      const [meta, body] = parseLanePage(vault, path);
       if (asJson) {
         okJson({
           exists: true,

@@ -52,7 +52,8 @@ beforeEach(() => {
   // vault paths no filesystem grammar should have to care about.
   tempRoot = mkdtempSync(join(tmpdir(), "o2b-token-store-"));
   vault = join(tempRoot, "brain vault 東");
-  mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

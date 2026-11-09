@@ -29,6 +29,7 @@ import {
   parseFlags,
   resolveConfig,
   VAULT_FLAGS,
+  requireSearchVault,
 } from "../helpers.ts";
 
 /** Structural shape shared by `ProviderProfile` and `RerankProviderProfile`. */
@@ -126,11 +127,12 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
     return 0;
   }
 
-  const cfg = resolveConfig(flags);
+  // The registry belongs to a vault's machine state.
+  const vault = requireSearchVault(resolveConfig(flags), `search ${verb}`);
   const name = typeof positional[0] === "string" ? positional[0] : undefined;
 
   if (action === "list") {
-    const registry = ops.load(cfg.vault);
+    const registry = ops.load(vault);
     if (json) {
       process.stdout.write(JSON.stringify(registry) + "\n");
       return 0;
@@ -149,7 +151,7 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
 
   if (action === "show") {
     if (!name) throw new CliError(`usage: o2b search ${verb} show NAME`);
-    const profile = ops.get(cfg.vault, name);
+    const profile = ops.get(vault, name);
     if (!profile) {
       process.stderr.write(`error: no registered ${kind} named '${name}'\n`);
       return 1;
@@ -164,7 +166,7 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
 
   if (action === "remove") {
     if (!name) throw new CliError(`usage: o2b search ${verb} remove NAME`);
-    const { removed } = ops.remove(cfg.vault, name);
+    const { removed } = ops.remove(vault, name);
     if (json) {
       process.stdout.write(JSON.stringify({ removed, name }) + "\n");
     } else {
@@ -189,7 +191,7 @@ async function runProviderRegistryCommand<T extends CliRegistryProfile>(
     );
   }
   const envKeyValue = ops.multiKey ? parseEnvKeyFlag(envKey) : envKey;
-  const registry = ops.add(cfg.vault, { name, baseUrl, defaultModel: model, envKey: envKeyValue });
+  const registry = ops.add(vault, { name, baseUrl, defaultModel: model, envKey: envKeyValue });
   const added = registry.find((p) => p.name === name)!;
   if (json) {
     process.stdout.write(JSON.stringify(added) + "\n");

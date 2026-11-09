@@ -19,15 +19,7 @@
  * genuine connection to prior material; a freshly created entity is not.
  */
 
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-} from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 
@@ -35,15 +27,9 @@ import type { FrontmatterMap } from "../../types.ts";
 import { normToken, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { assertCheckpointId } from "../checkpoint-store.ts";
-import {
-  formatFrontmatter,
-  parseFrontmatter,
-  slugify,
-  writeFrontmatterAtomic,
-} from "../../vault.ts";
+import { formatFrontmatter, slugify } from "../../vault.ts";
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { originChannelStamp } from "../../origin-channel.ts";
 import { CONTENT_CLASS_FIELD, contentClassCreationStamp } from "../provenance/content-class.ts";
 import {
@@ -116,6 +102,13 @@ import {
   neutralizedMarkersFrontmatter,
   resolveMarkdownNeutralizeModeForProcess,
 } from "../text/neutralize-markdown.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  parseLanePage,
+  readLaneText,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -319,7 +312,7 @@ export function ingestSource(
   opts: IngestSourceOptions,
 ): IngestSourceResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   // Before anything is written: an id the checkpoint store cannot use is a
   // resume that will never engage, and the caller has to hear it now rather
   // than discover it from a reconciliation report.
@@ -405,13 +398,14 @@ export function ingestSource(
   // on disk.
   const archive = captureTrustedSourceArchive(vault, canonicalSource, trust);
 
-  const withheld = existsSync(absPath) && opts.readable?.(summaryPath) === false;
-  const existed = !withheld && existsSync(absPath);
+  const pageExists = lanePageExists(vault, absPath);
+  const withheld = pageExists && opts.readable?.(summaryPath) === false;
+  const existed = !withheld && pageExists;
   const stamp = isoSecond(opts.now);
   // Preserve the original created_at and an operator-set visibility on a
   // re-ingest; bump updated_at.
   const kept: KeptFrontmatter = existed
-    ? readKeptFrontmatter(absPath, stamp)
+    ? readKeptFrontmatter(vault, absPath, stamp)
     : { createdAt: stamp };
 
   // Write-time marker neutralization (t_c2ac4fc8), keyed off PROVENANCE:
@@ -507,7 +501,7 @@ export function ingestSource(
   // the index watcher for nothing; skipping it keeps a re-ingest of an
   // unchanged source truly inert.
   const nextContents = formatFrontmatter(meta, body);
-  const unchanged = existed && readFileSync(absPath, "utf8") === nextContents;
+  const unchanged = existed && (readLaneText(vault, absPath) ?? "") === nextContents;
   // Review gate (write-side trust, Task 9): a FIRST publish of the summary
   // page stages under the ingest lane while registration completes. The
   // disposition itself was resolved BEFORE the intake (Task 12), so a deny
@@ -533,8 +527,7 @@ export function ingestSource(
     };
   }
   if (stagedFields === undefined && !withheld && !unchanged) {
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
+    writeLanePage(vault, absPath, meta, body, { overwrite: true });
   }
 
   // Record the source's CONTENT hash so a future re-ingest can classify it
@@ -563,6 +556,7 @@ export function ingestSource(
     disposition.verdict !== "stage" &&
     trust === INTAKE_TRUST.trusted &&
     resolvesInsideVault(vault, canonicalSource) &&
+    // The user's source file, read from disk below: asked of the disk too.
     existsSync(join(vault, canonicalSource))
   ) {
     const sourceAbs = join(vault, canonicalSource);
@@ -1084,8 +1078,8 @@ function stampContentClass(
  * existing content class from an existing summary page; `created_at`
  * falls back to `fallback`.
  */
-function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter {
-  const [meta] = parseFrontmatter(absPath);
+function readKeptFrontmatter(vault: string, absPath: string, fallback: string): KeptFrontmatter {
+  const [meta] = parseLanePage(vault, absPath);
   const value = meta["created_at"];
   const createdAt = typeof value === "string" && value.length > 0 ? value : fallback;
   const visibility = meta[VISIBILITY_FRONTMATTER_KEY];

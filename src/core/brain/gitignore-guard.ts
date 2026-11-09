@@ -63,6 +63,7 @@ import {
   insertManagedBlock,
   ManagedBlockError,
 } from "../install/managed-block.ts";
+import { isMachineStateRelocated } from "../state/machine-state.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
 
 /** Vault-relative name of the file this guard seeds. */
@@ -163,6 +164,10 @@ function negationAfterEntry(lines: ReadonlyArray<string>): string | null {
  * only throws are genuine I/O errors reading or writing the file.
  */
 export function ensureVaultGitignoreEntries(vault: string): GitignoreGuardResult {
+  // A switched machine keeps its derived state in the device-local state,
+  // so there is nothing under the vault to keep out of git, and the vault
+  // is not written (design D14, `state/machine-state.ts`).
+  if (isMachineStateRelocated(vault)) return { status: "skipped", file: GITIGNORE_GUARD_FILE };
   const file = join(vault, GITIGNORE_GUARD_FILE);
 
   // A symlinked .gitignore is refused, never written through or over:

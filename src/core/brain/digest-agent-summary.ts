@@ -6,12 +6,15 @@
  * apply-evidence / note), and attribution to confirmed/retired rules.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  memoryPageNamed,
+  storeMemoryPages,
+  type MemoryFolder,
+  type MemoryPage,
+} from "./memory-pages.ts";
 
-import { brainDirs } from "./paths.ts";
 import type { BrainLogEntry } from "./log.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
+import { logDayReader } from "./log-days.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
 export interface AgentSummaryEntry {
@@ -48,6 +51,7 @@ export function computeAgentSummary(
   const windowed = readLogsInWindow(vault, since, until);
   const logs = keep === undefined ? windowed : windowed.filter(keep);
   const byAgent = new Map<string, AgentAccumulator>();
+  const field = memoryFieldReader(vault);
 
   for (const entry of logs) {
     const agent = getEntryAgent(entry);
@@ -111,8 +115,8 @@ export function computeAgentSummary(
 
     seenPrefs.add(key);
 
-    const confirmedAt = getConfirmedAt(vault, prefId);
-    const retiredAt = getRetiredAt(vault, prefId);
+    const confirmedAt = field("preferences", `${prefId}.md`, "confirmed_at");
+    const retiredAt = field("retired", `${prefId.replace("pref-", "ret-")}.md`, "retired_at");
 
     if (confirmedAt && isInWindow(confirmedAt, since, until)) {
       acc.confirmed_attributed++;
@@ -135,10 +139,11 @@ function readLogsInWindow(vault: string, since: Date, until: Date): BrainLogEntr
   const untilDay = untilIso.slice(0, 10);
   const out: BrainLogEntry[] = [];
   // Shard-aware (Memory Integrity Suite): one discovery helper, merged reads.
-  for (const date of listLogDates(vault)) {
+  const log = logDayReader(vault);
+  for (const date of log.dates) {
     if (date < addDays(sinceDay, -1)) continue;
     if (date > addDays(untilDay, 1)) continue;
-    const { entries } = readLogDay(vault, date);
+    const { entries } = log.day(date);
     for (const e of entries) {
       if (e.timestamp >= sinceIso && e.timestamp < untilIso) {
         out.push(e);
@@ -174,31 +179,46 @@ function getEntryAgent(entry: BrainLogEntry): string {
   return "unknown";
 }
 
-function getConfirmedAt(vault: string, prefId: string): string | null {
-  const dirs = brainDirs(vault);
-  const path = join(dirs.preferences, `${prefId}.md`);
-  if (!existsSync(path)) return null;
-  try {
-    const text = readFileSync(path, "utf8");
-    const m = /^confirmed_at:\s*(.+)$/m.exec(text);
-    return m ? m[1]!.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function getRetiredAt(vault: string, prefId: string): string | null {
-  const dirs = brainDirs(vault);
-  const retiredId = prefId.replace("pref-", "ret-");
-  const path = join(dirs.retired, `${retiredId}.md`);
-  if (!existsSync(path)) return null;
-  try {
-    const text = readFileSync(path, "utf8");
-    const m = /^retired_at:\s*(.+)$/m.exec(text);
-    return m ? m[1]!.trim() : null;
-  } catch {
-    return null;
-  }
+/**
+ * A reader of one frontmatter field of memory page `name` of `folder`:
+ * the file on an unswitched machine (read when asked), the page the
+ * store's fold rebuilds once switched (no file exists there). The field
+ * is read from the parsed frontmatter in either `field` or the writer's
+ * `_field` spelling, so a page the preference writer wrote counts as a
+ * hand-written one does. The store's pages of a folder are loaded once
+ * per reader and indexed by name, so a summary costs one fold read per
+ * folder, not one per preference. `null` when there is no such page, no
+ * such field, or it cannot be read.
+ */
+function memoryFieldReader(
+  vault: string,
+): (folder: "preferences" | "retired", name: string, field: string) => string | null {
+  const folders = new Map<MemoryFolder, Map<string, MemoryPage> | null>();
+  const storedPages = (folder: MemoryFolder): Map<string, MemoryPage> | null => {
+    if (!folders.has(folder)) {
+      let pages: ReadonlyArray<MemoryPage> | null;
+      try {
+        pages = storeMemoryPages(vault, folder);
+      } catch {
+        pages = [];
+      }
+      folders.set(folder, pages === null ? null : new Map(pages.map((p) => [p.name, p])));
+    }
+    return folders.get(folder)!;
+  };
+  return (folder, name, field) => {
+    try {
+      const stored = storedPages(folder);
+      const page = stored === null ? memoryPageNamed(vault, folder, name) : stored.get(name);
+      if (page === undefined || page === null) return null;
+      const [meta] = page.read();
+      const value = meta[field] ?? meta[`_${field}`];
+      if (typeof value === "string") return value.trim() || null;
+      return value instanceof Date ? value.toISOString() : null;
+    } catch {
+      return null;
+    }
+  };
 }
 
 function isInWindow(iso: string, since: Date, until: Date): boolean {

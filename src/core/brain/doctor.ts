@@ -59,7 +59,10 @@ import { entityRegistryCheck } from "./doctor/entity-checks.ts";
 import { brokenBacklinkCheck } from "./doctor/link-checks.ts";
 import { mergeChainDanglingCheck } from "./doctor/merge-chain-check.ts";
 import { orphanSessionCheck } from "./doctor/orphan-session-check.ts";
-import { permissionsDocumentCheck } from "./doctor/permissions-check.ts";
+import {
+  permissionsDocumentCheck,
+  permissionsLegacyOnlyCheck,
+} from "./doctor/permissions-check.ts";
 import { sessionIdentityCheck } from "./doctor/session-identity-check.ts";
 import { evidenceRangeCheck, logShardCheck, orphanEvidenceCheck } from "./doctor/log-checks.ts";
 import {
@@ -95,7 +98,16 @@ import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
 import { frozenVaultCheck } from "./doctor/frozen-check.ts";
+import { deviceStateCheck } from "./doctor/device-state-check.ts";
+import { adoptConflictsCheck } from "./doctor/adopt-conflicts-check.ts";
+import { migrationCheck } from "./doctor/migration-check.ts";
 import { storeCheck } from "./doctor/store-check.ts";
+import { runStoreSideDoctor } from "./doctor/store-side-pass.ts";
+import { configuredStore } from "../store/read/store-entities.ts";
+import { storeOnlyMode } from "../store/store-only.ts";
+import { vaultBindingStatus } from "../vault-adapter/vault-binding.ts";
+import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
+import { viewWriterCheck } from "./doctor/view-writer-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
@@ -150,6 +162,7 @@ export type {
   RunDoctorResult,
   VerificationDeltaSummary,
 } from "./doctor/report.ts";
+import { withoutSeenRecording } from "../store/seen-shards.ts";
 
 // ----- The registry ---------------------------------------------------------
 
@@ -259,8 +272,17 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   rerankHealthCheck,
   payloadRegistryCheck,
   permissionsDocumentCheck,
+  permissionsLegacyOnlyCheck,
   // The brain store section (task 1.11): silent unless the store is in use.
   storeCheck,
+  // The human view writer (task 2.7): silent unless the store is in use.
+  viewWriterCheck,
+  // The store migration (task 2.12): another device's entries in this
+  // machine's device-local state, and a migration this machine has not run.
+  deviceStateCheck,
+  migrationCheck,
+  // Machine state a switch kept aside (task 2.10).
+  adoptConflictsCheck,
   denyConsultedLanesCheck,
 ]);
 
@@ -298,7 +320,76 @@ type BrainRootProbe =
   | { readonly kind: "absent" }
   | { readonly kind: "unreadable"; readonly reason: string };
 
-export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctorResult {
+/**
+ * What a vault with no `Brain/` is on this machine:
+ *
+ *  - `store-only`: the brain is in a readable store and the store-only
+ *    predicate says this machine is store-only for a reason other than
+ *    the very absence being judged: it holds its own switch record, or
+ *    the vault is the one init or the migration bound to the store
+ *    (`../vault-adapter/vault-binding.ts`).
+ *  - `unbound-store`: there is a store, but nothing says this vault is
+ *    the intended one. That is the shape a mis-resolved root takes on a
+ *    legacy machine whose store phase 1 dual write created
+ *    (context-integrity-gates, Unit J), so the absence stays a warning.
+ *  - `none`: there is no store.
+ */
+function storeOnlyShape(
+  vault: string,
+  configPath: string | undefined,
+): "store-only" | "unbound-store" | "none" {
+  if (configuredStore(configPath) === null) return "none";
+  const mode = storeOnlyMode({ vault, ...(configPath !== undefined ? { configPath } : {}) });
+  if (mode.reason === "device-switched") return "store-only";
+  const binding = vaultBindingStatus(vault, configPath !== undefined ? { configPath } : {});
+  if (mode.storeOnly && binding.state === "match") return "store-only";
+  return "unbound-store";
+}
+
+/**
+ * The pass of a machine with no vault: the store-side checks when there is
+ * a store (`doctor/store-side-pass.ts`), else the absence.
+ */
+function runDoctorWithoutVault(opts: RunDoctorOptions): RunDoctorResult {
+  const store = configuredStore(opts.configPath);
+  if (store !== null) return runStoreSideDoctor(opts);
+  let root: string;
+  try {
+    root = resolveConfiguredStoreRoot(opts.configPath).root;
+  } catch (err) {
+    root = `(unresolved: ${err instanceof Error ? err.message : String(err)})`;
+  }
+  const message = `no vault is configured and there is no brain store at ${root}; run \`o2b init\``;
+  return Object.freeze({
+    warnings: Object.freeze([
+      {
+        severity: "warning",
+        code: BRAIN_ROOT_ABSENT_CODE,
+        path: root,
+        message,
+      } satisfies DoctorIssue,
+    ]),
+    errors: Object.freeze([]),
+    trust_verdict: "watch" as TrustVerdict,
+    instruction_file_warnings: Object.freeze([]),
+    uncertain: Object.freeze([
+      {
+        code: BRAIN_ROOT_ABSENT_CODE,
+        path: root,
+        message: "every Brain check was skipped: there is no vault and no store",
+      },
+    ]),
+  });
+}
+
+export function runDoctor(vault: string | null, opts: RunDoctorOptions = {}): RunDoctorResult {
+  // The doctor writes nothing: a shard gone since this machine read it is
+  // reported, and no shard is recorded as seen.
+  return withoutSeenRecording(() => runDoctorPass(vault, opts));
+}
+
+function runDoctorPass(vault: string | null, opts: RunDoctorOptions): RunDoctorResult {
+  if (vault === null) return runDoctorWithoutVault(opts);
   const dirs = brainDirs(vault);
   const root = brainRootProbe(dirs.brain);
   if (root.kind === "unreadable") {
@@ -320,6 +411,12 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
       uncertain: Object.freeze(uncertain),
     });
   }
+  // A vault with no `Brain/` on a machine whose brain is the store is the
+  // normal store-only shape, not a mis-resolved root: the brain is in the
+  // store, so only the store-side checks run (design D14).
+  const storeShape = root.kind === "absent" ? storeOnlyShape(vault, opts.configPath) : "none";
+  // The store is the whole brain there: its checks still run.
+  if (storeShape === "store-only") return runStoreSideDoctor(opts, vault);
   if (root.kind === "absent") {
     // A root with no Brain layer is NOT clean (context-integrity-gates,
     // Unit J). It is exactly the shape a mis-resolved vault takes, and
@@ -330,8 +427,12 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     // was skipped, so nothing about this root has actually been
     // verified.
     const message =
-      `no Brain layer at ${dirs.brain}; run \`o2b brain init\` if this is the ` +
-      "intended vault, otherwise the resolved vault root is wrong";
+      storeShape === "unbound-store"
+        ? `no Brain layer at ${dirs.brain}, and this vault is not the one bound to the brain ` +
+          `store; run \`o2b init --vault ${vault}\` if this is the intended vault, otherwise ` +
+          "the resolved vault root is wrong"
+        : `no Brain layer at ${dirs.brain}; run \`o2b brain init\` if this is the ` +
+          "intended vault, otherwise the resolved vault root is wrong";
     return Object.freeze({
       warnings: Object.freeze([
         {
@@ -394,6 +495,7 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
       health,
       ctx.now,
       ctx.readable,
+      ctx.configPath,
     );
   } catch {
     /* doctor never throws */
@@ -520,20 +622,28 @@ function resolveContext(
     idIndex: new Map<string, string[]>(),
     // Built once and fed to every lint that needs them, rather than
     // re-parsing the same files five times.
-    preferences: readAllPreferenceRecords(vault, {
-      site: CONTEXT_SITE,
-      consequence:
-        "no preference in it was loaded, so every preference-hygiene lint below reports on a " +
-        "subset of the store",
-      uncertain,
-    }),
-    logs: (logSnapshot = readLogSnapshot(vault, {
-      site: CONTEXT_SITE,
-      consequence:
-        "no log day in it was loaded, so the evidence and orphan lints below report on a subset " +
-        "of the store",
-      uncertain,
-    })).records,
+    preferences: readAllPreferenceRecords(
+      vault,
+      {
+        site: CONTEXT_SITE,
+        consequence:
+          "no preference in it was loaded, so every preference-hygiene lint below reports on a " +
+          "subset of the store",
+        uncertain,
+      },
+      opts.configPath,
+    ),
+    logs: (logSnapshot = readLogSnapshot(
+      vault,
+      {
+        site: CONTEXT_SITE,
+        consequence:
+          "no log day in it was loaded, so the evidence and orphan lints below report on a subset " +
+          "of the store",
+        uncertain,
+      },
+      opts.configPath,
+    )).records,
     unreadableLogDays: logSnapshot.unreadableDays,
   };
 }

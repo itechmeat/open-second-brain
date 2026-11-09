@@ -234,7 +234,7 @@ export interface RelationalArmOutcome {
  * receipts' refusal records - are held to the same line.
  */
 function isCallerReadable(
-  vault: string,
+  vault: string | null,
   path: string,
   reach: TransportReach,
   agentScope: string | null,
@@ -304,7 +304,7 @@ function fanoutStoreFor(store: Store, bridges: boolean): RelationalFanoutStore {
  */
 export function runRelationalArm(
   store: Store,
-  vault: string,
+  vault: string | null,
   query: string,
   opts: RelationalArmOptions = {},
 ): RelationalArmOutcome {
@@ -438,7 +438,7 @@ export function runRelationalArm(
  * only place edge-type vocabulary enters the search path - never a
  * natural-language word list.
  */
-function relationalEdgeVocabulary(vault: string): string[] {
+function relationalEdgeVocabulary(vault: string | null): string[] {
   const vocab = new Set<string>(DEFAULT_RELATION_TYPES.map((t) => normalizeRelation(t)));
   try {
     for (const t of loadSchemaPack(vault).link_types) vocab.add(normalizeRelation(t));
@@ -488,7 +488,7 @@ function resolveSeedDocumentIds(store: Store, seeds: ReadonlyArray<string>): num
  * unparseable window, an open side, or a window still open answers null.
  */
 function closedSupersessionTip(
-  vault: string,
+  vault: string | null,
   path: string,
   cache: FrontmatterCache,
   nowMs: number,
@@ -532,7 +532,7 @@ function closedSupersessionTip(
  * gate's shared frontmatter reader gives it.
  */
 function classifyArrivalEligibility(input: {
-  readonly vault: string;
+  readonly vault: string | null;
   /** The arrived-at node's page path. */
   readonly nodePath: string;
   /** The arrived edge's source page path, when the walk records it. */
@@ -604,7 +604,7 @@ function classifyArrivalEligibility(input: {
  * identical-to-absent convention).
  */
 function gatePath(
-  vault: string,
+  vault: string | null,
   steps: ReadonlyArray<RelationalPathStep>,
   titles: ReadonlyMap<number, { readonly path: string }>,
   reach: TransportReach,

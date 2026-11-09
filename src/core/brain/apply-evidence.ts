@@ -30,7 +30,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
@@ -47,7 +47,11 @@ import {
   type AppendLogEventResult,
   type BrainLogEntry,
 } from "./log.ts";
-import { dualWrite, isDualWriteEnabled } from "../store/dual-write.ts";
+import { isDualWriteEnabled } from "../store/dual-write.ts";
+import { routeWrite } from "../store/store-write.ts";
+import { withLocalLock } from "../store/local-lock.ts";
+import { storesStateDir } from "../store/store-paths.ts";
+import { processDirsEnv } from "../platform-dirs.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { isPrivatePageFile, preferenceEvidenceRecord } from "../store/dual-write-records.ts";
 import {
@@ -57,8 +61,9 @@ import {
   type OperationPrivacy,
   type PrivacyVerdict,
 } from "../store/operation-privacy.ts";
-import { parsePreference } from "./preference.ts";
-import { preferencePath, validateSlug } from "./paths.ts";
+import { loadPreference, parsePreference } from "./preference.ts";
+import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
+import { preferencePathOf, validateSlug } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { checkRolePermission } from "./trust/check-role-permission.ts";
 import { BRAIN_OPERATIONS, type BrainRole } from "./trust/role.ts";
@@ -177,12 +182,20 @@ export interface AppendApplyEvidenceOptions {
  * against? A file the caller may not read answers as a missing one.
  */
 export function isApplyEvidenceTargetPresent(
-  vault: string,
+  vault: string | null,
   prefFilePath: string,
   readable: ((rel: string) => boolean) | undefined,
 ): boolean {
-  if (!existsSync(prefFilePath)) return false;
-  return readable === undefined || readable(vaultRelative(prefFilePath, vault));
+  const present =
+    vault === null || preferencesStoreOnly(vault)
+      ? loadPreference(vault, basename(prefFilePath, ".md").slice("pref-".length)) !== null
+      : existsSync(prefFilePath);
+  if (!present) return false;
+  // With no vault the path is already vault-relative.
+  return (
+    readable === undefined ||
+    readable(vault === null ? prefFilePath : vaultRelative(prefFilePath, vault))
+  );
 }
 
 export interface AppendApplyEvidenceResult {
@@ -214,7 +227,7 @@ interface PreparedEvidence {
  * body the append writes.
  */
 function prepareEvidence(
-  vault: string,
+  vault: string | null,
   input: AppendApplyEvidenceInput,
   readable: ((rel: string) => boolean) | undefined,
 ): PreparedEvidence {
@@ -263,7 +276,7 @@ function prepareEvidence(
     throw new Error(`apply-evidence: invalid pref_id (empty slug): ${input.pref_id}`);
   }
   validateSlug(slug);
-  const prefFilePath = preferencePath(vault, slug);
+  const prefFilePath = preferencePathOf(vault, slug);
   if (!isApplyEvidenceTargetPresent(vault, prefFilePath, readable)) {
     throw new BrainPreferenceNotFoundError(`pref-${slug}`, prefFilePath);
   }
@@ -271,7 +284,14 @@ function prepareEvidence(
   // than silently appending an evidence row that points at garbage.
   // The parsed pref also supplies the principle used to title the
   // wikilink we emit below.
-  const target = parsePreference(prefFilePath);
+  // Once switched (or with no vault) the fold is the only source: a
+  // preference retired since the presence check is not found, and no
+  // page path is read.
+  const loaded = loadPreference(vault, slug);
+  if (loaded === null && (vault === null || preferencesStoreOnly(vault))) {
+    throw new BrainPreferenceNotFoundError(`pref-${slug}`, prefFilePath);
+  }
+  const target = loaded ?? parsePreference(prefFilePath);
   const wikilink = renderPrefLink({ id: target.id, principle: target.principle });
 
   // Render the canonical payload. Ordering is deliberate: the wikilink
@@ -304,13 +324,17 @@ function prepareEvidence(
  * `<private>` region, or when `inherit` (an enclosing operation) is.
  */
 function evidencePrivacy(
-  vault: string,
+  vault: string | null,
   input: AppendApplyEvidenceInput,
   prepared: PreparedEvidence,
   inherit?: PrivacyVerdict,
 ): OperationPrivacy {
   return operationPrivacy(vault, {
-    target: () => isPrivatePageFile(prepared.prefFilePath),
+    // The preference's page, or its records once switched (task 2.10).
+    target: () =>
+      preferencesStoreOnly(vault)
+        ? (storePreferenceEntry(prepared.target.id.slice("pref-".length))?.private ?? true)
+        : isPrivatePageFile(prepared.prefFilePath),
     content: [logEventPrivacyContent(prepared.body), callerInput(input, EVIDENCE_INPUT_OPAQUE)],
     inherit: [inherit],
   });
@@ -326,7 +350,7 @@ const EVIDENCE_INPUT_OPAQUE: ReadonlySet<string> = opaqueFields();
  * private.
  */
 export function applyEvidencePrivacy(
-  vault: string,
+  vault: string | null,
   input: AppendApplyEvidenceInput,
   readable?: (rel: string) => boolean,
 ): OperationPrivacy {
@@ -349,7 +373,7 @@ export function applyEvidencePrivacy(
  * same UTC day append.
  */
 export function appendApplyEvidence(
-  vault: string,
+  vault: string | null,
   input: AppendApplyEvidenceInput,
   opts: AppendApplyEvidenceOptions = {},
 ): AppendApplyEvidenceResult {
@@ -360,96 +384,138 @@ export function appendApplyEvidence(
     }
   }
   const prepared = prepareEvidence(vault, input, opts.readable);
-  const { target, body } = prepared;
   // One privacy verdict for every store record this call writes: the log
   // event, the idempotency receipt and the evidence record. It is judged
   // once, before anything is appended, so it follows the preference as
   // read here even if the file is rewritten or retired meanwhile. Judged
   // only when the dual write is on (with it off nothing changes).
   const privacy = evidencePrivacy(vault, input, prepared, opts.storePrivate);
-  if (isDualWriteEnabled()) privacy();
+  if (isDualWriteEnabled() || preferencesStoreOnly(vault)) privacy();
   // Every store record written from here on, by this call or by any
   // writer it calls, carries this verdict (`store/operation-scope.ts`).
-  return withOperationPrivacy(privacy, () => {
-    const now = opts.now ?? new Date();
-    const timestamp = isoSecond(now);
+  const idKey = input.idempotency_key?.trim();
+  return withOperationPrivacy(privacy, () =>
+    serialisedByKey(idKey, () => appendOnce(vault, input, prepared, privacy, idKey, opts.now)),
+  );
+}
 
-    // Idempotency consult (C1): a repeat with the same key + same payload
-    // dedupes (no second row); the same key + a different payload throws
-    // before appending. The hash covers the rendered event body — exactly
-    // what would land in the log.
-    const idKey = input.idempotency_key?.trim();
-    let idContentHash: string | undefined;
-    if (idKey) {
-      idContentHash = computePayloadHash(body);
-      const existing = lookupKey(vault, idKey);
-      if (existing) {
-        if (existing.contentHash === idContentHash) {
-          const ref = (existing.ref ?? {}) as { logged_at?: string; log_path?: string };
-          return {
-            logged_at: ref.logged_at ?? timestamp,
-            log_path: ref.log_path ? join(vault, ref.log_path) : "",
-            deduped: true,
-          };
-        }
-        throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
-      }
-    }
+/**
+ * Run a keyed apply under one device-local lock, so two processes on
+ * this machine carrying the same idempotency key cannot both miss the
+ * consult and both append: the second sees the first's key and dedupes
+ * before it writes the log event or the evidence record (the fold counts
+ * evidence records by occurrence). A call with no key runs as is. Two
+ * devices racing on one key before their shards meet are the ledger's
+ * documented boundary (`idempotency-ledger.ts`).
+ */
+function serialisedByKey<T>(idKey: string | undefined, fn: () => T): T {
+  if (!idKey) return fn();
+  return withLocalLock(join(storesStateDir(processDirsEnv()), APPLY_EVIDENCE_LOCK), fn);
+}
 
-    const entry: BrainLogEntry = {
-      timestamp,
-      eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
-      body,
-    };
-    const result: AppendLogEventResult = appendLogEvent(vault, entry, { storePrivate: privacy });
+/** Device-local lock file of a keyed apply's consult-append-remember. */
+const APPLY_EVIDENCE_LOCK = "apply-evidence-idempotency";
 
-    // Record the key AFTER the row lands so a future retry dedupes. Under a
-    // concurrent same-key race the unlocked lookupKey above can miss a rival
-    // write; rememberKey re-checks under its shard lock and returns the verdict,
-    // which we MUST act on (the ledger never throws — the writer decides).
-    if (idKey && idContentHash !== undefined) {
-      const remembered = rememberKey(vault, {
-        key: idKey,
-        contentHash: idContentHash,
-        createdAt: timestamp,
-        ref: { logged_at: timestamp, log_path: relative(vault, result.logPath) },
-        private: privacy,
-      });
-      if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
-        throw new IdempotencyPayloadMismatchError(
-          idKey,
-          remembered.record.contentHash,
-          idContentHash,
-        );
-      }
-      if (remembered.status === REMEMBER_KEY_STATUS.duplicate_match) {
-        // A rival process won the key with the same payload between our unlocked
-        // lookup and this locked record; report the winner's row as the deduped
-        // result instead of a second normal write.
-        const ref = (remembered.record.ref ?? {}) as { logged_at?: string; log_path?: string };
+function appendOnce(
+  vault: string | null,
+  input: AppendApplyEvidenceInput,
+  prepared: PreparedEvidence,
+  privacy: OperationPrivacy,
+  idKey: string | undefined,
+  at: Date | undefined,
+): AppendApplyEvidenceResult {
+  const { target, body } = prepared;
+  const now = at ?? new Date();
+  const timestamp = isoSecond(now);
+
+  // Idempotency consult (C1): a repeat with the same key + same payload
+  // dedupes (no second row); the same key + a different payload throws
+  // before appending. The hash covers the rendered event body — exactly
+  // what would land in the log.
+  let idContentHash: string | undefined;
+  if (idKey) {
+    idContentHash = computePayloadHash(body);
+    const existing = lookupKey(vault, idKey);
+    if (existing) {
+      if (existing.contentHash === idContentHash) {
+        const ref = (existing.ref ?? {}) as { logged_at?: string; log_path?: string };
         return {
           logged_at: ref.logged_at ?? timestamp,
-          log_path: ref.log_path ? join(vault, ref.log_path) : result.logPath,
+          log_path: ref.log_path ? vaultPath(vault, ref.log_path) : "",
           deduped: true,
         };
       }
+      throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
     }
+  }
 
-    // Brain store dual write (task 1.11): the log event above is dual-written
-    // by the log appender; the evidence record feeds the preference fold's
-    // counters. Off by default, never fails this append.
-    dualWrite(
-      () =>
-        preferenceEvidenceRecord({
-          id: target.id,
-          result: input.result,
-          artifact: body["artifact"]!,
-          agent: body["agent"]!,
-          private: privacy(),
-        }),
-      { vault },
-    );
+  const entry: BrainLogEntry = {
+    timestamp,
+    eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+    body,
+  };
+  const result: AppendLogEventResult = appendLogEvent(vault, entry, { storePrivate: privacy });
 
-    return { logged_at: timestamp, log_path: result.logPath };
+  // Brain store dual write (task 1.11): the log event above is dual-written
+  // by the log appender; the evidence record feeds the preference fold's
+  // counters. Off by default, never fails this append.
+  // On a store-only machine (task 2.10) the record is written to the
+  // store only, and a store failure fails the call. It is written before
+  // the idempotency key is remembered: a failure then leaves no key, so
+  // a retry runs the whole path again instead of deduping onto an event
+  // whose evidence never reached the fold.
+  routeWrite({
+    legacy: () => undefined,
+    store: () =>
+      preferenceEvidenceRecord({
+        id: target.id,
+        result: input.result,
+        artifact: body["artifact"]!,
+        agent: body["agent"]!,
+        private: privacy(),
+      }),
+    context: { vault },
   });
+
+  // Record the key AFTER the row lands so a future retry dedupes. Under a
+  // concurrent same-key race the unlocked lookupKey above can miss a rival
+  // write; rememberKey re-checks under its shard lock and returns the verdict,
+  // which we MUST act on (the ledger never throws — the writer decides).
+  if (idKey && idContentHash !== undefined) {
+    const remembered = rememberKey(vault, {
+      key: idKey,
+      contentHash: idContentHash,
+      createdAt: timestamp,
+      ref: {
+        logged_at: timestamp,
+        log_path: vault === null ? result.logPath : relative(vault, result.logPath),
+      },
+      private: privacy,
+    });
+    if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
+      throw new IdempotencyPayloadMismatchError(
+        idKey,
+        remembered.record.contentHash,
+        idContentHash,
+      );
+    }
+    if (remembered.status === REMEMBER_KEY_STATUS.duplicate_match) {
+      // A rival process won the key with the same payload between our unlocked
+      // lookup and this locked record; report the winner's row as the deduped
+      // result instead of a second normal write.
+      const ref = (remembered.record.ref ?? {}) as { logged_at?: string; log_path?: string };
+      return {
+        logged_at: ref.logged_at ?? timestamp,
+        log_path: ref.log_path ? vaultPath(vault, ref.log_path) : result.logPath,
+        deduped: true,
+      };
+    }
+  }
+
+  return { logged_at: timestamp, log_path: result.logPath };
+}
+
+/** `rel` under `vault`; with no vault, the vault-relative name itself. */
+function vaultPath(vault: string | null, rel: string): string {
+  return vault === null ? rel : join(vault, rel);
 }

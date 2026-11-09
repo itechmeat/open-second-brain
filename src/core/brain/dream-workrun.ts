@@ -14,6 +14,11 @@
  *
  * Dry-run never opens a workrun: dryRun must not mutate disk.
  *
+ * A store-only machine (design D14 items 1 and 11) keeps its workruns in
+ * device-local state, never under the vault: they are forensic evidence
+ * of this machine's own process, which no other machine needs to agree
+ * on, so they are not a store ledger ({@link workrunDir}).
+ *
  * Writes use `appendFileSync` on the same file. The OS guarantees
  * `O_APPEND` is atomic for small writes (under PIPE_BUF, 4096 bytes
  * on Linux); each JSONL line is ~120 bytes so a partial write would
@@ -22,6 +27,7 @@
  * dangling on the next scan).
  */
 
+import { BRAIN_LOG_REL } from "./path-constants.ts";
 import {
   appendFileSync,
   existsSync,
@@ -30,10 +36,35 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 
-import { dreamRunsDir, dreamWorkrunPath } from "./paths.ts";
+import { isMachineStateRelocated, machineStatePath } from "../state/machine-state.ts";
+import { dreamRunsDir, dreamWorkrunPath, validateRunId } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+/**
+ * Where this machine keeps its workruns: `Brain/log/dream-runs/` on an
+ * unswitched machine, the same vault-relative path in its device-local
+ * machine state (`machineStatePath`) on a store-only one. The migration
+ * drops the legacy workruns, so this is their one location.
+ */
+export function workrunDir(vault: string | null): string {
+  return machineStatePath(vault, dreamRunsRel(vault));
+}
+
+/** The vault-relative workrun folder (`Brain/log/dream-runs`), with or without a vault. */
+function dreamRunsRel(vault: string | null): string {
+  return vault === null ? DREAM_RUNS_REL : relative(vault, dreamRunsDir(vault));
+}
+
+/** The workrun folder under `Brain/`, as machine state names it with no vault. */
+const DREAM_RUNS_REL = posix.join(BRAIN_LOG_REL, "dream-runs");
+
+/** The workrun file of `runId` in {@link workrunDir}; the run id is validated. */
+export function workrunPath(vault: string | null, runId: string): string {
+  if (vault !== null && !isMachineStateRelocated(vault)) return dreamWorkrunPath(vault, runId);
+  return machineStatePath(vault, dreamRunsRel(vault), `${validateRunId(runId)}.jsonl`);
+}
 
 /**
  * Canonical phase identifiers. Nine forward-progress phases plus the
@@ -80,10 +111,10 @@ export interface WorkrunHandle {
  * Open a workrun for `runId`, immediately writing the `started`
  * phase. Creates the workrun directory on demand.
  */
-export function openWorkrun(vault: string, runId: string): WorkrunHandle {
+export function openWorkrun(vault: string | null, runId: string): WorkrunHandle {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  const path = dreamWorkrunPath(vault, runId);
+  if (vault !== null && !isMachineStateRelocated(vault)) assertVaultIdentityForWrite(vault);
+  const path = workrunPath(vault, runId);
   mkdirSync(dirname(path), { recursive: true });
   let closed = false;
   const append = (phase: WorkrunPhase, extra: Record<string, unknown> = {}): void => {
@@ -122,8 +153,8 @@ export function openWorkrun(vault: string, runId: string): WorkrunHandle {
  * corrupt / unparseable file is treated as dangling so the operator
  * sees it.
  */
-export function scanDanglingWorkruns(vault: string): string[] {
-  const dir = dreamRunsDir(vault);
+export function scanDanglingWorkruns(vault: string | null): string[] {
+  const dir = workrunDir(vault);
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   for (const name of readdirSync(dir)) {

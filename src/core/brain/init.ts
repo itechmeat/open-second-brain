@@ -25,6 +25,12 @@
  *   - Every write is routed through {@link atomicWriteFileSync} so an
  *     interrupted run leaves either the prior version or the new one,
  *     never a torn hybrid.
+ *   - With no vault (design D14 item 1, task 2.10) the brain is the store:
+ *     bootstrap creates the store (`./init-store.ts`) and writes nothing
+ *     else. A machine that holds its own switch record writes no legacy
+ *     tree either. `.base` files come from the vault adapter
+ *     (`../vault-adapter/`), which stamps only the ones this machine may
+ *     use.
  */
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -39,7 +45,6 @@ import {
   type GitignoreGuardStatus,
 } from "./gitignore-guard.ts";
 import {
-  BRAIN_BASES_REL,
   BRAIN_ROOT_REL,
   brainConfigPath,
   brainDirs,
@@ -49,7 +54,11 @@ import {
 import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
 import { formatPrimaryAgentYamlValue } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
-import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
+import { renderBrainManual } from "./templates.ts";
+import { ensureBrainStore, type EnsureBrainStoreResult } from "./init-store.ts";
+import { recordFreshInstallSwitch, type FreshSwitchOutcome } from "../store/fresh-switch.ts";
+import { storeOnlyMode } from "../store/store-only.ts";
+import { stampBaseTemplates } from "../vault-adapter/index.ts";
 import { ORIGIN_CHANNEL, ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
 import { formatFrontmatter, parseFrontmatter } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -396,6 +405,23 @@ export interface BootstrapBrainResult {
     readonly status: BrainInitGuardStatus;
     readonly detail?: string;
   };
+  /**
+   * Whether this run wrote the legacy `Brain/` tree: `false` with no
+   * vault, and on a machine that holds its own switch record.
+   */
+  readonly legacyTree: boolean;
+  /** The store step, run when there is no vault; absent otherwise. */
+  readonly store?: EnsureBrainStoreResult;
+  /**
+   * The fresh-install switch step, run with the store step: what
+   * `recordFreshInstallSwitch` did, or `error` with the failure's message.
+   * It never fails the init; a caller tells the operator when the switch
+   * was not recorded (`error`, `no-device`, `no-store`).
+   */
+  readonly freshSwitch?: {
+    readonly outcome: FreshSwitchOutcome | "error";
+    readonly detail?: string;
+  };
 }
 
 /**
@@ -406,7 +432,7 @@ export interface BootstrapBrainResult {
  *   as exit code 1.
  */
 export function bootstrapBrain(
-  vault: string,
+  vault: string | null,
   opts: BootstrapBrainOptions = {},
 ): BootstrapBrainResult {
   const force = opts.force ?? false;
@@ -424,9 +450,57 @@ export function bootstrapBrain(
     );
   }
 
+  if (vault === null) {
+    if (opts.starter === true) {
+      throw new Error("--starter drops example pages into a vault, and no vault is configured");
+    }
+    refusePrimaryAgentWithoutTree(opts.primaryAgent);
+    const store = ensureBrainStore({ configPath });
+    // The switch record that keeps a fresh install store-only, as `o2b
+    // init` writes it. It never fails the init (the store exists, and the
+    // next init records the switch), but its outcome is reported, so a
+    // switch that was not recorded is never a silent success.
+    let freshSwitch: NonNullable<BootstrapBrainResult["freshSwitch"]>;
+    try {
+      freshSwitch = { outcome: recordFreshInstallSwitch({ vault: null, configPath }) };
+    } catch (err) {
+      freshSwitch = { outcome: "error", detail: err instanceof Error ? err.message : String(err) };
+    }
+    return {
+      freshSwitch,
+      created: [],
+      overwritten: [],
+      skipped: [],
+      guard: { status: "skipped", detail: "no vault is configured" },
+      legacyTree: false,
+      store,
+    };
+  }
+
   const created: string[] = [];
   const overwritten: string[] = [];
   const skipped: string[] = [];
+
+  // 0. A machine that holds its own switch record writes the store only:
+  //    no legacy tree, and only the `.base` files the adapter allows. A
+  //    vault without `Brain/` on an unswitched machine still gets the tree
+  //    here: `brain init` is what creates it.
+  const switched = storeOnlyMode({ vault, configPath }).reason === "device-switched";
+  if (switched) {
+    if (opts.starter === true) {
+      throw new Error(
+        "--starter drops example pages into the legacy Brain/ tree, which this machine " +
+          "no longer writes (it has switched to the store)",
+      );
+    }
+    refusePrimaryAgentWithoutTree(opts.primaryAgent);
+    const guard = seedGitignoreGuard(vault, created, overwritten, skipped);
+    const bases = stampBaseTemplates(vault, { force, storeOnly: true });
+    created.push(...bases.created);
+    overwritten.push(...bases.overwritten);
+    skipped.push(...bases.skipped);
+    return { created, overwritten, skipped, guard, legacyTree: false };
+  }
 
   // 1. Directories. mkdirSync({ recursive: true }) is idempotent and
   //    does not throw on existing paths, so we do not track create
@@ -508,7 +582,7 @@ export function bootstrapBrain(
   //    like the operating manual (always, not opt-in): they are inert
   //    structural scaffolding, not example data. Each file is written
   //    only when absent unless `force` is set.
-  const bases = stampBaseTemplates(vault, force);
+  const bases = stampBaseTemplates(vault, { force, storeOnly: false });
   created.push(...bases.created);
   overwritten.push(...bases.overwritten);
   skipped.push(...bases.skipped);
@@ -521,7 +595,7 @@ export function bootstrapBrain(
     created.push(...starterResult.copied);
   }
 
-  return { created, overwritten, skipped, guard };
+  return { created, overwritten, skipped, guard, legacyTree: true };
 }
 
 /**
@@ -563,6 +637,19 @@ function seedGitignoreGuard(
 }
 
 /**
+ * `--primary-agent` is written into `_brain.yaml`, which a store-only
+ * machine never writes: refuse it, naming the store-side setting, rather
+ * than report a success that persisted nothing.
+ */
+function refusePrimaryAgentWithoutTree(primaryAgent: string | undefined): void {
+  if (primaryAgent === undefined) return;
+  throw new Error(
+    "--primary-agent writes _brain.yaml, which this machine does not keep (its brain lives in " +
+      "the store); set it with `o2b brain settings set primary_agent <name>`",
+  );
+}
+
+/**
  * Replace the `primary_agent: null` line in the default `_brain.yaml`
  * body with the operator-supplied value, when provided. Trimmed,
  * empty-string-rejecting (the validator would catch that at load time,
@@ -577,44 +664,4 @@ function applyPrimaryAgentToYaml(yamlBody: string, primaryAgent: string | undefi
   if (primaryAgent === undefined) return yamlBody;
   const line = `primary_agent: ${formatPrimaryAgentYamlValue(primaryAgent)}`;
   return yamlBody.replace(/^primary_agent:.*$/m, line);
-}
-
-interface StampResult {
-  readonly created: string[];
-  readonly overwritten: string[];
-  readonly skipped: string[];
-}
-
-/**
- * Copy the bundled Obsidian Bases view definitions into
- * `Brain/bases/`. Each file is written only when absent; `force`
- * overwrites. Returns the per-file create/overwrite/skip breakdown in
- * the same vault-relative shape `bootstrapBrain` reports.
- *
- * The source assets ship under `src/core/brain/templates/bases/` so
- * they travel with the published `src/` tree (the `package.json`
- * `files` allowlist), unlike the opt-in `templates/brain-starter/`
- * bundle.
- */
-function stampBaseTemplates(vault: string, force: boolean): StampResult {
-  const created: string[] = [];
-  const overwritten: string[] = [];
-  const skipped: string[] = [];
-  for (const name of BASE_TEMPLATE_FILES) {
-    const body = readFileSync(join(BASES_TEMPLATE_DIR, name), "utf8");
-    const dest = join(vault, BRAIN_BASES_REL, name);
-    const rel = vaultRelative(dest, vault);
-    if (existsSync(dest)) {
-      if (force) {
-        atomicWriteFileSync(dest, body);
-        overwritten.push(rel);
-      } else {
-        skipped.push(rel);
-      }
-    } else {
-      atomicWriteFileSync(dest, body);
-      created.push(rel);
-    }
-  }
-  return { created, overwritten, skipped };
 }

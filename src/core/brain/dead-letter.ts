@@ -79,6 +79,7 @@ import {
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /**
  * Only schema version currently WRITTEN. Parsing is strict per version
@@ -230,7 +231,7 @@ export class DeadLetterError extends Error {
 
 /** Directory holding this vault's dead letters. */
 export function deadLetterDir(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, DEAD_LETTER_DIR);
+  return machineStatePath(vault, DERIVED_STORE_DIR, DEAD_LETTER_DIR);
 }
 
 /** Absolute path of one record. */

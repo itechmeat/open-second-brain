@@ -23,6 +23,10 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { dream } from "../../src/core/brain/dream.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { setPrimaryAgent } from "../../src/core/brain/set-primary.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

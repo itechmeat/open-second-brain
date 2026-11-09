@@ -13,7 +13,16 @@
  * the vault.
  */
 
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
@@ -34,6 +43,9 @@ import {
   wrapKeyfile as wrapKeyfileAtPath,
 } from "./envelope.ts";
 import { restrictToOwner } from "./owner-acl.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
+import { copyOwnerOnly, ensureOwnerOnlyRoot } from "../../store-migration/owner-only-copy.ts";
+import { DERIVED_STORE_DIR } from "../path-constants.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
 
@@ -80,7 +92,44 @@ export interface SecretAuditContext {
 }
 
 export function secretsDir(vault: string): string {
-  return join(vault, ".open-second-brain", "secrets");
+  const dir = machineStatePath(vault, DERIVED_STORE_DIR, "secrets");
+  adoptVaultSecrets(join(vault, DERIVED_STORE_DIR, "secrets"), dir);
+  return dir;
+}
+
+/**
+ * Bring the secrets a vault kept before its state moved (a vault with no
+ * `Brain/` tree that set secrets or minted MCP tokens before the move)
+ * into the relocated folder, once: only while that folder does not exist
+ * yet, owner-only, and never deleting the vault copy. Without it the next
+ * write would mint a fresh keyfile beside the old one, leaving every
+ * encrypted secret unreadable and every minted token gone. A switched
+ * machine's migration backs these files up and restores them itself.
+ *
+ * The folder's existence is the "done" mark, so it appears whole or not
+ * at all: the files are copied into a staging sibling owned by this
+ * process and renamed into place. A rival that renamed first wins (its
+ * copy is the same files) and this staging copy is dropped; a copy that
+ * fails throws, leaving no folder, so no key is minted over the vault's
+ * and the next read adopts again.
+ */
+function adoptVaultSecrets(legacy: string, dir: string): void {
+  if (legacy === dir || existsSync(dir) || !existsSync(legacy)) return;
+  const names = readdirSync(legacy).filter((name) => statSync(join(legacy, name)).isFile());
+  if (names.length === 0) return;
+  const staging = `${dir}.adopt-${process.pid}`;
+  rmSync(staging, { recursive: true, force: true });
+  try {
+    ensureOwnerOnlyRoot(staging);
+    for (const name of names) copyOwnerOnly(join(legacy, name), join(staging, name), staging);
+    try {
+      renameSync(staging, dir);
+    } catch (err) {
+      if (!existsSync(dir)) throw err;
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 function storePath(vault: string): string {

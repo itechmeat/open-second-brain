@@ -176,7 +176,7 @@ describe("preference fold", () => {
     expect(state.fields).toEqual({ principle: "p" });
   });
 
-  test("a removal is a tombstone that keeps the records and the last values", () => {
+  test("a removal is a tombstone that keeps the records and drops the content from the fold", () => {
     const set = prefSet("dev-a", T, "agent", { principle: "p" });
     const remove = rec({
       physical: T + 1,
@@ -187,7 +187,8 @@ describe("preference fold", () => {
     expect(state).toMatchObject({
       exists: false,
       removed: true,
-      fields: { principle: "p" },
+      // A forgotten preference shows its content nowhere (FORMAT.md, Removal).
+      fields: {},
       existenceWinner: remove.id,
     });
     expect(state.history.map((r) => r.id)).toEqual([set.id, remove.id]);
@@ -196,6 +197,49 @@ describe("preference fold", () => {
       exists: true,
       removed: false,
     });
+  });
+
+  test("a preference re-created after its removal carries none of the forgotten fields", () => {
+    const set = prefSet("dev-a", T, "agent", {
+      principle: "p",
+      scope: "secret scope",
+      text: "old prose",
+    });
+    const remove = rec({
+      physical: T + 1,
+      kind: "preference-remove",
+      body: authored("agent", { preference: "p1" }),
+    });
+    const again = prefSet("dev-a", T + 2, "agent", { principle: "q" });
+    const state = foldPreferences([set, remove, again]).preferences.get("p1")!;
+    expect(state.exists).toBe(true);
+    expect(state.fields).toEqual({ principle: "q" });
+    // A removal that lost to a human set keeps every field of the human's.
+    const human = prefSet("dev-a", T, "human", { principle: "p", scope: "s" });
+    expect(foldPreferences([human, remove]).preferences.get("p1")!.fields).toEqual({
+      principle: "p",
+      scope: "s",
+    });
+  });
+
+  test("a later tombstone that lost the existence register does not bring back forgotten fields", () => {
+    // agent set A -> human remove R1 -> human set S -> agent remove R2: S
+    // wins existence (human outranks agent), so the cut is R1, not R2.
+    const first = prefSet("dev-a", T, "agent", { principle: "p", scope: "work" });
+    const forget = rec({
+      physical: T + 1,
+      kind: "preference-remove",
+      body: authored("human", { preference: "p1" }),
+    });
+    const again = prefSet("dev-a", T + 2, "human", { principle: "q" });
+    const losing = rec({
+      physical: T + 3,
+      kind: "preference-remove",
+      body: authored("agent", { preference: "p1" }),
+    });
+    const state = foldPreferences([first, forget, again, losing]).preferences.get("p1")!;
+    expect(state.exists).toBe(true);
+    expect(state.fields).toEqual({ principle: "q" });
   });
 
   test("an agent removal does not remove a preference a human set", () => {
@@ -381,7 +425,7 @@ describe("settings fold", () => {
       rec({
         physical: T + 2,
         kind: "setting-set",
-        body: authored("agent", { key: "view.writer", value: "Bad Device" }),
+        body: authored("agent", { key: "topics.new_min_records", value: 0 }),
       }),
       rec({
         physical: T + 3,
@@ -391,11 +435,11 @@ describe("settings fold", () => {
     ];
     const fold = foldSettings(records);
     expect(settingValue(fold, "view.language")).toBe("ru");
-    expect(settingValue(fold, "view.writer")).toBeNull();
+    expect(settingValue(fold, "topics.new_min_records")).toBe(5);
     expect(settingValue(fold, "future.knob")).toEqual({ a: 1 });
     expect(fold.rejected.map((r) => r.reason)).toEqual([
       "view.language must be a language tag such as en or pt-BR",
-      "view.writer must be a device id",
+      "topics.new_min_records must be a positive integer",
     ]);
   });
 });

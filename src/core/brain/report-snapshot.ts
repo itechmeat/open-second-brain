@@ -22,12 +22,15 @@
  * writes nothing and renders byte-identically.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { discoverConfig } from "../config.ts";
-import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  listLaneFiles,
+  readLaneText,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 export const REPORT_SNAPSHOT_SCHEMA_VERSION = "o2b.report-snapshot.v1";
 
@@ -162,11 +165,11 @@ export function writeReportSnapshot(
   payload: unknown,
 ): string {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const dir = reportsDir(vault, surface);
-  mkdirSync(dir, { recursive: true });
   const path = join(dir, `${date}.json`);
-  atomicWriteFileSync(
+  writeLaneText(
+    vault,
     path,
     JSON.stringify(
       { schema: REPORT_SNAPSHOT_SCHEMA_VERSION, surface, date, payload: stripVolatile(payload) },
@@ -183,11 +186,12 @@ export function loadLatestReportSnapshot(
   surface: string,
   beforeDate: string,
 ): LoadedReportSnapshot | null {
+  // `listLaneFiles` answers [] for a missing folder in both modes: no
+  // separate existence probe (a second full pass over the store).
   const dir = reportsDir(vault, surface);
-  if (!existsSync(dir)) return null;
   let names: string[];
   try {
-    names = readdirSync(dir);
+    names = listLaneFiles(vault, dir, "");
   } catch {
     return null;
   }
@@ -198,7 +202,7 @@ export function loadLatestReportSnapshot(
     .toSorted();
   for (let i = dates.length - 1; i >= 0; i--) {
     try {
-      const parsed: unknown = JSON.parse(readFileSync(join(dir, `${dates[i]}.json`), "utf8"));
+      const parsed: unknown = JSON.parse(readLaneText(vault, join(dir, `${dates[i]}.json`)) ?? "");
       if (parsed === null || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
       if (record["schema"] !== REPORT_SNAPSHOT_SCHEMA_VERSION) continue;

@@ -29,13 +29,13 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /** Only survey-store schema this build understands. */
 export const SESSION_MINING_SURVEYS_SCHEMA_VERSION = 1 as const;
@@ -70,7 +70,7 @@ export function closedSurveyFailure(err: unknown): string {
 
 /** Absolute path of the pending-survey store for a vault. */
 export function sessionMiningSurveysPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, SESSION_MINING_SURVEYS_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, SESSION_MINING_SURVEYS_FILE);
 }
 
 interface SurveyRow {

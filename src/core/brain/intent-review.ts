@@ -1,11 +1,9 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
+import { vaultRelativeOf } from "./no-vault.ts";
 import { isExpired } from "./expiration.ts";
-import { brainDirs, vaultRelative } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
-import { parseRetired } from "./preference.ts";
-import { parseSignal } from "./signal.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { parseRetiredMeta } from "./preference.ts";
+import { parseSignalPage } from "./signal.ts";
 import { BRAIN_SIGNAL_SIGN, type BrainSignal, type BrainSignalSign } from "./types.ts";
 
 export type BrainIntentDecision =
@@ -53,7 +51,7 @@ interface RejectedRetiredSuppressor {
 }
 
 export function buildIntentReview(
-  vault: string,
+  vault: string | null,
   options: BuildIntentReviewOptions = {},
 ): BrainIntentReviewReport {
   const now = options.now ?? new Date();
@@ -109,17 +107,16 @@ export function buildIntentReview(
   });
 }
 
-function collectActiveSignals(vault: string): SignalRecord[] {
-  const inbox = brainDirs(vault).inbox;
-  if (!existsSync(inbox)) return [];
+function collectActiveSignals(vault: string | null): SignalRecord[] {
   const records: SignalRecord[] = [];
-  for (const name of readdirSync(inbox).toSorted()) {
-    if (!name.endsWith(".md")) continue;
-    const path = join(inbox, name);
+  for (const page of memoryFolderPages(vault, "inbox", { sorted: true })) {
+    if (!page.name.endsWith(".md")) continue;
+    const path = page.path;
     try {
+      const [meta, body] = page.read();
       records.push({
-        path: vaultRelative(path, vault),
-        signal: parseSignal(path),
+        path: vaultRelativeOf(path, vault),
+        signal: parseSignalPage(meta, body, path),
       });
     } catch {
       continue;
@@ -129,18 +126,16 @@ function collectActiveSignals(vault: string): SignalRecord[] {
 }
 
 function collectRejectedRetiredSuppressors(
-  vault: string,
+  vault: string | null,
   admit: ((rel: string) => boolean) | undefined,
 ): Map<string, RejectedRetiredSuppressor[]> {
-  const retiredDir = brainDirs(vault).retired;
   const byTopic = new Map<string, RejectedRetiredSuppressor[]>();
-  if (!existsSync(retiredDir)) return byTopic;
-  for (const name of readdirSync(retiredDir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
-    const path = join(retiredDir, name);
-    if (admit !== undefined && !admit(vaultRelative(path, vault))) continue;
+  for (const page of memoryFolderPages(vault, "retired", { sorted: true })) {
+    if (!page.name.endsWith(".md")) continue;
+    const path = page.path;
+    if (admit !== undefined && !admit(vaultRelativeOf(path, vault))) continue;
     try {
-      const retired = parseRetired(path);
+      const retired = parseRetiredMeta(page.read()[0], path);
       if (!retired.user_rejected_reason?.trim()) continue;
       const suppressor: RejectedRetiredSuppressor = {
         topic: retired.topic,

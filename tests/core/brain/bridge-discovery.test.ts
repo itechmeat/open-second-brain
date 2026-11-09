@@ -33,6 +33,8 @@ let config: ResolvedSearchConfig;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-bridge-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   config = makeConfig({
     vault,
     dbPath: join(vault, "index.sqlite"),

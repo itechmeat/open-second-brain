@@ -16,6 +16,8 @@ let vault: string;
 beforeEach(() => {
   vault = join(tmpdir(), `o2b-recurrence-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

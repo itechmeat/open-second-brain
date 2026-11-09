@@ -13,9 +13,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
 import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
+import { applySchemaMutationsToStore } from "./schema-mutate-store.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
@@ -133,6 +135,11 @@ export interface ApplySchemaMutationsOptions {
    * label is an audit field, not an identity a policy can answer on.
    */
   readonly subject?: WriteSubject;
+  /**
+   * Authority of the store records on a store-only machine: `human` from
+   * the CLI, `agent` from MCP. Absent: decided by the process's origin.
+   */
+  readonly authority?: "human" | "agent";
 }
 
 export interface ApplySchemaMutationsResult {
@@ -215,7 +222,10 @@ export async function applySchemaMutations(
   // Vault-identity write guard (context-integrity-gates, Unit J), ahead
   // of the `_brain.yaml` rewrite - the trailing audit append is far too
   // late to stop a schema landing in the wrong store.
-  assertVaultIdentityForWrite(vault);
+  const storeOnly = isStoreOnly({ vault });
+  // A store-only machine checks the store's identity on the write itself;
+  // the vault identity guard is the legacy tree's.
+  if (!storeOnly) assertVaultIdentityForWrite(vault);
   // Deny-consulted evidence (write-side trust, PR #247 review M3 residual,
   // schema sibling): a schema batch rewrites the operator's vocabulary pack
   // - the same mutation-lane shape as update, append and delete_by_source -
@@ -231,8 +241,18 @@ export async function applySchemaMutations(
     target: BRAIN_CONFIG_TARGET,
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   });
-  const configPath = brainConfigPath(vault);
   const now = opts.now ?? new Date();
+  if (storeOnly) {
+    return await applySchemaMutationsToStore(vault, mutations, {
+      actor: opts.actor,
+      now,
+      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      ...(opts.lockStaleMs !== undefined ? { lockStaleMs: opts.lockStaleMs } : {}),
+      ...(opts.authority !== undefined ? { authority: opts.authority } : {}),
+      next: (current) => applyMutationsToPack(current, mutations),
+    });
+  }
+  const configPath = brainConfigPath(vault);
   return await withFileLock(configPath, { staleMs: opts.lockStaleMs ?? 30_000, retries: 3 }, () => {
     const before = existsSync(configPath)
       ? readFileSync(configPath, "utf8")

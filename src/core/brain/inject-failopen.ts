@@ -23,16 +23,22 @@ import { join } from "node:path";
 
 import { derivedDirIsSymlinked, readRegularFileNoFollow } from "../derived-store-guard.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
+import { machineStateRoot } from "../state/machine-state.ts";
 
 const INJECT_CACHE_DIR = ".open-second-brain";
 const INJECT_CACHE_SUBDIR = "inject-cache";
 
-function cachePath(vault: string, key: string): string {
-  return join(vault, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR, `${key}.txt`);
-}
-
-function cacheDirIsSymlinked(vault: string): boolean {
-  return derivedDirIsSymlinked(vault, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR);
+/**
+ * The cache directory's root: the vault, or the device-local state once
+ * switched (`state/machine-state.ts`). Resolved once per call and inside a
+ * catch, so a fault resolving it costs the cache, never the inject path.
+ */
+function cacheRoot(vault: string): string | null {
+  try {
+    return machineStateRoot(vault);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -40,8 +46,13 @@ function cacheDirIsSymlinked(vault: string): boolean {
  * not a regular file, or behind a symlinked cache directory.
  */
 export function readInjectCache(vault: string, key: string): string | null {
-  if (cacheDirIsSymlinked(vault)) return null;
-  const read = readRegularFileNoFollow(cachePath(vault, key));
+  const root = cacheRoot(vault);
+  if (root === null || derivedDirIsSymlinked(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR)) {
+    return null;
+  }
+  const read = readRegularFileNoFollow(
+    join(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR, `${key}.txt`),
+  );
   return read.status === "ok" ? read.text : null;
 }
 
@@ -50,9 +61,12 @@ export function readInjectCache(vault: string, key: string): string | null {
  * failure is swallowed, and a symlinked cache directory skips the write.
  */
 export function writeInjectCache(vault: string, key: string, body: string): void {
-  if (cacheDirIsSymlinked(vault)) return;
   try {
-    atomicWriteText(cachePath(vault, key), body, { mode: 0o600 });
+    const root = cacheRoot(vault);
+    if (root === null || derivedDirIsSymlinked(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR)) return;
+    atomicWriteText(join(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR, `${key}.txt`), body, {
+      mode: 0o600,
+    });
   } catch {
     // The cache is an optimization; a failure to persist must never disturb
     // the inject path.

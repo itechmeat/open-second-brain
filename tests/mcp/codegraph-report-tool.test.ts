@@ -8,12 +8,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 let vault: string;
 
@@ -85,6 +86,41 @@ describe("brain_codegraph_report tool", () => {
       expect(report).toHaveProperty("index");
       expect(report).toHaveProperty("cargo_workspace");
       expect(report).toHaveProperty("cargo_workspace_reason");
+    },
+    CODEGRAPH_SPAWN_BUDGET_MS,
+  );
+
+  // A folder outside every root the egress pass knows (vault, store,
+  // device state, home, temp, config, view): on Linux `/dev/shm` is one.
+  const OUTSIDE_ROOTS = "/dev/shm";
+  test.skipIf(process.platform !== "linux" || !existsSync(OUTSIDE_ROOTS))(
+    "at remote reach the CLI path outside every known root is not a host path",
+    async () => {
+      const bin = mkdtempSync(join(OUTSIDE_ROOTS, "o2b-codegraph-bin-"));
+      const savedPath = process.env["PATH"];
+      try {
+        const cli = join(bin, "codegraph");
+        writeFileSync(cli, "#!/bin/sh\nexit 1\n");
+        chmodSync(cli, 0o755);
+        process.env["PATH"] = `${bin}${delimiter}${savedPath ?? ""}`;
+        const server = new MCPServer(
+          { vault, configPath: null },
+          { reach: TRANSPORT_REACH.remote },
+        );
+        const result = (await server.callTool("brain_codegraph_report", {})) as {
+          content: ReadonlyArray<{ text: string }>;
+        };
+        const text = result.content[0]!.text;
+        const report = JSON.parse(text) as { cli: { available: boolean; path: string | null } };
+        expect(report.cli.available).toBe(true);
+        expect(report.cli.path).not.toBeNull();
+        expect(isAbsolute(report.cli.path!)).toBe(false);
+        expect(text).not.toContain(bin);
+      } finally {
+        if (savedPath === undefined) delete process.env["PATH"];
+        else process.env["PATH"] = savedPath;
+        rmSync(bin, { recursive: true, force: true });
+      }
     },
     CODEGRAPH_SPAWN_BUDGET_MS,
   );

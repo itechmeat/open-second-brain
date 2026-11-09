@@ -5,6 +5,10 @@ import { join } from "node:path";
 
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { countBrainEvents } from "../../src/core/discipline/log-counts.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 function vaultWithLog(dayBody: string): string {
   const v = mkdtempSync(join(tmpdir(), "o2b-disc-log-"));
@@ -77,6 +81,7 @@ describe("countBrainEvents", () => {
 
   test("counts note events (§32B v0.10.8)", () => {
     const v = mkdtempSync(join(tmpdir(), "o2b-disc-log-note-"));
+    mkdirSync(join(v, "Brain"), { recursive: true }); // a legacy tree: an unswitched machine
     try {
       appendLogEvent(v, {
         timestamp: "2026-05-19T10:00:00Z",
@@ -111,6 +116,7 @@ describe("countBrainEvents", () => {
     // appendLogEvent writes both .md and .jsonl. Delete the .md to
     // prove the reader picked the JSONL path.
     const v = mkdtempSync(join(tmpdir(), "o2b-disc-jsonl-"));
+    mkdirSync(join(v, "Brain"), { recursive: true }); // a legacy tree: an unswitched machine
     try {
       appendLogEvent(v, {
         timestamp: "2026-05-19T10:00:00Z",

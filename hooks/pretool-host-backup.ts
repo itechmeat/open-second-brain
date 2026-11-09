@@ -40,7 +40,9 @@
  *     one sanctioned exception is the two directory-name constants
  *     from the leaf `src/core/brain/path-constants.ts` - names, not
  *     behavior - so the hook-audit root keeps its single spelling
- *     (`tests/hooks/audit-root.test.ts`). The receipt contract -
+ *     (`tests/hooks/audit-root.test.ts`), and the machine-state resolver
+ *     the receipt asks where the audit lives once switched, imported
+ *     lazily inside the receipt's own best-effort `try`. The receipt contract -
  *     actor, pid, before-hash, summary - is pinned against the trust
  *     conventions by tests, not by an import.
  *   - HARD FLOOR, stated honestly: the deny guarantee ends at this
@@ -379,16 +381,21 @@ function isoWeekLabel(d: Date): string {
  * pid, before-hash, summary plus the backup path). Best-effort: a
  * failed append must not turn a completed backup into a deny.
  */
-function appendReceipt(
+async function appendReceipt(
   vault: string | null,
   target: string,
   backup: { backupPath: string; beforeHash: string; bytes: number },
   actor: string,
   now: Date,
-): void {
+): Promise<void> {
   if (vault === null) return;
   try {
-    const dir = join(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR);
+    // Machine state: device-local once switched (`machineStatePath`).
+    // Imported here, inside the best-effort receipt, never at load: a
+    // broken core build then costs the receipt, never the backup or the
+    // deny (STDLIB-ONLY above), and the flag-off path loads nothing.
+    const { machineStatePath } = await import("../src/core/state/machine-state.ts");
+    const dir = machineStatePath(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR);
     mkdirSync(dir, { recursive: true });
     const record = {
       timestamp: now.toISOString(),
@@ -465,7 +472,14 @@ async function main(): Promise<void> {
       try {
         const backup = executeBackup(target, now);
         if (backup.kind === "allow-no-source") continue; // nothing to protect: silent allow
-        appendReceipt(resolveVaultPath(), target, backup, `hook:${detectHookRuntime(raw)}`, now);
+        // Never rejects: every failure inside it is swallowed.
+        await appendReceipt(
+          resolveVaultPath(),
+          target,
+          backup,
+          `hook:${detectHookRuntime(raw)}`,
+          now,
+        );
         // Silent success: the call proceeds through the normal permission
         // flow; the backup already happened. An explicit allow here would
         // pre-approve the very write this hook guards.

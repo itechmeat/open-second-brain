@@ -20,6 +20,10 @@ import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { digestVerifies } from "../../../src/core/integrity/digest.ts";
 import { brainConfigPath, brainManualPath } from "../../../src/core/brain/paths.ts";
 import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

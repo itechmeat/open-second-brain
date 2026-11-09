@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import { compiledDigestPath } from "../../../src/core/brain/compiled-digest-path.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { makeStoreEnv } from "../store/fixtures/store-env.ts";
+import { switchDevice } from "./store-only/fixtures.ts";
 
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { BRAIN_PREFERENCE_STATUS, BRAIN_CONFIDENCE } from "../../../src/core/brain/types.ts";
@@ -125,3 +130,27 @@ test("filters prompt-injection-like pre-compress snippets", () => {
   expect(pack.activeHeadSafety?.filtered).toBe(true);
   expect(pack.items[0]!.safety?.filtered).toBe(true);
 });
+
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "a switched machine's digest that cannot be rendered is named without a device path",
+  () => {
+    const env = makeStoreEnv("osb-precompress-render-", { dualWrite: false });
+    try {
+      switchDevice(env.storeRoot);
+      const cache = dirname(compiledDigestPath(env.vault, "active"));
+      mkdirSync(cache, { recursive: true });
+      chmodSync(cache, 0o500);
+      try {
+        const pack = buildPreCompressPack(env.vault, { topK: 10 });
+        const [warning] = pack.warnings ?? [];
+        expect(warning).toStartWith("the active digest could not be rendered");
+        expect(warning).not.toContain(env.parent);
+        expect(warning).not.toContain(cache);
+      } finally {
+        chmodSync(cache, 0o700);
+      }
+    } finally {
+      env.cleanup();
+    }
+  },
+);

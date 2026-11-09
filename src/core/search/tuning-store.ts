@@ -12,9 +12,10 @@
  */
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 
 import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
+import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 export const TUNING_SCHEMA_VERSION = "o2b.tuning.v1";
 
@@ -42,8 +43,8 @@ export function applyTunedParameters(
   });
 }
 
-export function tuningPath(vault: string): string {
-  return join(vault, "Brain", "search", "tuning.json");
+export function tuningPath(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, "search", "tuning.json");
 }
 
 /**
@@ -51,7 +52,7 @@ export function tuningPath(vault: string): string {
  * bounds. Fail-soft: missing file, torn JSON, or any out-of-bounds
  * value reads as null (search falls back to configured defaults).
  */
-export function loadTunedParameters(vault: string): TunedParameters | null {
+export function loadTunedParameters(vault: string | null): TunedParameters | null {
   const path = tuningPath(vault);
   if (!existsSync(path)) return null;
   try {
@@ -81,7 +82,7 @@ export function loadTunedParameters(vault: string): TunedParameters | null {
 }
 
 /** Delete the persisted tuning state. Returns true when it existed. */
-export function resetTuning(vault: string): boolean {
+export function resetTuning(vault: string | null): boolean {
   const path = tuningPath(vault);
   if (!existsSync(path)) return false;
   rmSync(path);

@@ -10,6 +10,10 @@ import { BrainPreferenceNotFoundError } from "../../src/core/brain/apply-evidenc
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import type { BrainPreference } from "../../src/core/brain/types.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

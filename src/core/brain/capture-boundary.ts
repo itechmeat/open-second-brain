@@ -14,11 +14,20 @@
  * invalid one degrades to a warning and is skipped - a typo in
  * `_brain.yaml` must never take capture down. Everything fails soft
  * to "capture" because losing real evidence is worse than admitting
- * noise the doctor can surface later.
+ * noise the doctor can surface later, with one exception (design D14,
+ * fail closed): settings that exist but cannot be read (an `_brain.yaml`
+ * that cannot be opened, a shared settings shard of the store that cannot
+ * be read or is gone since this machine read it) may hold an exclusion,
+ * so the boundary then captures nothing until they read again.
  */
 
 import { defaultConfigPath, discoverConfig } from "../config.ts";
-import { BRAIN_SESSIONS_DEFAULTS, loadBrainConfigDetailed, resolveSessions } from "./policy.ts";
+import {
+  BRAIN_SESSIONS_DEFAULTS,
+  BrainSettingsUnreadableError,
+  loadBrainConfigDetailed,
+  resolveSessions,
+} from "./policy.ts";
 import type { ResolvedBrainSessionsConfig } from "./types.ts";
 
 export type SessionCaptureDecision = "capture" | "ignore" | "stateless";
@@ -106,12 +115,27 @@ function localAdditions(localConfigPath: string | undefined, key: string): strin
 }
 
 /**
+ * The boundary while the settings cannot be read: every session is
+ * ignored and every message suppressed, so an exclusion the unreadable
+ * settings may hold is never bypassed.
+ */
+function closedBoundary(reason: string): CaptureBoundary {
+  return Object.freeze({
+    sessionDecision: () => "ignore" as const,
+    suppressMessage: () => true,
+    warnings: Object.freeze([`capture is off: ${reason}`]),
+    policy: BRAIN_SESSIONS_DEFAULTS,
+  });
+}
+
+/**
  * Resolve the effective boundary for a vault: the vault-portable
  * `sessions:` policy unioned with machine-local additions
  * (`sessions_ignore_patterns` / `sessions_stateless_patterns` /
  * `sessions_ignore_message_patterns`, comma-separated, in the
  * device config). Local config can ADD patterns, never remove
- * vault policy. Any load failure resolves to capture-everything.
+ * vault policy. A load failure resolves to capture-everything, except
+ * settings that cannot be read, which capture nothing.
  */
 export function buildCaptureBoundary(
   vault: string,
@@ -120,7 +144,8 @@ export function buildCaptureBoundary(
   let vaultPolicy: ResolvedBrainSessionsConfig;
   try {
     vaultPolicy = resolveSessions(loadBrainConfigDetailed(vault).config);
-  } catch {
+  } catch (err) {
+    if (err instanceof BrainSettingsUnreadableError) return closedBoundary(err.message);
     vaultPolicy = BRAIN_SESSIONS_DEFAULTS;
   }
   const merged: ResolvedBrainSessionsConfig = Object.freeze({

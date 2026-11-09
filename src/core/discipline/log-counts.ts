@@ -1,4 +1,4 @@
-import { readLogDay } from "../brain/log-jsonl.ts";
+import { readLogEvents } from "../store/read/log-events.ts";
 
 export interface AgentCounts {
   readonly feedback: number;
@@ -39,7 +39,9 @@ export function countBrainEvents(
   // §23 (v0.10.8): read through the JSONL-preferred reader. Historical
   // markdown-only days are served by the reader's fallback path so
   // discipline-report stays correct across the v0.10.8 boundary.
-  const { entries } = readLogDay(vault, date);
+  // The day file, or the store's log events of that day once switched:
+  // one day is read, never the whole log.
+  const entries = readLogEvents({ from: date, to: date }, { vault });
   let total = 0;
   for (const e of entries) {
     const agentField = e.body["agent"];

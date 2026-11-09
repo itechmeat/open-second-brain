@@ -49,7 +49,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { parseFrontmatter } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatter, parseFrontmatterText } from "../vault.ts";
+import {
+  rewriteStorePreference,
+  storePreferencePages,
+  type StorePreferencePage,
+} from "./preference-page-write.ts";
+import { preferencesStoreOnly } from "./preference-store.ts";
 import { WIKILINK_TARGET_RE, isBrainArtifactId, isLiveWikilinkSpan } from "./wikilink.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import {
@@ -224,16 +230,36 @@ function scanFileForMergedLinks(
   return { fixes, unresolved, rewritten };
 }
 
+/** The active preference pages: the files, or the store's fold once switched. */
+function activePreferencePages(
+  vault: string,
+): Array<{ name: string; path: string; read: () => Record<string, unknown> }> {
+  if (preferencesStoreOnly(vault)) {
+    return storePreferencePages(vault)
+      .filter((page) => !page.retired)
+      .map((page) => ({ name: `pref-${page.slug}.md`, path: page.abs, read: () => page.meta }));
+  }
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.preferences)) return [];
+  return readdirSync(dirs.preferences).map((name) => {
+    const path = join(dirs.preferences, name);
+    return { name, path, read: () => parseFrontmatter(path)[0] };
+  });
+}
+
+/** Demote one preference of the store's fold from `stable` to `draft`. */
+function applyStoreDemotion(vault: string, page: StorePreferencePage | undefined): boolean {
+  if (page === undefined) return false;
+  return rewriteStorePreference(vault, page, { ...page.meta, _lifecycle: PAGE_LIFECYCLE.draft });
+}
+
 function detectStaleStable(vault: string, now: Date, staleDays: number): LintDemotion[] {
   const out: LintDemotion[] = [];
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return out;
-  for (const name of readdirSync(dirs.preferences)) {
+  for (const { name, path, read } of activePreferencePages(vault)) {
     if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
-    const path = join(dirs.preferences, name);
     let meta: Record<string, unknown>;
     try {
-      [meta] = parseFrontmatter(path);
+      meta = read();
     } catch {
       continue;
     }
@@ -307,7 +333,25 @@ export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
   let scanned = 0;
   let filesWritten = 0;
   const brainRoot = join(vault, BRAIN_ROOT_REL);
-  if (existsSync(brainRoot)) {
+  // Store-only (task 2.10): the legacy tree is read-only to this machine
+  // (design D11a), so the pass reads and repairs the preferences the
+  // store's fold holds instead, each written as the fields it changes.
+  const storeOnly = preferencesStoreOnly(vault);
+  if (storeOnly) {
+    for (const page of storePreferencePages(vault)) {
+      scanned += 1;
+      // The whole page, prose included, as the legacy pass scans the file.
+      const raw = formatFrontmatter(page.meta, page.body);
+      const scan = scanFileForMergedLinks(page.abs, raw, merge);
+      unresolved.push(...scan.unresolved);
+      if (scan.fixes.length === 0) continue;
+      fixes.push(...scan.fixes);
+      if (opts.apply && scan.rewritten !== raw) {
+        const [next, nextBody] = parseFrontmatterText(scan.rewritten);
+        if (rewriteStorePreference(vault, page, next, undefined, nextBody)) filesWritten += 1;
+      }
+    }
+  } else if (existsSync(brainRoot)) {
     const stack: string[] = [brainRoot];
     while (stack.length > 0) {
       const dir = stack.pop()!;
@@ -356,8 +400,18 @@ export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
   // Phase 2: stale-stable demotions.
   const demotions = detectStaleStable(vault, now, staleDays);
   if (opts.apply) {
+    // The fold's pages once, keyed by the path each demotion names.
+    const byPath = storeOnly
+      ? new Map(
+          storePreferencePages(vault)
+            .filter((p) => !p.retired)
+            .map((p) => [p.abs, p] as const),
+        )
+      : null;
     for (const d of demotions) {
-      if (applyDemotion(d.path)) filesWritten += 1;
+      const done =
+        byPath !== null ? applyStoreDemotion(vault, byPath.get(d.path)) : applyDemotion(d.path);
+      if (done) filesWritten += 1;
     }
   }
 

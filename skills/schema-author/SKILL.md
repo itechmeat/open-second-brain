@@ -5,7 +5,7 @@ description: Use when adding, renaming, reviewing, or explaining Brain schema to
 
 # Schema Author
 
-Use this skill when a task changes the active Brain schema pack in `Brain/_brain.yaml` or reviews content against that schema.
+Use this skill when a task changes the active Brain schema pack or reviews content against that schema. Read and change the pack only through the tools and commands below, never by editing a settings file.
 
 ## Workflow
 

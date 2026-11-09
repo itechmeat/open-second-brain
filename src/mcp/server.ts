@@ -13,7 +13,12 @@ import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-rout
 import { createRouteScope } from "../core/route-scope.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
-import { UNRESOLVED_AGENT, vaultFrozenRefusal } from "./frozen-refusal.ts";
+import { MigrationInProgressError } from "../core/migration-gate.ts";
+import {
+  migrationInProgressRefusal,
+  UNRESOLVED_AGENT,
+  vaultFrozenRefusal,
+} from "./frozen-refusal.ts";
 import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
@@ -30,11 +35,13 @@ import {
 import type { JsonRpcErrorCode, JsonRpcNotification, MCPErrorData } from "./protocol.ts";
 import {
   codeForError,
+  errorDetailFor,
   isToolErrorCode,
   defaultCodeForRpc,
   TOOL_ERROR_META_KEY,
   toolErrorMeta,
   type ToolErrorCode,
+  type ToolErrorDetail,
 } from "./tool-error-codes.ts";
 import {
   META_MEMBER,
@@ -48,18 +55,22 @@ import {
 import { PROGRESS_REASON, type ProgressSink } from "../core/brain/progress.ts";
 import { listResources, listResourceTemplates, readResource } from "./resources.ts";
 import { buildToolTable, findTool } from "./tools.ts";
-import type {
-  RequestIdentity,
-  RuleScopeSources,
-  ServerContext,
-  ToolCapabilityReport,
-  ToolDefinition,
-  ToolScope,
+import {
+  VAULT_REQUIRED_CODE,
+  vaultRequiredToolMessage,
+  type RequestIdentity,
+  type RuleScopeSources,
+  type ServerContext,
+  type ToolCapabilityReport,
+  type ToolDefinition,
+  type ToolScope,
 } from "./tool-contract.ts";
+import { noVaultRoot } from "../core/platform-dirs.ts";
 import { assertOutputContract } from "./output-contract.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
+import { pathsForCaller } from "./brain/device-path.ts";
 import { redactErrorForCaller } from "./error-redaction.ts";
 import { resolvedSecretLiterals } from "../core/secret-resolver.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
@@ -75,7 +86,8 @@ import {
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface MCPServerOptions {
-  readonly vault: string;
+  /** The vault served, or `null` for a server with no vault (design D14). */
+  readonly vault: string | null;
   readonly configPath?: string | null;
   readonly repoRoot?: string | null;
 }
@@ -175,8 +187,15 @@ export interface JsonRpcErrorBody {
 /** `error.data`: the thrower's record plus the stable string code. */
 export type JsonRpcErrorData = MCPErrorData & { readonly code: string };
 
+/** The refusal a vault-adapter tool gives on a server with no vault. */
+function vaultRequired(tool: string | undefined): MCPError {
+  return new MCPError(INVALID_PARAMS, vaultRequiredToolMessage(tool), {
+    code: VAULT_REQUIRED_CODE,
+  });
+}
+
 export class MCPServer {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
   readonly tools: ReadonlyArray<ToolDefinition>;
@@ -220,7 +239,14 @@ export class MCPServer {
       harness: resolveHarnessScope(runtimeOpts.harness, runtimeOpts.hostTarget),
     });
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
-    this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
+    this.artifactStore = new ArtifactStore({
+      // A server with no vault keeps its payloads in this machine's
+      // device-local state, as a switched machine does: the no-vault
+      // stand-in is what `state/machine-state.ts` maps there (a resolved
+      // state folder would read as a fresh vault of its own).
+      vault: this.vault ?? noVaultRoot(),
+      runId,
+    });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
     // Never fatal - a missing/unwritable vault just yields zero pruned.
     try {
@@ -243,10 +269,18 @@ export class MCPServer {
    * identity rides the context as `requestIdentity`, so a writer tool
    * can answer for the credential's agent rather than the config's.
    */
-  private contextFor(identity?: RequestIdentity): ServerContext {
+  private contextFor(identity?: RequestIdentity, toolName?: string): ServerContext {
     const configPath = this.configPath ?? undefined;
+    const served = this.vault;
     return {
-      vault: this.vault,
+      // With no vault, reading `vault` is the uniform refusal (design D14):
+      // a vault-adapter tool refuses at its first use, every other tool
+      // reads `vaultOrNull` or never asks.
+      get vault(): string {
+        if (served === null) throw vaultRequired(toolName);
+        return served;
+      },
+      vaultOrNull: served,
       configPath: this.configPath,
       repoRoot: this.repoRoot,
       capabilityReport: this.capabilityReport,
@@ -283,7 +317,10 @@ export class MCPServer {
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
-    return toolResult(tool, await this.invokeToolHandler(tool, args, undefined, undefined));
+    return toolResult(
+      tool,
+      this.forCaller(await this.invokeToolHandler(tool, args, undefined, undefined)),
+    );
   }
 
   /**
@@ -310,6 +347,15 @@ export class MCPServer {
     } catch {
       return true;
     }
+  }
+
+  /**
+   * A tool result, resource body or refusal as this server's caller may
+   * see it: below local reach no string names a host path
+   * (`brain/device-path.ts` `pathsForCaller`).
+   */
+  private forCaller(result: unknown): unknown {
+    return pathsForCaller(result, this.vault, this.reach, this.configPath ?? undefined);
   }
 
   /**
@@ -348,7 +394,7 @@ export class MCPServer {
     assertKnownArguments(tool, args);
     if (!this.routeMetricsEnabled) {
       try {
-        return await tool.handler(this.contextFor(identity), args, onProgress);
+        return await tool.handler(this.contextFor(identity, tool.name), args, onProgress);
       } catch (exc) {
         throw this.mapFrozen(tool, exc, identity);
       }
@@ -358,25 +404,30 @@ export class MCPServer {
     const routeScope = createRouteScope();
     try {
       return await routeScope.run(async () =>
-        tool.handler(this.contextFor(identity), args, onProgress),
+        tool.handler(this.contextFor(identity, tool.name), args, onProgress),
       );
     } catch (exc) {
       status = "error";
       throw this.mapFrozen(tool, exc, identity);
     } finally {
-      emitMcpRouteLatency(
-        this.vault,
-        {
-          tool: tool.name,
-          scope: this.scope,
-          status,
-          durationMs: performance.now() - start,
-          argKeys: Object.keys(args),
-          ...(routeScope.decisionMs() !== undefined ? { decisionMs: routeScope.decisionMs() } : {}),
-          ...(routeScope.stages() !== undefined ? { stages: routeScope.stages() } : {}),
-        },
-        this.routeMetricsEnabled,
-      );
+      // The route metric is a vault continuity record: none without a vault.
+      if (this.vault !== null) {
+        emitMcpRouteLatency(
+          this.vault,
+          {
+            tool: tool.name,
+            scope: this.scope,
+            status,
+            durationMs: performance.now() - start,
+            argKeys: Object.keys(args),
+            ...(routeScope.decisionMs() !== undefined
+              ? { decisionMs: routeScope.decisionMs() }
+              : {}),
+            ...(routeScope.stages() !== undefined ? { stages: routeScope.stages() } : {}),
+          },
+          this.routeMetricsEnabled,
+        );
+      }
     }
   }
 
@@ -391,7 +442,9 @@ export class MCPServer {
    * through untouched.
    */
   private mapFrozen(tool: ToolDefinition, exc: unknown, identity?: RequestIdentity): unknown {
-    if (!(exc instanceof VaultFrozenError)) return exc;
+    // A store migration running on this machine refuses like a freeze.
+    if (exc instanceof MigrationInProgressError) return migrationInProgressRefusal(tool.name, exc);
+    if (!(exc instanceof VaultFrozenError) || this.vault === null) return exc;
     // `agentName` is optional on the context - a transport may supply
     // none - so an absent identity is recorded as the named absence
     // rather than as a plausible-looking name nobody claimed.
@@ -454,7 +507,8 @@ export class MCPServer {
       } else if (method === "resources/templates/list") {
         result = this.handleResourcesTemplatesList();
       } else if (method === "resources/read") {
-        result = this.handleResourcesRead(params, identity);
+        // A resource body is prose the brain rendered; it may name a host path.
+        result = this.forCaller(this.handleResourcesRead(params, identity));
       } else if (method.startsWith("notifications/")) {
         return null;
       } else {
@@ -466,7 +520,12 @@ export class MCPServer {
     } catch (exc) {
       if (isNotification) return null;
       if (exc instanceof MCPError) {
-        return errorResponse(requestId, exc.code, exc.message, exc.data);
+        // A refusal's prose and data may name a host path too.
+        const { message, data } = this.forCaller({ message: exc.message, data: exc.data }) as {
+          message: string;
+          data: typeof exc.data;
+        };
+        return errorResponse(requestId, exc.code, message, data);
       }
       // A channel that forwards raw exception prose to the caller. Node's
       // fs errors embed the absolute path of whatever the caller's last
@@ -538,6 +597,8 @@ export class MCPServer {
     if (typeof uri !== "string") {
       throw new MCPError(INVALID_PARAMS, "resources/read requires a string `uri`");
     }
+    // TODO(task 2.10 WP2a): resources served from the folds need no vault.
+    if (this.vault === null) throw vaultRequired(undefined);
     const content = readResource(
       {
         vault: this.vault,
@@ -576,7 +637,9 @@ export class MCPServer {
         ? progressRefusal(token, PROGRESS_REASON.transportSingleResponse)
         : undefined;
     try {
-      const structured = await this.invokeToolHandler(tool, args, onProgress, identity);
+      const structured = this.forCaller(
+        await this.invokeToolHandler(tool, args, onProgress, identity),
+      );
       return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
     } catch (exc) {
       if (exc instanceof MCPError) {
@@ -595,7 +658,10 @@ export class MCPServer {
       // ValueError/TypeError semantics in Python → tool-level error envelope.
       // OSError in Python → "filesystem error" prefix. We collapse both to a
       // single tool-level error since JS doesn't distinguish.
-      return withProgressRefusal(toolError(message, codeForError(exc)), refusal);
+      return withProgressRefusal(
+        toolError(message, codeForError(exc), errorDetailFor(exc)),
+        refusal,
+      );
     }
   }
 }
@@ -692,11 +758,15 @@ export function buildMcpToolResult(
  * was; the stable code rides on `_meta` because strict clients validate
  * `structuredContent` against the tool's output schema even on an error.
  */
-function toolError(message: string, code: ToolErrorCode): Record<string, unknown> {
+function toolError(
+  message: string,
+  code: ToolErrorCode,
+  detail?: ToolErrorDetail,
+): Record<string, unknown> {
   return {
     content: [{ type: "text", text: message }],
     isError: true,
-    [META_MEMBER]: { [TOOL_ERROR_META_KEY]: toolErrorMeta(code) },
+    [META_MEMBER]: { [TOOL_ERROR_META_KEY]: toolErrorMeta(code, detail) },
   };
 }
 
@@ -778,13 +848,15 @@ const INTERNAL_ERROR_PREFIX = "internal error: ";
 export function internalErrorResponse(
   requestId: unknown,
   exc: unknown,
-  vault: string,
+  vault: string | null,
   reach: TransportReach,
 ): JsonRpcResponse {
   const raw = (exc as Error).message ?? String(exc);
   const message = redactedErrorMessage(raw, vault, reach);
+  const detail = errorDetailFor(exc);
   return errorResponse(requestId, INTERNAL_ERROR, `${INTERNAL_ERROR_PREFIX}${message}`, {
     code: codeForError(exc),
+    ...(detail === undefined ? {} : { reason: detail.reason, remedy: detail.remedy }),
   });
 }
 
@@ -799,7 +871,10 @@ export function internalErrorResponse(
  * cannot know the values answers byte-identically to the pre-literal
  * redactor instead of pretending to redact.
  */
-function redactedErrorMessage(raw: string, vault: string, reach: TransportReach): string {
+function redactedErrorMessage(raw: string, vault: string | null, reach: TransportReach): string {
+  // With no vault there is no vault path to hide and no custody store to
+  // read literals from; the home and temp roots are still redacted.
+  if (vault === null) return redactErrorForCaller(raw, "", reach, []);
   return redactErrorForCaller(raw, vault, reach, resolvedSecretLiterals(vault));
 }
 

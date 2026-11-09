@@ -58,11 +58,23 @@
  * Brain layer and is not filtered here.
  */
 
+import { storeMemoryPageAt } from "../core/brain/memory-pages.ts";
+import { logDayReader } from "../core/brain/log-days.ts";
+import { vaultRelative } from "../core/path-safety.ts";
+import { formatFrontmatter } from "../core/vault.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { listLogMarkdownFiles } from "../core/brain/log-jsonl.ts";
 
-import { readActiveForReader, regenerateActive } from "../core/brain/active.ts";
-import { regenerateLessons, renderLessonsForReader } from "../core/brain/lessons.ts";
+import {
+  activeDigestPathForRead,
+  readActiveForReader,
+  regenerateActive,
+} from "../core/brain/active.ts";
+import {
+  lessonsDigestPathForRead,
+  regenerateLessons,
+  renderLessonsForReader,
+} from "../core/brain/lessons.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import type { BacklinkRef } from "../core/brain/backlinks.ts";
 import { renderDigest } from "../core/brain/digest.ts";
@@ -72,8 +84,6 @@ import {
   type BrainStatusSnapshot,
 } from "../core/brain/status.ts";
 import {
-  brainActivePath,
-  brainLessonsPath,
   preferencePath,
   retiredPath,
   validateIsoDate,
@@ -94,7 +104,12 @@ import {
 } from "../core/graph/transport-reach.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
-import { parseLogDayFile, renderLogEntryBlock, type ParseLogDayResult } from "../core/brain/log.ts";
+import {
+  parseLogDayFile,
+  renderLogDayHeader,
+  renderLogEntryBlock,
+  type ParseLogDayResult,
+} from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
 import {
   deliveryRelForBrainArtifact,
@@ -199,7 +214,7 @@ const TEMPLATES: ReadonlyArray<ResourceTemplateDescriptor> = [
     uriTemplate: "osb://preference/{id}",
     name: "Brain preference by id",
     description:
-      "Body of the matching `pref-{id}.md` (or `ret-{id}.md` when the active copy is gone).",
+      "The preference with this id (or its retired copy when the active one is gone), as Markdown.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -212,7 +227,7 @@ const TEMPLATES: ReadonlyArray<ResourceTemplateDescriptor> = [
   {
     uriTemplate: "osb://log/{date}",
     name: "Brain daily log",
-    description: "Body of `Brain/log/<date>.md` (YYYY-MM-DD).",
+    description: "The brain log of one day (YYYY-MM-DD), as Markdown.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -373,7 +388,14 @@ function parseUri(uri: string): Parsed {
 // ----- Readers -------------------------------------------------------------
 
 function readActive(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
-  const path = brainActivePath(ctx.vault);
+  // On a store-only machine the digest is rendered on demand into the
+  // device-local cache (D14 item 7); a render failure is reported below.
+  let path: string;
+  try {
+    path = activeDigestPathForRead(ctx.vault);
+  } catch (err) {
+    throw new MCPError(INTERNAL_ERROR, `active digest render failed: ${(err as Error).message}`);
+  }
   // First read attempt: the file usually exists because dream
   // regenerates it. On a fresh vault that has never been dreamed, the
   // file may not exist yet — generate it on demand so the resource is
@@ -386,7 +408,7 @@ function readActive(ctx: ResourceContext, uri: string, view: RequestView): Resou
     } catch (err) {
       throw new MCPError(
         INTERNAL_ERROR,
-        `active.md not present and on-demand regeneration failed: ${(err as Error).message}`,
+        `active-preferences digest not present and on-demand regeneration failed: ${(err as Error).message}`,
       );
     }
   }
@@ -410,7 +432,12 @@ function readActive(ctx: ResourceContext, uri: string, view: RequestView): Resou
 }
 
 function readLessons(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
-  const path = brainLessonsPath(ctx.vault);
+  let path: string;
+  try {
+    path = lessonsDigestPathForRead(ctx.vault);
+  } catch (err) {
+    throw new MCPError(INTERNAL_ERROR, `lessons digest render failed: ${(err as Error).message}`);
+  }
   // Same on-demand-on-first-miss policy as readActive: a fresh vault
   // that has never been dreamed has no lessons.md yet — generate it
   // once so the resource is always meaningful, but never on every read.
@@ -420,7 +447,7 @@ function readLessons(ctx: ResourceContext, uri: string, view: RequestView): Reso
     } catch (err) {
       throw new MCPError(
         INTERNAL_ERROR,
-        `lessons.md not present and on-demand regeneration failed: ${(err as Error).message}`,
+        `lessons digest not present and on-demand regeneration failed: ${(err as Error).message}`,
       );
     }
   }
@@ -535,7 +562,12 @@ function readPreference(
   // not - the presence of the prefix a one-bit existence oracle over the
   // whole reserved population.
   if (!view.refs.visible(resolvedId)) throw notFound(normalized);
-  const file = readMarkdown(uri, filePath);
+  // On a store-only machine the page is the one the fold rebuilds (task 2.10).
+  const stored = storeMemoryPageAt(ctx.vault, vaultRelative(filePath, ctx.vault));
+  const file =
+    stored === null
+      ? readMarkdown(uri, filePath)
+      : { uri, mimeType: MIME_MARKDOWN, text: formatFrontmatter(...stored.read()) };
   return {
     ...file,
     // The whole file - frontmatter and body - is the delivery
@@ -627,6 +659,20 @@ function readLog(
   // span several markdown files. The legacy single file is returned
   // verbatim (byte-identical to pre-shard behaviour); multiple shards
   // are concatenated in shard order.
+  // A store-only machine has no day pages (task 2.10): the day is
+  // rendered from its `log-event` records, in the shape a page has.
+  const log = logDayReader(ctx.vault);
+  if (log.stored) {
+    const entries = log.day(rawDate).entries;
+    if (entries.length === 0) {
+      throw new MCPError(INTERNAL_ERROR, `no log events for date '${rawDate}'`);
+    }
+    const blocks = logEntriesAtReach(view.refs, entries).map((e) =>
+      renderLogEntryBlock(e).trimEnd(),
+    );
+    const text = [renderLogDayHeader(rawDate).trimEnd(), ...blocks].join(LOG_BLOCK_SEPARATOR);
+    return { uri, mimeType: MIME_MARKDOWN, text: `${text}\n` };
+  }
   const files = listLogMarkdownFiles(ctx.vault).filter((f) => f.date === rawDate);
   if (files.length === 0) {
     throw new MCPError(INTERNAL_ERROR, `no log file for date '${rawDate}'`);

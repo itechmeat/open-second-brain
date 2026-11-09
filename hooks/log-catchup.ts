@@ -50,7 +50,6 @@ import {
   resolveAgentName,
   resolveDeviceId,
   resolveLogCatchupEnabled,
-  resolveVault,
 } from "../src/core/config.ts";
 import { listLogShardFiles, readLogDay } from "../src/core/brain/log-jsonl.ts";
 import type { BrainLogEntry } from "../src/core/brain/log.ts";
@@ -67,6 +66,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
+  appendOrderLines,
   dateCutoff,
   firstRunScanCutoffDate,
   LOG_CATCHUP_WINDOW_DATES,
@@ -74,6 +74,9 @@ import {
   writeLogCatchupCursor,
   type LogCatchupCursor,
 } from "./lib/log-cursor-state.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { logDaysWithDevices } from "../src/core/brain/log-days.ts";
+import { isStoreOnly } from "../src/core/store/store-only.ts";
 
 /** `origin` label stamped on the catch-up block's untrusted-content fence. */
 const CATCHUP_FENCE_ORIGIN = "cross-agent-catch-up";
@@ -243,8 +246,10 @@ async function main(): Promise<void> {
     // Default-closed: only an additionalContext-eligible event may emit.
     if (!isContextEventName(hookEventName)) return;
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
 
     const self = resolveSelfIdentity();
     if (self === null) return;
@@ -275,8 +280,20 @@ async function main(): Promise<void> {
     // pay one `readdirSync` + sort per day of history on every run.
     // Dates come from the same listing, so discovery and reading can
     // never disagree about what the log directory holds.
-    const shardFiles = listLogShardFiles(vault);
-    const dates = [...new Set(shardFiles.map((f) => f.date))].toSorted();
+    // A store-only machine (or one with no vault) has no day files: its
+    // days are the store's log events, the writing device standing in for
+    // the shard id and the entry's position among that device's events of
+    // the day, in append order, for the line (design D14, task 2.10). With
+    // a cursor only the days it can still vouch about are read.
+    const storedDays = storeLogDaysForCatchup(
+      vault,
+      cursor === null ? null : oldestVouched(cursor, windowCutoff),
+    );
+    const shardFiles = storedDays === null ? listLogShardFiles(vault) : [];
+    const dates =
+      storedDays !== null
+        ? [...storedDays.keys()]
+        : [...new Set(shardFiles.map((f) => f.date))].toSorted();
     //
     // The skip decision is per (date, shard), not per date: a shard that
     // syncs in late for an earlier date (the normal cross-device case)
@@ -325,7 +342,8 @@ async function main(): Promise<void> {
         unscannedOlderDays += 1;
         continue;
       }
-      const { entries, entryShardIds, entryLines } = readLogDay(vault, date, shardFiles);
+      const { entries, entryShardIds, entryLines } =
+        storedDays?.get(date) ?? readLogDay(vault, date, shardFiles);
       const shardMarks: Record<string, number> = Object.create(null);
       perDateMarks[date] = shardMarks;
       for (let i = 0; i < entries.length; i++) {
@@ -493,3 +511,50 @@ async function main(): Promise<void> {
 main().catch(() => {
   // Never crash the runtime; the session start must proceed regardless.
 });
+
+/**
+ * The store's log as catch-up days, or `null` on an unswitched machine
+ * (whose day files the lane reads). Each day carries, per entry, the
+ * writing device (the day file's shard id) and the entry's index among
+ * that device's events of the day (the shard line), so the cursor marks
+ * keep their meaning.
+ */
+function storeLogDaysForCatchup(
+  vault: string,
+  fromDate: string | null,
+): Map<
+  string,
+  {
+    readonly entries: ReadonlyArray<BrainLogEntry>;
+    readonly entryShardIds: ReadonlyArray<string>;
+    readonly entryLines: ReadonlyArray<number>;
+  }
+> | null {
+  if (!isStoreOnly({ vault })) return null;
+  const out = new Map<
+    string,
+    { entries: BrainLogEntry[]; entryShardIds: string[]; entryLines: number[] }
+  >();
+  for (const day of logDaysWithDevices(vault, fromDate, null)) {
+    const lines = appendOrderLines(day.entryShardIds, day.entryHlcs ?? []);
+    out.set(day.date, {
+      entries: [...day.entries],
+      entryShardIds: [...day.entryShardIds],
+      entryLines: lines,
+    });
+  }
+  return out;
+}
+
+/**
+ * The oldest date a cursor still vouches about: its calendar window, or
+ * an older date it keeps marks for. Older days are skipped by the walk
+ * anyway, so they are not read.
+ */
+function oldestVouched(
+  cursor: { readonly days: Readonly<Record<string, unknown>> },
+  windowCutoff: string,
+): string | null {
+  const dates = [windowCutoff, ...Object.keys(cursor.days)].filter((d) => d !== "");
+  return dates.length === 0 ? null : dates.toSorted()[0]!;
+}

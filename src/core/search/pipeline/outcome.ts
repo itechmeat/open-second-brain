@@ -431,7 +431,8 @@ export async function probeRetrievalCorpus(
     const { resolveNoteRoots } = await import("../../brain/notes/note-walk.ts");
     const config = resolveConfig();
     const status = await indexStatus(config);
-    const authorizedRoots = resolveNoteRoots(config.vault);
+    // No vault: no note roots to cover (design D14).
+    const authorizedRoots = config.vault === null ? [] : resolveNoteRoots(config.vault);
     // Skip the second open when there is nothing it could answer: no
     // index to read, or no note root the operator authorized.
     const indexedRoots =

@@ -49,6 +49,9 @@ let origEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-readiness-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
   home = mkdtempSync(join(tmpdir(), "o2b-readiness-home-"));
   configPath = join(tmp, "config.yaml");
   origEnv = {};

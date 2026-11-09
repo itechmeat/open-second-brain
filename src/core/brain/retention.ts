@@ -1,6 +1,9 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import type { SignalLifecycle } from "../store/fold-signals.ts";
+import { memoryFromStore } from "./memory-pages.ts";
+import { storeRetiredRecords, storeSignalRecords } from "./memory-page-records.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { parseRetired } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
@@ -35,6 +38,9 @@ export interface BuildRetentionReviewOptions {
   readonly now?: Date;
 }
 
+/** The signal state a page in `inbox/processed/` stands for. */
+const CONSUMED: ReadonlySet<SignalLifecycle> = new Set(["consumed"]);
+
 const OLD_PROCESSED_SIGNAL_DAYS = 30;
 const PARK_RETIRED_AFTER_DAYS = 90;
 
@@ -57,6 +63,12 @@ export function buildRetentionReview(
 }
 
 function collectRetiredPreferences(vault: string, now: Date): RetentionRecommendation[] {
+  if (memoryFromStore(vault)) {
+    // Store-only (task 2.10): the retired preferences of the fold.
+    return storeRetiredRecords(vault).records.map(({ path, retired }) =>
+      recommendRetired(vault, path, retired, now),
+    );
+  }
   const retiredDir = brainDirs(vault).retired;
   if (!existsSync(retiredDir)) return [];
   const recommendations: RetentionRecommendation[] = [];
@@ -74,6 +86,12 @@ function collectRetiredPreferences(vault: string, now: Date): RetentionRecommend
 }
 
 function collectProcessedSignals(vault: string, now: Date): RetentionRecommendation[] {
+  if (memoryFromStore(vault)) {
+    // Store-only: the signals the fold holds as consumed (`processed/`).
+    return storeSignalRecords(vault, CONSUMED).records.map(({ path, signal }) =>
+      recommendProcessedSignal(vault, path, signal, now),
+    );
+  }
   const processedDir = brainDirs(vault).processed;
   if (!existsSync(processedDir)) return [];
   const recommendations: RetentionRecommendation[] = [];

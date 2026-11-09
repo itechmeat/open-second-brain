@@ -12,6 +12,10 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "../../../src/core/brain/paths.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 describe("procedural learning paths", () => {
   const tmpRoots: string[] = [];

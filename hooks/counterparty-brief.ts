@@ -42,7 +42,6 @@ import {
   defaultConfigPath,
   resolveCounterpartyBriefEnabled,
   resolveCounterpartyBriefTriggers,
-  resolveVault,
 } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import {
@@ -58,6 +57,7 @@ import {
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /** Runtime identity on the audit record. */
 const HOOK_ACTOR = "counterparty-brief";
@@ -113,8 +113,10 @@ async function main(): Promise<void> {
 
     const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
     auditVault = vault;
 
     const triggers = resolveCounterpartyBriefTriggers(defaultConfigPath());

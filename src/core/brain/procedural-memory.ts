@@ -1,15 +1,26 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { opaqueFields } from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
+
 import { ensureInsideVault } from "../path-safety.ts";
-import { parseFrontmatter } from "../vault.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
 import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts";
 import type { ProceduralEntryKind, ProceduralMemoryEntry, ProceduralOutcome } from "./types.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneTree,
+  parseLanePage,
+  writeLaneText,
+  readLaneFile,
+} from "../store/lane-pages.ts";
 
 interface UsageRecord {
   readonly usedCount: number;
@@ -77,17 +88,15 @@ export function reconcileProceduralMemory(
     if (!nextById.has(id) && counted(old)) removed++;
   }
 
-  writeIndex(vault, next);
-  const graph = rebuildProceduralGraph(vault);
-  rebuildProceduralHints(vault, { graph });
+  writeProjections(vault, next, () => writeIndex(vault, next));
   return { total: next.filter(counted).length, added, updated, removed };
 }
 
 export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMemoryEntry> {
   const path = proceduralMemoryIndexPath(vault);
-  if (!existsSync(path)) return Object.freeze([]);
+  if (!lanePageExists(vault, path)) return Object.freeze([]);
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+    const parsed = JSON.parse(readLaneFile(vault, path)) as {
       entries?: Array<ProceduralMemoryEntry>;
     };
     if (!Array.isArray(parsed.entries)) return Object.freeze([]);
@@ -162,19 +171,18 @@ export function markProceduralMemoryUsed(
         }
       : entry,
   );
-  writeIndex(vault, next);
-
-  const usage = readUsageMap(vault);
-  const prev = usage.get(id);
-  usage.set(id, {
-    usedCount: (prev?.usedCount ?? 0) + 1,
-    lastUsedAt: now.toISOString(),
-    successCount: prev?.successCount ?? 0,
-    failureCount: prev?.failureCount ?? 0,
+  writeProjections(vault, next, () => {
+    writeIndex(vault, next);
+    const usage = readUsageMap(vault);
+    const prev = usage.get(id);
+    usage.set(id, {
+      usedCount: (prev?.usedCount ?? 0) + 1,
+      lastUsedAt: now.toISOString(),
+      successCount: prev?.successCount ?? 0,
+      failureCount: prev?.failureCount ?? 0,
+    });
+    writeUsageMap(vault, usage);
   });
-  writeUsageMap(vault, usage);
-  const graph = rebuildProceduralGraph(vault);
-  rebuildProceduralHints(vault, { graph });
 
   return next.find((entry) => entry.id === id) ?? null;
 }
@@ -206,21 +214,46 @@ export function recordProceduralOutcome(
         }
       : entry,
   );
-  writeIndex(vault, next);
-
-  const usage = readUsageMap(vault);
-  const prev = usage.get(id);
-  usage.set(id, {
-    usedCount: prev?.usedCount ?? target.usedCount,
-    lastUsedAt: prev?.lastUsedAt ?? target.lastUsedAt,
-    successCount: (prev?.successCount ?? 0) + (outcome === "success" ? 1 : 0),
-    failureCount: (prev?.failureCount ?? 0) + (outcome === "failure" ? 1 : 0),
+  writeProjections(vault, next, () => {
+    writeIndex(vault, next);
+    const usage = readUsageMap(vault);
+    const prev = usage.get(id);
+    usage.set(id, {
+      usedCount: prev?.usedCount ?? target.usedCount,
+      lastUsedAt: prev?.lastUsedAt ?? target.lastUsedAt,
+      successCount: (prev?.successCount ?? 0) + (outcome === "success" ? 1 : 0),
+      failureCount: (prev?.failureCount ?? 0) + (outcome === "failure" ? 1 : 0),
+    });
+    writeUsageMap(vault, usage);
   });
-  writeUsageMap(vault, usage);
-  const graph = rebuildProceduralGraph(vault);
-  rebuildProceduralHints(vault, { graph });
 
   return next.find((entry) => entry.id === id) ?? null;
+}
+
+/** Fields of an index entry that are counters and stamps, never page references. */
+const PROJECTION_OPAQUE = opaqueFields("lastUsedAt", "usedCount", "successCount", "failureCount");
+
+/**
+ * Write the index (and usage) with `write`, then rebuild the graph and
+ * hints, as ONE operation: one privacy verdict over the entries every one
+ * of these projections is derived from (an entry naming a private page
+ * makes them all private), so the index, the usage sidecar, the graph and
+ * the hints never land in different partitions.
+ */
+function writeProjections(
+  vault: string,
+  entries: ReadonlyArray<ProceduralMemoryEntry>,
+  write: () => void,
+): void {
+  const judgeVault = existsSync(vault) ? vault : null;
+  withOperationPrivacy(
+    () => rowNamesPrivatePage(judgeVault, { entries }, PROJECTION_OPAQUE),
+    () => {
+      write();
+      const graph = rebuildProceduralGraph(vault);
+      rebuildProceduralHints(vault, { graph });
+    },
+  );
 }
 
 function collectEntries(vault: string, roots: ReadonlyArray<string>): ProceduralMemoryEntry[] {
@@ -228,14 +261,14 @@ function collectEntries(vault: string, roots: ReadonlyArray<string>): Procedural
 
   for (const root of roots) {
     const safeRoot = ensureInsideVault(root, vault);
-    if (!existsSync(safeRoot)) continue;
+    if (!lanePageExists(vault, safeRoot)) continue;
 
-    for (const filePath of walkMarkdown(safeRoot)) {
+    for (const filePath of walkMarkdown(vault, safeRoot)) {
       const rel = toVaultRelative(vault, filePath);
       const detectedKind = detectKind(rel);
       if (detectedKind === null) continue;
 
-      const [fm, body] = parseFrontmatter(filePath);
+      const [fm, body] = parseLanePage(vault, filePath);
       const title = extractTitle(body, rel);
       const id = proceduralEntryId(rel);
       out.push({
@@ -285,13 +318,27 @@ function extractTitle(body: string, fallbackPath: string): string {
   return parts[parts.length - 1] ?? fallbackPath;
 }
 
-function walkMarkdown(root: string): string[] {
-  const out: string[] = [];
+function walkMarkdown(vault: string, root: string): string[] {
+  // On a store-only machine `Brain/` is a set of lane records: a root
+  // inside it is read from the store only (never the stale legacy tree),
+  // and a root that contains it gets the store's pages for that part and
+  // a disk walk of the rest. Any other root (the user's `skills/`,
+  // `runbooks/`) is walked on disk.
+  const brain = join(vault, BRAIN_ROOT_REL);
+  const fromStore = lanePagesInStore(vault);
+  if (fromStore && isInside(brain, root)) return listLaneTree(vault, root);
+  const out: string[] = fromStore && isInside(root, brain) ? [...listLaneTree(vault, brain)] : [];
   const stack: string[] = [root];
 
   while (stack.length > 0) {
     const dir = stack.pop()!;
-    for (const name of readdirSync(dir)) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
       const path = join(dir, name);
       let st;
       try {
@@ -301,6 +348,7 @@ function walkMarkdown(root: string): string[] {
       }
       if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
+        if (fromStore && path === brain) continue;
         stack.push(path);
       } else if (st.isFile() && name.endsWith(".md")) {
         out.push(path);
@@ -309,6 +357,12 @@ function walkMarkdown(root: string): string[] {
   }
 
   return out;
+}
+
+/** Whether `path` is `dir` or lies below it. */
+function isInside(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function toVaultRelative(vault: string, absPath: string): string {
@@ -344,9 +398,8 @@ function asStringOrNull(value: unknown): string | null {
 
 function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const path = proceduralMemoryIndexPath(vault);
-  mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const payload = JSON.stringify(
     {
       schema_version: 1,
@@ -355,15 +408,15 @@ function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>
     null,
     2,
   );
-  atomicWriteFileSync(path, `${payload}\n`);
+  writeLaneText(vault, path, `${payload}\n`);
 }
 
 function readUsageMap(vault: string): Map<string, UsageRecord> {
   const path = proceduralMemoryUsagePath(vault);
-  if (!existsSync(path)) return new Map();
+  if (!lanePageExists(vault, path)) return new Map();
 
   const out = new Map<string, UsageRecord>();
-  for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const line of readLaneFile(vault, path).split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
@@ -384,7 +437,6 @@ function readUsageMap(vault: string): Map<string, UsageRecord> {
 
 function writeUsageMap(vault: string, usage: ReadonlyMap<string, UsageRecord>): void {
   const path = proceduralMemoryUsagePath(vault);
-  mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const lines: string[] = [];
   for (const [id, value] of [...usage.entries()].toSorted((left, right) =>
     left[0].localeCompare(right[0]),
@@ -400,5 +452,5 @@ function writeUsageMap(vault: string, usage: ReadonlyMap<string, UsageRecord>): 
     if (value.failureCount > 0) record["failureCount"] = value.failureCount;
     lines.push(JSON.stringify(record));
   }
-  atomicWriteFileSync(path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
+  writeLaneText(vault, path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
 }

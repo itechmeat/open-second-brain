@@ -8,7 +8,7 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,8 @@ let config: ResolvedSearchConfig;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-idx-alias-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   config = makeConfig({ vault, dbPath: join(vault, "index.sqlite") });
 });
 

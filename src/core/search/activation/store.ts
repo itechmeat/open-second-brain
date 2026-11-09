@@ -15,10 +15,19 @@
  * newest-N cap) approximates the limit instead of corrupting it.
  *
  * Privacy: events carry an FNV-1a hash of the query, never raw text.
+ *
+ * A store-only machine (design D14 items 1 and 11) keeps both in its
+ * device-local state, never under the vault: the events record what this
+ * machine's searches surfaced and decay away, the state is their fold,
+ * and no other machine needs to agree on either, so they are not a store
+ * ledger.
  */
 
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 import { fnv1aHex } from "../feedback.ts";
 import { bumpStrength } from "./decay.ts";
@@ -43,12 +52,27 @@ export const CO_ACCESS_MIN_COUNT = 2;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function activationDir(vault: string): string {
-  return join(vault, "Brain", "search", "activation");
+export function activationDir(vault: string | null): string {
+  return join(activationRoot(vault), ACTIVATION_EVENTS_DIR);
 }
 
-export function activationStatePath(vault: string): string {
-  return join(vault, "Brain", "search", "activation-state.json");
+export function activationStatePath(vault: string | null): string {
+  return join(activationRoot(vault), ACTIVATION_STATE_FILE);
+}
+
+const ACTIVATION_EVENTS_DIR = "activation";
+const ACTIVATION_STATE_FILE = "activation-state.json";
+/** The folder under `Brain/` that holds the activation files. */
+const ACTIVATION_SEARCH_DIR = "search";
+
+/**
+ * The folder both live in: `Brain/search/` on a legacy machine, else this
+ * machine's state for the vault (`state/machine-state.ts`): the switched
+ * machine's device-local folder, or one folder per bare vault, so two bare
+ * vaults on one machine never boost each other's paths.
+ */
+function activationRoot(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, ACTIVATION_SEARCH_DIR);
 }
 
 /**
@@ -56,7 +80,7 @@ export function activationStatePath(vault: string): string {
  * state. The filename derives from the timestamp plus a content hash,
  * so recording the identical event twice is idempotent.
  */
-export function recordAccessEvent(vault: string, event: ActivationAccessEvent): string {
+export function recordAccessEvent(vault: string | null, event: ActivationAccessEvent): string {
   const dir = activationDir(vault);
   mkdirSync(dir, { recursive: true });
   const bounded: ActivationAccessEvent = {
@@ -72,7 +96,7 @@ export function recordAccessEvent(vault: string, event: ActivationAccessEvent): 
 }
 
 /** Load all retained access events, sorted by ts then filename. */
-export function loadAccessEvents(vault: string): ActivationAccessEvent[] {
+export function loadAccessEvents(vault: string | null): ActivationAccessEvent[] {
   const dir = activationDir(vault);
   let files: string[];
   try {
@@ -162,9 +186,10 @@ export function computeActivationState(
   });
 }
 
-export function writeActivationState(vault: string, state: ActivationState): void {
-  mkdirSync(join(vault, "Brain", "search"), { recursive: true });
-  writeFileSync(activationStatePath(vault), JSON.stringify(state, null, 2) + "\n");
+export function writeActivationState(vault: string | null, state: ActivationState): void {
+  const path = activationStatePath(vault);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(state, null, 2) + "\n");
 }
 
 function isPathState(v: unknown): v is ActivationPathState {
@@ -198,7 +223,7 @@ function isCoAccessPair(v: unknown): v is CoAccessPair {
  * including corrupt NESTED rows, which would otherwise feed NaN into
  * ranking. A null read falls back to the replayable event fold.
  */
-export function readActivationState(vault: string): ActivationState | null {
+export function readActivationState(vault: string | null): ActivationState | null {
   try {
     const parsed = JSON.parse(readFileSync(activationStatePath(vault), "utf8")) as ActivationState;
     if (parsed.version !== 1) return null;
@@ -222,7 +247,7 @@ export function readActivationState(vault: string): ActivationState | null {
  * Stable fingerprint of the activation state for the query-cache key:
  * "off" when no derived file exists, else a hash of its content.
  */
-export function activationStateFingerprint(vault: string): string {
+export function activationStateFingerprint(vault: string | null): string {
   const path = activationStatePath(vault);
   if (!existsSync(path)) return "off";
   try {

@@ -11,8 +11,10 @@
  * reference view by hand.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { posix } from "node:path";
+
+import { memoryPageExists } from "../../core/brain/memory-pages.ts";
+import { memoryFromStore, storeMemoryRel } from "../../core/store/read/memory-ids.ts";
 
 import { readerRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { eventAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
@@ -138,11 +140,36 @@ export function deliveryRelForBrainArtifact(vault: string, id: string): string {
  * answer the walk the same way - one derivation, not two that can drift.
  */
 export function signalDeliveryRel(vault: string, id: string): string {
-  for (const dir of [BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL]) {
-    const rel = `${dir}/${id}.md`;
-    if (existsSync(join(vault, rel))) return rel;
+  return (
+    memoryPageRelIn(vault, id, [
+      BRAIN_INBOX_REL,
+      BRAIN_PROCESSED_REL,
+      BRAIN_ARCHIVED_SIGNALS_REL,
+    ]) ?? `${BRAIN_INBOX_REL}/${id}.md`
+  );
+}
+
+/**
+ * The page of memory record `id` in the first of `dirs` that holds it, or
+ * `null` when none does. A store-only machine answers from the folds'
+ * index of record states (`storeMemoryRel`, cached with the store's
+ * entities), not by rebuilding every memory page once per probe; an
+ * unswitched one asks each folder in order.
+ */
+export function memoryPageRelIn(
+  vault: string,
+  id: string,
+  dirs: ReadonlyArray<string>,
+): string | null {
+  if (memoryFromStore(vault)) {
+    const rel = storeMemoryRel(vault, id);
+    return rel !== null && dirs.includes(posix.dirname(rel)) ? rel : null;
   }
-  return `${BRAIN_INBOX_REL}/${id}.md`;
+  for (const dir of dirs) {
+    const rel = `${dir}/${id}.md`;
+    if (memoryPageExists(vault, rel)) return rel;
+  }
+  return null;
 }
 
 /** The events this caller may see, each in the form it may see it, in order. */

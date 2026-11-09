@@ -9,6 +9,10 @@ import {
 } from "../../../src/core/brain/import-claude-memory.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 function setupVault(): string {
   const v = mkdtempSync(join(tmpdir(), "o2b-cm-orch-"));

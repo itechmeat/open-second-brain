@@ -199,7 +199,7 @@ export interface CrossTopicLedger {
 }
 
 /** Read the ledger, or null when absent or unparseable (treated as fresh). */
-export function readCrossTopicLedger(vault: string): CrossTopicLedger | null {
+export function readCrossTopicLedger(vault: string | null): CrossTopicLedger | null {
   const path = crossTopicLedgerPath(vault);
   if (!existsSync(path)) return null;
   try {
@@ -214,11 +214,12 @@ export function readCrossTopicLedger(vault: string): CrossTopicLedger | null {
 }
 
 /** Persist the ledger. Called only when a promotion fired. */
-export function writeCrossTopicLedger(vault: string, ledger: CrossTopicLedger): void {
+export function writeCrossTopicLedger(vault: string | null, ledger: CrossTopicLedger): void {
   // Vault-identity write guard (context-integrity-gates, Unit J), the
   // same discipline as the rollup ledger: the shared atomic writer
-  // keeps the write-site census exactly as it was.
-  assertVaultIdentityForWrite(vault);
+  // keeps the write-site census exactly as it was. With no vault the
+  // ledger is device-local state only (design D14 item 11).
+  if (vault !== null) assertVaultIdentityForWrite(vault);
   atomicWriteFileSync(crossTopicLedgerPath(vault), `${JSON.stringify(ledger, null, 2)}\n`);
 }
 

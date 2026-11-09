@@ -1813,6 +1813,11 @@ what it was.
 
 ## Brain store dual writes (phase 1 trial)
 
+For setting up the store on one or more machines, syncing its partitions,
+the human view, moving an existing install out of the vault and the threat
+model, see the [brain store guide](brain-store.md). This section describes
+the phase 1 dual-write trial.
+
 Open Second Brain is moving its machine data out of the vault into the brain
 store: an append-only folder outside the vault whose format is documented in
 `FORMAT.md` inside the store (source: `src/core/store/FORMAT.md`). In this
@@ -1834,6 +1839,14 @@ finds some requested partitions already present (a first run that stopped
 half way, or a machine adding `private` later) adds the missing ones with
 the same store id. A partition folder that holds store files but no
 `store.json` is refused by name rather than given a new id.
+
+`o2b store path` prints where the store is on this machine: the store root,
+each partition and whether this machine holds it, the device-local state
+directory, and the folder the human view is rendered into (`none` when
+`view_target` is not set), each with the setting that put it there (`env`,
+`config` or `default`) and whether it exists. It creates nothing, so it also answers
+before `o2b store init` has run. `second_brain_status` carries the same
+answer in its `store` block, so an agent never has to know a path by heart.
 
 The `store_dual_write` setting turns the trial on. It is off by default.
 Set `store_dual_write: true` in the machine config, or set the environment

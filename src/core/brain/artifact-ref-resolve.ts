@@ -14,8 +14,39 @@ import { isAbsolute, join } from "node:path";
 import { existsSync, statSync } from "node:fs";
 
 import { pathIsInside, posixRel, vaultRelative } from "../path-safety.ts";
-import { BRAIN_DECISIONS_REL, BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
+import { memoryEntities, memoryFromStore, memoryRelOf } from "../store/read/memory-ids.ts";
+import type { StoreEntities } from "../store/read/store-entities.ts";
+import { BRAIN_DECISIONS_REL, BRAIN_SOURCES_REL, type BrainDirs, brainDirs } from "./paths.ts";
 import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "./wikilink.ts";
+
+/**
+ * What resolving a bare id needs to know about the vault: whether its
+ * memory records are read from the store (`memoryFromStore`), its Brain
+ * folders (`brainDirs`) and, on a store-only machine, the store's memory
+ * entities. Each reads the disk (the machine's switch state, a realpath
+ * per folder, the store's shard fingerprints), so a caller that resolves many
+ * references in one operation shares one scope, whose answers are worked
+ * out on first use and then kept: paying them for every string of every
+ * row made a batch append cost milliseconds per record.
+ */
+export interface ArtifactRefScope {
+  readonly fromStore: () => boolean;
+  readonly dirs: () => BrainDirs;
+  /** The store's memory entities (`memoryEntities`), read on a store-only machine only. */
+  readonly entities: () => StoreEntities | null;
+}
+
+/** A scope for `vault` that works each answer out once, on first use. */
+export function artifactRefScope(vault: string, fromStore?: boolean): ArtifactRefScope {
+  let store = fromStore;
+  let dirs: BrainDirs | undefined;
+  let entities: { readonly value: StoreEntities | null } | undefined;
+  return {
+    fromStore: () => (store ??= memoryFromStore(vault)),
+    dirs: () => (dirs ??= brainDirs(vault)),
+    entities: () => (entities ??= { value: memoryEntities({ vault }) }).value,
+  };
+}
 
 /** The `.md` extension every Brain artifact id resolves through. */
 const MARKDOWN_EXT = ".md";
@@ -81,15 +112,21 @@ function unbracket(ref: string): string {
  * `.base` view definitions rather than Markdown pages, and `snapshots`
  * holds dated copies addressed by path rather than by id.
  */
-function artifactPath(vault: string, id: string): string | null {
-  const dirs = brainDirs(vault);
+function artifactPath(vault: string, id: string, scope: ArtifactRefScope): string | null {
+  const dirs = scope.dirs();
+  const fromStore = scope.fromStore();
+  // Store-only (task 2.10): a preference or a signal is a record of the
+  // folds, not a file, and still names the page it would be, so the id
+  // keeps naming something the view must judge rather than nothing.
+  if (fromStore) {
+    const rel = memoryRelOf(scope.entities(), id);
+    if (rel !== null) return rel;
+  }
+  const memoryDirs = fromStore
+    ? []
+    : [dirs.preferences, dirs.retired, dirs.inbox, dirs.processed, dirs.archived, dirs.pending];
   for (const dir of [
-    dirs.preferences,
-    dirs.retired,
-    dirs.inbox,
-    dirs.processed,
-    dirs.archived,
-    dirs.pending,
+    ...memoryDirs,
     join(vault, BRAIN_SOURCES_REL),
     dirs.entities,
     join(vault, BRAIN_DECISIONS_REL),
@@ -154,12 +191,20 @@ function isVaultFile(vault: string, rel: string): boolean {
  *  - an absolute path is made relative to the vault: one inside the vault
  *    names its page, one outside comes back climbing out of it (or
  *    absolute, on another Windows drive), which every caller refuses.
+ *
+ * A caller that resolves many references in one operation passes one
+ * `scope` for all of them (see {@link ArtifactRefScope}).
  */
-export function resolveArtifactRef(vault: string, ref: string): string | null {
+export function resolveArtifactRef(
+  vault: string,
+  ref: string,
+  scope: ArtifactRefScope = artifactRefScope(vault),
+): string | null {
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0) return null;
   const bare = isAbsolute(spelled) ? vaultRelative(spelled, vault) : spelled;
   if (bare.length === 0) return null;
   if (bare.endsWith(MARKDOWN_EXT)) return bare;
-  return bare.includes("/") ? pageCandidate(vault, bare) : artifactPath(vault, bare);
+  if (bare.includes("/")) return pageCandidate(vault, bare);
+  return artifactPath(vault, bare, scope);
 }

@@ -12,20 +12,23 @@
  * whole plan with zero writes.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { HYGIENE_AUDIT_DIR } from "./audit-dirs.ts";
 import { scanFreshness } from "./freshness.ts";
 import { writeHandoffNote } from "./handoff.ts";
-import { brainDirsForWrite, BRAIN_SNAPSHOTS_REL } from "./paths.ts";
+import { brainDirsForWrite, snapshotsDir } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { isoDate } from "./time.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { renameWithRetry } from "../fs-atomic.ts";
+import { lanePagesInStore, readLaneText, removeLanePage } from "../store/lane-pages.ts";
+import { lanePlaceOf } from "../store/lane-paths.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 export type RecompileEntryKind = "rederive-handoff" | "cleanup" | "manual";
 
@@ -138,7 +141,7 @@ export function archivePage(vault: string, page: string, now: Date): string {
   // from the recompile executor, so it carries its own assertion ahead of
   // the `mkdirSync` + `renameSync` pair rather than relying on a caller.
   assertVaultIdentityForWrite(vault);
-  const dir = join(vault, BRAIN_SNAPSHOTS_REL, `hygiene-${isoDate(now)}`);
+  const dir = join(snapshotsDir(vault), `hygiene-${isoDate(now)}`);
   mkdirSync(dir, { recursive: true });
   let target = join(dir, basename(page));
   let suffix = 1;
@@ -146,8 +149,64 @@ export function archivePage(vault: string, page: string, now: Date): string {
     target = join(dir, `${basename(page, ".md")}-${suffix}.md`);
     suffix++;
   }
-  renameWithRetry(page, target);
+  moveIntoArchive(vault, page, target);
   return target;
+}
+
+/**
+ * Move `page` to `target`. A `Brain/` lane page on a store-only machine is
+ * its lane record: it is copied out of the store and its entry removed,
+ * and a leftover pre-switch file at `page` (the legacy tree a switch
+ * leaves in place) is left alone, as nothing under `Brain/` changes once
+ * switched. A file is renamed; the snapshots folder sits in the
+ * device-local state once switched, which can be another volume, so a
+ * cross-device rename is a copy, then the removal of the source.
+ */
+function moveIntoArchive(vault: string, page: string, target: string): void {
+  const rel = relative(join(vault, BRAIN_ROOT_REL), page);
+  const inBrain = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  const lanePage = inBrain && lanePlaceOf(rel.split(sep).join("/")) !== null;
+  if (lanePage && lanePagesInStore(vault)) {
+    const text = readLaneText(vault, page);
+    if (text === null) {
+      const error = new Error(`ENOENT: no such page, '${page}'`) as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      throw error;
+    }
+    archiveStoredPage(vault, page, target, text);
+    return;
+  }
+  try {
+    renameWithRetry(page, target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
+    copyFileSync(page, target);
+    rmSync(page, { force: true });
+  }
+}
+
+/**
+ * Write the archive copy of a stored lane page, then remove its entry. The
+ * copy is written whole under a temporary name and renamed into place (a
+ * crash leaves no partial archive under the name the suffix loop proved
+ * free), and removed again when the entry's tombstone fails, so the page
+ * is never both archived and live.
+ */
+function archiveStoredPage(vault: string, page: string, target: string, text: string): void {
+  const temp = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temp, text, { flag: "wx" });
+    renameWithRetry(temp, target);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    throw err;
+  }
+  try {
+    removeLanePage(vault, page);
+  } catch (err) {
+    rmSync(target, { force: true });
+    throw err;
+  }
 }
 
 /**

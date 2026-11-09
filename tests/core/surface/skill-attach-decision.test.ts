@@ -63,7 +63,8 @@ beforeEach(() => {
   resetDecisionSpendCache();
   tmp = mkdtempSync(join(tmpdir(), "osb-skill-dm-"));
   vault = join(tmp, "vault");
-  mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   const root = join(tmp, "skills");
   writeSkill(root, "release-cut", "Cut a release: version bump, tag and publish.");
   writeSkill(root, "changelog-writer", "Write the changelog entry for a release.");

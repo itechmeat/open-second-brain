@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { isMachineStateRelocated, machineStatePath } from "../state/machine-state.ts";
 
 export interface HostMemoryPromotionEntry {
   readonly pref_id: string;
@@ -29,8 +30,23 @@ export interface LoadedPromotionsManifest extends HostMemoryPromotionsManifest {
   readonly corrupt: boolean;
 }
 
+const MANIFEST_SEGMENTS = [BRAIN_ROOT_REL, ".imports", "host-memory-promotions.json"] as const;
+
+/** The manifest: in the vault, or in the device-local state once switched (D14). */
 function manifestPath(vault: string): string {
-  return join(vault, BRAIN_ROOT_REL, ".imports", "host-memory-promotions.json");
+  return machineStatePath(vault, ...MANIFEST_SEGMENTS);
+}
+
+/**
+ * The file a load reads: the manifest, or on a switched machine that has
+ * not saved one yet, the copy the legacy tree still holds (read only), so
+ * the promotion history survives the switch.
+ */
+function manifestReadPath(vault: string): string {
+  const p = manifestPath(vault);
+  if (existsSync(p)) return p;
+  const legacy = join(vault, ...MANIFEST_SEGMENTS);
+  return existsSync(legacy) ? legacy : p;
 }
 
 /**
@@ -51,7 +67,7 @@ function manifestPath(vault: string): string {
  * by construction.
  */
 export function loadPromotionsManifest(vault: string): LoadedPromotionsManifest {
-  const p = manifestPath(vault);
+  const p = manifestReadPath(vault);
   if (!existsSync(p)) return { version: 1, promotions: {}, corrupt: false };
   let raw: unknown;
   try {
@@ -76,9 +92,10 @@ export function loadPromotionsManifest(vault: string): LoadedPromotionsManifest 
 }
 
 export function savePromotionsManifest(vault: string, m: HostMemoryPromotionsManifest): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
   const p = manifestPath(vault);
+  // Vault-identity write guard (context-integrity-gates, Unit J), for a
+  // manifest in the vault; the device-local one writes nothing there.
+  if (!isMachineStateRelocated(vault)) assertVaultIdentityForWrite(vault);
   mkdirSync(dirname(p), { recursive: true });
   atomicWriteFileSync(p, JSON.stringify(m, null, 2) + "\n");
 }

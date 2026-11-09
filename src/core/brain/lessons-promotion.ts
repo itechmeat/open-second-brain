@@ -70,6 +70,7 @@ import { acquireLockSyncWithRetry, ingestLockRemedy } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainConfidence, type BrainPreference } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 export { LESSONS_PROMOTION_SCOPES_CONFIG_KEY };
 export {
@@ -508,9 +509,9 @@ export const LESSONS_APPROVALS_SCHEMA_VERSION = 1 as const;
 /** Basename of the approvals ledger inside the derived store. */
 export const LESSONS_APPROVALS_FILE = "lessons-approvals.json";
 
-/** Absolute path of the approvals ledger for a vault. */
+/** Absolute path of the approvals ledger for a vault (device-local once switched, D14 item 6). */
 export function lessonsApprovalsPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, LESSONS_APPROVALS_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, LESSONS_APPROVALS_FILE);
 }
 
 /**

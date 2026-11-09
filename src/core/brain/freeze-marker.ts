@@ -18,10 +18,14 @@
  * must not reach any of the three: an edge back would close a cycle whose
  * cost is paid at module-initialisation time by every consumer in the
  * tree (`tests/core/architecture/import-cycles.test.ts` is the ratchet).
- * It therefore builds its own path from the leaf constants, exactly as
- * `vault-identity.ts` builds the identity marker's path, and the
- * `paths.ts` re-export is a convenience for callers rather than the
- * definition.
+ * It therefore builds its own path from the leaf constants through the
+ * machine-state resolver (`state/machine-state.ts`, which reaches none of
+ * the three), and the `paths.ts` re-export is a convenience for callers
+ * rather than the definition.
+ *
+ * Once this machine is switched to the store (design D14 item 13) the
+ * marker is device-local: it lives in the device-local state, freezes
+ * this machine only, and no longer rides the vault's sync channel.
  *
  * ## An unreadable marker is a freeze
  *
@@ -50,9 +54,13 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
-import { ensureInsideVault } from "../path-safety.ts";
+import {
+  machineStateLocation,
+  machineStatePathIn,
+  machineStateRoot,
+} from "../state/machine-state.ts";
 import {
   DEGRADATION_CODE,
   degradationNotice,
@@ -118,9 +126,19 @@ export interface FreezeMarker {
   readonly reason: string;
 }
 
-/** Path of the freeze marker: `<vault>/Brain/.state/frozen.json`. */
+/**
+ * Path of the freeze marker: `<vault>/Brain/.state/frozen.json`, or the
+ * same path under the device-local state once this machine is switched
+ * (design D14 item 13: the freeze marker is device-local and no longer
+ * rides the vault's sync channel).
+ */
 export function frozenMarkerPath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE), vault);
+  return markerPathIn(machineStateRoot(vault));
+}
+
+/** The freeze marker below a machine-state root already resolved. */
+function markerPathIn(root: string): string {
+  return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
 }
 
 /**
@@ -178,7 +196,12 @@ interface MarkerStamp {
 }
 const MARKER_STAMPS = new Map<string, MarkerStamp>();
 
-/** Resolved marker path per root; the containment walk is paid once. */
+/**
+ * Resolved marker path per root, kept only once it is the device-local
+ * one: a switch is sticky, so that answer holds for the process, while an
+ * unswitched machine resolves again on every read (another process may
+ * switch it, and the marker then lives in the device-local state).
+ */
 const MARKER_PATHS = new Map<string, string>();
 
 /**
@@ -239,8 +262,13 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
   const root = resolve(vault);
   let path = MARKER_PATHS.get(root);
   if (path === undefined) {
-    path = frozenMarkerPath(root);
-    MARKER_PATHS.set(root, path);
+    // Only a relocated path is cached: a switch never goes back without a
+    // rollback, while an unswitched answer can change under this process
+    // (another process switches the machine), and the guarded write
+    // resolves the mode for itself anyway.
+    const location = machineStateLocation(root);
+    path = markerPathIn(location.root);
+    if (location.relocated) MARKER_PATHS.set(root, path);
   }
   // `throwIfNoEntry: false` for the same reason `currentVaultId` uses it:
   // an absent marker is the steady state, and the throwing form built and

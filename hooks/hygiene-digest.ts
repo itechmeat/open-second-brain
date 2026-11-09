@@ -32,7 +32,7 @@
  *      artifact-writing turn (`summarizeTurn` hadArtifact, the
  *      stop-log-guardrail gate) - an artifact write anywhere, code
  *      included, counts; the sweep is not vault-scoped.
- *   6. `resolveVault()` null -> silent.
+ *   6. `resolveHookVault()` null -> silent.
  *
  * Change detection is a hash ledger,
  * `<vault>/.open-second-brain/hygiene-digest.hash`
@@ -54,7 +54,7 @@
 
 import { writeSync } from "node:fs";
 
-import { resolveHygieneDigestEnabled, resolveVault } from "../src/core/config.ts";
+import { resolveHygieneDigestEnabled } from "../src/core/config.ts";
 import { detectHookRuntime, summarizeTurn } from "./lib/detect.ts";
 import { composeHygieneDigest } from "./lib/hygiene-digest-text.ts";
 import {
@@ -64,6 +64,7 @@ import {
 } from "./lib/hygiene-digest-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { readTranscript } from "./lib/transcript.ts";
+import { resolveHookVault } from "./lib/hook-vault.ts";
 
 async function main(): Promise<void> {
   let payload;
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
   const summary = summarizeTurn(signal.toolCalls, signal.bashCommands);
   if (!summary.hadArtifact) return;
 
-  const vault = resolveVault();
+  const vault = resolveHookVault();
   if (vault === null) return;
 
   // Heavy imports, only past every gate: the detector sweep and the
@@ -106,6 +107,9 @@ async function main(): Promise<void> {
   const { runHygieneScan } = await import("../src/core/brain/hygiene/scan.ts");
   const { resolveSearchConfig } = await import("../src/core/search/index.ts");
   const { measureFromIndex } = await import("../src/core/search/link-ratchet.ts");
+  // The ledger is machine state: the vault before the switch, the
+  // device-local state once store-only (nothing written into the vault).
+  const { machineStateRoot } = await import("../src/core/state/machine-state.ts");
 
   const report = runHygieneScan(vault, { now: new Date() });
   // The dangling-link measurement must never fail the digest: resolving
@@ -125,7 +129,8 @@ async function main(): Promise<void> {
   if (line === null) return;
 
   const hash = computeHygieneDigestHash({ findings: report.findings, danglingLinks });
-  if (hygieneDigestHashMatches(vault, hash)) return;
+  const stateRoot = machineStateRoot(vault);
+  if (hygieneDigestHashMatches(stateRoot, hash)) return;
 
   // One blocking write to fd 1, not process.stdout.write: a write error
   // must surface HERE, before the ledger write below. Bun and Node
@@ -140,7 +145,7 @@ async function main(): Promise<void> {
   );
   // Lose-not-duplicate: the ledger records the state only after the
   // emit, so a crash in between re-emits rather than going silent.
-  writeHygieneDigestHash(vault, hash);
+  writeHygieneDigestHash(stateRoot, hash);
 }
 
 main().catch(() => {

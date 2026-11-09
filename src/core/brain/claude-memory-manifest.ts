@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 export interface ClaudeMemoryManifestEntry {
   readonly pref_id: string;
@@ -16,8 +17,9 @@ export interface ClaudeMemoryManifest {
   readonly imports: Readonly<Record<string, ClaudeMemoryManifestEntry>>;
 }
 
+/** The manifest: in the vault, or in the device-local state once switched (D14). */
 function manifestPath(vault: string): string {
-  return join(vault, BRAIN_ROOT_REL, ".imports", "claude-memory.json");
+  return machineStatePath(vault, BRAIN_ROOT_REL, ".imports", "claude-memory.json");
 }
 
 /**

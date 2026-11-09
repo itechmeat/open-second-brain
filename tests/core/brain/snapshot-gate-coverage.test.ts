@@ -72,6 +72,10 @@ import { brainDirs, dreamWorkrunPath } from "../../../src/core/brain/paths.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { maskLogChainDigests } from "../../helpers/vault-digest.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = new Date("2026-06-01T00:00:00Z");
 

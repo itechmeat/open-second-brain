@@ -14,6 +14,7 @@ import {
 } from "./schema-pack.ts";
 import {
   applySchemaMutations,
+  type ApplySchemaMutationsOptions,
   type ApplySchemaMutationsResult,
   type SchemaMutation,
 } from "./schema-mutate.ts";
@@ -299,7 +300,7 @@ export function reviewSchemaOrphans(vault: string): SchemaOrphanReport {
 export async function applySchemaAdminMutations(
   vault: string,
   mutations: ReadonlyArray<SchemaMutation>,
-  opts: { actor: string; reason?: string },
+  opts: ApplySchemaMutationsOptions,
 ): Promise<ApplySchemaMutationsResult> {
   return await applySchemaMutations(vault, mutations, opts);
 }

@@ -325,3 +325,14 @@ export function documentSources(
   for (const row of rows) out.set(row.id, row.source);
   return out;
 }
+
+/** Whether the index holds any record of `kind` (one indexed row is enough). */
+export function holdsRecordKind(db: Database, kind: string): boolean {
+  return (
+    db
+      .query<{ n: number }, [string]>(
+        `SELECT EXISTS(SELECT 1 FROM ${RECORDS_TABLE} WHERE kind = ?) AS n`,
+      )
+      .get(kind)!.n === 1
+  );
+}

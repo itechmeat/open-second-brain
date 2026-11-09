@@ -33,6 +33,8 @@ function writeNote(rel: string, body: string): void {
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-cooccurrence-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -78,6 +80,8 @@ describe("computeCoOccurrenceSuggestions", () => {
 
     rmSync(vault, { recursive: true, force: true });
     vault = mkdtempSync(join(tmpdir(), "o2b-cooccurrence-cjk-"));
+    // An unswitched vault: its Brain/ tree is the legacy layout under test.
+    mkdirSync(join(vault, "Brain"), { recursive: true });
     writeNote("notes/m1.md", "# M1\n\nSee [[行列]] and [[共鳴]].\n");
     writeNote("notes/m2.md", "# M2\n\nAlso [[行列]] with [[共鳴]].\n");
     writeNote("notes/m3.md", "# M3\n\nDifferent [[勾配]] and [[時系列]].\n");

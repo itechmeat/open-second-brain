@@ -24,7 +24,6 @@
  * "what just happened" before it answers "what happened once".
  */
 
-import { listLogDates, listLogShardFiles, readLogDay, type LogShardFile } from "../log-jsonl.ts";
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../../origin-channel.ts";
@@ -36,6 +35,7 @@ import {
   timestampInWindow,
 } from "./log-window.ts";
 import { isNoteWriteOp, type NoteWriteOp } from "./write-record.ts";
+import { logDaysWithDevices } from "../log-days.ts";
 
 /** One recorded note write, projected from its log event. */
 export interface NoteWriteRecord {
@@ -76,6 +76,11 @@ export interface ListNoteWritesFilter {
   readonly device?: string;
   /** Exact vault-relative target path. */
   readonly path?: string;
+  /**
+   * The machine config that decides whether the log is the day files or
+   * the store, and which store (default: the resolved one).
+   */
+  readonly configPath?: string;
   /** Inclusive lower bound: an ISO date or an ISO-8601 UTC timestamp. */
   readonly since?: string;
   /** Inclusive upper bound, same two spellings. */
@@ -179,14 +184,17 @@ export function listNoteWrites(
     filter.since === undefined ? null : parseWindowBound(filter.since, "since", DAY_START_SUFFIX);
   const until =
     filter.until === undefined ? null : parseWindowBound(filter.until, "until", DAY_END_SUFFIX);
-  const shards: ReadonlyArray<LogShardFile> = listLogShardFiles(vault);
   const warnings: BrainLogParseWarning[] = [];
   const writes: NoteWriteRecord[] = [];
 
-  for (const date of listLogDates(vault)) {
-    if (since !== null && date < since.slice(0, DATE_LENGTH)) continue;
-    if (until !== null && date > until.slice(0, DATE_LENGTH)) continue;
-    const day = readLogDay(vault, date, shards);
+  // The day files and their shard ids, or the store's log events and
+  // their devices once switched.
+  for (const day of logDaysWithDevices(
+    vault,
+    since === null ? null : since.slice(0, DATE_LENGTH),
+    until === null ? null : until.slice(0, DATE_LENGTH),
+    filter.configPath !== undefined ? { configPath: filter.configPath } : {},
+  )) {
     warnings.push(...day.warnings);
     day.entries.forEach((entry, index) => {
       const record = projectRecord(entry, day.entryShardIds[index] ?? "");

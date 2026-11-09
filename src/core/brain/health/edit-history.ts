@@ -12,12 +12,18 @@
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 import { jsonlLedgerGrammar, readShardedLines } from "../ledger-shards.ts";
 import { preferenceHistoryPath, preferenceHistoryStem } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { dualWrite } from "../../store/dual-write.ts";
+import { processDirsEnv } from "../../platform-dirs.ts";
+import { withLocalLock } from "../../store/local-lock.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { storesStateDir } from "../../store/store-paths.ts";
+import { dualWrite, type DualWriteRecord } from "../../store/dual-write.ts";
+import { storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
@@ -62,8 +68,28 @@ function historyGrammar(slug: string) {
   return jsonlLedgerGrammar(preferenceHistoryStem(slug));
 }
 
-/** Read every device's shard, skipping malformed lines. No shards -> `[]`. */
-export function readEditHistory(vault: string, slug: string): EditHistoryEntry[] {
+/**
+ * The preference's edit history: every device's shard on an unswitched
+ * machine (malformed lines skipped, no shards -> `[]`), the
+ * `edit-history` ledger rows of the store once switched (task 2.10).
+ */
+export function readEditHistory(vault: string | null, slug: string): EditHistoryEntry[] {
+  return readLedgerRows<unknown>(
+    DUAL_WRITE_LEDGERS.editHistory,
+    (root) => readLegacyEditHistory(root, slug),
+    { vault },
+  ).flatMap((row) => {
+    if (row === null || typeof row !== "object") return [];
+    // A store row is `{ slug, entry }`; a legacy line is the entry itself.
+    if ("entry" in row) {
+      const { slug: rowSlug, entry } = row as { slug?: unknown; entry?: unknown };
+      return rowSlug === slug && isEntry(entry) ? [entry] : [];
+    }
+    return isEntry(row) ? [row] : [];
+  });
+}
+
+function readLegacyEditHistory(vault: string, slug: string): EditHistoryEntry[] {
   const dir = dirname(preferenceHistoryPath(vault, slug));
   const out: EditHistoryEntry[] = [];
   for (const line of readShardedLines(dir, historyGrammar(slug))) {
@@ -77,51 +103,89 @@ export function readEditHistory(vault: string, slug: string): EditHistoryEntry[]
   return out;
 }
 
+/** Device-local lock of the store-only dedup read and append, per preference. */
+const STORE_EDIT_HISTORY_LOCK_DIR = "edit-history-locks";
+
 /**
  * Append `entries` to the sidecar, skipping any whose
  * `(revision, field, after)` already exists. Returns the number of
  * lines actually written. Creates the parent directory if missing.
+ *
+ * On a store-only machine (task 2.10, design D14 items 1 and 13) the
+ * entries are `edit-history` ledger rows only, nothing under the vault
+ * changes, and the store identity check of the store write replaces the
+ * vault identity guard. The dedup read and the append are one critical
+ * section under a device-local lock per preference, as for the other
+ * store-only ledgers that dedup.
  */
 export function appendEditHistory(
-  vault: string,
+  vault: string | null,
   slug: string,
   entries: ReadonlyArray<EditHistoryEntry>,
 ): number {
+  // No vault means store-only too (design D14).
+  if (vault === null || isStoreOnly({ vault })) {
+    if (entries.length === 0) return 0;
+    return withLocalLock(
+      join(storesStateDir(processDirsEnv()), STORE_EDIT_HISTORY_LOCK_DIR, `pref-${slug}`),
+      () => {
+        const appended = newEntries(readEditHistory(vault, slug), entries);
+        if (appended.length > 0) storeWrite(() => historyRows(vault, slug, appended), { vault });
+        return appended.length;
+      },
+    );
+  }
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   if (entries.length === 0) return 0;
   const path = preferenceHistoryPath(vault, slug);
-  const seen = new Set(readEditHistory(vault, slug).map(dedupKey));
-  const lines: string[] = [];
-  const appended: EditHistoryEntry[] = [];
+  const appended = newEntries(readEditHistory(vault, slug), entries);
+  if (appended.length === 0) return 0;
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, appended.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  // Brain store dual write (task 1.11): off by default, never fails this
+  // append.
+  dualWrite(() => historyRows(vault, slug, appended), { vault });
+  return appended.length;
+}
+
+/** The entries of `entries` whose `(revision, field, after)` is not in `existing`, once each. */
+function newEntries(
+  existing: ReadonlyArray<EditHistoryEntry>,
+  entries: ReadonlyArray<EditHistoryEntry>,
+): EditHistoryEntry[] {
+  const seen = new Set(existing.map(dedupKey));
+  const out: EditHistoryEntry[] = [];
   for (const e of entries) {
     const key = dedupKey(e);
     if (seen.has(key)) continue;
     seen.add(key);
-    lines.push(JSON.stringify(e));
-    appended.push(e);
+    out.push(e);
   }
-  if (lines.length === 0) return 0;
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, lines.join("\n") + "\n");
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // A private preference's history rows stay out of the shared store
-  // partition, as do rows about a preference whose page cannot be judged
-  // and rows whose values name a private or unjudgeable page.
-  dualWrite(
-    () => {
-      const prefPrivate = rowNamesPrivatePage(vault, `pref-${slug}`);
-      return appended.map((entry) =>
-        ledgerRowRecord(
-          DUAL_WRITE_LEDGERS.editHistory,
-          { slug, entry },
-          prefPrivate || rowNamesPrivatePage(vault, entry) ? "private" : "shared",
-        ),
-      );
-    },
-    { vault },
+  return out;
+}
+
+/**
+ * The store rows of `appended`. A private preference's history rows stay
+ * out of the shared store partition, as do rows about a preference whose
+ * page cannot be judged and rows whose values name a private or
+ * unjudgeable page.
+ */
+function historyRows(
+  vault: string | null,
+  slug: string,
+  appended: ReadonlyArray<EditHistoryEntry>,
+): DualWriteRecord[] {
+  // One verdict for the whole append (one operation, one partition): a
+  // sibling row of a private edit would otherwise reveal it in shared.
+  const partition =
+    rowNamesPrivatePage(vault, `pref-${slug}`) ||
+    appended.some((entry) => rowNamesPrivatePage(vault, entry))
+      ? "private"
+      : "shared";
+  return appended.map((entry) =>
+    ledgerRowRecord(DUAL_WRITE_LEDGERS.editHistory, { slug, entry }, partition),
   );
-  return lines.length;
 }
 
 /**

@@ -98,7 +98,7 @@ export interface QueryEntityExpansion {
  * registry's derived lookup lane compares them.
  */
 export function expandQueryEntities(
-  vault: string,
+  vault: string | null,
   queryEntities: ReadonlyArray<string>,
 ): QueryEntityExpansion {
   const identity: QueryEntityExpansion = Object.freeze({
@@ -108,7 +108,8 @@ export function expandQueryEntities(
     sourceIds: Object.freeze([] as string[]),
     derivedAmbiguities: Object.freeze([] as DerivedPersonAmbiguity[]),
   });
-  if (queryEntities.length === 0) return identity;
+  // No vault: no entity registry to expand through (design D14).
+  if (queryEntities.length === 0 || vault === null) return identity;
 
   let derivedIndex: PersonDerivedIndex;
   try {

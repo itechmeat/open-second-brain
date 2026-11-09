@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { computeAgentSummary } from "../../../src/core/brain/digest-agent-summary.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_APPLY_RESULT } from "../../../src/core/brain/types.ts";
+import { preferencePath } from "../../../src/core/brain/paths.ts";
+import { moveToRetired, writePreference } from "../../../src/core/brain/preference.ts";
+import { makeStoreEnv } from "../store/fixtures/store-env.ts";
+import { switchDevice } from "./store-only/fixtures.ts";
 
 let vault: string;
 
@@ -119,5 +123,57 @@ describe("computeAgentSummary", () => {
 
     expect(agentA.confirmed_attributed).toBe(1);
     expect(agentB.confirmed_attributed).toBe(0);
+  });
+});
+
+describe("computeAgentSummary on both machines", () => {
+  /** A confirmed and a retired preference, each applied once by one agent. */
+  function attributions(mode: "legacy" | "switched") {
+    const env = makeStoreEnv(`osb-agent-summary-${mode}-`, { dualWrite: false });
+    try {
+      if (mode === "switched") switchDevice(env.storeRoot);
+      const pref = (slug: string, extra: Record<string, unknown>) => ({
+        slug,
+        topic: slug,
+        principle: `principle ${slug}`,
+        created_at: "2026-05-01T00:00:00Z",
+        unconfirmed_until: "2026-05-31T00:00:00Z",
+        status: "confirmed" as const,
+        evidenced_by: [] as string[],
+        ...extra,
+      });
+      writePreference(env.vault, pref("kept", { confirmed_at: "2026-05-15T00:00:00Z" }), {
+        authority: "agent",
+      });
+      writePreference(env.vault, pref("gone", { confirmed_at: "2026-04-01T00:00:00Z" }), {
+        authority: "agent",
+      });
+      moveToRetired(env.vault, preferencePath(env.vault, "gone"), "stale-no-evidence", {
+        now: new Date("2026-05-16T00:00:00Z"),
+        retired_by: "[[Brain/log/2026-05-16]]",
+        authority: "agent",
+      });
+      for (const id of ["pref-kept", "pref-gone"]) {
+        appendLogEvent(env.vault, {
+          timestamp: "2026-05-14T10:00:00Z",
+          eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+          body: { preference: `[[${id}]]`, result: BRAIN_APPLY_RESULT.applied, artifact: "[[x]]" },
+          agent: "claude",
+        });
+      }
+      return computeAgentSummary(
+        env.vault,
+        new Date("2026-05-13T00:00:00Z"),
+        new Date("2026-05-20T00:00:00Z"),
+      ).map((a) => [a.agent, a.confirmed_attributed, a.retired_attributed]);
+    } finally {
+      env.cleanup();
+    }
+  }
+
+  test("a switched machine attributes confirmations and retirements as an unswitched one", () => {
+    const legacy = attributions("legacy");
+    expect(legacy).toEqual([["claude", 1, 1]]);
+    expect(attributions("switched")).toEqual(legacy);
   });
 });

@@ -19,14 +19,16 @@
 
 import {
   listAttestationRecordFiles,
-  readAttestationRecordFile,
+  readAttestationEntry,
 } from "../../core/brain/attestation/record.ts";
 import { attestationKeyPaths } from "../../core/brain/attestation/signing.ts";
 import { verifyAttestation } from "../../core/brain/attestation/verify.ts";
 import { unknownOperationError } from "../coerce.ts";
 import { INTERNAL_ERROR, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
+import { redactErrorForCaller } from "../error-redaction.ts";
+import { contextReach } from "../tool-contract.ts";
 
 async function toolBrainAttestations(
   ctx: ServerContext,
@@ -54,18 +56,22 @@ async function toolBrainAttestations(
       const unreadable: Record<string, string>[] = [];
       for (const entry of listAttestationRecordFiles(ctx.vault).toReversed()) {
         try {
-          const record = readAttestationRecordFile(entry.path);
+          const record = readAttestationEntry(entry);
           attestations.push({
             id: record.id,
             created_at: record.createdAt,
             device_id: record.deviceId,
             store_digest: record.storeDigest,
-            path: vaultRelativeSafe(ctx.vault, entry.path),
+            path: toolPath(ctx, entry.path),
           });
         } catch (exc) {
           unreadable.push({
-            path: vaultRelativeSafe(ctx.vault, entry.path),
-            reason: ((exc as Error).message ?? String(exc)).replaceAll(ctx.vault, "<vault>"),
+            path: toolPath(ctx, entry.path),
+            reason: redactErrorForCaller(
+              (exc as Error).message ?? String(exc),
+              ctx.vault,
+              contextReach(ctx),
+            ),
           });
         }
       }
@@ -86,7 +92,7 @@ async function toolBrainAttestations(
     // is named explicitly, so a verification an agent triggers never
     // falls back to reading the operator's private key material.
     return {
-      ...verifyAttestation(ctx.vault, readAttestationRecordFile(newest.path), {
+      ...verifyAttestation(ctx.vault, readAttestationEntry(newest), {
         publicPath: attestationKeyPaths(ctx.vault).publicPath,
       }),
     };
@@ -101,7 +107,7 @@ async function toolBrainAttestations(
     // root the server runs under.
     throw new MCPError(
       INTERNAL_ERROR,
-      `brain_attestations: ${((exc as Error).message ?? String(exc)).replaceAll(ctx.vault, "<vault>")}`,
+      `brain_attestations: ${redactErrorForCaller((exc as Error).message ?? String(exc), ctx.vault, contextReach(ctx))}`,
     );
   }
 }

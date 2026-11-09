@@ -23,16 +23,22 @@
  * touched.
  */
 
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { Store } from "../../search/store.ts";
 import { getGraphSnapshot } from "./graph-index.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isoSecond } from "../time.ts";
 import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
-import { formatFrontmatter, parseFrontmatter } from "../../vault.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { formatFrontmatter } from "../../vault.ts";
+import {
+  assertLaneWrite,
+  lanePagesInStore,
+  listLaneFiles,
+  parseLanePage,
+  removeLanePage,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 export const COMMUNITY_DEFAULT_MIN_SIZE = 4;
 export const COMMUNITY_MAX_ITERATIONS = 20;
@@ -288,10 +294,13 @@ export function materializeClusterNotes(
   opts: MaterializeClusterNotesOptions,
 ): MaterializeClusterNotesResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const dir = clustersDir(vault);
-  mkdirSync(dir, { recursive: true });
-  const writeNote = opts.writeNote ?? atomicWriteFileSync;
+  const writeNote =
+    opts.writeNote ?? ((path: string, text: string) => writeLaneText(vault, path, text));
+  // The default writer creates its parent; a caller's writer is handed an
+  // existing `Brain/clusters/` on an unswitched machine, as it always was.
+  if (opts.writeNote !== undefined && !lanePagesInStore(vault)) mkdirSync(dir, { recursive: true });
 
   // The full detected set protects every community note from the stale
   // sweep regardless of batch success: a failed batch keeps its prior
@@ -340,12 +349,12 @@ export function materializeClusterNotes(
 
   // Single global stale sweep: only generated notes are eligible.
   const removed: string[] = [];
-  for (const file of readdirSync(dir).toSorted()) {
-    if (!file.endsWith(".md") || expected.has(file)) continue;
+  for (const file of listLaneFiles(vault, dir)) {
+    if (expected.has(file)) continue;
     const full = join(dir, file);
-    const [meta] = parseFrontmatter(full);
+    const [meta] = parseLanePage(vault, full);
     if (meta["kind"] !== GENERATED_KIND) continue;
-    rmSync(full);
+    removeLanePage(vault, full);
     removed.push(`Brain/clusters/${file}`);
   }
 

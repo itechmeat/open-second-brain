@@ -66,7 +66,7 @@ export interface SessionPoolCapResult {
 
 /** What the cap reads per row: the vault root, the cap, the shared cache. */
 export interface SessionPoolCapOptions {
-  readonly vault: string;
+  readonly vault: string | null;
   /**
    * Rows one group may keep, in ranked order. Must be a non-negative
    * integer; the caller gates the phase on the configured knob being on,
@@ -117,7 +117,7 @@ export function resolveSessionPoolCap(value: number): number {
  * and an unreadable file has no frontmatter to speak of, so it lands on
  * the same path fallback as a note that never carried any.
  */
-function sessionKey(vault: string, r: BrainSearchResult, cache: FrontmatterCache): string {
+function sessionKey(vault: string | null, r: BrainSearchResult, cache: FrontmatterCache): string {
   const { meta } = readCachedFrontmatterEntry(cache, vault, r.path);
   const ref = meta[SESSION_REF_KEY];
   if (typeof ref === "string" && ref !== "") return `${REF_GROUP_PREFIX}${ref}`;

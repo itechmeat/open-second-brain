@@ -105,6 +105,9 @@ function writeAged(relPath: string, body: string): void {
 
 beforeEach(async () => {
   vault = mkdtempSync(join(tmpdir(), "o2b-signals-vault-"));
+  // An unswitched machine: a vault with no `Brain/` is a store-only fresh
+  // install (design D14 item 1), whose writes need a device id and a store.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-signals-cfg-"));
   writeAged("notes/claim.md", CLAIM);
   writeAged("notes/counter.md", COUNTER);

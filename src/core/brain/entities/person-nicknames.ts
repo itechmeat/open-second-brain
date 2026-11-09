@@ -30,6 +30,7 @@ import { join } from "node:path";
 
 import { normalizeEntityName } from "./canonical.ts";
 import { EMPTY_PERSON_NICKNAME_MAP, type PersonNicknameMap } from "./person-variants.ts";
+import { lanePagesInStore, readLaneText } from "../../store/lane-pages.ts";
 
 /**
  * Vault-relative home of the operator-supplied nickname map.
@@ -140,7 +141,14 @@ export function resolvePersonNicknameMap(vault: string): PersonNicknameMap {
   const path = join(vault, PERSON_NICKNAMES_ARTIFACT_REL);
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    // A store-only machine keeps the file as an entities lane record.
+    if (lanePagesInStore(vault)) {
+      const stored = readLaneText(vault, path);
+      if (stored === null) return EMPTY_PERSON_NICKNAME_MAP;
+      text = stored;
+    } else {
+      text = readFileSync(path, "utf8");
+    }
   } catch (err) {
     if (isMissingFileError(err)) return EMPTY_PERSON_NICKNAME_MAP;
     throw new PersonNicknameConfigError(path, `not readable (${String(err)})`);

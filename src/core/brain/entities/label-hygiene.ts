@@ -14,11 +14,10 @@
  * heal side must agree.
  */
 
-import { rmSync } from "node:fs";
-
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
+import { entityPagesPrivate } from "./page-privacy.ts";
 import { discoverConfig } from "../../config.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { relationFromFrontmatterField } from "../../graph/relation-vocab.ts";
 import { withDestructiveSnapshot } from "../snapshot-gate.ts";
@@ -32,7 +31,12 @@ import { buildEntityIndex, type EntityIndex } from "./index-builder.ts";
 import { resolveEntityLexicon } from "./lexicon.ts";
 import type { BrainEntity } from "./types.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../types.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import {
+  assertLaneWrite,
+  parseLanePage,
+  removeLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 
 /** Config key / env twin for the operator-supplied exact-label denylist. */
 export const ENTITY_LABEL_DENYLIST_CONFIG_KEY = "entities.label_denylist";
@@ -206,13 +210,14 @@ interface EdgeRewrite {
  * number of edges removed.
  */
 function planEdgeRewrites(
+  vault: string,
   survivors: ReadonlyArray<BrainEntity>,
   prunedIds: ReadonlySet<string>,
 ): { rewrites: EdgeRewrite[]; edgesStripped: number } {
   const rewrites: EdgeRewrite[] = [];
   let edgesStripped = 0;
   for (const entity of survivors) {
-    const [meta, body] = parseFrontmatter(entity.path);
+    const [meta, body] = parseLanePage(vault, entity.path);
     let changed = 0;
     const nextMeta: FrontmatterMap = {};
     for (const [key, value] of Object.entries(meta)) {
@@ -260,7 +265,7 @@ export function pruneEntityLabels(
 ): PruneEntityLabelsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   // Unconfirmed runs only list candidates, so they stay ungated.
-  if (opts.confirm === true) assertVaultIdentityForWrite(vault);
+  if (opts.confirm === true) assertLaneWrite(vault);
   const denylist = opts.denylist ?? resolveEntityLabelDenylist(opts.configPath);
   const findings = findMalformedEntityLabels(vault, { denylist });
   const candidates = opts.includeAdvisory === true ? findings : findings.filter((f) => !f.advisory);
@@ -281,18 +286,25 @@ export function pruneEntityLabels(
   const prunedIds = new Set(candidates.map((c) => c.id));
   const prunePaths = candidates.map((c) => c.path);
   const survivors = buildEntityIndex(vault).entities.filter((e) => !prunedIds.has(e.id));
-  const { rewrites, edgesStripped } = planEdgeRewrites(survivors, prunedIds);
+  const { rewrites, edgesStripped } = planEdgeRewrites(vault, survivors, prunedIds);
 
-  const gated = withDestructiveSnapshot(
-    vault,
-    BRAIN_SNAPSHOT_REASON.entityPrune,
-    () => {
-      for (const path of prunePaths) rmSync(path, { force: true });
-      for (const rewrite of rewrites) {
-        writeFrontmatterAtomic(rewrite.path, rewrite.meta, rewrite.body, { overwrite: true });
-      }
-    },
-    opts.now !== undefined ? { now: opts.now } : {},
+  // One privacy verdict for the whole prune: every tombstone and every
+  // rewritten survivor lands in one partition, private when any pruned or
+  // rewritten page is private or names a private page (the edge a rewrite
+  // removes may name a private pruned page). Judged before any write.
+  const prunePrivate = entityPagesPrivate(vault, [...prunePaths, ...rewrites.map((r) => r.path)]);
+  const gated = withOperationPrivacy(prunePrivate, () =>
+    withDestructiveSnapshot(
+      vault,
+      BRAIN_SNAPSHOT_REASON.entityPrune,
+      () => {
+        for (const path of prunePaths) removeLanePage(vault, path);
+        for (const rewrite of rewrites) {
+          writeLanePage(vault, rewrite.path, rewrite.meta, rewrite.body, { overwrite: true });
+        }
+      },
+      opts.now !== undefined ? { now: opts.now } : {},
+    ),
   );
 
   return Object.freeze({

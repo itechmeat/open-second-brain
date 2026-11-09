@@ -96,6 +96,7 @@ import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
+import { memoryFromStore, storeMemoryRel } from "../store/read/memory-ids.ts";
 import { collectAllBasenames } from "./doctor/records.ts";
 import {
   LINT_CONSOLIDATE_KIND,
@@ -571,15 +572,17 @@ function mergedAtReach(vault: string, ctx: LintContext, target: string): MergedL
 function hasReadableArtifact(vault: string, ctx: LintContext, target: string): boolean {
   if (!ctx.basenames.has(target)) return false;
   const dirs = brainDirs(vault);
-  for (const dir of [
-    dirs.brain,
-    dirs.inbox,
-    dirs.processed,
-    dirs.archived,
-    dirs.preferences,
-    dirs.retired,
-    dirs.log,
-  ]) {
+  const memoryDirs = [dirs.inbox, dirs.processed, dirs.archived, dirs.preferences, dirs.retired];
+  const fromStore = memoryFromStore(vault);
+  if (fromStore) {
+    // Store-only (task 2.10): a preference or a signal is a fold record,
+    // judged by the path its page would have. The fold's answer is final
+    // for the memory folders: a stale page the frozen legacy tree still
+    // holds there names nothing live.
+    const rel = storeMemoryRel(vault, target);
+    if (rel !== null && ctx.readable(rel)) return true;
+  }
+  for (const dir of [dirs.brain, ...(fromStore ? [] : memoryDirs), dirs.log]) {
     const absolute = join(dir, `${target}.md`);
     if (!ctx.readable(vaultRelative(absolute, vault))) continue;
     if (lstatSync(absolute, { throwIfNoEntry: false })?.isFile() === true) return true;

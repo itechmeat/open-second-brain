@@ -61,6 +61,7 @@ import {
   readDecisionChangeReceipts,
   receiptsDir,
 } from "./decisions/receipts.ts";
+import { memoryFromStore, storePagesIn } from "./memory-pages.ts";
 import { readAllRetiredRecords } from "./doctor/records.ts";
 import {
   joinStaleDependencies,
@@ -376,7 +377,26 @@ function artifactDirs(vault: string): ReadonlyArray<string> {
 function walkBrainArtifacts(vault: string): ReadonlyArray<BrainArtifactFile> {
   const out: BrainArtifactFile[] = [];
   const seen = new Set<string>();
-  for (const dir of artifactDirs(vault)) {
+  // Store-only (task 2.10): the preferences and signals are fold records,
+  // each with the instant it was last written; only the Brain root is
+  // still walked as files.
+  const fromStore = memoryFromStore(vault);
+  if (fromStore) {
+    const dirs = brainDirs(vault);
+    for (const dir of artifactDirs(vault).filter((d) => d !== dirs.brain)) {
+      for (const page of storePagesIn(vault, dir)) {
+        out.push({
+          basename: page.id,
+          path: page.path,
+          mtimeMs: page.updatedMs,
+          mtimeIso: new Date(page.updatedMs).toISOString(),
+          meta: page.meta,
+        });
+      }
+    }
+  }
+  const walked = fromStore ? [brainDirs(vault).brain] : artifactDirs(vault);
+  for (const dir of walked) {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });

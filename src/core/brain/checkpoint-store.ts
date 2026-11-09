@@ -26,12 +26,12 @@
  */
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy, type LockHandle } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /**
  * Env var that, when truthy, disables checkpoint reads and writes in EVERY
@@ -71,7 +71,7 @@ export function assertCheckpointId(label: string, id: string): void {
 /** Absolute path of one checkpoint file inside a lane's own directory. */
 export function checkpointFilePath(vault: string, dir: string, label: string, id: string): string {
   assertCheckpointId(label, id);
-  return join(vault, DERIVED_STORE_DIR, dir, `${id}.json`);
+  return machineStatePath(vault, DERIVED_STORE_DIR, dir, `${id}.json`);
 }
 
 /**

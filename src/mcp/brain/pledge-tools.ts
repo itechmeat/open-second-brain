@@ -52,6 +52,7 @@ import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
 import { isRecord } from "./intake-args.ts";
+import { laneVault, vaultForNoteAction } from "./lane-vault.ts";
 
 const INTAKE_TOOL = "brain_intake_pledges";
 
@@ -122,7 +123,7 @@ function assertCanonicalCounterparties(
   }
   const readable = readableAtContextReachOrUndefined(ctx);
   const canonical = new Map(
-    buildEntityIndex(ctx.vault)
+    buildEntityIndex(laneVault(ctx))
       .entities.filter((entity) =>
         entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical),
       )
@@ -138,7 +139,7 @@ function assertCanonicalCounterparties(
     const entity = canonical.get(id);
     if (
       entity === undefined ||
-      (readable !== undefined && !readable(vaultRelativeSafe(ctx.vault, entity.path)))
+      (readable !== undefined && !readable(vaultRelativeSafe(laneVault(ctx), entity.path)))
     ) {
       throw new MCPError(
         INVALID_PARAMS,
@@ -167,6 +168,8 @@ function toolBrainPledge(
   // Every operation answers at the caller's reach, exactly as
   // `brain_obligation` does; `undefined` at local reach with the owner
   // gate off, so an unfiltered read skips the per-page check entirely.
+  // A record-lane tool works with no vault: its pages are store records then.
+  const vault = laneVault(ctx);
   const readable = readableAtContextReachOrUndefined(ctx);
   const withheld = (slug: string): boolean => {
     const rel = pledgeRel(slugify(slug));
@@ -175,7 +178,7 @@ function toolBrainPledge(
   try {
     switch (operation) {
       case "list": {
-        const items = listPledges(ctx.vault, {
+        const items = listPledges(vault, {
           now: new Date(),
           ...(readable !== undefined ? { readable } : {}),
         });
@@ -196,7 +199,8 @@ function toolBrainPledge(
         // `addPledge` never overwrites a page: a title slug held by a
         // different identity takes an identity suffix, and a true duplicate
         // refuses with the family's taken-slug error.
-        const page = addPledge(ctx.vault, {
+        // The source is a page of the user's own vault.
+        const page = addPledge(vaultForNoteAction(ctx, "brain_pledge operation=add"), {
           title,
           due,
           source,
@@ -218,7 +222,7 @@ function toolBrainPledge(
           throw noPledgeError(slugify(slug));
         }
         if (operation === "show") {
-          const page = showPledge(ctx.vault, {
+          const page = showPledge(vault, {
             slug,
             ...(readable !== undefined ? { readable } : {}),
           });
@@ -227,18 +231,19 @@ function toolBrainPledge(
         }
         if (operation === "fulfill") {
           const date = coerceStr(args, "date", false);
-          const page = fulfillPledge(ctx.vault, { slug, ...(date !== null ? { date } : {}) });
+          const page = fulfillPledge(vault, { slug, ...(date !== null ? { date } : {}) });
           return { operation, pledge: pageJson(page) };
         }
-        const removed = removePledge(ctx.vault, { slug });
+        const removed = removePledge(vault, { slug });
         // The archive name steps past every name already taken in archive/,
         // readable or not, so below local reach it is left out of the answer.
         if (readable !== undefined) return { operation, slug: removed.slug };
         return {
           operation,
           slug: removed.slug,
-          // Vault-relative like every other path this surface returns.
-          archive_path: vaultRelativeSafe(ctx.vault, removed.archivePath),
+          // Vault-relative like every other path this surface returns, the
+          // no-vault root's too (its pages are store records, no file).
+          archive_path: vaultRelativeSafe(vault, removed.archivePath),
         };
       }
     }
@@ -343,7 +348,7 @@ async function toolBrainIntakePledges(
   // the typed error's message preserved under exactly one prefix.
   return wrapToolErrors(INTAKE_TOOL, [PledgeError, PledgeIntakeError], async () => {
     const result = intakePledges(
-      ctx.vault,
+      vaultForNoteAction(ctx, "brain_intake_pledges"),
       { source: parsed.source, pledges: parsed.pledges },
       {
         agent: agentFor(ctx, parsed.agent),
@@ -368,7 +373,7 @@ export const PLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_pledge",
     kind: "write",
     description:
-      "One-off pledges under Brain/pledges/ - a promise made in prose, with a due date, a cited source page and evidence quotes verified against that source at write time: add, fulfill (stamps the date), list (optionally overdue-only), show, remove (archives the page).",
+      "One-off pledges - a promise made in prose, with a due date, a cited source page and evidence quotes verified against that source at write time: add, fulfill (stamps the date), list (optionally overdue-only), show, remove (archives the page).",
     inputSchema: {
       type: "object",
       properties: {

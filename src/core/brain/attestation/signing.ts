@@ -66,6 +66,8 @@ import {
   attestationSigningPayload,
   type AttestationRecord,
 } from "./record.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
+import { DERIVED_STORE_DIR } from "../path-constants.ts";
 
 /** The stable code every missing-key refusal carries. */
 export const ATTESTATION_KEY_MISSING = "attestation_key_missing";
@@ -134,7 +136,7 @@ const SYNC_EXCLUSION_CONTENT = "*\n!.gitignore\n";
 
 /** `<vault>/.open-second-brain/keys/attestation/`. */
 export function attestationKeysDir(vault: string): string {
-  return join(vault, ".open-second-brain", ...KEY_DIR_SEGMENTS);
+  return machineStatePath(vault, DERIVED_STORE_DIR, ...KEY_DIR_SEGMENTS);
 }
 
 /** Both halves of the operator's attestation key, without reading either. */

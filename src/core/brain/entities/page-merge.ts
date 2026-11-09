@@ -27,10 +27,11 @@
  * Brain `merge` log event are appended after the bytes land.
  */
 
-import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
+import { entityPagesPrivate } from "./page-privacy.ts";
+
 import type { FrontmatterMap } from "../../types.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { relationFromFrontmatterField } from "../../graph/relation-vocab.ts";
@@ -43,11 +44,17 @@ import { BRAIN_ENTITY_STATUS, type BrainEntity } from "./types.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./status-scope.ts";
 import { withDestructiveSnapshot } from "../snapshot-gate.ts";
 import { HYGIENE_AUDIT_DIR } from "../audit-dirs.ts";
-import { brainDirsForWrite, vaultRelative } from "../paths.ts";
+import { brainDirs, vaultRelative } from "../paths.ts";
 import { appendLogEvent } from "../log.ts";
 import { isoSecond } from "../time.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "../types.ts";
+import {
+  assertLaneWrite,
+  parseLanePage,
+  readLaneText,
+  removeLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 
 /** Why an entity merge refused, as a stable code an operator scripts on. */
 export type EntityMergeErrorCode =
@@ -408,9 +415,9 @@ export function planEntityMerge(
     guardBypassed = true;
   }
 
-  const keepMeta = parseFrontmatter(keep.path)[0];
+  const keepMeta = parseLanePage(vault, keep.path)[0];
   const keepTargets = new Set(relationEdges(keepMeta).map((e) => `${e.key}:${e.target}`));
-  const dropMeta = parseFrontmatter(drop.path)[0];
+  const dropMeta = parseLanePage(vault, drop.path)[0];
   // Dedup the dropped edges by field:target BEFORE counting, so the plan
   // counts edges the way the apply's union writes them: a duplicated edge
   // on the dropped page lands once, and the plan says one.
@@ -440,8 +447,8 @@ export function planEntityMerge(
     drop_name: drop.name,
     keep_path: vaultRelative(keep.path, vault),
     drop_path: vaultRelative(drop.path, vault),
-    keep_digest: sha256Hex(readFileSync(keep.path)),
-    drop_digest: sha256Hex(readFileSync(drop.path)),
+    keep_digest: sha256Hex(readLaneText(vault, keep.path) ?? ""),
+    drop_digest: sha256Hex(readLaneText(vault, drop.path) ?? ""),
     alias_added: aliasAdded,
     aliases_merged: Object.freeze(aliasesMerged),
     body_folded: drop.body.trim().length > 0,
@@ -470,7 +477,7 @@ export function applyEntityMerge(
   // Vault-identity write guard (context-integrity-gates, Unit J) at the
   // entry of the write path, ahead of any other work: everything below
   // this line is deciding how to write, not whether to.
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
 
   const plan = planEntityMerge(vault, refs, { bypassEntityGuard: opts.bypassEntityGuard });
   if (opts.expectHash === undefined) {
@@ -494,164 +501,183 @@ export function applyEntityMerge(
   const drop = index.entities.find((e) => e.id === plan.drop_id)!;
   const stamp = isoSecond(opts.now ?? new Date());
 
-  const gated = withDestructiveSnapshot(
-    vault,
-    BRAIN_SNAPSHOT_REASON.entityMerge,
-    () => {
-      // 1. Survivor rewrite: the dropped page's names in as aliases, its
-      //    relation edges unioned in, edges pointing at the dropped page
-      //    removed (a self-relation the registry would refuse), folded
-      //    body appended.
-      const [keepMeta, keepBody] = parseFrontmatter(keep.path);
-      const [dropMeta] = parseFrontmatter(drop.path);
-      const nextMeta: FrontmatterMap = { ...keepMeta };
-      if (plan.aliases_merged.length > 0) {
-        const existing = nextMeta["aliases"];
-        const aliases = Array.isArray(existing)
-          ? [...existing]
-          : typeof existing === "string" && existing.trim().length > 0
-            ? [existing]
-            : [];
-        for (const alias of plan.aliases_merged) {
-          const normalized = normalizeEntityName(alias);
-          if (
-            normalized.length > 0 &&
-            aliases.some((a) => normalizeEntityName(String(a)) === normalized)
-          ) {
-            continue;
-          }
-          aliases.push(alias);
-        }
-        nextMeta["aliases"] = aliases;
-      }
-      for (const [key, value] of Object.entries(dropMeta)) {
-        if (!relationFromFrontmatterField(key)) continue;
-        const incoming = Array.isArray(value) ? value : value === "" ? [] : [value];
-        const currentRaw = nextMeta[key];
-        const current = Array.isArray(currentRaw)
-          ? [...currentRaw]
-          : typeof currentRaw === "string" && currentRaw.trim().length > 0
-            ? [currentRaw]
-            : [];
-        for (const item of incoming) {
-          const target = normalizeRelationTarget(String(item));
-          if (target === keep.id || target === drop.id) continue;
-          if (current.some((c) => normalizeRelationTarget(String(c)) === target)) continue;
-          current.push(String(item));
-        }
-        if (current.length > 0) nextMeta[key] = current;
-      }
-      for (const [key, value] of Object.entries(nextMeta)) {
-        if (!relationFromFrontmatterField(key)) continue;
-        const items = Array.isArray(value) ? value : value === "" ? [] : [value];
-        const kept = items.filter((item) => normalizeRelationTarget(String(item)) !== drop.id);
-        if (kept.length === 0) delete nextMeta[key];
-        else nextMeta[key] = kept;
-      }
-      nextMeta["updated_at"] = stamp;
-      const foldedBody =
-        plan.body_folded && drop.body.trim().length > 0
-          ? `${keepBody.trimEnd()}\n\n${FOLDED_BODY_HEADING_PREFIX} ${drop.name}\n\n${drop.body.trim()}\n`
-          : keepBody;
-      writeFrontmatterAtomic(keep.path, nextMeta, foldedBody, { overwrite: true });
-
-      // 2. Inbound relation edges: retarget the dropped id to the survivor
-      //    so no `broken-entity-relation` survives the merge and no edge
-      //    information is lost. A field holding BOTH sides of the pair maps
-      //    onto `[[keep]]` twice, so the map dedups by normalized target -
-      //    first occurrence wins, order preserved (the same union rule the
-      //    survivor's own absorbed edges follow).
-      for (const entity of index.entities) {
-        if (entity.id === keep.id || entity.id === drop.id) continue;
-        if (!entity.relations.some((edge) => edge.target === drop.id)) continue;
-        const [meta, body] = parseFrontmatter(entity.path);
-        const metaNext: FrontmatterMap = { ...meta };
-        for (const [key, value] of Object.entries(metaNext)) {
-          if (!relationFromFrontmatterField(key)) continue;
-          const items = Array.isArray(value) ? value : value === "" ? [] : [value];
-          // A field nothing in it points at the dropped page is left
-          // exactly as it reads: no scalar arrayified, no empty field
-          // rewritten into an empty list.
-          if (!items.some((item) => normalizeRelationTarget(String(item)) === drop.id)) continue;
-          const mapped = items.map((item) =>
-            normalizeRelationTarget(String(item)) === drop.id ? `[[${keep.id}]]` : String(item),
-          );
-          const seen = new Set<string>();
-          const deduped: string[] = [];
-          for (const item of mapped) {
-            const target = normalizeRelationTarget(item);
-            if (target !== null && seen.has(target)) continue;
-            if (target !== null) seen.add(target);
-            deduped.push(item);
-          }
-          metaNext[key] = deduped;
-        }
-        metaNext["updated_at"] = stamp;
-        writeFrontmatterAtomic(entity.path, metaNext, body, { overwrite: true });
-      }
-      // 3. The old page is archived - removed BEHIND the recovery point
-      //    this callback runs under, never as a bare delete.
-      rmSync(drop.path, { force: true });
-    },
-    opts.now !== undefined ? { now: opts.now } : {},
+  // The other entities whose relation edges name the dropped page: the
+  // merge rewrites each of them to point at the survivor.
+  const inbound = index.entities.filter(
+    (entity) =>
+      entity.id !== keep.id &&
+      entity.id !== drop.id &&
+      entity.relations.some((edge) => edge.target === drop.id),
   );
 
-  const agent = opts.agent ?? "unknown";
-  // Reliability audit record (the destructive-entity-verb template: the
-  // hygiene audit directory under Brain/log/ carries week shards).
-  appendAuditRecord(
-    join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR),
-    {
-      timestamp: (opts.now ?? new Date()).toISOString(),
-      actor: agent,
-      action: "entity_merge",
-      target: plan.keep_id,
-      ok: true,
-      details: {
-        dropped: plan.drop_id,
+  // One privacy verdict for the whole merge (design D14, phase 1 rule):
+  // the survivor, every retargeted page, the tombstone, the audit row and
+  // the log event land in one partition, private when either side of the
+  // pair or any retargeted page is private or names a private page.
+  // Judged before any write, from the pages as the plan read them.
+  const verdict = entityPagesPrivate(vault, [
+    keep.path,
+    drop.path,
+    ...inbound.map((entity) => entity.path),
+  ]);
+  return withOperationPrivacy(verdict, () => {
+    const gated = withDestructiveSnapshot(
+      vault,
+      BRAIN_SNAPSHOT_REASON.entityMerge,
+      () => {
+        // 1. Survivor rewrite: the dropped page's names in as aliases, its
+        //    relation edges unioned in, edges pointing at the dropped page
+        //    removed (a self-relation the registry would refuse), folded
+        //    body appended.
+        const [keepMeta, keepBody] = parseLanePage(vault, keep.path);
+        const [dropMeta] = parseLanePage(vault, drop.path);
+        const nextMeta: FrontmatterMap = { ...keepMeta };
+        if (plan.aliases_merged.length > 0) {
+          const existing = nextMeta["aliases"];
+          const aliases = Array.isArray(existing)
+            ? [...existing]
+            : typeof existing === "string" && existing.trim().length > 0
+              ? [existing]
+              : [];
+          for (const alias of plan.aliases_merged) {
+            const normalized = normalizeEntityName(alias);
+            if (
+              normalized.length > 0 &&
+              aliases.some((a) => normalizeEntityName(String(a)) === normalized)
+            ) {
+              continue;
+            }
+            aliases.push(alias);
+          }
+          nextMeta["aliases"] = aliases;
+        }
+        for (const [key, value] of Object.entries(dropMeta)) {
+          if (!relationFromFrontmatterField(key)) continue;
+          const incoming = Array.isArray(value) ? value : value === "" ? [] : [value];
+          const currentRaw = nextMeta[key];
+          const current = Array.isArray(currentRaw)
+            ? [...currentRaw]
+            : typeof currentRaw === "string" && currentRaw.trim().length > 0
+              ? [currentRaw]
+              : [];
+          for (const item of incoming) {
+            const target = normalizeRelationTarget(String(item));
+            if (target === keep.id || target === drop.id) continue;
+            if (current.some((c) => normalizeRelationTarget(String(c)) === target)) continue;
+            current.push(String(item));
+          }
+          if (current.length > 0) nextMeta[key] = current;
+        }
+        for (const [key, value] of Object.entries(nextMeta)) {
+          if (!relationFromFrontmatterField(key)) continue;
+          const items = Array.isArray(value) ? value : value === "" ? [] : [value];
+          const kept = items.filter((item) => normalizeRelationTarget(String(item)) !== drop.id);
+          if (kept.length === 0) delete nextMeta[key];
+          else nextMeta[key] = kept;
+        }
+        nextMeta["updated_at"] = stamp;
+        const foldedBody =
+          plan.body_folded && drop.body.trim().length > 0
+            ? `${keepBody.trimEnd()}\n\n${FOLDED_BODY_HEADING_PREFIX} ${drop.name}\n\n${drop.body.trim()}\n`
+            : keepBody;
+        writeLanePage(vault, keep.path, nextMeta, foldedBody, { overwrite: true });
+
+        // 2. Inbound relation edges: retarget the dropped id to the survivor
+        //    so no `broken-entity-relation` survives the merge and no edge
+        //    information is lost. A field holding BOTH sides of the pair maps
+        //    onto `[[keep]]` twice, so the map dedups by normalized target -
+        //    first occurrence wins, order preserved (the same union rule the
+        //    survivor's own absorbed edges follow).
+        for (const entity of inbound) {
+          const [meta, body] = parseLanePage(vault, entity.path);
+          const metaNext: FrontmatterMap = { ...meta };
+          for (const [key, value] of Object.entries(metaNext)) {
+            if (!relationFromFrontmatterField(key)) continue;
+            const items = Array.isArray(value) ? value : value === "" ? [] : [value];
+            // A field nothing in it points at the dropped page is left
+            // exactly as it reads: no scalar arrayified, no empty field
+            // rewritten into an empty list.
+            if (!items.some((item) => normalizeRelationTarget(String(item)) === drop.id)) continue;
+            const mapped = items.map((item) =>
+              normalizeRelationTarget(String(item)) === drop.id ? `[[${keep.id}]]` : String(item),
+            );
+            const seen = new Set<string>();
+            const deduped: string[] = [];
+            for (const item of mapped) {
+              const target = normalizeRelationTarget(item);
+              if (target !== null && seen.has(target)) continue;
+              if (target !== null) seen.add(target);
+              deduped.push(item);
+            }
+            metaNext[key] = deduped;
+          }
+          metaNext["updated_at"] = stamp;
+          writeLanePage(vault, entity.path, metaNext, body, { overwrite: true });
+        }
+        // 3. The old page is archived - removed BEHIND the recovery point
+        //    this callback runs under, never as a bare delete.
+        removeLanePage(vault, drop.path);
+      },
+      opts.now !== undefined ? { now: opts.now } : {},
+    );
+
+    const agent = opts.agent ?? "unknown";
+    // Reliability audit record (the destructive-entity-verb template: the
+    // hygiene audit directory under Brain/log/ carries week shards).
+    appendAuditRecord(
+      join(brainDirs(vault).log, HYGIENE_AUDIT_DIR),
+      {
+        timestamp: (opts.now ?? new Date()).toISOString(),
+        actor: agent,
+        action: "entity_merge",
+        target: plan.keep_id,
+        ok: true,
+        details: {
+          dropped: plan.drop_id,
+          category: plan.category,
+          alias_added: plan.alias_added ?? "",
+          // The full moved set, not just the display name: the aliases the
+          // dropped page held are nowhere else in the trail.
+          aliases_merged: JSON.stringify(plan.aliases_merged),
+          body_folded: String(plan.body_folded),
+          relations_absorbed: String(plan.relations_absorbed),
+          inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
+          cyclic_edges_removed: String(plan.cyclic_edges_removed),
+          plan_hash: verified,
+          snapshot_run_id: gated.snapshot.runId,
+        },
+      },
+      vault,
+    );
+
+    // Brain log event (the `merge` kind, entity payload), so the merge
+    // surfaces in the activity timeline like every other lifecycle event.
+    appendLogEvent(vault, {
+      timestamp: stamp,
+      eventType: BRAIN_LOG_EVENT_KIND.merge,
+      agent,
+      body: {
+        keep_id: plan.keep_id,
+        drop_id: plan.drop_id,
         category: plan.category,
         alias_added: plan.alias_added ?? "",
-        // The full moved set, not just the display name: the aliases the
-        // dropped page held are nowhere else in the trail.
+        // Mirrors the audit record: the full moved alias set, not just the
+        // display name the alias_added field carries.
         aliases_merged: JSON.stringify(plan.aliases_merged),
         body_folded: String(plan.body_folded),
         relations_absorbed: String(plan.relations_absorbed),
-        inbound_edges_retargeted: String(plan.inbound_edges_retargeted),
         cyclic_edges_removed: String(plan.cyclic_edges_removed),
         plan_hash: verified,
         snapshot_run_id: gated.snapshot.runId,
       },
-    },
-    vault,
-  );
+    });
 
-  // Brain log event (the `merge` kind, entity payload), so the merge
-  // surfaces in the activity timeline like every other lifecycle event.
-  appendLogEvent(vault, {
-    timestamp: stamp,
-    eventType: BRAIN_LOG_EVENT_KIND.merge,
-    agent,
-    body: {
-      keep_id: plan.keep_id,
-      drop_id: plan.drop_id,
-      category: plan.category,
-      alias_added: plan.alias_added ?? "",
-      // Mirrors the audit record: the full moved alias set, not just the
-      // display name the alias_added field carries.
-      aliases_merged: JSON.stringify(plan.aliases_merged),
-      body_folded: String(plan.body_folded),
-      relations_absorbed: String(plan.relations_absorbed),
-      cyclic_edges_removed: String(plan.cyclic_edges_removed),
-      plan_hash: verified,
+    return Object.freeze({
+      plan,
+      dropped_path: plan.drop_path,
       snapshot_run_id: gated.snapshot.runId,
-    },
-  });
-
-  return Object.freeze({
-    plan,
-    dropped_path: plan.drop_path,
-    snapshot_run_id: gated.snapshot.runId,
-    snapshot_path: gated.snapshot.path,
-    verified_hash: verified,
+      snapshot_path: gated.snapshot.path,
+      verified_hash: verified,
+    });
   });
 }

@@ -568,7 +568,7 @@ describe("CANONICAL_WRITEBACK_BLOCK_BODY", () => {
 
   test("merges the cross-project-pointer usage content with the gate clauses", () => {
     // The four usage surfaces K2 names, in the checker's own vocabulary.
-    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("Brain/active.md");
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("brain_context");
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("brain_feedback");
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("brain_apply_evidence");
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).toContain("dream");
@@ -578,6 +578,8 @@ describe("CANONICAL_WRITEBACK_BLOCK_BODY", () => {
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toMatch(/\{\{?/);
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toContain("<absolute");
     expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toMatch(/\/(home|Users|mnt)\//);
+    // Agent-facing text names tools, never the legacy tree's paths.
+    expect(CANONICAL_WRITEBACK_BLOCK_BODY).not.toMatch(/Brain\//);
   });
 
   test("a file carrying only the lessons pair still grades missing-block", () => {

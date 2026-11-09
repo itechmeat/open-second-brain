@@ -49,11 +49,17 @@ import {
 import type { BrainConfig } from "../../../src/core/brain/types.ts";
 import type { DoctorFindings } from "../../../src/core/brain/doctor/check.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
+import { machineStateRoot } from "../../../src/core/state/machine-state.ts";
+import { makeStoreEnv } from "../store/fixtures/store-env.ts";
+import { switchDevice } from "./store-only/fixtures.ts";
 
 let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-storage-usage-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -140,6 +146,32 @@ describe("measureStorageUsage", () => {
     expect(surfaceBytes(usage, STORAGE_SURFACE.payloads)).toBe(FIXTURE_BYTES.payload);
     expect(surfaceBytes(usage, STORAGE_SURFACE.internalState)).toBe(FIXTURE_BYTES.internal);
     expect(surfaceBytes(usage, STORAGE_SURFACE.derivedStore)).toBe(FIXTURE_BYTES.store);
+  });
+
+  test("a switched machine: machine-state surfaces are measured in the device-local state", () => {
+    // Snapshots, artifacts and internal state live under the device-local
+    // machine state; `.archives` is source text and stays in the vault.
+    const env = makeStoreEnv("o2b-storage-usage-switched-");
+    try {
+      switchDevice(env.storeRoot);
+      const state = machineStateRoot(env.vault);
+      expect(state.startsWith(env.vault)).toBe(false);
+      const put = (root: string, rel: string, text: string): void => {
+        mkdirSync(join(root, rel, ".."), { recursive: true });
+        writeFileSync(join(root, rel), text, "utf8");
+      };
+      put(state, "Brain/.snapshots/AA-run.tar.zst", SNAPSHOT_TEXT);
+      put(state, "Brain/.artifacts/run-1/AA-artifact.json", ARTIFACT_TEXT);
+      put(state, "Brain/.state/AA-lineage.jsonl", INTERNAL_TEXT);
+      put(env.vault, "Brain/.archives/aa1b2c3d.txt", ARCHIVE_TEXT);
+      const usage = measureStorageUsage(env.vault, { now: NOW });
+      expect(surfaceBytes(usage, STORAGE_SURFACE.snapshots)).toBe(FIXTURE_BYTES.snapshot);
+      expect(surfaceBytes(usage, STORAGE_SURFACE.artifacts)).toBe(FIXTURE_BYTES.artifact);
+      expect(surfaceBytes(usage, STORAGE_SURFACE.internalState)).toBe(FIXTURE_BYTES.internal);
+      expect(surfaceBytes(usage, STORAGE_SURFACE.archives)).toBe(FIXTURE_BYTES.archive);
+    } finally {
+      env.cleanup();
+    }
   });
 
   test("tier totals split on recoverability and fold into the total", () => {

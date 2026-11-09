@@ -5,7 +5,18 @@ import { listVaultPages } from "../vault.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { hostPathFreeReason } from "./host-path-free.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
+import {
+  memoryFromStore,
+  signalPageRaw,
+  type StoreMemoryPage,
+  storePagesIn,
+} from "./memory-pages.ts";
+import {
+  parsePreference,
+  parsePreferenceMeta,
+  parseRetired,
+  parseRetiredMeta,
+} from "./preference.ts";
 import {
   DEFAULT_SCHEMA_VOCAB,
   SCHEMA_VOCAB_CATEGORIES,
@@ -14,7 +25,7 @@ import {
   type BrainSchemaVocabulary,
   type SchemaVocabularyCategory,
 } from "./schema-vocab.ts";
-import { parseSignal } from "./signal.ts";
+import { parseSignal, parseStoreSignal } from "./signal.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 export interface SchemaTokenUsage {
@@ -154,10 +165,10 @@ function readArtifact<T>(
   path: string,
   category: SchemaVocabularyCategory,
   findings: SchemaReportFinding[],
-  read: (path: string) => T,
+  read: () => T,
 ): T | undefined {
   try {
-    return read(path);
+    return read();
   } catch (err) {
     const rel = vaultRelative(path, vault);
     findings.push({
@@ -177,8 +188,16 @@ function scanPreferences(
   findings: SchemaReportFinding[],
 ): void {
   const dirs = brainDirs(vault);
-  for (const path of listMarkdown(dirs.preferences, "pref-")) {
-    const pref = readArtifact(vault, path, "preference_types", findings, parsePreference);
+  const fromStore = memoryFromStore(vault);
+  for (const { path, read } of artifactReads(
+    vault,
+    fromStore,
+    dirs.preferences,
+    "pref-",
+    parsePreference,
+    (page) => parsePreferenceMeta(page.meta, page.path),
+  )) {
+    const pref = readArtifact(vault, path, "preference_types", findings, read);
     if (pref === undefined) continue;
     recordSchemaType(
       vault,
@@ -190,8 +209,15 @@ function scanPreferences(
       findings,
     );
   }
-  for (const path of listMarkdown(dirs.retired, "ret-")) {
-    const retired = readArtifact(vault, path, "preference_types", findings, parseRetired);
+  for (const { path, read } of artifactReads(
+    vault,
+    fromStore,
+    dirs.retired,
+    "ret-",
+    parseRetired,
+    (page) => parseRetiredMeta(page.meta, page.path),
+  )) {
+    const retired = readArtifact(vault, path, "preference_types", findings, read);
     if (retired === undefined) continue;
     recordSchemaType(
       vault,
@@ -212,9 +238,12 @@ function scanSignals(
   findings: SchemaReportFinding[],
 ): void {
   const dirs = brainDirs(vault);
+  const fromStore = memoryFromStore(vault);
   for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
-    for (const path of listMarkdown(dir, "sig-")) {
-      const signal = readArtifact(vault, path, "signal_types", findings, parseSignal);
+    for (const { path, read } of artifactReads(vault, fromStore, dir, "sig-", parseSignal, (page) =>
+      parseStoreSignal(page.path, page.meta, signalPageRaw(page)),
+    )) {
+      const signal = readArtifact(vault, path, "signal_types", findings, read);
       if (signal === undefined) continue;
       recordSchemaType(
         vault,
@@ -253,8 +282,8 @@ function scanLogEventKinds(
   findings: SchemaReportFinding[],
 ): void {
   for (const path of listMarkdown(brainDirs(vault).log, "")) {
-    const text = readArtifact(vault, path, "log_event_kinds", findings, (p) =>
-      readFileSync(p, "utf8"),
+    const text = readArtifact(vault, path, "log_event_kinds", findings, () =>
+      readFileSync(path, "utf8"),
     );
     if (text === undefined) continue;
     for (const line of text.split(/\r?\n/)) {
@@ -304,6 +333,27 @@ function addUnusedDeclarationFindings(
       }
     }
   }
+}
+
+/**
+ * The `<prefix>*.md` artifacts of `dir` in name order, each with its
+ * parse: the files on an unswitched machine, the store's records whose
+ * page sat in `dir` on a store-only one (task 2.10).
+ */
+function artifactReads<T>(
+  vault: string,
+  fromStore: boolean,
+  dir: string,
+  prefix: string,
+  parseFile: (path: string) => T,
+  parsePage: (page: StoreMemoryPage) => T,
+): ReadonlyArray<{ readonly path: string; readonly read: () => T }> {
+  if (fromStore) {
+    return storePagesIn(vault, dir)
+      .filter((page) => page.id.startsWith(prefix))
+      .map((page) => ({ path: page.path, read: () => parsePage(page) }));
+  }
+  return listMarkdown(dir, prefix).map((path) => ({ path, read: () => parseFile(path) }));
 }
 
 function listMarkdown(dir: string, prefix: string): string[] {

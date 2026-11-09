@@ -58,30 +58,6 @@ export const BRAIN_MANUAL_TEMPLATE_REVISION = 1;
 export const BRAIN_MANUAL_TEMPLATE_SHA256 =
   "40b711db15b7215225cc8218d12400dd72825f39fe859b8446a5665b32367804";
 
-/** Directory holding the bundled Obsidian Bases view definitions. */
-export const BASES_TEMPLATE_DIR = join(TEMPLATE_DIR, "bases");
-
-/**
- * Bundled Obsidian Bases view definitions stamped into `Brain/bases/`
- * at init. Each maps a Brain collection to a native structured view:
- *
- *   - `projects.base` → entities with `category: project`
- *   - `people.base`   → entities with `category: person`
- *   - `tasks.base`    → obligations (`Brain/obligations/`)
- *   - `daily.base`    → log days (`Brain/log/`)
- *
- * Static assets — no `{{key}}` substitution — because the Brain layout
- * the filters target is fixed. They carry no plugin dependency:
- * Obsidian renders `.base` files natively, and they are inert in
- * editors that do not.
- */
-export const BASE_TEMPLATE_FILES: ReadonlyArray<string> = [
-  "projects.base",
-  "people.base",
-  "tasks.base",
-  "daily.base",
-];
-
 /**
  * Read a template file from disk. A missing template would indicate a
  * broken open-second-brain install — the message names the canonical

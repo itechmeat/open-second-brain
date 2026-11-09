@@ -43,6 +43,10 @@ import {
   FAKE_VENDOR_KEY,
   fakeCredential,
 } from "../../../helpers/fake-credentials.ts";
+import { useUnshardedLegacyLog } from "../../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let savedEnv: Record<string, string | undefined>;

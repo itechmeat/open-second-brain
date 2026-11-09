@@ -3,7 +3,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,8 @@ afterEach(() => {
 });
 function tempVault(): string {
   const v = mkdtempSync(join(tmpdir(), "osb-dm-run-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(v, "Brain"), { recursive: true });
   dirs.push(v);
   return v;
 }

@@ -1,9 +1,7 @@
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 
-import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { attentionFlowsDir, brainDirs } from "./paths.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { listProceduralMemory } from "./procedural-memory.ts";
 import { listPendingSkillProposals } from "./skill-proposals.ts";
 import { listRecurrenceEntries } from "./recurrence.ts";
@@ -14,7 +12,16 @@ import {
   type SessionRefOrigin,
   type SignalSessionRefLookup,
 } from "./preference-provenance.ts";
-import { BRAIN_PREFERENCE_STATUS } from "./types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  writeLanePage,
+} from "../store/lane-pages.ts";
+import { storePreferenceRecords, storeSignalRecords } from "./memory-page-records.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 
 export type AttentionFlowAction =
   | "open_proposals"
@@ -96,12 +103,12 @@ export interface AttentionFlowEvaluation {
 
 export function ensureDefaultAttentionFlows(vault: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const dir = attentionFlowsDir(vault);
-  mkdirSync(dir, { recursive: true });
   const defaultPath = join(dir, "open-loops.md");
-  if (existsSync(defaultPath)) return;
-  writeFrontmatterAtomic(
+  if (lanePageExists(vault, defaultPath)) return;
+  writeLanePage(
+    vault,
     defaultPath,
     {
       kind: "brain-attention-flow",
@@ -129,10 +136,9 @@ export function ensureDefaultAttentionFlows(vault: string): void {
 export function listAttentionFlows(vault: string): ReadonlyArray<AttentionFlowRecipe> {
   ensureDefaultAttentionFlows(vault);
   const dir = attentionFlowsDir(vault);
-  if (!existsSync(dir)) return Object.freeze([]);
+  if (!lanePageExists(vault, dir)) return Object.freeze([]);
   const out: AttentionFlowRecipe[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const path = join(dir, name);
     // Unit F: unreachable `catch { continue }` removed - nothing in this
     // body throws (`parseFrontmatter` reads inside its own try, and both
@@ -141,7 +147,7 @@ export function listAttentionFlows(vault: string): ReadonlyArray<AttentionFlowRe
     // the next line, and is skipped exactly as the dead branch intended.
     // See the "Why most readers keep the two-tuple form" section in
     // src/core/vault.ts for where the condition IS reported.
-    const [fm] = parseFrontmatter(path);
+    const [fm] = parseLanePage(vault, path);
     if (fm["kind"] !== "brain-attention-flow") continue;
     const actions = normalizeActions(fm["actions"]);
     out.push({
@@ -273,6 +279,13 @@ const EARLIEST_CITED_SUFFIX = "]";
  * provenance rather than an error.
  */
 function signalSessionRefLookup(vault: string): SignalSessionRefLookup {
+  if (isStoreOnly({ vault })) {
+    // A store-only machine: every signal of the fold, by id.
+    const refs = new Map(
+      storeSignalRecords(vault, "all").records.map((r) => [r.signal.id, r.signal.session_ref]),
+    );
+    return (signalId) => refs.get(signalId);
+  }
   const dirs = brainDirs(vault);
   const searchDirs = [dirs.inbox, dirs.processed, dirs.archived];
   return (signalId) => {
@@ -308,6 +321,25 @@ interface SurfacedStandingInstruction {
  * only, never a membership change, so a facet cannot surface a preference the
  * plain lane would withhold.
  */
+/**
+ * One read per preference, in file-name order: the page files on an
+ * unswitched machine, the preference fold's pages on a store-only one
+ * (`storePreferenceRecords`), so the lane answers in both modes.
+ */
+function confirmedPreferenceReads(vault: string): Array<() => BrainPreference> {
+  if (isStoreOnly({ vault })) {
+    return storePreferenceRecords(vault)
+      .records.toSorted((a, b) => (basename(a.path) < basename(b.path) ? -1 : 1))
+      .map((record) => () => record.pref);
+  }
+  const dir = brainDirs(vault).preferences;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .toSorted()
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => () => parsePreference(join(dir, name)));
+}
+
 function listConfirmedPreferencesByScope(
   vault: string,
   scopes: ReadonlyArray<string>,
@@ -317,13 +349,10 @@ function listConfirmedPreferencesByScope(
   const facets: StandingInstructionFacet[] = [];
   if (scopes.length === 0) return { items, facets };
   const wanted = new Set(scopes);
-  const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return { items, facets };
   const lookup = facetsWanted ? signalSessionRefLookup(vault) : null;
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const read of confirmedPreferenceReads(vault)) {
     try {
-      const pref = parsePreference(join(dir, name));
+      const pref = read();
       if (
         pref.status === BRAIN_PREFERENCE_STATUS.confirmed &&
         pref.scope !== undefined &&

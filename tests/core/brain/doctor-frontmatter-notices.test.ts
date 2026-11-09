@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { DEGRADATION_CODE } from "../../../src/core/integrity/degradation.ts";
+import { MIGRATION_AVAILABLE_CODE } from "../../../src/core/brain/doctor/migration-check.ts";
 
 let tmp: string;
 let vault: string;
@@ -40,6 +41,15 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+/**
+ * The codes of the uncertain entries. Every legacy tree holding a page
+ * carries the store-migration advice exactly once until this machine
+ * switches, so a clean tree reports that code and nothing else.
+ */
+function uncertainCodes(entries: ReadonlyArray<{ code: string }> | undefined): string[] {
+  return (entries ?? []).map((e) => e.code);
+}
+
 describe("runDoctor frontmatter notices", () => {
   test("a clean Brain tree reports no uncertain entries", () => {
     writeFileSync(
@@ -47,7 +57,7 @@ describe("runDoctor frontmatter notices", () => {
       "---\ntitle: Fine\ntopic: ok\ntags:\n  - brain\n  - brain/note\n---\n\nBody.\n",
     );
     const result = runDoctor(vault);
-    expect(result.uncertain ?? []).toEqual([]);
+    expect(uncertainCodes(result.uncertain)).toEqual([MIGRATION_AVAILABLE_CODE]);
   });
 
   test("an unsupported frontmatter line is reported as an uncertain entry naming the file", () => {
@@ -81,7 +91,7 @@ describe("runDoctor frontmatter notices", () => {
       "---\ntitle: Block\ntopic: block\ntags:\n  - brain\n  - brain/signal\n---\n\nBody.\n",
     );
     const result = runDoctor(vault);
-    expect(result.uncertain ?? []).toEqual([]);
+    expect(uncertainCodes(result.uncertain)).toEqual([MIGRATION_AVAILABLE_CODE]);
   });
 
   test("the doctor still never throws on an unreadable Brain subtree", () => {

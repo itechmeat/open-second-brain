@@ -13,11 +13,10 @@
  * `brain_dream` with `dry_run: true` directly.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { vaultRelativeOf } from "./no-vault.ts";
 import { posix } from "node:path";
 
 import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
-import { vaultRelative } from "../path-safety.ts";
 import { SearchError } from "../search/search-error.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream, shouldGateRetireFromConfirmed } from "./dream.ts";
@@ -31,7 +30,8 @@ import {
   type StoredVectorStatus,
 } from "./near-duplicate-vectors.ts";
 import { failureCode } from "./page-lint.ts";
-import { brainDirs } from "./paths.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { brainDirsOf } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import {
   compareRetireSiblings,
@@ -172,18 +172,19 @@ export interface BuildReviewCandidatesOptions {
  * every host: a Windows `relative`/`join` pair yields `Brain\inbox\...`,
  * which matches no indexed document and silently scores every signal null.
  */
-function listInboxSignalRefs(vault: string): Array<{ id: string; relPath: string }> {
-  const inbox = brainDirs(vault).inbox;
-  if (!existsSync(inbox)) return [];
-  const inboxRel = vaultRelative(inbox, vault);
-  return readdirSync(inbox)
+function listInboxSignalRefs(vault: string | null): Array<{ id: string; relPath: string }> {
+  // The inbox pages: files on an unswitched machine, the signal fold's
+  // active signals on a store-only one (task 2.10).
+  const inboxRel = vaultRelativeOf(brainDirsOf(vault).inbox, vault);
+  return memoryFolderPages(vault, "inbox")
+    .map((page) => page.name)
     .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
     .toSorted()
     .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: posix.join(inboxRel, n) }));
 }
 
 export async function buildReviewCandidates(
-  vault: string,
+  vault: string | null,
   opts: BuildReviewCandidatesOptions = {},
 ): Promise<ReviewCandidatesReport> {
   const siblingsEnabled = opts.retireSiblingsEnabled ?? resolveNearDuplicateRetireSiblingsEnabled();
@@ -281,7 +282,7 @@ interface RetireSiblingProjection {
  * preview: the lexical pairs stand and the status names the failure.
  */
 async function projectRetireSiblings(
-  vault: string,
+  vault: string | null,
   summary: DreamRunSummary,
   preferences: ReadonlyArray<PreferenceRecord>,
   opts: BuildReviewCandidatesOptions,
@@ -291,7 +292,7 @@ async function projectRetireSiblings(
   if (opts.searchConfig === undefined || triggered.length === 0) return { siblings: lexical };
   const readable = opts.readable ?? READ_ALL_REFS;
   const scanned = preferences
-    .filter((p) => readable(vaultRelative(p.path, vault)))
+    .filter((p) => readable(vaultRelativeOf(p.path, vault)))
     .map((p) => p.pref);
   // The dry run gates nothing, so the retires the confirmed-evidence gate
   // will hold back are dropped here, as the dream summary drops their
@@ -310,7 +311,7 @@ async function projectRetireSiblings(
     .filter((id) => opts.retiringVisible?.(id) ?? true);
   if (retiringIds.length === 0) return { siblings: lexical };
 
-  const prefsRel = vaultRelative(brainDirs(vault).preferences, vault);
+  const prefsRel = vaultRelativeOf(brainDirsOf(vault).preferences, vault);
   const pathOf = (id: string): string => posix.join(prefsRel, `${id}.md`);
   const allRetiring = new Set(summary.retired.map((r) => `pref-${r.id.replace(/^ret-/, "")}`));
   const pool = retireSiblingPool(scanned).filter((p) => !allRetiring.has(p.id));

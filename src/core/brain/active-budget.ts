@@ -59,7 +59,7 @@ const PREAMBLE_KEY = "preamble";
  * the drop notice and the tier notice can never drift apart.
  */
 const FULL_VIEW_POINTER =
-  " Call `brain_context` (or read `Brain/active.md`) for the full preference set._";
+  " Call `brain_context` (or run `o2b brain export --format llms-txt`) for the full preference set._";
 
 /**
  * The truncation notice, built from the budgeter's own report.

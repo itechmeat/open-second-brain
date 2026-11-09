@@ -66,6 +66,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 /**
@@ -323,12 +324,12 @@ async function toolBrainHygiene(
       dry_run: result.dry_run,
       plan: plan.entries.map((entry) => ({
         kind: entry.kind,
-        page: vaultRelativeSafe(ctx.vault, entry.page),
+        page: toolPath(ctx, entry.page),
         reason: entry.reason,
       })),
-      rederived: result.rederived.map((page) => vaultRelativeSafe(ctx.vault, page)),
-      archived: result.archived.map((page) => vaultRelativeSafe(ctx.vault, page)),
-      manual: result.manual.map((page) => vaultRelativeSafe(ctx.vault, page)),
+      rederived: result.rederived.map((page) => toolPath(ctx, page)),
+      archived: result.archived.map((page) => toolPath(ctx, page)),
+      manual: result.manual.map((page) => toolPath(ctx, page)),
       errors: result.errors.map((row) => errorRowForCaller(ctx, row)),
     };
   }

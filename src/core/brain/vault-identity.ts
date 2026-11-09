@@ -13,6 +13,12 @@
  *
  * This module supplies the identity that makes such a root nameable.
  *
+ * Scope after the store (design D14 item 13, task 2.10): this guard covers
+ * vault writes. A store-only write is guarded by the store identity check
+ * (`../store/store-identity.ts`, run by `storeWrite`), and the note tools
+ * reach this guard through the vault adapter (`assertNoteVaultForWrite`
+ * in `../vault-adapter/`), which also refuses when there is no vault.
+ *
  * ## Absent WARNS, present-and-different REFUSES
  *
  * The two conditions are not symmetric and must not be treated alike.
@@ -89,6 +95,7 @@ import {
 } from "../integrity/degradation.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
 import { assertVaultNotFrozen, WRITE_LANE, type WriteLane } from "./freeze-marker.ts";
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 /** Marker schema version. Bumped only on an incompatible field change. */
@@ -374,7 +381,11 @@ export function assertVaultIdentityForWrite(
   lane: WriteLane = WRITE_LANE.content,
 ): void {
   const root = resolve(vault);
-  if (lane === WRITE_LANE.content) assertVaultNotFrozen(root);
+  if (lane === WRITE_LANE.content) {
+    assertVaultNotFrozen(root);
+    // A brain store migration running on this machine (design D11 step 2).
+    assertNoMigrationInProgress(root);
+  }
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {

@@ -501,7 +501,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
         confirm: {
           type: "boolean",
           description:
-            "delete: explicit confirmation. Without it an applied delete is refused, because no archive covers a note outside Brain/.",
+            "delete: explicit confirmation. Without it an applied delete is refused, because no archive covers a user-authored note.",
         },
         delete_linked: {
           type: "boolean",

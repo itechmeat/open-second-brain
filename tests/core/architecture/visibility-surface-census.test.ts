@@ -1018,8 +1018,18 @@ function directVaultReadFiles(files: ReadonlyArray<CensusFile>): ReadonlySet<str
 const SURFACE_SOURCE_TREE = SURFACE_TREES.flatMap((root) => readTree(root));
 const DIRECT_VAULT_READERS = directVaultReadFiles(SURFACE_SOURCE_TREE);
 
-/** Measured: files in the surface trees that read a vault path directly. */
-const DIRECT_VAULT_READ_POPULATION_SIZE = 5;
+/**
+ * Measured: files in the surface trees that read a vault path directly.
+ * 5 -> 4: the bootstrap receipt (`src/cli/bootstrap/receipt.ts`) resolves
+ * through `machineStatePath`, so it is no longer read under the vault's
+ * `.open-second-brain/` (task 2.10, machine state device-local once
+ * switched).
+ * 4 -> 3: brain_clusters and brain_bridges list their pages through the
+ * lane page store (task 2.10 WP6), asking the store-aware reach rule.
+ * 3 -> 2: the clusters verb's staleness check lists its pages through the
+ * lane page store in both modes too.
+ */
+const DIRECT_VAULT_READ_POPULATION_SIZE = 2;
 
 /**
  * ## What this sweep cannot see, stated rather than implied

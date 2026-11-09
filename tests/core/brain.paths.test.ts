@@ -9,12 +9,15 @@ import {
   allocateSlug,
   brainConfigPath,
   brainDirs,
+  brainDirsOf,
   brainManualPath,
   brainVaultRelative,
   logPath,
   preferencePath,
+  preferencePathOf,
   processedSignalPath,
   retiredPath,
+  retiredPathOf,
   signalPath,
   snapshotPath,
   snapshotsDir,
@@ -22,6 +25,7 @@ import {
   validateRunId,
   validateSlug,
 } from "../../src/core/brain/paths.ts";
+import { freshVaultStateRoot } from "../../src/core/state/machine-state.ts";
 
 let tmp: string;
 
@@ -69,10 +73,52 @@ describe("path constructors", () => {
       join(resolve("/v"), "Brain", "retired", "ret-no-internal-abbrev.md"),
     );
     expect(logPath("/v", "2026-05-14")).toBe(join(resolve("/v"), "Brain", "log", "2026-05-14.md"));
-    expect(snapshotsDir("/v")).toBe(join(resolve("/v"), "Brain", ".snapshots"));
-    expect(snapshotPath("/v", "dream-2026-05-14-104200")).toBe(
-      join(resolve("/v"), "Brain", ".snapshots", "dream-2026-05-14-104200.tar.zst"),
+    // Snapshots are machine state: a legacy vault (one with `Brain/`)
+    // keeps them; a vault with no `Brain/` is store-only and keeps them
+    // device-local.
+    const legacy = mkdtempSync(join(tmpdir(), "o2b-paths-legacy-"));
+    try {
+      mkdirSync(join(legacy, "Brain"));
+      expect(snapshotsDir(legacy)).toBe(join(resolve(legacy), "Brain", ".snapshots"));
+      expect(snapshotPath(legacy, "dream-2026-05-14-104200")).toBe(
+        join(resolve(legacy), "Brain", ".snapshots", "dream-2026-05-14-104200.tar.zst"),
+      );
+    } finally {
+      rmSync(legacy, { recursive: true, force: true });
+    }
+    const bare = mkdtempSync(join(tmpdir(), "o2b-paths-bare-"));
+    try {
+      const dir = snapshotsDir(bare);
+      expect(dir.startsWith(resolve(bare))).toBe(false);
+      expect(dir.startsWith(freshVaultStateRoot(bare))).toBe(true);
+      expect(snapshotPath(bare, "dream-2026-05-14-104200").startsWith(dir)).toBe(true);
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("with no vault, the path builders give POSIX vault-relative names", () => {
+    expect(preferencePathOf(null, "no-internal-abbrev")).toBe(
+      "Brain/preferences/pref-no-internal-abbrev.md",
     );
+    expect(retiredPathOf(null, "no-internal-abbrev")).toBe(
+      "Brain/retired/ret-no-internal-abbrev.md",
+    );
+    const dirs = brainDirsOf(null);
+    expect([dirs.brain, dirs.inbox, dirs.preferences, dirs.retired, dirs.log]).toEqual([
+      "Brain",
+      "Brain/inbox",
+      "Brain/preferences",
+      "Brain/retired",
+      "Brain/log",
+    ]);
+    // A slug is validated the same way with no vault.
+    expect(() => preferencePathOf(null, "../escape")).toThrow();
+    expect(() => retiredPathOf(null, "a/b")).toThrow();
+    // With a vault they are the vault's absolute paths.
+    expect(preferencePathOf("/v", "x")).toBe(preferencePath("/v", "x"));
+    expect(retiredPathOf("/v", "x")).toBe(retiredPath("/v", "x"));
+    expect(brainDirsOf("/v")).toEqual(brainDirs("/v"));
   });
 
   test("signalPath validates date format", () => {

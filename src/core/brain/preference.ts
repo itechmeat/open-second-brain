@@ -11,7 +11,7 @@
  * resolve (Obsidian indexes by basename regardless of folder, and the
  * retired file's frontmatter `id` flips to `ret-foo`).
  *
- * Three concerns matter:
+ * Four concerns matter:
  *
  *   1. **Default `pinned: false`** when parsing a file whose
  *      frontmatter omits the field. The design doc §5.3 makes this
@@ -31,11 +31,24 @@
  *      atomic operations (write the new file, unlink the old) to keep
  *      the filesystem consistent on a mid-run crash: the new file is
  *      complete before the old one disappears.
+ *
+ *   4. **Store-only** (task 2.10). Once the machine is switched
+ *      (`../store/store-only.ts`) a preference is no page: the writer,
+ *      the mover and {@link loadPreference} read the store's preference
+ *      fold (`./preference-store.ts`) and write `preference-set` records
+ *      only, so nothing under `Brain/` changes.
  */
 
+import type { StorePreference } from "../store/read/store-entities.ts";
+import { loadPermissionsDocumentFor } from "./permissions/document-source.ts";
+import { legacyVaultOf } from "./no-vault.ts";
 import type { Authority } from "../store/constants.ts";
 import { authorityFromOrigin, dualWrite, type DualWriteRecord } from "../store/dual-write.ts";
-import { isPrivateFrontmatter, preferenceSetRecord } from "../store/dual-write-records.ts";
+import {
+  isPrivateFrontmatter,
+  preferenceFields,
+  preferenceSetRecord,
+} from "../store/dual-write-records.ts";
 import {
   callerInput,
   operationPrivacy,
@@ -55,6 +68,23 @@ import {
   slugify,
   writeFrontmatterAtomic,
 } from "../vault.ts";
+import { FileAlreadyExistsError } from "../fs-atomic.ts";
+import { routeWrite, storeWrite } from "../store/store-write.ts";
+import { DERIVED_FIELDS, storeEntryMeta } from "./preference-page-meta.ts";
+import {
+  fieldsUnchanged,
+  isRetiredEntry,
+  PREFERENCE_TEXT_FIELD,
+  preferencesStoreOnly,
+  storePreferenceEntry,
+  textOfFields,
+  typedPreferenceFields,
+} from "./preference-store.ts";
+import {
+  appendRetiredSection,
+  preferencePageProse,
+  renderPreferenceBody,
+} from "./preference-body.ts";
 import { requireObsidianTagValue, scopeTagValues } from "./tag-syntax.ts";
 import { BrainParseError } from "./parse-error.ts";
 import { FrontmatterTierConflictError, mergeFrontmatterTiered } from "./frontmatter-tiers.ts";
@@ -65,7 +95,15 @@ import {
   validateSchemaToken,
   type BrainSchemaVocabulary,
 } from "./schema-vocab.ts";
-import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
+import {
+  brainDirsForWrite,
+  brainDirsOf,
+  preferencePath,
+  preferencePathOf,
+  retiredPath,
+  retiredPathOf,
+  validateSlug,
+} from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { OWNER_UNRESOLVED, normalizeAgentScope, ownerStampFor } from "../graph/agent-scope.ts";
 import { normalizeAgentArgument } from "../agent-identity.ts";
@@ -73,7 +111,6 @@ import { resolveAgentName, UNCONFIGURED_AGENT_NAME } from "../config.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { GATE_MODE } from "../integrity/stamp.ts";
 import { loadIntegrityConfigForWrite, loadIntegrityConfigSafe } from "./policy.ts";
-import { loadPermissionsDocument } from "./permissions/document.ts";
 import { appendDecisionLedger } from "./permissions/ledger.ts";
 import { OWNER_SCOPE_WRITES_KEY, refuseCrossOwnerWrite } from "./trust/owner-write-gate.ts";
 import { substrateSubject, type WriteSubject } from "./write-disposition.ts";
@@ -418,7 +455,7 @@ export interface MoveToRetiredResult {
  * §5.3 — "## Principle", "## Origin", "## How to apply".
  */
 export function writePreference(
-  vault: string,
+  vault: string | null,
   input: WritePreferenceInput,
   options: WritePreferenceOptions = {},
 ): WritePreferenceResult {
@@ -426,7 +463,8 @@ export function writePreference(
   // reaches the tree through `preferencePath`, not `brainDirs`, so
   // `brainDirsForWrite` cannot cover it - the assertion has to sit at
   // the entry point, ahead of the field validation and every write.
-  assertVaultIdentityForWrite(vault);
+  // With no vault the store write checks the store identity instead.
+  if (vault !== null) assertVaultIdentityForWrite(vault);
   if (!input.slug?.trim()) throw new Error("preference missing field: slug");
   if (!input.topic?.trim()) throw new Error("preference missing field: topic");
   if (!input.principle?.trim()) {
@@ -449,7 +487,7 @@ export function writePreference(
   }
 
   const slug = validateSlug(input.slug);
-  const path = preferencePath(vault, slug);
+  const path = preferencePathOf(vault, slug);
   const id = `pref-${slug}`;
 
   // Every store record written from here on (an owner-write decision row,
@@ -465,7 +503,13 @@ export function writePreference(
           callerInput(input, PREFERENCE_OPAQUE_FIELDS),
         ])(),
       () =>
-        existsSync(path) && preferencePrivacy(vault, storeFieldsOf(parseFrontmatter(path)[0]))(),
+        vault !== null &&
+        existsSync(path) &&
+        preferencePrivacy(vault, storeFieldsOf(parseFrontmatter(path)[0]))(),
+      // Store-only: the preference the write lands on, as the fold holds it.
+      () =>
+        preferencesStoreOnly(vault, options.configPath) &&
+        (storePreferenceEntry(slug, options.configPath)?.private ?? false),
     ],
   });
   return withOperationPrivacy(privacy, () =>
@@ -474,7 +518,7 @@ export function writePreference(
 }
 
 function writeJudgedPreference(
-  vault: string,
+  vault: string | null,
   input: WritePreferenceInput,
   options: WritePreferenceOptions,
   slug: string,
@@ -500,6 +544,10 @@ function writeJudgedPreference(
       }
       throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, idContentHash);
     }
+  }
+
+  if (vault === null || preferencesStoreOnly(vault, options.configPath)) {
+    return writeStorePreference(vault, input, options, owned, path, id, idKey, idContentHash);
   }
 
   let metadata = preferenceFrontmatter(owned, id);
@@ -551,7 +599,7 @@ function writeJudgedPreference(
   // One privacy verdict for every store record this write produces: the
   // idempotency receipt and the preference's human and derived records,
   // judged from the fields they carry and the caller's whole input.
-  const written = storeFieldsOf(metadata);
+  const written = withGuidance(storeFieldsOf(metadata), owned, metadata, body);
   const privacy = preferencePrivacy(vault, written, [callerInput(input, PREFERENCE_OPAQUE_FIELDS)]);
   recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, privacy);
   // Brain store dual write (task 1.11): off by default, never fails this write.
@@ -561,6 +609,120 @@ function writeJudgedPreference(
     { vault, ...(options.configPath !== undefined ? { configPath: options.configPath } : {}) },
   );
   return { path, id };
+}
+
+/**
+ * The store-only preference write (task 2.10): no page, the preference's
+ * records only. The rules the page writer keeps hold for the fold: a
+ * create refuses a preference the fold already holds active (as the
+ * exclusive create refuses an existing page), and an overwrite that would
+ * change no field the fold holds writes nothing (the page writer's
+ * byte-identical no-op), so a no-op dream rerun appends no record.
+ */
+function writeStorePreference(
+  vault: string | null,
+  input: WritePreferenceInput,
+  options: WritePreferenceOptions,
+  owned: WritePreferenceInput,
+  path: string,
+  id: string,
+  idKey: string | undefined,
+  idContentHash: string | undefined,
+): WritePreferenceResult {
+  const slug = id.slice("pref-".length);
+  const found = storePreferenceEntry(slug, options.configPath);
+  const live = found !== undefined && !isRetiredEntry(found) ? found : undefined;
+  if (live !== undefined && options.overwrite !== true) {
+    throw new FileAlreadyExistsError(path, {
+      kind: "preference",
+      displayPath: vault === null ? path : relative(vault, path),
+    });
+  }
+  const frontmatter = preferenceFrontmatter(owned, id);
+  const written = withGuidance(
+    storeFieldsOf(frontmatter),
+    owned,
+    frontmatter,
+    renderPreferenceBody(owned),
+  );
+  const privacy = preferencePrivacy(vault, written, [callerInput(input, PREFERENCE_OPAQUE_FIELDS)]);
+  // A record only proposes the fields it names, so the fields a retired
+  // life left in the fold are cleared explicitly (`null`): a retire's
+  // metadata never rides on a live preference, and a slug brought back
+  // starts with no prose of its old life, as a fresh page would.
+  const cleared = clearedFields(found, written, live === undefined);
+  if (
+    options.overwrite === true &&
+    Object.keys(cleared).length === 0 &&
+    fieldsUnchanged(preferenceFields(written), live)
+  ) {
+    recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, privacy);
+    return { path, id };
+  }
+  const fields = { ...written, ...cleared };
+  storeWrite(
+    () => preferenceStoreRecords(id, fields, options.authority ?? authorityFromOrigin(), privacy()),
+    { vault, ...(options.configPath !== undefined ? { configPath: options.configPath } : {}) },
+  );
+  recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, privacy);
+  return { path, id };
+}
+
+/** Fields only a retire writes: never part of a live preference. */
+const RETIRE_ONLY_FIELDS: ReadonlyArray<string> = Object.freeze([
+  "retired_at",
+  "retired_reason",
+  "retired_by",
+  "superseded_by",
+  "user_rejected_reason",
+]);
+
+/**
+ * The fields of `found` a write of `written` must clear: the retire-only
+ * ones it holds, and, when the write brings a retired slug back
+ * (`revive`), every field of the old life the write does not name (its
+ * prose, scope, aliases, merge pointer, rejection and guidance fields),
+ * so the result is the fresh page an unswitched machine writes beside the
+ * retired one. The counters are derived, never fields.
+ */
+function clearedFields(
+  found: StorePreference | undefined,
+  written: Readonly<Record<string, unknown>>,
+  revive: boolean,
+): Record<string, null> {
+  const out: Record<string, null> = {};
+  if (found === undefined) return out;
+  const names = revive ? Object.keys(found.state.fields) : RETIRE_ONLY_FIELDS;
+  for (const name of names) {
+    const held = found.state.fields[name];
+    if (!(name in written) && held !== undefined && held !== null) out[name] = null;
+  }
+  return out;
+}
+
+export {
+  derivedPreferenceBody,
+  preferencePageBody,
+  preferencePageProse,
+  withPreferenceProse,
+} from "./preference-body.ts";
+
+/**
+ * The store fields of a `writePreference` write, with the page body as
+ * `text` when the caller handed prose guidance (`howToApply`), the one
+ * part of the body the fields do not render. A write without guidance
+ * leaves `text` as it is: the page writer re-renders the body from the
+ * fields, and prose another writer left in the fold is not overwritten.
+ */
+function withGuidance(
+  fields: Record<string, unknown>,
+  owned: WritePreferenceInput,
+  meta: FrontmatterMap,
+  body: string,
+): Record<string, unknown> {
+  if (!owned.howToApply?.trim()) return fields;
+  const prose = preferencePageProse(meta, body, false);
+  return prose === null ? fields : { ...fields, [PREFERENCE_TEXT_FIELD]: prose };
 }
 
 /**
@@ -610,7 +772,7 @@ function writeJudgedPreference(
  * the defaults, i.e. `off`.
  */
 function withResolvedOwner(
-  vault: string,
+  vault: string | null,
   path: string,
   input: WritePreferenceInput,
   configPath: string | undefined,
@@ -637,7 +799,7 @@ function withResolvedOwner(
  * decision is how the fifth writer gets it wrong again.
  */
 export function resolvedOwnerFor(
-  vault: string,
+  vault: string | null,
   path: string,
   explicit: string | undefined,
   configPath: string | undefined,
@@ -660,7 +822,14 @@ export function resolvedOwnerFor(
     );
   }
   if (mode === GATE_MODE.off) return undefined;
-  if (existsSync(path)) return carriedOwner(path).owner;
+  if (vault === null || preferencesStoreOnly(vault, configPath)) {
+    // Store-only: the preference the fold holds carries its owner forward.
+    const held = storePreferenceEntry(basename(path, ".md").slice("pref-".length), configPath);
+    if (held !== undefined && !isRetiredEntry(held)) {
+      const owner = held.state.fields["owner"];
+      return typeof owner === "string" && owner.trim() !== "" ? owner.trim() : undefined;
+    }
+  } else if (existsSync(path)) return carriedOwner(path).owner;
   const agent = subject?.agent ?? resolveAgentName(configPath);
   const stamp = ownerStampFor(agent);
   if (stamp === null) {
@@ -709,7 +878,7 @@ export function resolvedOwnerFor(
  * accountability could not be recorded.
  */
 function gateNamedOwner(
-  vault: string,
+  vault: string | null,
   path: string,
   given: string,
   configPath: string | undefined,
@@ -720,7 +889,9 @@ function gateNamedOwner(
   // token's agent, never for whoever the process config names.
   const resolved = subject?.agent ?? resolveAgentName(configPath);
   const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
-  const { document } = loadPermissionsDocument(vault);
+  // The permissions document: the operator's shared setting, or the legacy
+  // file on an unswitched machine (document-source.ts).
+  const { document } = loadPermissionsDocumentFor(vault, configPath);
   const verdict = refuseCrossOwnerWrite({
     explicitOwner: given,
     resolvedIdentity: resolved,
@@ -729,7 +900,9 @@ function gateNamedOwner(
     subject: substrateSubject(subject ?? { agent: resolved, via: "config" }),
   });
   if (verdict.refused) {
-    throw new Error(`preference write at ${relative(vault, path)}: ${verdict.reason}`);
+    throw new Error(
+      `preference write at ${vault === null ? path : relative(vault, path)}: ${verdict.reason}`,
+    );
   }
   if (gateMode === GATE_MODE.warn) {
     logWatchedOwnerWrite(vault, path, given, resolved, subject?.via ?? "config");
@@ -744,7 +917,7 @@ function gateNamedOwner(
  * watch).
  */
 function logWatchedOwnerWrite(
-  vault: string,
+  vault: string | null,
   path: string,
   given: string,
   resolved: string,
@@ -758,7 +931,7 @@ function logWatchedOwnerWrite(
     actor: resolved,
     via,
     action: "owner_write",
-    target: relative(vault, path),
+    target: vault === null ? path : relative(vault, path),
     verdict: GATE_MODE.warn,
     source: OWNER_SCOPE_WRITES_KEY,
     reason:
@@ -828,7 +1001,7 @@ function preferencePayloadFields(
  * future retry dedupes. No-op when no key was supplied.
  */
 function recordPreferenceKey(
-  vault: string,
+  vault: string | null,
   idKey: string | undefined,
   contentHash: string | undefined,
   createdAt: string,
@@ -841,7 +1014,7 @@ function recordPreferenceKey(
     key: idKey,
     contentHash,
     createdAt,
-    ref: { id, path: relative(vault, path) },
+    ref: { id, path: vault === null ? path : relative(vault, path) },
     private: privacy,
   });
 }
@@ -859,9 +1032,28 @@ function recordPreferenceKey(
  * body. Caller-side cost is negligible compared with the writePref
  * + log overhead avoided when the body is up to date.
  */
-export function wouldRewritePreference(vault: string, input: WritePreferenceInput): boolean {
+export function wouldRewritePreference(vault: string | null, input: WritePreferenceInput): boolean {
   const slug = validateSlug(input.slug);
-  const path = preferencePath(vault, slug);
+  const path = preferencePathOf(vault, slug);
+  if (vault === null || preferencesStoreOnly(vault)) {
+    // Store-only: the write changes something when a field the fold holds
+    // would take a new value (the store twin of the byte comparison).
+    try {
+      const found = storePreferenceEntry(slug);
+      if (found === undefined || isRetiredEntry(found)) return true;
+      const owned = withResolvedOwner(vault, path, input, undefined);
+      const frontmatter = preferenceFrontmatter(owned, `pref-${slug}`);
+      const written = withGuidance(
+        storeFieldsOf(frontmatter),
+        owned,
+        frontmatter,
+        renderPreferenceBody(owned),
+      );
+      return !fieldsUnchanged(preferenceFields(written), found);
+    } catch {
+      return true;
+    }
+  }
   if (!existsSync(path)) return true;
   try {
     const id = `pref-${slug}`;
@@ -1049,92 +1241,9 @@ function composePreferenceTags(input: WritePreferenceInput): string[] {
   return out;
 }
 
-/**
- * Render the preference body. Sections are emitted **only when they
- * have real content** — v0.10.1 removes the always-empty placeholder
- * blocks (`_(no evidence yet)_`, `_(not provided)_`) that the v0.9.x
- * shape used to ship. Principle text is intentionally NOT duplicated:
- * frontmatter is the single source for that field.
- *
- * Sections, in order:
- *
- *   - `## Origin` — wikilinks from `evidenced_by` (one bullet each).
- *     Omitted when the array is empty (e.g. `--force-confirmed`).
- *   - `## Recent applications` — last N `apply-evidence applied` rows,
- *     newest first. Each bullet: `[[artifact]] — ts (agent) — note`.
- *     Omitted when zero.
- *   - `## Recent violations` — same shape for `violated` / `outdated`.
- *     Omitted when zero.
- *   - `## How to apply` — only when `howToApply` is non-empty prose
- *     supplied by the caller; never auto-filled.
- *
- * If all sections are skipped, the body is empty and {@link
- * writeFrontmatterAtomic} writes a frontmatter-only file.
- */
-function renderPreferenceBody(input: WritePreferenceInput): string {
-  const sections: string[] = [];
-
-  if (input.evidenced_by.length > 0) {
-    const block: string[] = ["## Origin", ""];
-    for (const ev of input.evidenced_by) block.push(`- ${ev}`);
-    sections.push(block.join("\n"));
-  }
-
-  if (input.recentApplied && input.recentApplied.length > 0) {
-    sections.push(renderEvidenceSection("Recent applications", input.recentApplied));
-  }
-
-  if (input.recentViolated && input.recentViolated.length > 0) {
-    sections.push(renderEvidenceSection("Recent violations", input.recentViolated));
-  }
-
-  const guidance = input.howToApply?.trim();
-  if (guidance) {
-    const normalised = guidance.replace(/\r\n?/g, "\n").replace(/\s+$/g, "");
-    sections.push(["## How to apply", "", normalised].join("\n"));
-  }
-
-  return sections.join("\n\n");
-}
-
-function renderEvidenceSection(heading: string, rows: ReadonlyArray<BrainEvidenceSummary>): string {
-  const lines: string[] = [`## ${heading}`, ""];
-  for (const ev of rows) {
-    const parts: string[] = [`- ${ev.artifact}`, `— ${ev.timestamp}`];
-    if (ev.agent) parts.push(`(${ev.agent})`);
-    if (ev.result === "violated" || ev.result === "outdated") {
-      parts.push(`[${ev.result}]`);
-    }
-    if (ev.note) parts.push(`— ${ev.note.replace(/\s+/g, " ").trim()}`);
-    lines.push(parts.join(" "));
-  }
-  return lines.join("\n");
-}
-
 // ----- Parsers --------------------------------------------------------------
 
-/**
- * Group C — derived fields that get a `_` prefix in the on-disk
- * shape (dream-rewritten state, see §24). Parser accepts both
- * `name` and `_name`; writer always emits `_name`. Listed once so
- * both `parsePreference`, `parseRetired`, and the migration helper
- * share the same list — a follow-up adding a derived field updates
- * exactly this constant.
- */
-export const DERIVED_FIELDS: ReadonlyArray<string> = Object.freeze([
-  "status",
-  "confirmed_at",
-  "last_evidence_at",
-  "applied_count",
-  "violated_count",
-  "confidence",
-  "confidence_value",
-  "evidenced_by",
-  "contradicted_by",
-  "lifecycle",
-  "revision",
-  "content_hash",
-]);
+export { DERIVED_FIELDS };
 
 /**
  * Rename `_`-prefixed Group C keys (`_status`, `_applied_count`, ...)
@@ -1189,7 +1298,7 @@ const RETIRE_DECIDED_FIELDS: ReadonlyArray<string> = Object.freeze(["status"]);
  * on first use.
  */
 export function preferencePrivacy(
-  vault: string,
+  vault: string | null,
   fields: Readonly<Record<string, unknown>>,
   extra: ReadonlyArray<JudgedContent> = [],
 ): OperationPrivacy {
@@ -1209,7 +1318,7 @@ export function preferencePrivacy(
  * file. Every record keeps the scope the whole preference has and the
  * partition of the write's one privacy verdict (`isPrivate`).
  */
-function preferenceStoreRecords(
+export function preferenceStoreRecords(
   id: string,
   fields: Readonly<Record<string, unknown>>,
   authority: Authority,
@@ -1251,11 +1360,76 @@ export function parsePreference(
   path: string,
   options: ParsePreferenceOptions = {},
 ): BrainPreference {
-  const [rawMeta, _body] = parseFrontmatter(path);
-  const meta = normalizeDerivedKeys(rawMeta);
-  // `_body` is unused for preferences — the body is purely human prose;
+  // The body is unused for preferences — it is purely human prose;
   // every machine-actionable field lives in the frontmatter.
-  void _body;
+  return preferenceFromMeta(parseFrontmatter(path)[0], path, options);
+}
+
+/**
+ * The preference `pref-<slug>` of the vault: its page on an unswitched
+ * machine, the store's fold once switched (task 2.10), or `null` when it
+ * does not exist (or is retired). Parsed by the same rules either way.
+ */
+export function loadPreference(
+  vault: string | null,
+  slug: string,
+  options: ParsePreferenceOptions & { readonly configPath?: string } = {},
+): BrainPreference | null {
+  const path = preferencePathOf(vault, slug);
+  // No vault means store-only too (design D14).
+  if (vault === null || preferencesStoreOnly(vault, options.configPath)) {
+    const page = storePreferenceMeta(slug, options.configPath);
+    return page === null || page.retired ? null : preferenceFromMeta(page.meta, path, options);
+  }
+  return existsSync(path) ? parsePreference(path, options) : null;
+}
+
+/**
+ * Whether the preference `pref-<slug>` is active, retired or absent: its
+ * pages on an unswitched machine, the store's fold once switched.
+ */
+export function preferencePresence(
+  vault: string | null,
+  slug: string,
+  configPath?: string,
+): "active" | "retired" | "absent" {
+  if (vault === null || preferencesStoreOnly(vault, configPath)) {
+    const entry = storePreferenceEntry(slug, configPath);
+    if (entry === undefined) return "absent";
+    return isRetiredEntry(entry) ? "retired" : "active";
+  }
+  if (existsSync(preferencePath(vault, slug))) return "active";
+  return existsSync(retiredPath(vault, slug)) ? "retired" : "absent";
+}
+
+/**
+ * The preference `pref-<slug>` as its page would carry it, rebuilt from
+ * the store's fold: the fold's fields under their on-disk names (derived
+ * fields `_`-prefixed, `null` as the textual sentinel), the counters the
+ * fold derives, and the page's identity keys. The result goes through the
+ * page writer and parser once, so every value has the type the legacy
+ * parser gives it. `null` when the fold does not hold the preference.
+ */
+export function storePreferenceMeta(
+  slug: string,
+  configPath?: string,
+): {
+  readonly meta: FrontmatterMap;
+  readonly retired: boolean;
+  /** The page body the fold carries (`text`), or `null` when no writer wrote one. */
+  readonly text: string | null;
+} | null {
+  const entry = storePreferenceEntry(slug, configPath);
+  if (entry === undefined) return null;
+  return { ...storeEntryMeta(entry, slug), text: textOfFields(entry.state.fields) };
+}
+
+function preferenceFromMeta(
+  rawMeta: FrontmatterMap,
+  path: string,
+  options: ParsePreferenceOptions,
+): BrainPreference {
+  const meta = normalizeDerivedKeys(rawMeta);
 
   requireField(meta, "kind", path);
   if (meta["kind"] !== "brain-preference") {
@@ -1463,7 +1637,28 @@ function spreadBiTemporal(meta: Record<string, unknown>): {
  * both forms of Group C frontmatter parse identically.
  */
 export function parseRetired(path: string, options: ParsePreferenceOptions = {}): BrainRetired {
-  const [rawMeta] = parseFrontmatter(path);
+  return parseRetiredMeta(parseFrontmatter(path)[0], path, options);
+}
+
+/**
+ * {@link parsePreference} over frontmatter already read: a page's, or one
+ * rebuilt from the store's fold ({@link storePreferenceMeta}), so a reader
+ * that switched to the store parses by the page's rules (task 2.10).
+ */
+export function parsePreferenceMeta(
+  meta: FrontmatterMap,
+  path: string,
+  options: ParsePreferenceOptions = {},
+): BrainPreference {
+  return preferenceFromMeta(meta, path, options);
+}
+
+/** {@link parseRetired} over frontmatter already read (see {@link parsePreferenceMeta}). */
+export function parseRetiredMeta(
+  rawMeta: FrontmatterMap,
+  path: string,
+  options: ParsePreferenceOptions = {},
+): BrainRetired {
   const meta = normalizeDerivedKeys(rawMeta);
 
   requireField(meta, "kind", path);
@@ -1564,7 +1759,7 @@ export function parseRetired(path: string, options: ParsePreferenceOptions = {})
  * doctor` flags the duplicate id.
  */
 export function moveToRetired(
-  vault: string,
+  vault: string | null,
   prefPath: string,
   reason: BrainRetiredReason,
   opts: MoveToRetiredOptions,
@@ -1573,12 +1768,17 @@ export function moveToRetired(
   // canonical `preferences/` folder. Doing this check *before* any I/O
   // means a buggy caller cannot trick us into deleting an unrelated
   // file: a misrouted call fails fast with no destructive side effect.
-  const dirs = brainDirsForWrite(vault);
+  // With no vault the paths are vault-relative and the store write checks
+  // the store identity (design D14).
+  const dirs = vault === null ? brainDirsOf(null) : brainDirsForWrite(vault);
   if (dirname(prefPath) !== dirs.preferences) {
     throw new Error(`moveToRetired: source path was not under preferences/: ${prefPath}`);
   }
 
-  const [meta, body] = parseFrontmatter(prefPath);
+  // Store-only (task 2.10): the preference is read from the store's fold
+  // and the retire is records only; no page is written or removed.
+  const storeOnly = vault === null || preferencesStoreOnly(vault);
+  const [meta, body] = storeOnly ? storeRetireSource(prefPath) : parseFrontmatter(prefPath);
   if (meta["kind"] !== "brain-preference") {
     throw new Error(
       `moveToRetired: expected a preference file; got kind ${JSON.stringify(meta["kind"])} (${prefPath})`,
@@ -1596,7 +1796,7 @@ export function moveToRetired(
   }
 
   const newId = `ret-${slug}`;
-  const newPath = retiredPath(vault, slug);
+  const newPath = retiredPathOf(vault, slug);
 
   // Build the new frontmatter map. We preserve every inherited field
   // verbatim (`topic`, `principle`, `evidenced_by`, counters, …), drop
@@ -1653,75 +1853,88 @@ export function moveToRetired(
     newMeta["aliases"] = [oldId, ...existingAliases];
   }
 
-  // Re-render the body from scratch so the retired file carries the
-  // v0.10.1 shape (only sections with content), even if the source
-  // pref was last written in the v0.9.x placeholder format. Evidence
-  // is collected from the live log so the snapshot reflects how the
-  // rule was actually used right up to retirement.
-  const renderInput: WritePreferenceInput = {
-    slug,
-    topic: requireString(meta, "topic", prefPath),
-    principle: requireString(meta, "principle", prefPath),
-    created_at: requireString(meta, "created_at", prefPath),
-    unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
-    status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
-    evidenced_by: optionalStringArray(meta, "evidenced_by", prefPath),
-    ...(opts.evidenceApplied !== undefined ? { recentApplied: opts.evidenceApplied } : {}),
-    ...(opts.evidenceViolated !== undefined ? { recentViolated: opts.evidenceViolated } : {}),
-  };
-  // moveToRetired is also called outside dream (CLI reject) — when the
-  // caller did not pre-fetch evidence, we collect it here so the
-  // retired file is the canonical historical snapshot in both paths.
-  let renderInputWithEvidence: WritePreferenceInput = renderInput;
-  if (renderInput.recentApplied === undefined && renderInput.recentViolated === undefined) {
-    // Late-bound import to avoid a cyclic dependency: evidence.ts
-    // imports nothing from preference.ts at module load time.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const ev = (require("./evidence.ts") as typeof import("./evidence.ts")).collectEvidenceForSlug(
-      vault,
-      slug,
-      { sinceIso: renderInput.created_at },
+  // A retire is a field change of the same preference id (`status:
+  // retired`), never a removal. The retired page's identity keys (`id:
+  // ret-<slug>`, `kind`, `aliases`) are not fields of `pref-<slug>`, so they
+  // stay out; the status is what a retire decides, at the caller's
+  // authority. Values carry the types the preference writer writes: the
+  // page parser reads every scalar as text, and `pinned: "false"` is not
+  // the boolean the fold folds.
+  const lifecycleRecords = () => {
+    const {
+      id: _id,
+      kind: _kind,
+      aliases: _aliases,
+      ...lifecycle
+    } = typedPreferenceFields(storeFieldsOf(newMeta));
+    // Once switched, a preference the fold holds as private (any of its
+    // records sits in `private/`, whatever its fields say) keeps its
+    // retire there too: one entity, one partition, as the other writers.
+    const heldPrivate = storeOnly && (storePreferenceEntry(slug)?.private ?? true);
+    return preferenceStoreRecords(
+      oldId,
+      lifecycle,
+      opts.authority ?? authorityFromOrigin(),
+      heldPrivate || preferencePrivacy(vault, lifecycle)(),
+      RETIRE_DECIDED_FIELDS,
     );
-    renderInputWithEvidence = {
-      ...renderInput,
-      recentApplied: ev.applied,
-      recentViolated: ev.violated,
-    };
-  }
-  const renderedBody = renderPreferenceBody(renderInputWithEvidence);
-  const newBody = appendRetiredSection(renderedBody, reason, opts);
-  void body; // original source body is intentionally discarded — see above.
+  };
+  routeWrite({
+    legacy: () => {
+      // Re-render the body from scratch so the retired file carries the
+      // v0.10.1 shape (only sections with content), even if the source
+      // pref was last written in the v0.9.x placeholder format. Evidence
+      // is collected from the live log so the snapshot reflects how the
+      // rule was actually used right up to retirement.
+      const renderInput: WritePreferenceInput = {
+        slug,
+        topic: requireString(meta, "topic", prefPath),
+        principle: requireString(meta, "principle", prefPath),
+        created_at: requireString(meta, "created_at", prefPath),
+        unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
+        status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
+        evidenced_by: optionalStringArray(meta, "evidenced_by", prefPath),
+        ...(opts.evidenceApplied !== undefined ? { recentApplied: opts.evidenceApplied } : {}),
+        ...(opts.evidenceViolated !== undefined ? { recentViolated: opts.evidenceViolated } : {}),
+      };
+      // moveToRetired is also called outside dream (CLI reject) — when the
+      // caller did not pre-fetch evidence, we collect it here so the
+      // retired file is the canonical historical snapshot in both paths.
+      let renderInputWithEvidence: WritePreferenceInput = renderInput;
+      if (renderInput.recentApplied === undefined && renderInput.recentViolated === undefined) {
+        // Late-bound import to avoid a cyclic dependency: evidence.ts
+        // imports nothing from preference.ts at module load time.
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const ev = (
+          require("./evidence.ts") as typeof import("./evidence.ts")
+        ).collectEvidenceForSlug(vault, slug, { sinceIso: renderInput.created_at });
+        renderInputWithEvidence = {
+          ...renderInput,
+          recentApplied: ev.applied,
+          recentViolated: ev.violated,
+        };
+      }
+      const renderedBody = renderPreferenceBody(renderInputWithEvidence);
+      const newBody = appendRetiredSection(renderedBody, reason, opts);
+      void body; // original source body is intentionally discarded — see above.
 
-  writeFrontmatterAtomic(newPath, newMeta, newBody, {
-    overwrite: false,
-    existsErrorKind: "retired",
-    vaultForRelativePath: vault,
-  });
+      writeFrontmatterAtomic(newPath, newMeta, newBody, {
+        overwrite: false,
+        existsErrorKind: "retired",
+        vaultForRelativePath: legacyVaultOf(vault, "moveToRetired"),
+      });
 
-  // Confirm the new file actually landed before unlinking the source.
-  if (!existsSync(newPath)) {
-    throw new Error(`moveToRetired: write of ${newPath} reported success but file is absent`);
-  }
-  unlinkSync(prefPath);
-
-  // Brain store dual write (task 1.11): a retire is a field change of the
-  // same preference id (`status: retired`), never a removal. The retired
-  // file's identity keys (`id: ret-<slug>`, `kind`, `aliases`) are not
-  // fields of `pref-<slug>`, so they stay out; the status is what a retire
-  // decides, at the caller's authority.
-  dualWrite(
-    () => {
-      const { id: _id, kind: _kind, aliases: _aliases, ...lifecycle } = storeFieldsOf(newMeta);
-      return preferenceStoreRecords(
-        oldId,
-        lifecycle,
-        opts.authority ?? authorityFromOrigin(),
-        preferencePrivacy(vault, lifecycle)(),
-        RETIRE_DECIDED_FIELDS,
-      );
+      // Confirm the new file actually landed before unlinking the source.
+      if (!existsSync(newPath)) {
+        throw new Error(`moveToRetired: write of ${newPath} reported success but file is absent`);
+      }
+      unlinkSync(prefPath);
     },
-    { vault },
-  );
+    // Brain store dual write (task 1.11) on an unswitched machine: off by
+    // default, never fails this write.
+    store: lifecycleRecords,
+    context: { vault },
+  });
 
   // Per-preference mutation audit (opt-in, Brain lifecycle suite F1).
   // Keyed by the ORIGINAL `pref-<slug>` id so create -> ... -> retire
@@ -1752,32 +1965,19 @@ export function moveToRetired(
   return { path: newPath, id: newId };
 }
 
-function appendRetiredSection(
-  body: string,
-  reason: BrainRetiredReason,
-  opts: MoveToRetiredOptions,
-): string {
-  const trimmed = body.trimEnd();
-  const block: string[] = [
-    "",
-    "",
-    "## Retired",
-    "",
-    `Reason: \`${reason}\``,
-    `Retired at: ${opts.now.toISOString()}`,
-    `Retired by: ${opts.retired_by}`,
-  ];
-  if (opts.superseded_by?.trim()) {
-    block.push(`Superseded by: ${opts.superseded_by.trim()}`);
+/**
+ * The preference a store-only retire moves, from the store's fold, as the
+ * page `parseFrontmatter` would have read (and an empty body: the retired
+ * page is not written). Throws when the fold holds no active preference
+ * of that id, as the page read throws for a missing page.
+ */
+function storeRetireSource(prefPath: string): [FrontmatterMap, string] {
+  const slug = basename(prefPath, ".md").slice("pref-".length);
+  const page = slug === "" ? null : storePreferenceMeta(slug);
+  if (page === null || page.retired) {
+    throw new Error(`moveToRetired: the brain store holds no active preference pref-${slug}`);
   }
-  if (opts.user_rejected_reason?.trim()) {
-    // Multi-line user prose: collapse internal newlines so the rendered
-    // block stays a flat bullet list. Long-form context belongs in the
-    // log entry, not in the retired body.
-    const reasonLine = opts.user_rejected_reason.trim().replace(/\s+/g, " ");
-    block.push(`User reason: ${reasonLine}`);
-  }
-  return trimmed + block.join("\n") + "\n";
+  return [page.meta, ""];
 }
 
 // ----- Field helpers --------------------------------------------------------

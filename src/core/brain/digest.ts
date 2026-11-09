@@ -35,8 +35,7 @@
  * retired entries, the log, or the snapshots.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join, posix } from "node:path";
+import { posix } from "node:path";
 
 import { everyArtifactRefView, readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { logEntriesAtReach, logEntryAtReach } from "./log-events-at-reach.ts";
@@ -54,7 +53,7 @@ import {
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import { loadActiveMostAppliedSafe } from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
-import { parseRetired } from "./preference.ts";
+import { parseRetiredMeta } from "./preference.ts";
 import {
   collectPreferences,
   PREFERENCE_ID_PREFIX,
@@ -63,7 +62,8 @@ import {
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
 import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import type { BrainLogEntry } from "./log.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { logDayReader } from "./log-days.ts";
 import {
   BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
@@ -761,14 +761,11 @@ function computeConnectionHealth(
 ): DigestJsonConnectionHealth {
   const allIds = preferences.map(({ pref }) => pref.id);
   // Also include retired entries.
-  const dirs = brainDirs(vault);
-  if (existsSync(dirs.retired)) {
-    for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      if (!entry.name.startsWith("ret-")) continue;
-      if (!refs.visible(posix.join(BRAIN_RETIRED_REL, entry.name))) continue;
-      allIds.push(entry.name.replace(/\.md$/, ""));
-    }
+  for (const entry of memoryFolderPages(vault, "retired", { regularFilesOnly: true })) {
+    if (!entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith("ret-")) continue;
+    if (!refs.visible(posix.join(BRAIN_RETIRED_REL, entry.name))) continue;
+    allIds.push(entry.name.replace(/\.md$/, ""));
   }
 
   const totalNodes = allIds.length;
@@ -853,17 +850,15 @@ function readAllRetired(
   agentScope: string | undefined,
   refs: ArtifactRefView,
 ): ReadonlyArray<RetiredWithPath> {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.retired)) return [];
   const scope = resolveOwnerScopeDelivery(vault, agentScope).enforcedScope;
   const out: RetiredWithPath[] = [];
-  for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+  for (const entry of memoryFolderPages(vault, "retired", { regularFilesOnly: true })) {
+    if (!entry.name.endsWith(".md")) continue;
     if (!entry.name.startsWith("ret-")) continue;
     if (!refs.visible(posix.join(BRAIN_RETIRED_REL, entry.name))) continue;
-    const path = join(dirs.retired, entry.name);
+    const path = entry.path;
     try {
-      const ret = parseRetired(path);
+      const ret = parseRetiredMeta(entry.read()[0], path);
       if (scope !== null && !isPreferenceVisible(ret, scope)) continue;
       out.push({ ret, path });
     } catch {
@@ -883,10 +878,11 @@ function readLogsInWindow(vault: string, since: Date, until: Date): ReadonlyArra
   const sinceDay = sinceIso.slice(0, 10);
   const untilDay = untilIso.slice(0, 10);
   const out: BrainLogEntry[] = [];
-  for (const date of listLogDates(vault)) {
+  const log = logDayReader(vault);
+  for (const date of log.dates) {
     if (date < addDays(sinceDay, -1)) continue;
     if (date > addDays(untilDay, 1)) continue;
-    const { entries } = readLogDay(vault, date);
+    const { entries } = log.day(date);
     for (const e of entries) {
       if (e.timestamp >= sinceIso && e.timestamp < untilIso) {
         out.push(e);
@@ -914,8 +910,9 @@ function findFirstAppliedArtifact(
   prefId: string,
   refs: ArtifactRefView,
 ): string | null {
-  for (const date of listLogDates(vault)) {
-    const { entries } = readLogDay(vault, date);
+  const log = logDayReader(vault);
+  for (const date of log.dates) {
+    const { entries } = log.day(date);
     for (const e of logEntriesAtReach(refs, entries)) {
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
       if (e.body["result"] !== BRAIN_APPLY_RESULT.applied) continue;

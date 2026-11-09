@@ -32,12 +32,14 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePagesIn } from "./memory-pages.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import { relationFromFrontmatterField } from "../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
+import { storeLogDays } from "./log-days.ts";
 import { listLogShardFiles, readLogDay } from "./log-jsonl.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
@@ -209,11 +211,16 @@ export function buildBacklinkIndex(vault: string, ownerScope?: string | null): B
     unparsed.push(Object.freeze(row));
   };
 
-  collectPreferences(dirs.preferences, "preference", push, fail);
-  collectPreferences(dirs.retired, "retired", push, fail);
-  collectSignals(dirs.inbox, push, fail);
-  collectSignals(dirs.processed, push, fail);
-  collectSignals(dirs.archived, push, fail);
+  // Store-only (task 2.10): the preferences and signals are the folds'
+  // records, read as the pages they would be; the log is not one of them.
+  const fromStore = memoryFromStore(vault);
+  const pagesOf = (dir: string): ReadonlyArray<SourcePage> =>
+    fromStore ? storeSourcePages(vault, dir) : legacySourcePages(dir);
+  collectPreferences(pagesOf(dirs.preferences), "preference", push, fail);
+  collectPreferences(pagesOf(dirs.retired), "retired", push, fail);
+  collectSignals(pagesOf(dirs.inbox), push, fail);
+  collectSignals(pagesOf(dirs.processed), push, fail);
+  collectSignals(pagesOf(dirs.archived), push, fail);
   collectLog(vault, dirs.log, push, fail);
 
   // Freeze each entry's array so downstream callers can't mutate the
@@ -241,16 +248,40 @@ export function backlinkCount(index: BacklinkIndex, target: string): number {
 
 // ----- Collectors ----------------------------------------------------------
 
+/** One page a collector reads: its file name, its path, and how to read it. */
+interface SourcePage {
+  readonly name: string;
+  readonly full: string;
+  readonly read: () => readonly [Record<string, unknown>, string];
+}
+
+/** The `.md` files of `dir`, as the collectors always listed them. */
+function legacySourcePages(dir: string): ReadonlyArray<SourcePage> {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => {
+      const full = join(dir, name);
+      return { name, full, read: () => parseFrontmatter(full) };
+    });
+}
+
+/** The store's records whose page sat in `dir`, read as those pages. */
+function storeSourcePages(vault: string, dir: string): ReadonlyArray<SourcePage> {
+  return storePagesIn(vault, dir).map((page) => ({
+    name: `${page.id}.md`,
+    full: page.path,
+    read: () => [page.meta, page.body] as const,
+  }));
+}
+
 function collectPreferences(
-  dir: string,
+  pages: ReadonlyArray<SourcePage>,
   kind: "preference" | "retired",
   push: (target: string, ref: BacklinkRef) => void,
   fail: (row: BacklinkParseFailure) => void,
 ): void {
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
-    const full = join(dir, name);
+  for (const { name, full, read } of pages) {
     const source = name.slice(0, -".md".length);
     // Single read: pull both frontmatter and body in one pass so we
     // don't pay 2× readFileSync per preference on every index build.
@@ -259,7 +290,7 @@ function collectPreferences(
     let meta: Record<string, unknown>;
     let body: string;
     try {
-      const [rawMeta, rawBody] = parseFrontmatter(full);
+      const [rawMeta, rawBody] = read();
       // Collapse legacy / `_`-prefixed Group C keys so this
       // collector reads the same shape regardless of which the file
       // was written in. Collision aborts the row (caller's job to
@@ -321,18 +352,15 @@ function collectPreferences(
 }
 
 function collectSignals(
-  dir: string,
+  pages: ReadonlyArray<SourcePage>,
   push: (target: string, ref: BacklinkRef) => void,
   fail: (row: BacklinkParseFailure) => void,
 ): void {
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
-    const full = join(dir, name);
+  for (const { name, full, read } of pages) {
     if (!name.startsWith("sig-")) continue;
     const source = name.slice(0, -".md".length);
     try {
-      const [meta, body] = parseFrontmatter(full);
+      const [meta, body] = read();
       const sources = meta["source"];
       const list = Array.isArray(sources) ? sources : sources ? [String(sources)] : [];
       for (const t of list) push(t, { source, sourceKind: "signal", field: "source" });
@@ -352,18 +380,24 @@ function collectLog(
   push: (target: string, ref: BacklinkRef) => void,
   fail: (row: BacklinkParseFailure) => void,
 ): void {
-  if (!existsSync(dir)) return;
+  // Store-only (task 2.10): the log is the store's `log-event` records.
+  const stored = storeLogDays(vault);
+  if (stored === null && !existsSync(dir)) return;
   // Shard-aware (Memory Integrity Suite): merged per-day reads. List the
   // log directory once and share it across every date's readLogDay call
   // instead of one readdirSync+sort per date (this loop can span a
   // vault's entire log history).
-  const shards = listLogShardFiles(vault);
-  const dates = [...new Set(shards.map((f) => f.date))].toSorted();
+  const shards = stored === null ? listLogShardFiles(vault) : [];
+  const storedDays = new Map((stored ?? []).map((d) => [d.date, d.entries] as const));
+  const dates =
+    stored === null
+      ? [...new Set(shards.map((f) => f.date))].toSorted()
+      : stored.map((d) => d.date);
   for (const date of dates) {
     const source = `log-${date}`;
     let entries;
     try {
-      entries = readLogDay(vault, date, shards).entries;
+      entries = stored === null ? readLogDay(vault, date, shards).entries : storedDays.get(date)!;
     } catch (err) {
       fail({ source, sourceKind: LOG_READ_KIND, reason: failureReason(err, dir) });
       continue;

@@ -5,7 +5,8 @@
  * is in use (see `brain-store/location.ts`) the default is the store's
  * device-local state instead: `<device state>/index/<vault key>/brain.sqlite`.
  * Either default is overridable through CLI `--db` or config
- * `search_db_path`.
+ * `search_db_path`. With no vault the index can only live in the store's
+ * device-local state, keyed by the store id (design D14 item 14).
  *
  * The two name components come from `brain/path-constants.ts`, the leaf
  * module that already owns every vault-relative name in this project.
@@ -36,8 +37,22 @@ export const SEARCH_DB_ENV = "OPEN_SECOND_BRAIN_SEARCH_DB";
 /** Machine-config key that overrides the store location. */
 export const SEARCH_DB_CONFIG_KEY = "search_db_path";
 
+/**
+ * No vault, no store and no override: there is nowhere an index can live
+ * (design D14 item 14). The remedy names both ways out.
+ */
+export class NoIndexLocationError extends Error {
+  constructor() {
+    super(
+      "the search index has no location: no vault is configured and no brain store is in use; " +
+        "run `o2b store init` to create the store, or configure a vault",
+    );
+    this.name = "NoIndexLocationError";
+  }
+}
+
 export function resolveIndexPath(
-  vault: string,
+  vault: string | null,
   override: string | null,
   store: IndexedStore | null = null,
 ): string {
@@ -46,6 +61,7 @@ export function resolveIndexPath(
     if (trimmed !== "") return trimmed;
   }
   if (store !== null) return storeIndexPath(store, vault);
+  if (vault === null) throw new NoIndexLocationError();
   return join(vault, DERIVED_STORE_DIR, DERIVED_STORE_FILE);
 }
 
@@ -59,7 +75,7 @@ export function resolveIndexPath(
  * override wins as always.
  */
 export function resolveIndexPathForProbe(
-  vault: string,
+  vault: string | null,
   override: string | null,
   probe: StoreProbe,
 ): string {
@@ -89,7 +105,7 @@ export function resolveIndexPathForProbe(
  * unconfigured store is a real state, and refusing it by name belongs to
  * the caller that tries to use it, not here.
  */
-export function resolveConfiguredIndexPath(vault: string, configPath?: string): string {
+export function resolveConfiguredIndexPath(vault: string | null, configPath?: string): string {
   const path = configPath ?? defaultConfigPath();
   const config = discoverConfig(path).data;
   return resolveIndexPathForProbe(

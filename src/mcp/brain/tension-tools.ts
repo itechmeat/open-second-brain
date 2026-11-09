@@ -37,6 +37,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceStr, unknownOperationError } from "../coerce.ts";
 import { readableAtContextReachOrUndefined, type ReadablePredicate } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
+import { laneVault, vaultForNoteAction } from "./lane-vault.ts";
 
 const TOOL = "brain_tension";
 
@@ -98,8 +99,11 @@ async function toolBrainTension(
     // of list and verify and answered as absent by show and the
     // transitions, before anything is written.
     const readable = readableAtContextReachOrUndefined(ctx);
+    // A record-lane tool works with no vault: its pages are store records
+    // then; detect alone reads the vault's notes and needs one.
+    const vault = laneVault(ctx);
     const visible = (rows: ReadonlyArray<TensionRecord>): TensionRecord[] =>
-      rows.filter((t) => tensionReadable(ctx.vault, readable, t));
+      rows.filter((t) => tensionReadable(vault, readable, t));
 
     switch (action) {
       case "detect":
@@ -115,7 +119,7 @@ async function toolBrainTension(
           }
           jaccard = rawJaccard;
         }
-        const res = detectTensionsInVault(ctx.vault, {
+        const res = detectTensionsInVault(vaultForNoteAction(ctx, "brain_tension action=detect"), {
           ...(jaccard !== undefined ? { jaccard } : {}),
           ...(agent ? { agent } : {}),
           ...(readable !== undefined ? { readable } : {}),
@@ -130,12 +134,12 @@ async function toolBrainTension(
       }
       case "list": {
         const unresolved = coerceBool(args, "unresolved");
-        const rows = unresolved ? listUnresolvedTensions(ctx.vault) : listTensions(ctx.vault);
+        const rows = unresolved ? listUnresolvedTensions(vault) : listTensions(vault);
         return { action, tensions: visible(rows).map(renderRow) };
       }
       case "show": {
         const slug = coerceStr(args, "slug", true)!;
-        const t = readableTension(ctx.vault, readable, slug);
+        const t = readableTension(vault, readable, slug);
         return {
           action,
           ...renderRow(t),
@@ -162,19 +166,22 @@ async function toolBrainTension(
             : action === "dismiss"
               ? dismissTension
               : resolveTension;
-        readableTension(ctx.vault, readable, slug);
-        const t = fn(ctx.vault, slug, opts);
+        readableTension(vault, readable, slug);
+        const t = fn(vault, slug, opts);
         return { action, ...renderRow(t) };
       }
       case "verify": {
+        // The verdicts quote the subject notes, so they need the user's
+        // vault: refused first, whatever the other arguments name.
+        vaultForNoteAction(ctx, "brain_tension action=verify");
         const slug = coerceStr(args, "slug", false);
         let records: TensionRecord[];
         if (slug) {
-          records = [readableTension(ctx.vault, readable, slug)];
+          records = [readableTension(vault, readable, slug)];
         } else {
-          records = visible(listUnresolvedTensions(ctx.vault));
+          records = visible(listUnresolvedTensions(vault));
         }
-        const verified = await verifyTensions(ctx.vault, records, { configPath: ctx.configPath });
+        const verified = await verifyTensions(vault, records, { configPath: ctx.configPath });
         return {
           action,
           available: verified.available,

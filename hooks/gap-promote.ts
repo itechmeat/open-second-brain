@@ -25,7 +25,6 @@ import {
   defaultConfigPath,
   resolveGapLoopEnabled,
   resolveGapLoopThreshold,
-  resolveVault,
 } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
@@ -33,6 +32,7 @@ import { gapScopedRecallRetriever } from "../src/core/brain/gaps/gap-recall.ts";
 import { autoCloseRecalledGaps, promoteGapsToTasks } from "../src/core/brain/gaps/gap-loop.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /**
  * The vault this run resolved, remembered for the failure path.
@@ -109,8 +109,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
     auditedVault = vault;
     const configPath = defaultConfigPath();
     const now = new Date();

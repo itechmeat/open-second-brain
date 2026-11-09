@@ -6,8 +6,9 @@
  * cut. Surfaced-only frequency is never recorded, so it never boosts.
  */
 
+import { join } from "node:path";
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
 import {
   REINFORCE_BOOST_CAP,
@@ -27,6 +28,8 @@ let cleanup: () => void;
 
 beforeEach(() => {
   ({ vault, cleanup } = createTempVault("reinforce"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => cleanup());
 

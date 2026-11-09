@@ -54,6 +54,8 @@ let configHome: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-maint-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-maint-cfg-"));
   const configPath = join(configHome, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${vault}\n`);

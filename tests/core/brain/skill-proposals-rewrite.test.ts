@@ -512,6 +512,33 @@ describe("the journal captures prior content", () => {
     expect(readSkillAcceptJournals(vault).entries).toEqual([]);
   });
 
+  test("the copy is read beside the journal, whatever path the journal recorded", () => {
+    const { slug } = stagePromoted();
+    const skillPath = writeIncumbentUnderVaultSkills();
+    writeFileSync(
+      skillPath,
+      "---\nname: example-skill\ndescription: x\nversion: 4\n---\n\nCandidate body: plan first\n",
+      "utf8",
+    );
+    const priorPath = join(vault, "Brain", "skill-proposals", "accept-journal", `${slug}.prior.md`);
+    mkdirSync(dirname(priorPath), { recursive: true });
+    writeFileSync(priorPath, INCUMBENT_BODY, "utf8");
+    writeSkillAcceptJournal(vault, {
+      slug,
+      id: `prop-${slug}`,
+      phase: "materialize",
+      startedAt: "2026-06-01T09:00:00.000Z",
+      acceptedExisted: false,
+      materializedExisted: true,
+      materializedPath: skillPath,
+      // Recorded before the machine state moved: the path names the old root.
+      priorContentPath: join(tmpdir(), "moved-away", `${slug}.prior.md`),
+    });
+    const recovered = recoverSkillProposalAccepts(vault);
+    expect(recovered.map((entry) => entry.action)).toEqual(["rolled_back"]);
+    expect(readFileSync(skillPath, "utf8")).toBe(INCUMBENT_BODY);
+  });
+
   test("without a captured prior copy the incumbent is left untouched", () => {
     const { slug } = stagePromoted();
     const skillPath = writeIncumbent();

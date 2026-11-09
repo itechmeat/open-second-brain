@@ -721,6 +721,9 @@ export class Store {
    * verdict and no rescue, which is the narrowed read's own answer.
    */
   private staleSnapshotDocumentIds(documentIds: ReadonlyArray<number>): Set<number> {
+    // No vault (design D14): the index holds store records, no file to stat.
+    const vault = this.config.vault;
+    if (vault === null) return new Set();
     const placeholders = documentIds.map(() => "?").join(", ");
     const rows = this.db
       .query<{ id: number; path: string; mtime: number; size: number }, number[]>(
@@ -735,14 +738,14 @@ export class Store {
       // lexical containment the live filter applies, and the safe arm (the
       // candidate falls through to the live filter, which judges it
       // unreadable rather than reading outside the vault).
-      if (!pathIsInside(join(this.config.vault, row.path), this.config.vault)) {
+      if (!pathIsInside(join(vault, row.path), vault)) {
         stale.add(row.id);
         continue;
       }
       let liveSize: number;
       let liveMtimeMs: number;
       try {
-        const live = statSync(join(this.config.vault, row.path));
+        const live = statSync(join(vault, row.path));
         liveSize = live.size;
         liveMtimeMs = live.mtimeMs;
       } catch {

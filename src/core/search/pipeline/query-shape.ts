@@ -63,7 +63,7 @@ function highFrequencyTokens(store: Store, query: string): ReadonlySet<string> {
  * unreadable pack yields an empty set, so the router falls back to the
  * vocabulary-independent source signal only.
  */
-function summarySurfaceVocabulary(vault: string): ReadonlySet<string> {
+function summarySurfaceVocabulary(vault: string | null): ReadonlySet<string> {
   try {
     return new Set(loadSchemaPack(vault).vocabulary.page_types.map((t) => t.toLowerCase()));
   } catch {
@@ -73,7 +73,7 @@ function summarySurfaceVocabulary(vault: string): ReadonlySet<string> {
 
 export interface QueryShapeInput {
   readonly store: Store;
-  readonly vault: string;
+  readonly vault: string | null;
   /** Residual query text (time directives already stripped). */
   readonly query: string;
   /** An explicit structured document from the caller, if any. */

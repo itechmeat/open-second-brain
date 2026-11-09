@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,8 @@ const INPUT = Object.freeze({
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-pre-compact-dry-run-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -49,6 +51,7 @@ describe("pre-compact extraction dry-run preview", () => {
 
   test("dry-run candidate records are deeply equal to the records the real path appends", () => {
     const dryVault = mkdtempSync(join(tmpdir(), "o2b-pre-compact-dry-"));
+    mkdirSync(join(dryVault, "Brain"), { recursive: true }); // a legacy tree: unswitched
     try {
       const preview = extractPreCompactRecords(dryVault, { ...INPUT, dryRun: true });
       const real = extractPreCompactRecords(vault, INPUT);
@@ -68,6 +71,7 @@ describe("pre-compact extraction dry-run preview", () => {
     expect(listContinuityRecords(vault)).toHaveLength(absent.records.length);
 
     const falseVault = mkdtempSync(join(tmpdir(), "o2b-pre-compact-false-"));
+    mkdirSync(join(falseVault, "Brain"), { recursive: true }); // a legacy tree: unswitched
     try {
       const explicitFalse = extractPreCompactRecords(falseVault, { ...INPUT, dryRun: false });
       expect(explicitFalse.records).toEqual(absent.records);

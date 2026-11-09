@@ -21,11 +21,13 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePageInPreferenceFolders, storePagesIn } from "../memory-pages.ts";
 import { FRONTMATTER_RE, parseFrontmatter } from "../../vault.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
 import { UNFILTERED_ARTIFACT_REFS, type ArtifactRefView } from "../artifact-ref-view.ts";
 import { brainDirs } from "../paths.ts";
 import { maskCodeRegions } from "../wikilink.ts";
+import { requireVaultAdapter, WIKILINK_AUDIT } from "../../vault-adapter/index.ts";
 
 /** One unlinked-mention occurrence. */
 export interface MentionRef {
@@ -81,10 +83,11 @@ const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
  * `opts.limit`.
  */
 export function findUnlinkedMentions(
-  vault: string,
+  vaultOrNull: string | null,
   targetId: string,
   opts: FindUnlinkedMentionsOptions = {},
 ): ReadonlyArray<MentionRef> {
+  const vault = requireVaultAdapter(vaultOrNull, WIKILINK_AUDIT.unlinkedMentions);
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const dirs = brainDirs(vault);
   const reach = opts.reachView ?? UNFILTERED_ARTIFACT_REFS;
@@ -97,9 +100,15 @@ export function findUnlinkedMentions(
   const owner = ownerScopeView(vault, opts.ownerScope ?? null);
   const view = (source: string): boolean => owner.visible(source) && reach.visible(source);
   const collected: MentionRef[] = [];
-  scanDir(dirs.preferences, targetId, terms, collected, limit, view);
+  // Store-only (task 2.10): the preference fold's records, as their pages.
+  const fromStore = memoryFromStore(vault);
+  const pagesOf = (dir: string): ReadonlyArray<MentionPage> =>
+    fromStore
+      ? storePagesIn(vault, dir).map((page) => ({ name: `${page.id}.md`, text: () => page.text }))
+      : legacyPages(dir);
+  scanDir(pagesOf(dirs.preferences), targetId, terms, collected, limit, view);
   if (collected.length < limit) {
-    scanDir(dirs.retired, targetId, terms, collected, limit, view);
+    scanDir(pagesOf(dirs.retired), targetId, terms, collected, limit, view);
   }
 
   return Object.freeze(collected) as ReadonlyArray<MentionRef>;
@@ -107,11 +116,17 @@ export function findUnlinkedMentions(
 
 function resolveSearchTerms(vault: string, targetId: string): ReadonlyArray<string> {
   const dirs = brainDirs(vault);
-  const candidates = [
-    join(dirs.preferences, `${targetId}.md`),
-    join(dirs.retired, `${targetId}.md`),
-  ];
+  // Store-only (task 2.10): the fold's record, as its page; no file is read.
+  const fromStore = memoryFromStore(vault);
+  const candidates = fromStore
+    ? []
+    : [join(dirs.preferences, `${targetId}.md`), join(dirs.retired, `${targetId}.md`)];
   let metaSource: Record<string, unknown> | null = null;
+  if (fromStore) {
+    // The same two folders the legacy lookup reads.
+    const page = storePageInPreferenceFolders(vault, targetId);
+    if (page !== null) metaSource = page.meta;
+  }
   for (const c of candidates) {
     if (!existsSync(c)) continue;
     try {
@@ -149,16 +164,29 @@ function resolveSearchTerms(vault: string, targetId: string): ReadonlyArray<stri
   return terms;
 }
 
+/** One `.md` page of a folder: its file name and how to read its text. */
+interface MentionPage {
+  readonly name: string;
+  readonly text: () => string;
+}
+
+function legacyPages(dir: string): ReadonlyArray<MentionPage> {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((name) => ({
+    name,
+    text: () => readFileSync(join(dir, name), "utf8"),
+  }));
+}
+
 function scanDir(
-  dir: string,
+  pages: ReadonlyArray<MentionPage>,
   targetId: string,
   terms: ReadonlyArray<string>,
   out: MentionRef[],
   limit: number,
   visible: (source: string) => boolean,
 ): void {
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
+  for (const { name, text: read } of pages) {
     if (out.length >= limit) return;
     if (!name.endsWith(".md")) continue;
     const source = name.slice(0, -".md".length);
@@ -168,7 +196,7 @@ function scanDir(
     if (!visible(source)) continue;
     let text: string;
     try {
-      text = readFileSync(join(dir, name), "utf8");
+      text = read();
     } catch {
       continue;
     }

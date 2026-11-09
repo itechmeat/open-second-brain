@@ -56,7 +56,7 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
@@ -65,7 +65,9 @@ import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
 import { loadIntegrityConfigSafe } from "./policy.ts";
-import { parsePreference } from "./preference.ts";
+import { storeMemoryPages, type MemoryPage } from "./memory-pages.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
+import { parsePreference, parsePreferenceMeta } from "./preference.ts";
 import type { BrainPreference } from "./types.ts";
 
 /** Attribution recorded on the notices this module's reads produce. */
@@ -87,6 +89,12 @@ export interface PreferenceFile {
   readonly name: string;
   /** Absolute path, `join(dir, name)`. */
   readonly path: string;
+  /**
+   * On a store-only machine, the page the store's fold rebuilt for this
+   * name (task 2.10): there is no file at {@link path}, and the parse
+   * reads this page instead.
+   */
+  readonly page?: MemoryPage;
 }
 
 /** Per-caller listing rules; both default to the loosest form. */
@@ -169,7 +177,7 @@ export interface OwnerScopeDelivery {
  * is not a reason to change what a delivery surface returns.
  */
 export function resolveOwnerScopeDelivery(
-  vault: string,
+  vault: string | null,
   requested: string | undefined,
 ): OwnerScopeDelivery {
   const mode = loadIntegrityConfigSafe(vault).owner_scope_delivery;
@@ -212,6 +220,12 @@ export function listPreferenceFiles(
   dir: string,
   opts: PreferenceScanOptions = {},
 ): ReadonlyArray<PreferenceFile> {
+  const stored = storedPagesOf(dir);
+  if (stored !== null) {
+    return stored
+      .filter((page) => opts.namePrefix === undefined || page.name.startsWith(opts.namePrefix))
+      .map((page) => ({ name: page.name, path: page.path, page }));
+  }
   if (!existsSync(dir)) return [];
   const out: PreferenceFile[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -222,6 +236,23 @@ export function listPreferenceFiles(
     out.push({ name, path: join(dir, name) });
   }
   return out;
+}
+
+/**
+ * The pages the store's fold rebuilds for `dir` on a store-only machine
+ * (task 2.10), or `null` when `dir` is not a memory folder of a vault's
+ * `Brain/` or the machine is unswitched. Every delivery surface hands
+ * this walk `brainDirs(vault).preferences` or `.retired`, so the folder
+ * and the vault are read off the path.
+ */
+function storedPagesOf(dir: string): MemoryPage[] | null {
+  const folder = basename(dir);
+  if (folder !== "preferences" && folder !== "retired") return null;
+  const brain = dirname(dir);
+  if (basename(brain) !== BRAIN_ROOT_REL) return null;
+  // A vault-relative folder (`Brain/preferences`, from `brainDirsOf(null)`)
+  // names the folder of a machine with no vault (design D14).
+  return storeMemoryPages(isAbsolute(dir) ? dirname(brain) : null, folder);
 }
 
 /**
@@ -241,7 +272,10 @@ export function collectPreferences(
     try {
       // An unparseable file is already fail-closed: it is omitted under
       // every scope, so its unknowable owner can never leak.
-      pref = parsePreference(file.path);
+      pref =
+        file.page === undefined
+          ? parsePreference(file.path)
+          : parsePreferenceMeta(file.page.read()[0], file.path);
     } catch {
       continue;
     }
@@ -269,7 +303,10 @@ export function collectPreferencePages(
   const entries: CollectedPage[] = [];
   let hiddenByOwnerScope = 0;
   for (const file of listPreferenceFiles(dir, opts)) {
-    const [meta, body, notices] = parseFrontmatterWithNotices(file.path, { site: COLLECT_SITE });
+    const [meta, body, notices] =
+      file.page === undefined
+        ? parseFrontmatterWithNotices(file.path, { site: COLLECT_SITE })
+        : [...file.page.read(), []];
     const unreadable = notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable);
     if (gate !== null) {
       // Fail CLOSED on an unreadable page, matching `applyAgentScope` on

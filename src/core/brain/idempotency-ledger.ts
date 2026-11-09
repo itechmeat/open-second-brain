@@ -51,7 +51,13 @@ import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { processDirsEnv } from "../platform-dirs.ts";
+import { dualWrite, type DualWriteRecord } from "../store/dual-write.ts";
+import { withLocalLock } from "../store/local-lock.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { storesStateDir } from "../store/store-paths.ts";
+import { storeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
 
@@ -74,7 +80,7 @@ export const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
  * write and review ids a write batch's results carry. The store copy's
  * privacy judge skips them (see {@link rememberKey}).
  */
-const RECEIPT_OPAQUE_FIELDS: ReadonlySet<string> = new Set([
+export const RECEIPT_OPAQUE_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "namespace",
   "contentHash",
@@ -236,7 +242,7 @@ export function idempotencyLogPath(
  * the retry this ledger exists to dedupe would go through twice.
  */
 export function lookupKey(
-  vault: string,
+  vault: string | null,
   key: string,
   namespace?: string,
 ): IdempotencyRecord | null {
@@ -252,14 +258,43 @@ export function lookupKey(
  * outcomes. Only `inserted` appends a line; `duplicate_match` and
  * `payload_mismatch` write nothing.
  */
-export function rememberKey(vault: string, input: RememberKeyInput): RememberKeyResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+export function rememberKey(vault: string | null, input: RememberKeyInput): RememberKeyResult {
   const key = normaliseKey(input.key);
   const contentHash = requireHash(input.contentHash);
   const createdAt = input.createdAt ?? isoSecond(new Date());
   const month = monthOf(createdAt);
+  const candidate: IdempotencyRecord = Object.freeze({
+    key,
+    ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
+    contentHash,
+    createdAt,
+    ...(input.ref !== undefined ? { ref: input.ref } : {}),
+  });
+  const existingOutcome = (existing: IdempotencyRecord): RememberKeyResult => ({
+    status:
+      existing.contentHash === contentHash
+        ? REMEMBER_KEY_STATUS.duplicate_match
+        : REMEMBER_KEY_STATUS.payload_mismatch,
+    record: existing,
+  });
 
+  // A store-only machine (design D14 item 1) keeps the receipts as
+  // `idempotency` ledger rows. The lookup and the append run under one
+  // device-local lock, so two writers on this machine cannot both insert
+  // a key; a key a synced peer remembered is honoured once its shard has
+  // arrived, as with the legacy shards.
+  // No vault means store-only too (design D14).
+  if (vault === null || isStoreOnly({ vault })) {
+    return withLocalLock(join(storesStateDir(processDirsEnv()), STORE_IDEMPOTENCY_LOCK), () => {
+      const existing = lookupKey(vault, key, input.namespace);
+      if (existing) return existingOutcome(existing);
+      storeWrite(() => receiptRowRecord(vault, candidate, input.private), { vault });
+      return { status: REMEMBER_KEY_STATUS.inserted, record: candidate };
+    });
+  }
+
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   mkdirSync(join(vault, IDEMPOTENCY_REL), { recursive: true });
   const shardPath = idempotencyLogPath(vault, month);
   const handle = acquireLockSync(shardPath);
@@ -270,25 +305,10 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
     // append to - while the scan still spans every shard, so a key a
     // synced peer already remembered is honoured here too.
     const existing = lookupKey(vault, key, input.namespace);
-    if (existing) {
-      return {
-        status:
-          existing.contentHash === contentHash
-            ? REMEMBER_KEY_STATUS.duplicate_match
-            : REMEMBER_KEY_STATUS.payload_mismatch,
-        record: existing,
-      };
-    }
-    const record: IdempotencyRecord = Object.freeze({
-      key,
-      ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
-      contentHash,
-      createdAt,
-      ...(input.ref !== undefined ? { ref: input.ref } : {}),
-    });
-    writeFileSync(shardPath, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a" });
-    inserted = record;
-    return { status: REMEMBER_KEY_STATUS.inserted, record };
+    if (existing) return existingOutcome(existing);
+    writeFileSync(shardPath, `${JSON.stringify(candidate)}\n`, { encoding: "utf8", flag: "a" });
+    inserted = candidate;
+    return { status: REMEMBER_KEY_STATUS.inserted, record: candidate };
   } finally {
     handle.release();
     // Brain store dual write (task 1.11): off by default, never fails this
@@ -296,37 +316,45 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
     // never lengthen this ledger's critical section.
     if (inserted !== undefined) {
       const row = inserted;
-      // A receipt that carries its operation's verdict follows it and is
-      // never judged again: the operation fixed one partition for every
-      // record it writes, and a second judge reading the vault later (a
-      // page turned private in between) would split them. A receipt with
-      // no verdict names the written item (its path, id or log entry) in
-      // its `ref` and is judged from it: one whose references name a page
-      // that is private or cannot be judged goes to `private` only. The
-      // key, hash and timestamps are opaque and never judged as
-      // references. Either way the dual-write entry point still raises a
-      // receipt carrying a `<private>` region; a region inside an
-      // operation's receipt is already in the content its verdict judged.
-      const verdict = input.private;
-      dualWrite(
-        () =>
-          ledgerRowRecord(
-            DUAL_WRITE_LEDGERS.idempotency,
-            row,
-            (
-              verdict === undefined
-                ? rowNamesPrivatePage(vault, row, RECEIPT_OPAQUE_FIELDS)
-                : typeof verdict === "function"
-                  ? verdict()
-                  : verdict
-            )
-              ? "private"
-              : "shared",
-          ),
-        { vault },
-      );
+      dualWrite(() => receiptRowRecord(vault, row, input.private), { vault });
     }
   }
+}
+
+/** Device-local lock file of the store-only lookup-then-append. */
+const STORE_IDEMPOTENCY_LOCK = "idempotency-ledger";
+
+/**
+ * The store row of one receipt. A receipt that carries its operation's
+ * verdict follows it and is never judged again: the operation fixed one
+ * partition for every record it writes, and a second judge reading the
+ * vault later (a page turned private in between) would split them. A
+ * receipt with no verdict names the written item (its path, id or log
+ * entry) in its `ref` and is judged from it: one whose references name a
+ * page that is private or cannot be judged goes to `private` only. The
+ * key, hash and timestamps are opaque and never judged as references.
+ * Either way the store entry point still raises a receipt carrying a
+ * `<private>` region; a region inside an operation's receipt is already in
+ * the content its verdict judged.
+ */
+function receiptRowRecord(
+  vault: string | null,
+  row: IdempotencyRecord,
+  verdict: RememberKeyInput["private"],
+): DualWriteRecord {
+  return ledgerRowRecord(
+    DUAL_WRITE_LEDGERS.idempotency,
+    row,
+    (
+      verdict === undefined
+        ? rowNamesPrivatePage(vault, row, RECEIPT_OPAQUE_FIELDS)
+        : typeof verdict === "function"
+          ? verdict()
+          : verdict
+    )
+      ? "private"
+      : "shared",
+  );
 }
 
 // ----- internals -----------------------------------------------------------
@@ -359,7 +387,16 @@ function monthOf(createdAt: string): string {
   return month;
 }
 
-function readAllRecords(vault: string): IdempotencyRecord[] {
+function readAllRecords(vault: string | null): IdempotencyRecord[] {
+  // The `idempotency` ledger rows in fold order on a store-only machine
+  // (design D14 item 1): the first-written row of a key comes first, as
+  // with the legacy shards.
+  return readLedgerRows<IdempotencyRecord>(DUAL_WRITE_LEDGERS.idempotency, readLegacyRecords, {
+    vault,
+  }).filter((row) => row !== null && typeof row === "object");
+}
+
+function readLegacyRecords(vault: string): IdempotencyRecord[] {
   const dir = idempotencyLogDir(vault);
   const records: IdempotencyRecord[] = [];
   for (const shard of listShardedFiles(dir, IDEMPOTENCY_GRAMMAR)) {

@@ -51,6 +51,7 @@
  * (kept as the raw string), matching the log-reader tolerance contract.
  */
 
+import { legacyVaultOf } from "./no-vault.ts";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -72,7 +73,9 @@ import {
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { routeWrite } from "../store/store-write.ts";
 import {
   auditRowRecord,
   DUAL_WRITE_LEDGERS,
@@ -152,12 +155,10 @@ export function renderPrefAuditLine(rec: PrefAuditRecord): string {
  * audit directory is created on demand.
  */
 export function appendPrefAudit(
-  vault: string,
+  vault: string | null,
   input: AppendPrefAuditInput,
   opts: { now?: Date } = {},
 ): boolean {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
   // No-op when an `update` did not change the preference content. Both
   // hashes present and equal => counter-only churn, nothing meaningful
   // to record. Lifecycle ops always record (see module docstring).
@@ -183,16 +184,22 @@ export function appendPrefAudit(
     hash_after: input.hash_after,
   };
 
-  const path = prefAuditPath(vault, input.pref_id);
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, renderPrefAuditLine(record), "utf8");
-  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // One `preference-audit` ledger row on a store-only machine (design D14
+  // item 1), the preference's audit shard plus the dual write otherwise.
   // Audit rows go to `private` when this machine holds it, else `shared`
   // (`auditRowRecord`). A private preference's trail is private only: the
   // caller's flag (it knows the file it just wrote, merged or retired), or
-  // the preference file found on disk.
-  dualWrite(
-    () =>
+  // the preference itself (its file, or its fold once store-only).
+  routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J).
+      const root = legacyVaultOf(vault, "appendPrefAudit");
+      assertVaultIdentityForWrite(root);
+      const path = prefAuditPath(root, input.pref_id);
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, renderPrefAuditLine(record), "utf8");
+    },
+    store: () =>
       auditRowRecord(
         DUAL_WRITE_LEDGERS.preferenceAudit,
         record,
@@ -200,8 +207,8 @@ export function appendPrefAudit(
         (typeof input.private === "function" ? input.private() : input.private === true) ||
           isPrivatePreference(vault, record.pref_id.replace(/^pref-/, "")),
       ),
-    { vault },
-  );
+    context: { vault },
+  });
   return true;
 }
 
@@ -226,6 +233,30 @@ export function appendPrefAudit(
  */
 export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResult {
   const wanted = validateSlug(prefId);
+  // A store-only machine (design D14 item 1) reads this preference's rows
+  // of the `preference-audit` ledger, sorted by `ts` with fold order (the
+  // order they were written in) breaking ties.
+  if (isStoreOnly({ vault })) {
+    const warnings: PrefAuditParseWarning[] = [];
+    const records: PrefAuditRecord[] = [];
+    readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.preferenceAudit, () => [], { vault }).forEach(
+      (row, index) => {
+        if (
+          row === null ||
+          typeof row !== "object" ||
+          (row as { pref_id?: unknown }).pref_id !== wanted
+        ) {
+          return;
+        }
+        const rec = coerceRecord(row, PREF_AUDIT_STORE_SOURCE, index + 1, warnings);
+        if (rec !== null) records.push(rec);
+      },
+    );
+    return {
+      records: records.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)),
+      warnings,
+    };
+  }
   const rows: Array<ShardedRow<PrefAuditRecord>> = [];
   const warnings: PrefAuditParseWarning[] = [];
   const shards = [
@@ -275,6 +306,9 @@ export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResul
   }
   return { records: mergeShardedRows(rows, (record) => record.ts), warnings };
 }
+
+/** The `path` a warning about a store row names: the ledger it came from. */
+const PREF_AUDIT_STORE_SOURCE = `store:ledgers/${DUAL_WRITE_LEDGERS.preferenceAudit}`;
 
 /**
  * The name layout of one preference's shards INSIDE its own directory.

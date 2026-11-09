@@ -15,10 +15,12 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { resolveMergedValue } from "../../secret-resolver.ts";
 import { SearchError } from "../types.ts";
+import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 /** A registered OpenAI-compatible provider profile. */
 export interface ProviderProfile {
@@ -50,8 +52,8 @@ export const RESERVED_PROVIDER_NAMES: ReadonlyArray<string> = Object.freeze([
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-export function providerRegistryPath(vault: string): string {
-  return join(vault, "Brain", "search", "embedding-providers.json");
+export function providerRegistryPath(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, "search", "embedding-providers.json");
 }
 
 function isEnvKey(value: unknown): value is string | ReadonlyArray<string> {
@@ -71,7 +73,7 @@ function isProfile(value: unknown): value is ProviderProfile {
 }
 
 /** Load the registry, fail-soft: absent or malformed file -> empty list. */
-export function loadProviderRegistry(vault: string): ProviderProfile[] {
+export function loadProviderRegistry(vault: string | null): ProviderProfile[] {
   let text: string;
   try {
     text = readFileSync(providerRegistryPath(vault), "utf8");
@@ -88,7 +90,10 @@ export function loadProviderRegistry(vault: string): ProviderProfile[] {
   return parsed.filter(isProfile).map((p) => Object.freeze({ ...p }));
 }
 
-function writeProviderRegistry(vault: string, registry: ReadonlyArray<ProviderProfile>): void {
+function writeProviderRegistry(
+  vault: string | null,
+  registry: ReadonlyArray<ProviderProfile>,
+): void {
   const path = providerRegistryPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   // Sort by name so the on-disk file is deterministic across edits.
@@ -128,7 +133,10 @@ function validateProfile(profile: ProviderProfile): void {
  * Add (or upsert by name) a provider profile and persist. Returns the
  * full registry after the change.
  */
-export function addProviderProfile(vault: string, profile: ProviderProfile): ProviderProfile[] {
+export function addProviderProfile(
+  vault: string | null,
+  profile: ProviderProfile,
+): ProviderProfile[] {
   validateProfile(profile);
   const keys = envKeyList(profile.envKey);
   const normalised: ProviderProfile = Object.freeze({
@@ -147,7 +155,7 @@ export function addProviderProfile(vault: string, profile: ProviderProfile): Pro
 
 /** Remove a profile by name; reports whether one was present. */
 export function removeProviderProfile(
-  vault: string,
+  vault: string | null,
   name: string,
 ): { removed: boolean; registry: ProviderProfile[] } {
   const current = loadProviderRegistry(vault);
@@ -157,7 +165,7 @@ export function removeProviderProfile(
   return { removed, registry: loadProviderRegistry(vault) };
 }
 
-export function getProviderProfile(vault: string, name: string): ProviderProfile | null {
+export function getProviderProfile(vault: string | null, name: string): ProviderProfile | null {
   return loadProviderRegistry(vault).find((p) => p.name === name) ?? null;
 }
 

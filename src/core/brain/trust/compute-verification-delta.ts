@@ -29,7 +29,8 @@ import { existsSync } from "node:fs";
 
 import type { DreamRunSummary } from "../dream.ts";
 import { preferencePath, retiredPath, vaultRelative } from "../paths.ts";
-import { parsePreference } from "../preference.ts";
+import { memoryFromStore } from "../memory-pages.ts";
+import { loadPreference, preferencePresence } from "../preference.ts";
 
 export type VerificationDeltaState = "confirmed" | "drift" | "regression" | "missing_evidence";
 
@@ -109,9 +110,10 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
       note: `invalid slug: ${(err as Error).message}`,
     });
   }
-  if (existsSync(prefPath)) {
+  if (pageExists(vault, slug, prefPath, "active")) {
     try {
-      const pref = parsePreference(prefPath);
+      const pref = loadPreference(vault, slug);
+      if (pref === null) throw new Error(`preference pref-${slug} vanished while it was read`);
       // Validate the on-disk status against the dream claim. If dream
       // said "confirmed" but the file is still `unconfirmed` (or
       // sitting in `quarantine`), the claim does not match disk.
@@ -155,7 +157,7 @@ function classifyConfirmedClaim(vault: string, id: string): VerificationDeltaEnt
   } catch {
     return Object.freeze({ id, state: "missing_evidence" });
   }
-  if (existsSync(retPath)) {
+  if (pageExists(vault, slug, retPath, "retired")) {
     return Object.freeze({
       id,
       state: "regression",
@@ -181,7 +183,7 @@ function classifyUnconfirmedClaim(vault: string, id: string): VerificationDeltaE
       note: `invalid slug: ${(err as Error).message}`,
     });
   }
-  if (existsSync(prefPath)) {
+  if (pageExists(vault, slug, prefPath, "active")) {
     return Object.freeze({
       id,
       state: "confirmed",
@@ -194,7 +196,7 @@ function classifyUnconfirmedClaim(vault: string, id: string): VerificationDeltaE
   } catch {
     return Object.freeze({ id, state: "missing_evidence" });
   }
-  if (existsSync(retPath)) {
+  if (pageExists(vault, slug, retPath, "retired")) {
     return Object.freeze({
       id,
       state: "regression",
@@ -220,7 +222,7 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
       note: `invalid slug: ${(err as Error).message}`,
     });
   }
-  if (existsSync(retPath)) {
+  if (pageExists(vault, slug, retPath, "retired")) {
     return Object.freeze({
       id,
       state: "confirmed",
@@ -241,7 +243,7 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
       note: "dream claimed retired but no file under retired/",
     });
   }
-  if (existsSync(stillActivePath)) {
+  if (pageExists(vault, slug, stillActivePath, "active")) {
     return Object.freeze({
       id,
       state: "regression",
@@ -254,6 +256,21 @@ function classifyRetiredClaim(vault: string, id: string): VerificationDeltaEntry
     state: "missing_evidence",
     note: "dream claimed retired but no file under retired/",
   });
+}
+
+/**
+ * Whether the preference `slug` is `presence`: its page at `path` exists on
+ * an unswitched machine; the store's fold holds it so on a store-only one
+ * (task 2.10), where no page is written.
+ */
+function pageExists(
+  vault: string,
+  slug: string,
+  path: string,
+  presence: "active" | "retired",
+): boolean {
+  if (memoryFromStore(vault)) return preferencePresence(vault, slug) === presence;
+  return existsSync(path);
 }
 
 function stripPrefPrefix(id: string): string | null {

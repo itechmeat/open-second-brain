@@ -18,6 +18,12 @@ import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse
 import { fileAgeMs, msToWholeDays } from "./time.ts";
 import { parseFrontmatter } from "../vault.ts";
 import type { InsightCandidate, TriggerKind } from "./triggers/types.ts";
+import { laneEntryClockMs, listLaneTree, readLaneText } from "../store/lane-pages.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { storeRecordPages } from "./memory-pages.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
+import { vaultRelative } from "../path-safety.ts";
+import type { FrontmatterMap } from "../types.ts";
 
 const KIND_WEIGHT: Readonly<Record<string, number>> = Object.freeze({
   open_question: 3,
@@ -55,6 +61,8 @@ export interface DiscoverIdeasOptions {
 interface NoteFile {
   readonly relPath: string;
   readonly absPath: string;
+  /** On a store-only machine: the page text and the record clock, read up front. */
+  readonly stored?: { readonly text: string; readonly mtimeMs: number | null };
 }
 
 /** Top-level Brain dirs whose notes never count as orphan CANDIDATES. */
@@ -69,6 +77,7 @@ const MACHINE_DIRS: ReadonlySet<string> = new Set([
 
 /** Recursively list .md files under Brain/, optionally skipping dirs. */
 function listBrainNotes(vault: string, skipTopLevel: ReadonlySet<string> = new Set()): NoteFile[] {
+  if (isStoreOnly({ vault })) return storeBrainNotes(vault, skipTopLevel);
   const out: NoteFile[] = [];
   const walk = (dir: string, rel: string): void => {
     let entries;
@@ -90,6 +99,50 @@ function listBrainNotes(vault: string, skipTopLevel: ReadonlySet<string> = new S
   };
   walk(join(vault, "Brain"), "");
   return out;
+}
+
+/**
+ * The `Brain/` notes of a store-only machine: the lane entries' pages and
+ * the memory records' pages (preferences, signals), by their legacy paths,
+ * with dot folders and `skipTopLevel` left out as the tree walk does.
+ */
+function storeBrainNotes(vault: string, skipTopLevel: ReadonlySet<string>): NoteFile[] {
+  const root = join(vault, BRAIN_ROOT_REL);
+  const keep = (rel: string): boolean => {
+    const segments = rel.split("/").slice(1);
+    if (segments.some((s) => s.startsWith("."))) return false;
+    return !(segments.length > 1 && skipTopLevel.has(segments[0]!));
+  };
+  const out: NoteFile[] = [];
+  for (const page of storeRecordPages(vault, { signalStates: "all" })) {
+    if (!keep(page.rel)) continue;
+    out.push({
+      relPath: page.rel,
+      absPath: page.path,
+      // A record whose clock does not parse has no age, as a failed stat.
+      stored: { text: page.text, mtimeMs: storeRecordMs(page) },
+    });
+  }
+  for (const absPath of listLaneTree(vault, root)) {
+    const relPath = vaultRelative(absPath, vault);
+    if (!keep(relPath)) continue;
+    out.push({
+      relPath,
+      absPath,
+      stored: {
+        text: readLaneText(vault, absPath) ?? "",
+        mtimeMs: laneEntryClockMs(vault, absPath),
+      },
+    });
+  }
+  return out.toSorted((a, b) => (a.relPath < b.relPath ? -1 : 1));
+}
+
+/** A note's age in whole days: its file's mtime, or its record clock once switched. */
+function noteAgeDays(note: NoteFile, now: Date): number | null {
+  if (note.stored === undefined) return ageDays(note.absPath, now);
+  if (note.stored.mtimeMs === null) return null;
+  return msToWholeDays(Math.max(0, now.getTime() - note.stored.mtimeMs));
 }
 
 function baseName(relPath: string): string {
@@ -175,7 +228,7 @@ export function discoverIdeas(
   for (const note of allNotes) {
     let content: string;
     try {
-      content = readFileSync(note.absPath, "utf8");
+      content = note.stored?.text ?? readFileSync(note.absPath, "utf8");
     } catch {
       continue;
     }
@@ -191,7 +244,7 @@ export function discoverIdeas(
     // sharing a basename can mask a true orphan. Acceptable for a
     // ranked suggestion list - precision over completeness.
     if (inbound.has(name)) continue;
-    const age = ageDays(note.absPath, opts.now);
+    const age = noteAgeDays(note, opts.now);
     const ageText = age === null ? "age unreadable" : `${age}d old`;
     candidates.push(
       Object.freeze({
@@ -206,47 +259,45 @@ export function discoverIdeas(
 
   // 3. Aging unresolved inbox signals.
   const inbox = join(vault, "Brain", "inbox");
-  if (existsSync(inbox)) {
-    for (const name of readdirSync(inbox)) {
-      if (!name.startsWith("sig-") || !name.endsWith(".md")) continue;
-      if (!included(`Brain/inbox/${name}`)) continue;
-      const absPath = join(inbox, name);
-      const age = ageDays(absPath, opts.now);
-      // An unmeasurable age cannot clear the aging threshold and cannot
-      // fail it either. Dropping the signal here is what the old age-0
-      // return did silently; the signal is nominated instead, with a
-      // reason that states the threshold was never evaluated. A false
-      // nomination costs one line on a suggestion list, where a silent
-      // drop costs the operator the only notice that the file is broken.
-      if (age !== null && age < agingSignalDays) continue;
-      let topic = name.slice(0, -".md".length);
-      // Unit F: this site used to do its own `readFileSync` inside a
-      // `catch {}` that silently kept the filename-derived topic - the one
-      // genuinely reachable swallow among the frontmatter readers, since
-      // the read is outside the parser. `parseFrontmatter` owns the read
-      // now, so a failure is named at the source (a
-      // `frontmatter-unreadable` notice) instead of here, and still
-      // returns an empty map - which leaves the filename-derived topic in
-      // place, exactly as before. A ranked candidate list has no report
-      // field; see the "Why most readers keep the two-tuple form" section
-      // in src/core/vault.ts for where the condition IS reported.
-      const [meta] = parseFrontmatter(absPath);
-      if (typeof meta["topic"] === "string" && meta["topic"] !== "") topic = meta["topic"];
-      const reason =
-        age === null
-          ? `inbox signal '${topic}' could not be aged (Brain/inbox/${name} is unreadable), ` +
-            `so the ${agingSignalDays}-day wait could not be checked`
-          : `inbox signal '${topic}' has waited ${age}d without becoming a preference`;
-      candidates.push(
-        Object.freeze({
-          kind: "idea_direction" as const,
-          title: topic,
-          reason,
-          score: KIND_WEIGHT["idea_direction"]! + ageBonus(age),
-          sourceArtifacts: Object.freeze([`Brain/inbox/${name}`]),
-        }),
-      );
-    }
+  const inboxSignals = inboxSignalSources(vault, inbox, opts.now);
+  for (const { name, age: ageOf, meta: metaOf, unaged } of inboxSignals) {
+    if (!name.startsWith("sig-") || !name.endsWith(".md")) continue;
+    if (!included(`Brain/inbox/${name}`)) continue;
+    const age = ageOf();
+    // An unmeasurable age cannot clear the aging threshold and cannot
+    // fail it either. Dropping the signal here is what the old age-0
+    // return did silently; the signal is nominated instead, with a
+    // reason that states the threshold was never evaluated. A false
+    // nomination costs one line on a suggestion list, where a silent
+    // drop costs the operator the only notice that the file is broken.
+    if (age !== null && age < agingSignalDays) continue;
+    let topic = name.slice(0, -".md".length);
+    // Unit F: this site used to do its own `readFileSync` inside a
+    // `catch {}` that silently kept the filename-derived topic - the one
+    // genuinely reachable swallow among the frontmatter readers, since
+    // the read is outside the parser. `parseFrontmatter` owns the read
+    // now, so a failure is named at the source (a
+    // `frontmatter-unreadable` notice) instead of here, and still
+    // returns an empty map - which leaves the filename-derived topic in
+    // place, exactly as before. A ranked candidate list has no report
+    // field; see the "Why most readers keep the two-tuple form" section
+    // in src/core/vault.ts for where the condition IS reported.
+    const meta = metaOf();
+    if (typeof meta["topic"] === "string" && meta["topic"] !== "") topic = meta["topic"];
+    const reason =
+      age === null
+        ? `inbox signal '${topic}' could not be aged (${unaged}), ` +
+          `so the ${agingSignalDays}-day wait could not be checked`
+        : `inbox signal '${topic}' has waited ${age}d without becoming a preference`;
+    candidates.push(
+      Object.freeze({
+        kind: "idea_direction" as const,
+        title: topic,
+        reason,
+        score: KIND_WEIGHT["idea_direction"]! + ageBonus(age),
+        sourceArtifacts: Object.freeze([`Brain/inbox/${name}`]),
+      }),
+    );
   }
 
   const ranked = candidates.toSorted((a, b) => {
@@ -273,4 +324,52 @@ export function ideaCandidates(
       }),
     ),
   );
+}
+
+/** One inbox signal the aging pass reads: its page name, age and frontmatter. */
+interface InboxSignalSource {
+  readonly name: string;
+  readonly age: () => number | null;
+  readonly meta: () => FrontmatterMap;
+  /** Why the signal has no age, where the operator looks for it. */
+  readonly unaged: string;
+}
+
+/**
+ * The clock of a store record as a page's mtime (ms), or `null` when its
+ * clock does not parse: such a record has no age, as a file whose stat
+ * fails.
+ */
+function storeRecordMs(page: { readonly updatedMs: number }): number | null {
+  return page.updatedMs > 0 ? page.updatedMs : null;
+}
+
+/**
+ * The inbox signals: the files of `Brain/inbox/`, or the active signals of
+ * the store's fold (their pages, by the same names) once switched. A
+ * record whose clock does not parse has no age (`null`), as a file whose
+ * stat fails.
+ */
+function inboxSignalSources(vault: string, inbox: string, now: Date): InboxSignalSource[] {
+  if (isStoreOnly({ vault })) {
+    return storeRecordPages(vault, {
+      kinds: new Set(["signal"]),
+      signalStates: new Set(["active"]),
+    }).map((page) => {
+      const ms = storeRecordMs(page);
+      return {
+        name: page.name,
+        age: () => (ms === null ? null : msToWholeDays(Math.max(0, now.getTime() - ms))),
+        meta: () => page.meta,
+        unaged: `its store record ${page.name} has no readable timestamp`,
+      };
+    });
+  }
+  if (!existsSync(inbox)) return [];
+  return readdirSync(inbox).map((name) => ({
+    name,
+    age: () => ageDays(join(inbox, name), now),
+    meta: () => parseFrontmatter(join(inbox, name))[0],
+    unaged: `Brain/inbox/${name} is unreadable`,
+  }));
 }

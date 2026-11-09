@@ -35,6 +35,7 @@ import { dirname, join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { clamp01 } from "../math.ts";
 import { redactRawOutput } from "../redactor.ts";
+import { legacyVaultOf } from "./no-vault.ts";
 import { BRAIN_LOG_REL } from "./path-constants.ts";
 import { jsonlLedgerGrammar, readShardedLines } from "./ledger-shards.ts";
 import { QUERY_DEMAND_LEDGER_STEM, queryDemandLogPath } from "./paths.ts";
@@ -48,7 +49,8 @@ import type { CompletenessVerdict } from "../search/types.ts";
 import { isRecallAdequacyLevel } from "./recall-adequacy.ts";
 import type { RecallAdequacyLevel, RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { routeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 
 /** Longest single normalized term kept; longer tokens are dropped as a
@@ -236,10 +238,13 @@ const DEMAND_LEDGER_GRAMMAR = jsonlLedgerGrammar(QUERY_DEMAND_LEDGER_STEM);
  * from `terms` (redacted) or `query` (normalized+redacted); a query with
  * no significant terms is not recorded (returns null). Best-effort by
  * contract — callers gate this behind opt-in telemetry and must not let
- * a log write fail the search.
+ * a log write fail the search. On a store-only machine a failed store
+ * write is counted device-locally, not thrown: the returned record is
+ * what was attempted, not proof that it was stored. An unswitched
+ * machine's legacy write fault still propagates.
  */
 export function recordQueryDemand(
-  vault: string,
+  vault: string | null,
   input: RecordQueryDemandInput,
 ): QueryDemandRecord | null {
   const terms =
@@ -254,6 +259,22 @@ export function recordQueryDemand(
       : {}),
     ...(input.adequacy !== undefined ? { adequacy: input.adequacy } : {}),
   };
+  // One `query-demand` ledger row on a store-only machine (design D14
+  // item 1), the vault's demand shard plus the dual write otherwise. The
+  // terms are what the user searched for, so the row goes to `private`
+  // when this machine holds it. Telemetry never fails the search it
+  // observes, so a store-only failure is counted and the search goes on.
+  routeWrite({
+    legacy: () => appendLegacyDemand(legacyVaultOf(vault, "recordQueryDemand"), record),
+    store: () => ledgerRowRecord(DUAL_WRITE_LEDGERS.queryDemand, record, "private-when-held"),
+    context: { vault },
+    failOpen: true,
+  });
+  return record;
+}
+
+/** The legacy append: this device's demand shard under the vault. */
+function appendLegacyDemand(vault: string, record: QueryDemandRecord): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   // Per-device shard (t_774dea61): this device appends to a file no other
@@ -268,13 +289,6 @@ export function recordQueryDemand(
   } finally {
     handle.release();
   }
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // The terms are what the user searched for, so they go to `private` when
-  // this machine holds it.
-  dualWrite(() => ledgerRowRecord(DUAL_WRITE_LEDGERS.queryDemand, record, "private-when-held"), {
-    vault,
-  });
-  return record;
 }
 
 /**
@@ -286,8 +300,10 @@ export function recordQueryDemand(
  * Returns null, rather than writing, when the attempt is not demand: a
  * `sufficient` verdict is met recall, and a query with no significant terms
  * has no bucket to key on. Both are documented non-cases, not swallowed
- * failures; a genuine write fault still propagates from
- * {@link recordQueryDemand}.
+ * failures. A genuine write fault of an unswitched machine still
+ * propagates from {@link recordQueryDemand}; a store-only machine counts a
+ * failed store write in the device-local status and the search goes on
+ * (design D14 item 1), so the returned record may not have been stored.
  */
 export function recordRecallAdequacyDemand(
   vault: string,
@@ -342,12 +358,17 @@ function demandBucketKey(terms: ReadonlyArray<string>): string {
 
 /** Read all demand records, filtered by [since, until] and sorted by ts. */
 export function readQueryDemand(
-  vault: string,
+  vault: string | null,
   filter: QueryDemandFilter = {},
 ): ReadonlyArray<QueryDemandRecord> {
-  // Merged read over every device's shard (t_774dea61); the absent
-  // directory lists nothing, which is the same empty result as before.
-  const lines = readShardedLines(join(vault, BRAIN_LOG_REL), DEMAND_LEDGER_GRAMMAR);
+  // The `query-demand` ledger rows on a store-only machine; otherwise a
+  // merged read over every device's shard (t_774dea61), where the absent
+  // directory lists nothing, the same empty result as before.
+  const lines = readLedgerRows<unknown>(
+    DUAL_WRITE_LEDGERS.queryDemand,
+    (legacyVault) => readShardedLines(join(legacyVault, BRAIN_LOG_REL), DEMAND_LEDGER_GRAMMAR),
+    { vault },
+  );
   // Normalize the filter bounds to the same millisecond-precision form the
   // stored `ts` already uses (records are normalized at write time). The
   // comparison below is lexical, so a second-precision `--since
@@ -502,12 +523,15 @@ function verdictFor(satisfaction: number): CompletenessVerdict {
   return "sparse";
 }
 
-function coerceRecord(line: string): QueryDemandRecord | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
+/** One demand row: a legacy JSONL line, or a store row as its writer wrote it. */
+function coerceRecord(line: unknown): QueryDemandRecord | null {
+  let parsed: unknown = line;
+  if (typeof line === "string") {
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return null;
+    }
   }
   if (parsed === null || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;

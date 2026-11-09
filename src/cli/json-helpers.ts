@@ -53,6 +53,7 @@ export const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "vault",
   "state",
   "store",
+  "view",
   "discipline",
   "partner",
   "decision-model",

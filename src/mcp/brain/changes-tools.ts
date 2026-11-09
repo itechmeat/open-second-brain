@@ -21,7 +21,12 @@ import { SearchError } from "../../core/search/types.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import { coerceInt, coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
+import {
+  contextReach,
+  contextVault,
+  type ServerContext,
+  type ToolDefinition,
+} from "../tool-contract.ts";
 
 /** The reason a probe below local reach names. */
 export const CHANGES_REACH_REASON = "reach" as const;
@@ -36,7 +41,8 @@ export interface BrainChangesRefusal {
 export type BrainChangesView = (BrainChanges & { readonly measured: true }) | BrainChangesRefusal;
 
 export interface BuildBrainChangesOptions {
-  readonly vault: string;
+  /** The vault, or `null` with none: the index is then keyed by the store id (D14). */
+  readonly vault: string | null;
   readonly reach: TransportReach;
   readonly configPath?: string;
   readonly since?: string;
@@ -71,7 +77,7 @@ async function toolBrainChanges(
   const limit = coerceInt(args, "limit", CHANGES_DEFAULT_LIMIT, 1, CHANGES_MAX_LIMIT);
   try {
     const view = await buildBrainChanges({
-      vault: ctx.vault,
+      vault: contextVault(ctx),
       reach: contextReach(ctx),
       ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
       ...(since !== undefined ? { since } : {}),

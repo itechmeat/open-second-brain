@@ -41,6 +41,8 @@ import {
   STORE_LINE_CAP_BYTES,
 } from "./constants.ts";
 import { readBlob } from "./blobs.ts";
+import { noteObservedClock } from "./clock-floor.ts";
+import { compareHlc, parseHlc, type Hlc } from "./hlc.ts";
 import {
   BODY_TOO_DEEP_REASON,
   bodyChecksum,
@@ -52,6 +54,7 @@ import {
 } from "./envelope.ts";
 import { openRegularFileForRead } from "./safe-fs.ts";
 import { isShardFileName } from "./shard-list.ts";
+import { isTornObjectPrefix } from "./torn-line.ts";
 
 /** Where a returned record's body came from. */
 export type BodyState = "inline" | "blob" | "pending";
@@ -77,6 +80,12 @@ export interface ShardDiagnostic {
   /** Byte offset of the line concerned (or the requested offset). */
   readonly offset: number;
   readonly reason: string;
+  /**
+   * A `corrupt-line` that is a record line cut short by a crash and closed
+   * by the device's next append (`torn-line.ts`): never a record any
+   * machine read, so it hides nothing.
+   */
+  readonly torn?: true;
 }
 
 /** One compaction a shard announced: partition-relative shard paths. */
@@ -110,6 +119,20 @@ export interface ReadShardOptions {
 }
 
 const NEWLINE = 0x0a;
+
+/**
+ * Reading is receiving (`clock-floor.ts`): the newest stamp among `records`
+ * raises this process's clock floor for the store the partition belongs
+ * to, so a write that replaces or removes one of them orders after it.
+ */
+function observeRead(partitionRoot: string, records: ReadonlyArray<ReadRecord>): void {
+  let newest: Hlc | null = null;
+  for (const { record } of records) {
+    const clock = parseHlc(record.hlc);
+    if (clock !== null && (newest === null || compareHlc(clock, newest) > 0)) newest = clock;
+  }
+  if (newest !== null) noteObservedClock(dirname(partitionRoot), newest);
+}
 
 /** Bytes read from a shard per call. */
 const READ_CHUNK_BYTES = 1024 * 1024;
@@ -207,15 +230,28 @@ function readLine(
 ): LineOutcome {
   if (text.trim() === "") return { kind: "skip" };
   let check: ReturnType<typeof verifyEnvelope>;
+  let notJson = false;
   try {
     check = verifyEnvelope(JSON.parse(text));
   } catch {
+    notJson = true;
     check = { ok: false, reason: "line is not valid JSON" };
   }
   const corrupt = (reason: string): LineOutcome => ({
     kind: "diagnostic",
     diagnostic: { kind: "corrupt-line", offset: lineOffset, reason },
   });
+  if (notJson && !isLast && isTornObjectPrefix(text)) {
+    return {
+      kind: "diagnostic",
+      diagnostic: {
+        kind: "corrupt-line",
+        offset: lineOffset,
+        reason: "line is a record cut short by a crash (a torn write)",
+        torn: true,
+      },
+    };
+  }
   if (!check.ok) {
     if (check.unknownVersion !== undefined) {
       return {
@@ -362,6 +398,7 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
       overlong();
       consumed = position;
     }
+    if (options.partitionRoot !== undefined) observeRead(options.partitionRoot, records);
     return {
       records,
       diagnostics,
@@ -373,6 +410,32 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Why a read of a whole shard misses records it holds, or `null` when it
+ * saw every record: a record whose body is a blob that has not arrived, a
+ * bad line in the middle (anything but a write torn by a crash), a record
+ * of a newer format, a shard that is no regular file. The held-back last
+ * line is not a gap: it is an append still arriving (FORMAT.md,
+ * "Reading"), and no machine has read it as a record yet. A reader whose
+ * answer decides a protection treats a shard with a gap as unseen.
+ */
+export function shardReadGap(read: ShardRead): string | null {
+  const reasons: string[] = [];
+  const pending = read.records.filter((r) => r.bodyState === "pending").length;
+  if (pending > 0) {
+    reasons.push(
+      pending === 1
+        ? "a record whose body is a blob that has not arrived yet"
+        : `${pending} records whose bodies are blobs that have not arrived yet`,
+    );
+  }
+  for (const d of read.diagnostics) {
+    if (d.torn === true) continue;
+    reasons.push(`${d.kind} at byte ${d.offset}: ${d.reason}`);
+  }
+  return reasons.length === 0 ? null : reasons.join("; ");
 }
 
 /**

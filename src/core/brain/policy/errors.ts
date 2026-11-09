@@ -34,3 +34,17 @@ export class BrainConfigError extends Error {
     this.source = source;
   }
 }
+
+/**
+ * The settings exist but cannot be read: `_brain.yaml` cannot be opened,
+ * or a shared `settings` shard of the store cannot be read or has gone
+ * since this machine read it. Unlike an absent or invalid file, the
+ * values in force are unknown, so a protection that reads a setting (a
+ * capture exclusion) fails closed on this error (design D14).
+ */
+export class BrainSettingsUnreadableError extends BrainConfigError {
+  constructor(message: string, source: string | null) {
+    super(message, null, source);
+    this.name = "BrainSettingsUnreadableError";
+  }
+}

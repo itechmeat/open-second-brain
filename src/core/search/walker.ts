@@ -49,11 +49,15 @@ function isInsideVault(absTarget: string, vaultReal: string): boolean {
  * tree.
  */
 export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> {
+  // No vault (design D14): there are no notes to walk; the index holds the
+  // brain store's records only.
+  const vault = config.vault;
+  if (vault === null) return;
   const vaultReal = (() => {
     try {
-      return realpathSync(config.vault);
+      return realpathSync(vault);
     } catch {
-      return config.vault;
+      return vault;
     }
   })();
   // Track real (canonical) paths of visited directories so a symlink

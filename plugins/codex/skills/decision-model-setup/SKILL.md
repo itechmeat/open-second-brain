@@ -85,8 +85,9 @@ decision_model_uses: "<use>:shadow"
 - Never write the key into the config, the vault, a tracked file or the
   chat. Never echo it. Ask the user to set the variable themselves, then
   rerun `check`.
-- The config lives outside the vault (the machine config); a vault's
-  `Brain/_brain.yaml` can only turn the feature off, never on.
+- The config lives outside the vault (the machine config); the shared
+  brain setting `decision_model.enabled` can only turn the feature off,
+  never on.
 - Plain `http://` is accepted only on loopback. For another host without
   TLS, explain what `decision_model_allow_insecure_http` means (text and
   key cross the network unencrypted) before the user sets it.
@@ -145,12 +146,14 @@ Any one of these:
 
 1. remove the use from `decision_model_uses` (or set it to `off`);
 2. set `decision_model_enabled: "false"` in the machine config;
-3. add the vault opt-out to `Brain/_brain.yaml`:
-
-   ```yaml
-   decision_model:
-     enabled: false
-   ```
+3. set the shared brain setting `decision_model.enabled` to `false`,
+   which turns the feature off on every machine of this brain:
+   `o2b brain settings set decision_model.enabled false`. That is the
+   operator's command, and only the operator can run it: the key is
+   operator-only, so the `brain_settings` tool refuses an agent's write
+   to it with `operator_only_setting` on every machine, switched or not.
+   Ask the operator to run the command; never try to turn the feature
+   back on.
 
 Unsetting the key variable also stops every request, except to a keyless
 loopback `laya` or `openjev` server, which needs none.
@@ -187,5 +190,5 @@ loopback `laya` or `openjev` server, which needs none.
 - Does not switch a use to `enforce` without the user's decision and the
   shadow numbers.
 - Does not install servers or download model weights.
-- Does not edit a vault's `_brain.yaml` except to add the opt-out when
-  the user asks for it.
+- Does not change the shared brain settings except to add the opt-out
+  when the user asks for it.

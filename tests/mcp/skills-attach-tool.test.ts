@@ -21,7 +21,8 @@ let ctx: ServerContext;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "osb-attach-tool-"));
   const vault = join(tmp, "vault");
-  mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configPath = join(tmp, "config.yaml");
   writeFileSync(configPath, `vault: "${vault}"\n`);
   const skillDir = join(tmp, "skills", "embeddings-setup");

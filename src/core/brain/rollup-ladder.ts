@@ -135,7 +135,7 @@ export function resolveRollupThresholds(cfg: BrainConfig): RollupThresholds {
 }
 
 /** Read the ledger, or null when absent or unparseable (treated as fresh). */
-export function readRollupLedger(vault: string): RollupLedger | null {
+export function readRollupLedger(vault: string | null): RollupLedger | null {
   const path = rollupLedgerPath(vault);
   if (!existsSync(path)) return null;
   try {
@@ -151,9 +151,10 @@ export function readRollupLedger(vault: string): RollupLedger | null {
 }
 
 /** Persist the ledger. Called only when a rung fired. */
-export function writeRollupLedger(vault: string, ledger: RollupLedger): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+export function writeRollupLedger(vault: string | null, ledger: RollupLedger): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J). With no
+  // vault the ledger is device-local state only (design D14 item 11).
+  if (vault !== null) assertVaultIdentityForWrite(vault);
   atomicWriteFileSync(rollupLedgerPath(vault), `${JSON.stringify(ledger, null, 2)}\n`);
 }
 

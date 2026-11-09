@@ -330,11 +330,15 @@ export function buildAnchorables(
     const nameVerdict = validateEntityLabel(sanitizeEntityLabel(entity.name), { lexicon });
     if (!nameVerdict.valid) {
       try {
-        appendLogEvent(vault, {
-          timestamp: isoSecond(now),
-          eventType: BRAIN_LOG_EVENT_KIND.entityAnchorSkip,
-          body: { entity: entity.id, name: entity.name, reason: nameVerdict.reason!, agent },
-        });
+        appendLogEvent(
+          vault,
+          {
+            timestamp: isoSecond(now),
+            eventType: BRAIN_LOG_EVENT_KIND.entityAnchorSkip,
+            body: { entity: entity.id, name: entity.name, reason: nameVerdict.reason!, agent },
+          },
+          { failOpen: true },
+        );
       } catch {
         // A skip that cannot be logged must still not break capture.
       }
@@ -450,12 +454,16 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
     const count = input.facts.length;
     if (!input.dryRun) {
       try {
-        appendLogEvent(vault, {
-          timestamp: isoSecond(input.now),
-          eventType: BRAIN_LOG_EVENT_KIND.ambientWithheld,
-          agent: input.agent,
-          body: { count: String(count), session_ref: input.sessionRef, agent: input.agent },
-        });
+        appendLogEvent(
+          vault,
+          {
+            timestamp: isoSecond(input.now),
+            eventType: BRAIN_LOG_EVENT_KIND.ambientWithheld,
+            agent: input.agent,
+            body: { count: String(count), session_ref: input.sessionRef, agent: input.agent },
+          },
+          { failOpen: true },
+        );
       } catch {
         // A withheld capture that cannot be logged must still stay withheld.
       }
@@ -520,23 +528,27 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       durabilityRejected++;
       if (!input.dryRun) {
         try {
-          appendLogEvent(vault, {
-            timestamp: isoSecond(input.now),
-            eventType: BRAIN_LOG_EVENT_KIND.durabilitySkip,
-            agent: input.agent,
-            body: {
-              family: fact.family,
-              reason: verdict.reason!,
-              // Secret-redacted for the LOG surface only (matching the
-              // attribute-write audit); the fact is skipped, not written.
-              text: sanitiseTextField(fact.text, {
-                maxLen: DURABILITY_LOG_TEXT_MAX_LEN,
-                singleLine: true,
-              }),
-              hash,
+          appendLogEvent(
+            vault,
+            {
+              timestamp: isoSecond(input.now),
+              eventType: BRAIN_LOG_EVENT_KIND.durabilitySkip,
               agent: input.agent,
+              body: {
+                family: fact.family,
+                reason: verdict.reason!,
+                // Secret-redacted for the LOG surface only (matching the
+                // attribute-write audit); the fact is skipped, not written.
+                text: sanitiseTextField(fact.text, {
+                  maxLen: DURABILITY_LOG_TEXT_MAX_LEN,
+                  singleLine: true,
+                }),
+                hash,
+                agent: input.agent,
+              },
             },
-          });
+            { failOpen: true },
+          );
         } catch {
           // A skip that cannot be logged must still not break capture.
         }

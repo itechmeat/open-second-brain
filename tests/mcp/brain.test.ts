@@ -41,6 +41,10 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { vaultRelativeSafe } from "../../src/mcp/brain-tools.ts";
 import { findingRefs } from "../../src/mcp/brain/hygiene-tools.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

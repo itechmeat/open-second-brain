@@ -27,11 +27,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainGapTasksDir, BRAIN_GAP_TASKS_REL } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { fenceUntrustedContent, neutralizeSingleLine } from "../untrusted-source.ts";
@@ -39,8 +37,16 @@ import { renderActivityTimeline, type ActivityItem } from "../render/activity-li
 import type { RecallResultSet } from "../recall-inject.ts";
 import type { RetrievalDegradationCode } from "../../search/retrieval-trail.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
-import { parseFrontmatterText, writeFrontmatterAtomic } from "../../vault.ts";
+import { parseFrontmatterText } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
+import {
+  assertLaneWrite,
+  writeLanePage,
+  lanePageExists,
+  listLaneFiles,
+  readLaneText,
+  removeLanePage,
+} from "../../store/lane-pages.ts";
 
 /** Default recurrence threshold: a gap must recur this often to promote. */
 export const GAP_LOOP_RECURRENCE_THRESHOLD = 3;
@@ -236,7 +242,7 @@ export function promoteGapsToTasks(
   opts: { threshold?: number; now: Date },
 ): GapPromotionResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const dir = brainGapTasksDir(vault);
   const created: string[] = [];
   const skipped: string[] = [];
@@ -252,7 +258,7 @@ export function promoteGapsToTasks(
       // did not refuse it - counting it as refused would report a backlog
       // pressure that is not there. The exclusive create below stays the
       // authority on skipping; this pre-check only keeps the count honest.
-      if (existsSync(path)) skipped.push(key);
+      if (lanePageExists(vault, path)) skipped.push(key);
       else capped++;
       continue;
     }
@@ -270,7 +276,7 @@ export function promoteGapsToTasks(
       `Add vault coverage for this topic; the task auto-closes once the ` +
       `topic is recalled with sufficient confidence.`;
     try {
-      writeFrontmatterAtomic(path, metadata, body, {
+      writeLanePage(vault, path, metadata, body, {
         existsErrorKind: "gap task",
         vaultForRelativePath: vault,
       });
@@ -303,10 +309,9 @@ function pruneExpiredGapTasks(vault: string, now: Date): ReadonlyArray<string> {
   const cutoffMs = now.getTime() - GAP_TASK_CLOSED_RETENTION_MS;
   const removed: string[] = [];
   for (const task of listGapTasks(vault, { status: GAP_TASK_STATUS_CLOSED })) {
-    const [fm] = parseFrontmatterText(readFileSync(task.path, "utf8"));
-    const closedAtMs = Date.parse(stringField(fm["closed_at"]));
+    const closedAtMs = Date.parse(task.closedAt);
     if (!Number.isFinite(closedAtMs) || closedAtMs >= cutoffMs) continue;
-    rmSync(task.path, { force: true });
+    removeLanePage(vault, task.path);
     removed.push(task.key);
   }
   return Object.freeze(removed);
@@ -320,6 +325,8 @@ export interface GapTask {
   /** Which recurrence source minted it (see {@link GAP_SOURCES}). */
   readonly source: GapSource;
   readonly createdAt: string;
+  /** `closed_at` as the page carries it; empty when absent. */
+  readonly closedAt: string;
   readonly path: string;
 }
 
@@ -333,12 +340,11 @@ export function listGapTasks(
   opts: { status?: string } = {},
 ): ReadonlyArray<GapTask> {
   const dir = brainGapTasksDir(vault);
-  if (!existsSync(dir)) return Object.freeze([]);
+  // A missing directory lists nothing, in both modes.
   const tasks: GapTask[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const path = join(dir, name);
-    const [fm] = parseFrontmatterText(readFileSync(path, "utf8"));
+    const [fm] = parseFrontmatterText(readLaneText(vault, path) ?? "");
     if (fm["kind"] !== GAP_TASK_KIND) continue;
     const status = stringField(fm["status"]);
     if (opts.status !== undefined && status !== opts.status) continue;
@@ -350,6 +356,7 @@ export function listGapTasks(
         occurrences: Number.parseInt(stringField(fm["occurrences"]) || "0", 10) || 0,
         source: coerceGapSource(fm["gap_source"]),
         createdAt: stringField(fm["created_at"]),
+        closedAt: stringField(fm["closed_at"]),
         path,
       }),
     );
@@ -488,7 +495,7 @@ export async function autoCloseRecalledGaps(
   // Vault-identity write guard (context-integrity-gates, Unit J), like
   // its sibling `promoteGapsToTasks`: closing a task rewrites the note's
   // frontmatter, so it is a write path, not a read.
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const floor = opts.confidenceFloor ?? GAP_LOOP_AUTO_CLOSE_FLOOR;
   const closed: string[] = [];
   const kept: string[] = [];
@@ -518,7 +525,7 @@ export async function autoCloseRecalledGaps(
     coveredElsewhere = result.candidates.length > 0;
     matchQuality = result.idfWeightedCoverage;
     if (coveredElsewhere && matchQuality !== null && matchQuality >= floor) {
-      closeGapTask(task, opts.now);
+      closeGapTask(vault, task, opts.now);
       closed.push(task.key);
     } else {
       kept.push(task.key);
@@ -531,15 +538,19 @@ export async function autoCloseRecalledGaps(
   });
 }
 
-function closeGapTask(task: GapTask, now: Date): void {
-  const [fm, body] = parseFrontmatterText(readFileSync(task.path, "utf8"));
+function closeGapTask(vault: string, task: GapTask, now: Date): void {
+  const text = readLaneText(vault, task.path);
+  // Removed since it was listed (pruned, or a synced tombstone): nothing to
+  // close, and writing it would bring back a page with no gap fields.
+  if (text === null) return;
+  const [fm, body] = parseFrontmatterText(text);
   const updated: FrontmatterMap = {
     ...fm,
     status: GAP_TASK_STATUS_CLOSED,
     closed_at: now.toISOString(),
     closed_reason: "recalled",
   };
-  writeFrontmatterAtomic(task.path, updated, body, { overwrite: true });
+  writeLanePage(vault, task.path, updated, body, { overwrite: true });
 }
 
 function stringField(value: unknown): string {

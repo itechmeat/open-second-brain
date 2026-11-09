@@ -9,6 +9,7 @@
  */
 
 import { dirname, join } from "node:path";
+import { loadPermissionsDocumentFor } from "../permissions/document-source.ts";
 
 import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
 import { resolveAgentName } from "../../config.ts";
@@ -23,11 +24,7 @@ import { JSONL_LEDGER_EXT, listSyncConflictFiles } from "../ledger-shards.ts";
 import { brainStateDirPath } from "../lineage/ledger.ts";
 import { metricsDir } from "../metrics.ts";
 import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
-import {
-  loadPermissionsDocument,
-  PERMISSIONS_DOCUMENT_REL,
-  PermissionsDocumentError,
-} from "../permissions/document.ts";
+import { PERMISSIONS_DOCUMENT_REL, PermissionsDocumentError } from "../permissions/document.ts";
 import { resolvePermission } from "../permissions/resolve.ts";
 import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
 import { BRAIN_CONFIG_TARGET } from "../schema-mutate.ts";
@@ -306,9 +303,9 @@ export const DENY_CONSULTED_LANES_CODE = "deny-consulted-lanes";
 export const denyConsultedLanesCheck: DoctorCheck = {
   failSoft: true,
   run({ vault, configPath }, { issues }) {
-    let document: ReturnType<typeof loadPermissionsDocument>["document"];
+    let document: ReturnType<typeof loadPermissionsDocumentFor>["document"];
     try {
-      document = loadPermissionsDocument(vault).document;
+      document = loadPermissionsDocumentFor(vault, configPath).document;
     } catch (err) {
       if (!(err instanceof PermissionsDocumentError)) throw err;
       return;

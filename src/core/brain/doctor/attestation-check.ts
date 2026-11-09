@@ -32,11 +32,15 @@
 
 import { existsSync } from "node:fs";
 
+import { isStoreOnly } from "../../store/store-only.ts";
+import { resolveAppendShardId } from "../ledger-shards.ts";
+import { brainDirs } from "../paths.ts";
 import { msToWholeDays } from "../time.ts";
 import {
   attestationsDir,
   listAttestationRecordFiles,
-  readAttestationRecordFile,
+  readAttestationEntry,
+  type AttestationEntry,
 } from "../attestation/record.ts";
 import { attestationKeyPaths } from "../attestation/signing.ts";
 import { verifyAttestation } from "../attestation/verify.ts";
@@ -68,7 +72,7 @@ const MAX_NAMED_SHARDS = 3;
 export const attestationCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
-    let files: ReadonlyArray<{ path: string; name: string }>;
+    let files: ReadonlyArray<AttestationEntry>;
     try {
       files = listAttestationRecordFiles(ctx.vault);
     } catch {
@@ -83,12 +87,12 @@ export const attestationCheck: DoctorCheck = {
     }
     // No attestations at all: no key is owed, nothing is stale, nothing
     // can have diverged. Silent, with or without a key.
-    const newest = files.at(-1);
+    let newest = files.at(-1);
     if (newest === undefined) return;
 
     let record;
     try {
-      record = readAttestationRecordFile(newest.path);
+      record = readAttestationEntry(newest);
     } catch {
       pushUncertain(out.uncertain, {
         code: ATTESTATION_STATE_UNMEASURED_CODE,
@@ -99,6 +103,26 @@ export const attestationCheck: DoctorCheck = {
       });
       return;
     }
+    // A store-only machine lists the attestations every device signed.
+    // This machine's own newest one is the one its key vouches for; a
+    // peer's record is checked only when this machine signed none.
+    const local = resolveAppendShardId();
+    if (record.deviceId !== local) {
+      for (let i = files.length - 2; i >= 0; i--) {
+        const entry = files[i]!;
+        let own;
+        try {
+          own = readAttestationEntry(entry);
+        } catch {
+          continue;
+        }
+        if (own.deviceId !== local) continue;
+        newest = entry;
+        record = own;
+        break;
+      }
+    }
+    const signedHere = record.deviceId === local;
 
     const facts: string[] = [];
 
@@ -154,9 +178,29 @@ export const attestationCheck: DoctorCheck = {
       });
       return;
     }
-    const diverged = verification.shards.filter(
-      (shard) => shard.state === "diverged" || shard.state === "missing",
-    );
+    // Once the switch removed the legacy log, the day files an attestation
+    // binds are gone by design: no shard can be checked, which is not
+    // damage but a verification this machine can no longer make.
+    const legacyLogGone =
+      isStoreOnly({
+        vault: ctx.vault,
+        ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
+      }) && !existsSync(brainDirs(ctx.vault).log);
+    if (legacyLogGone) {
+      pushUncertain(out.uncertain, {
+        code: ATTESTATION_STATE_UNMEASURED_CODE,
+        path: attestationsDir(ctx.vault),
+        message:
+          `the newest attestation (${record.id}) binds legacy log day files this vault no ` +
+          "longer holds (the brain moved to the store), so it can no longer be verified",
+      });
+    }
+    const diverged = legacyLogGone
+      ? []
+      : verification.shards.filter(
+          (shard) => shard.state === "diverged" || shard.state === "missing",
+        );
+    const unexplainedDrift = !legacyLogGone && verification.unexplainedDrift;
     // The kernel could not re-measure the manifest: whether the store
     // still matches is unknown, which is the uncertain stream's question
     // - never a clean bill and never a damage fact.
@@ -170,10 +214,12 @@ export const attestationCheck: DoctorCheck = {
           "still matches the signed point is unknown",
       });
     }
-    if (!verification.signatureValid) {
+    // Another device signs with its own key, so a peer's record never
+    // verifies against this machine's: that is no fact about this vault.
+    if (!verification.signatureValid && signedHere) {
       facts.push("the newest attestation's signature does not verify against this vault's key");
     }
-    if (verification.unexplainedDrift) {
+    if (unexplainedDrift) {
       // The same rule `o2b brain attest verify` exits on, computed once
       // in the kernel: a manifest change no shard verdict explains.
       facts.push(
@@ -203,13 +249,13 @@ export const attestationCheck: DoctorCheck = {
     // half still verifies, and age alone by a re-sign.
     const publicMissing = !existsSync(attestationKeyPaths(ctx.vault).publicPath);
     let nextCommand = "o2b brain attest sign";
-    if (diverged.length > 0 || verification.unexplainedDrift || !verification.storeMeasured) {
+    if (diverged.length > 0 || unexplainedDrift || !verification.storeMeasured) {
       // An unmeasured store is not one to vouch for either: inspect (or
       // re-run) before any key or signing decision.
       nextCommand = "o2b brain attest verify";
     } else if (keyMissing && publicMissing) {
       nextCommand = "o2b brain attest keygen";
-    } else if (keyMissing || !verification.signatureValid) {
+    } else if (keyMissing || (signedHere && !verification.signatureValid)) {
       nextCommand = "o2b brain attest verify";
     }
     out.issues.push({

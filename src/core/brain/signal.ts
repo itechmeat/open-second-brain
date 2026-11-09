@@ -17,7 +17,10 @@
  *   - `writeSignal(vault, input, options)` allocates a free slug under
  *     `Brain/inbox/`, writes the file atomically through `fs-atomic`,
  *     and returns the resulting path + id. Slug collisions are resolved
- *     by `allocateAndCreate` (suffixes `-2`, `-3`, …).
+ *     by `allocateAndCreate` (suffixes `-2`, `-3`, …). On a store-only
+ *     machine (task 2.10) no file is written: the signal is its `signal`
+ *     record, its id allocated against the store's signal fold, and the
+ *     returned path names the page it would have been.
  *
  * The body shape ("## Raw" section with the optional `raw` text) is
  * deterministic so two writes with identical input produce byte-for-byte
@@ -25,7 +28,11 @@
  */
 
 import { dualWrite } from "../store/dual-write.ts";
-import { isPrivateFrontmatter, signalRecord } from "../store/dual-write-records.ts";
+import {
+  isPrivateFrontmatter,
+  signalRecord,
+  type SignalRawShape,
+} from "../store/dual-write-records.ts";
 import {
   callerInput,
   operationPrivacy,
@@ -33,7 +40,13 @@ import {
   type OperationPrivacy,
 } from "../store/operation-privacy.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
-import { join, relative, resolve } from "node:path";
+import { withLocalLock } from "../store/local-lock.ts";
+import { storesStateDir } from "../store/store-paths.ts";
+import { storeWrite } from "../store/store-write.ts";
+import { FileAlreadyExistsError } from "../fs-atomic.ts";
+import { processDirsEnv } from "../platform-dirs.ts";
+import { signalsStoreOnly, storeSignal } from "./signal-state.ts";
+import { join, posix, relative, resolve } from "node:path";
 
 import type { WriteSubject } from "./write-disposition.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -53,12 +66,20 @@ import {
   type OriginChannelStamp,
 } from "../origin-channel.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
-import { writeFrontmatterAtomic, parseFrontmatter, slugify } from "../vault.ts";
+import {
+  formatFrontmatter,
+  parseFrontmatter,
+  parseFrontmatterText,
+  slugify,
+  writeFrontmatterAtomic,
+} from "../vault.ts";
 import { requireObsidianTagValue, scopeTagValues } from "./tag-syntax.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { resolveWriteDisposition } from "./write-disposition.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateAndCreate, brainDirsForWrite, validateIsoDate, BRAIN_INBOX_REL } from "./paths.ts";
+import { BRAIN_PENDING_REL } from "./path-constants.ts";
+import { allocateRecordName, deviceTaggedSlug } from "./record-name.ts";
 import {
   isKnownSchemaToken,
   validateSchemaToken,
@@ -337,7 +358,7 @@ const REQUIRED_INPUT_FIELDS: ReadonlyArray<keyof WriteSignalInput> = [
  * fixtures and read-side parsers that carry its meaning.
  */
 export function writeSignal(
-  vault: string,
+  vault: string | null,
   input: WriteSignalInput,
   options: WriteSignalOptions = {},
 ): WriteSignalResult {
@@ -391,7 +412,7 @@ export function writeSignal(
 }
 
 function writeJudgedSignal(
-  vault: string,
+  vault: string | null,
   input: WriteSignalInput,
   options: WriteSignalOptions,
   resolvedInput: WriteSignalInput,
@@ -412,7 +433,7 @@ function writeJudgedSignal(
       if (existing.contentHash === contentHash) {
         const ref = (existing.ref ?? {}) as { id?: string; path?: string };
         return {
-          path: ref.path ? join(vault, ref.path) : "",
+          path: ref.path ? (vault === null ? ref.path : join(vault, ref.path)) : "",
           id: ref.id ?? "",
           staged: false,
           deduped: true,
@@ -420,6 +441,12 @@ function writeJudgedSignal(
       }
       throw new IdempotencyPayloadMismatchError(idKey, existing.contentHash, contentHash);
     }
+  }
+
+  // With no vault the signal is a store record named against the fold
+  // (design D14); the store write checks the store identity.
+  if (vault === null) {
+    return writeVaultlessSignal(options, resolvedInput, sanitised, privacy, idKey, contentHash);
   }
 
   // Write-intent variant (Unit J): a signal write is the path that
@@ -458,63 +485,86 @@ function writeJudgedSignal(
     gateStaged = disposition.verdict === "stage";
   }
 
+  // `staged` says where the signal lands: the review gate's staging, or an
+  // explicit target that is the pending directory (`stagePendingSignal`).
+  const landedStaged =
+    gateStaged ||
+    (options.targetDir !== undefined && resolve(options.targetDir) === resolve(dirs.pending));
+  const allocationOptions = {
+    vault,
+    targetDir: options.targetDir ?? (gateStaged ? dirs.pending : dirs.inbox),
+    prefix,
+    slug: sanitised.slug,
+    maxAttempts: options.maxSlugAttempts,
+  };
+
+  // Store-only (task 2.10): the signal is a `signal` record and no file is
+  // written. Its id is allocated against the signal fold (and against any
+  // legacy page still on disk), under a device-local lock so two writers on
+  // this machine cannot take the same id.
+  if (signalsStoreOnly(vault)) {
+    // The name carries this device's tag: the fold this machine checks is
+    // only its own view, so another device may mint the same name before
+    // their shards meet (`deviceMintTag`).
+    const storeAllocation = { ...allocationOptions, slug: deviceTaggedSlug(sanitised.slug) };
+    const { allocation: allocated, value: id } = timeStageSync(ROUTE_STAGE.documentWrite, () =>
+      withLocalLock(signalAllocationLock(), () =>
+        allocateAndCreate(storeAllocation, (allocation) => {
+          const signalId = `${prefix}-${allocation.slug}`;
+          if (storeSignal(signalId) !== undefined) {
+            throw new FileAlreadyExistsError(allocation.path, { kind: "signal" });
+          }
+          const { metadata } = renderSignalDocument(sanitised, signalId);
+          storeWrite(
+            () =>
+              signalRecord({
+                vault,
+                path: allocation.path,
+                id: signalId,
+                staged: landedStaged,
+                frontmatter: metadata,
+                raw: sanitised.raw,
+                private: privacy(),
+              }),
+            { vault },
+          );
+          return signalId;
+        }),
+      ),
+    );
+    rememberSignalKey(vault, idKey, contentHash, sanitised, id, allocated.path, privacy);
+    return { path: allocated.path, id, staged: gateStaged };
+  }
+
   // Allocation and creation are one step (#161): a signal write is the
   // most contended name in the vault - inline scan, pending drain and
   // session import each write many signals per run on the same date and
   // often the same topic stem - so losing the name to a concurrent
   // writer has to cost this call the next candidate, not the event.
   const { allocation: allocated, value: id } = timeStageSync(ROUTE_STAGE.documentWrite, () =>
-    allocateAndCreate(
-      {
-        vault,
-        targetDir: options.targetDir ?? (gateStaged ? dirs.pending : dirs.inbox),
-        prefix,
-        slug: sanitised.slug,
-        maxAttempts: options.maxSlugAttempts,
-      },
-      (allocation) => {
-        // The on-disk id always equals the filename basename, including any
-        // `-2`/`-3` collision suffix — which is why the document is rendered
-        // per attempt rather than once: a retry that reused the first
-        // attempt's bytes would ship a file whose `id` names a different
-        // file. We surface it as the canonical id and duplicate it inside
-        // the frontmatter so a manual `mv` keeps the link.
-        const signalId = `${prefix}-${allocation.slug}`;
-        const { metadata, body } = renderSignalDocument(sanitised, signalId);
-        writeFrontmatterAtomic(allocation.path, metadata, body, {
-          overwrite: false,
-          existsErrorKind: "signal",
-          vaultForRelativePath: vault,
-        });
-        return signalId;
-      },
-    ),
+    allocateAndCreate(allocationOptions, (allocation) => {
+      // The on-disk id always equals the filename basename, including any
+      // `-2`/`-3` collision suffix — which is why the document is rendered
+      // per attempt rather than once: a retry that reused the first
+      // attempt's bytes would ship a file whose `id` names a different
+      // file. We surface it as the canonical id and duplicate it inside
+      // the frontmatter so a manual `mv` keeps the link.
+      const signalId = `${prefix}-${allocation.slug}`;
+      const { metadata, body } = renderSignalDocument(sanitised, signalId);
+      writeFrontmatterAtomic(allocation.path, metadata, body, {
+        overwrite: false,
+        existsErrorKind: "signal",
+        vaultForRelativePath: vault,
+      });
+      return signalId;
+    }),
   );
 
   const frontmatter = renderSignalDocument(sanitised, id).metadata;
 
-  // Record the key AFTER the file lands so a future retry dedupes. `ref`
-  // stores the vault-relative path + id so the dedupe branch above can
-  // return the original coordinates without re-deriving them.
-  if (idKey && contentHash !== undefined) {
-    const hash = contentHash;
-    timeStageSync(ROUTE_STAGE.idempotencyRemember, () =>
-      rememberKey(vault, {
-        key: idKey,
-        contentHash: hash,
-        createdAt: sanitised.created_at,
-        ref: { id, path: relative(vault, allocated.path) },
-        private: privacy,
-      }),
-    );
-  }
+  rememberSignalKey(vault, idKey, contentHash, sanitised, id, allocated.path, privacy);
 
   // Brain store dual write (task 1.11): off by default, never fails this write.
-  // `staged` says where the file landed: the review gate's staging, or an
-  // explicit target that is the pending directory (`stagePendingSignal`).
-  const landedStaged =
-    gateStaged ||
-    (options.targetDir !== undefined && resolve(options.targetDir) === resolve(dirs.pending));
   dualWrite(
     () =>
       signalRecord({
@@ -530,6 +580,94 @@ function writeJudgedSignal(
   );
 
   return { path: allocated.path, id, staged: gateStaged };
+}
+
+/**
+ * Record the idempotency key AFTER the signal lands so a future retry
+ * dedupes. `ref` stores the vault-relative path + id so the dedupe branch
+ * can return the original coordinates without re-deriving them.
+ */
+function rememberSignalKey(
+  vault: string | null,
+  idKey: string | undefined,
+  contentHash: string | undefined,
+  sanitised: WriteSignalInput,
+  id: string,
+  path: string,
+  privacy: OperationPrivacy,
+): void {
+  if (!idKey || contentHash === undefined) return;
+  timeStageSync(ROUTE_STAGE.idempotencyRemember, () =>
+    rememberKey(vault, {
+      key: idKey,
+      contentHash,
+      createdAt: sanitised.created_at,
+      ref: { id, path: vault === null ? path : relative(vault, path) },
+      private: privacy,
+    }),
+  );
+}
+
+/**
+ * The no-vault write: a `signal` record whose id is allocated against the
+ * signal fold under the device-local allocation lock. The record carries
+ * the vault-relative path the signal would have had (the inbox, or
+ * `Brain/pending/` when the review gate stages it), so it reads the same
+ * as one written on a vault, and the result's `path` is that
+ * vault-relative name (the convention of `memory-pages.ts` with no vault).
+ */
+function writeVaultlessSignal(
+  options: WriteSignalOptions,
+  resolvedInput: WriteSignalInput,
+  sanitised: WriteSignalInput,
+  privacy: OperationPrivacy,
+  idKey: string | undefined,
+  contentHash: string | undefined,
+): WriteSignalResult {
+  if (options.targetDir !== undefined) {
+    throw new Error("writeSignal: an explicit targetDir needs a vault");
+  }
+  const prefix = signalPrefix(sanitised.date);
+  const disposition = resolveWriteDisposition(
+    null,
+    REVIEW_LANE.signals,
+    options.subject ?? { agent: resolvedInput.agent, via: "config" },
+    { target: `${BRAIN_INBOX_REL}/${prefix}-${sanitised.slug}.md` },
+  );
+  const staged = disposition.verdict === "stage";
+  const { id, path } = timeStageSync(ROUTE_STAGE.documentWrite, () =>
+    withLocalLock(signalAllocationLock(), () => {
+      const { name } = allocateRecordName(
+        prefix,
+        deviceTaggedSlug(sanitised.slug),
+        (candidate) => storeSignal(candidate) !== undefined,
+        options.maxSlugAttempts,
+      );
+      const relPath = posix.join(staged ? BRAIN_PENDING_REL : BRAIN_INBOX_REL, `${name}.md`);
+      const { metadata } = renderSignalDocument(sanitised, name);
+      storeWrite(
+        () =>
+          signalRecord({
+            vault: null,
+            path: relPath,
+            id: name,
+            staged,
+            frontmatter: metadata,
+            raw: sanitised.raw,
+            private: privacy(),
+          }),
+        { vault: null },
+      );
+      return { id: name, path: relPath };
+    }),
+  );
+  rememberSignalKey(null, idKey, contentHash, sanitised, id, path, privacy);
+  return { path, id, staged };
+}
+
+/** Device-local lock that serialises store-only signal id allocation on this machine. */
+function signalAllocationLock(): string {
+  return join(storesStateDir(processDirsEnv()), "signal-ids");
 }
 
 /**
@@ -735,7 +873,60 @@ function sanitiseSignalInput(input: WriteSignalInput): WriteSignalInput {
  */
 export function parseSignal(path: string, options: ParseSignalOptions = {}): BrainSignal {
   const [meta, body] = parseFrontmatter(path);
+  return signalFromPage(meta, body, path, options);
+}
 
+/**
+ * A signal of the store's signal fold (task 2.10) parsed by the same rules
+ * as its page: the fold's frontmatter and the raw text the `signal` record
+ * carries, as the page would hold them. `path` names the page the record
+ * says it would live at.
+ */
+export function parseStoreSignal(
+  path: string,
+  frontmatter: Readonly<Record<string, unknown>>,
+  raw: string | null,
+  options: ParseSignalOptions & {
+    /** What `raw` holds (`signalRawShape` of the record); default the bare text. */
+    readonly rawShape?: SignalRawShape;
+  } = {},
+): BrainSignal {
+  // Two raw shapes reach here, named by the record (FORMAT.md, `signal`).
+  // The bare raw text `writeSignal` captured, or a page the store rebuilt
+  // already gives, uncompressed, so the codec marker the page would carry
+  // does not apply to it. A record the migration imported carries the
+  // page body itself (`## Raw` heading included, still compressed when the
+  // page had a `_raw_codec`): that body is the page's, read as the page is,
+  // with its codec marker kept.
+  const pageBody = raw !== null && options.rawShape === "page";
+  const { _raw_codec: _codec, ...bare } = frontmatter;
+  const meta = pageBody ? frontmatter : bare;
+  let bodyText = "";
+  if (raw !== null) bodyText = pageBody ? raw : `## Raw\n\n${raw}\n`;
+  const text = formatFrontmatter(meta as FrontmatterMap, bodyText);
+  const [parsed, body] = parseFrontmatterText(text);
+  return signalFromPage(parsed, body, path, options);
+}
+
+/**
+ * {@link parseSignal} over a page already read: its frontmatter and body,
+ * or the page the store's fold rebuilt (`memory-pages.ts`).
+ */
+export function parseSignalPage(
+  meta: FrontmatterMap,
+  body: string,
+  path: string,
+  options: ParseSignalOptions = {},
+): BrainSignal {
+  return signalFromPage(meta, body, path, options);
+}
+
+function signalFromPage(
+  meta: FrontmatterMap,
+  body: string,
+  path: string,
+  options: ParseSignalOptions,
+): BrainSignal {
   requireField(meta, "kind");
   if (meta["kind"] !== "brain-signal") {
     throw new Error(

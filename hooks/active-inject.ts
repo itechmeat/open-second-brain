@@ -55,7 +55,6 @@ import {
   resolveRecallInjectEnabled,
   resolveRegroundPartChars,
   resolveRegroundPartsEnabled,
-  resolveVault,
 } from "../src/core/config.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
@@ -85,6 +84,7 @@ import { isContextEventName } from "./lib/context-events.ts";
 import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /**
  * Best-effort hook audit line. Never throws: a failure to record must never
@@ -153,8 +153,11 @@ async function main(): Promise<void> {
       }
     }
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook injects what the store's folds render and
+    // skips the vault's own maintenance (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const { vault, hasVault } = target;
     auditVault = vault;
 
     // Hands-off post-upgrade maintenance on SessionStart: migrate a stale
@@ -162,7 +165,7 @@ async function main(): Promise<void> {
     // reindex runs detached so it survives this short-lived hook). Best-effort,
     // never blocks injection. In background mode the synchronous part (brain
     // upgrade + spawning the reindex) completes before this awaits.
-    if (hookEventName === "SessionStart") {
+    if (hookEventName === "SessionStart" && hasVault) {
       // Fire-and-forget: never put maintenance on the hook's critical path.
       // background:true spawns the reindex detached; we do not await the result.
       void ensureVaultCurrent(vault, { background: true }).catch(() => {

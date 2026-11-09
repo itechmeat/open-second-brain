@@ -125,7 +125,7 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
     name: "schema_apply_mutations",
     kind: "write",
     description:
-      "Apply an atomic batch of schema mutations to Brain/_brain.yaml and write an audit record. With dry_run, returns the pack that would result and its diff instead, writing nothing.",
+      "Apply an atomic batch of schema mutations to the active schema pack and write an audit record. With dry_run, returns the pack that would result and its diff instead, writing nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -170,7 +170,10 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       try {
         return await applySchemaAdminMutations(ctx.vault, mutations, {
           actor,
-          reason,
+          ...(reason !== undefined ? { reason } : {}),
+          // An agent's change: on a store-only machine it never outvotes a
+          // field the operator set.
+          authority: "agent",
           // The deny consult answers for the credential-minted subject,
           // never for the caller-named actor label (write-side-trust,
           // Task 7) - the same discipline as the delete tool.

@@ -19,6 +19,9 @@
 import { existsSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storeRecordPages, UNSTAGED_STATES } from "../memory-pages.ts";
+import { storePreferenceRecords, storeRetiredRecords } from "../memory-page-records.ts";
+import { storeLogDays } from "../log-days.ts";
 import { listLogDates, readLogDay } from "../log-jsonl.ts";
 import { brainDirs } from "../paths.ts";
 import { parsePreference, parseRetired } from "../preference.ts";
@@ -68,16 +71,32 @@ function listRecordDir(dir: string, swept: SweptPath | undefined): Dirent[] | nu
   return readdirSync(dir, { withFileTypes: true });
 }
 
+/** The read context of the machine config the doctor was started against. */
+function contextOf(configPath: string | undefined): { readonly configPath?: string } {
+  return configPath !== undefined ? { configPath } : {};
+}
+
 /**
  * Build a single pre-parsed snapshot of `Brain/preferences/` so the
  * three pref-walking lints don't each re-parse the directory.
  * Files that fail to parse are silently omitted — schema errors are
  * already reported by the preference record check.
+ *
+ * On a store-only machine the snapshot is the preference fold, each
+ * record parsed by the page's rules under the path its page would have
+ * (task 2.10); the legacy folder is not read.
  */
 export function readAllPreferenceRecords(
   vault: string,
   swept?: SweptPath,
+  configPath?: string,
 ): ReadonlyArray<PreferenceRecord> {
+  if (memoryFromStore(vault, configPath)) {
+    return storePreferenceRecords(vault, contextOf(configPath)).records.map(({ path, pref }) => ({
+      path,
+      pref,
+    }));
+  }
   const dirs = brainDirs(vault);
   const entries = listRecordDir(dirs.preferences, swept);
   if (entries === null) return [];
@@ -108,11 +127,20 @@ export function readAllPreferenceRecords(
  * Files that fail to parse are omitted, exactly as above: a retired file
  * whose frontmatter is wrong is already a finding of the retired record
  * check, and reporting it twice would say nothing new.
+ *
+ * On a store-only machine: the retired preferences of the fold.
  */
 export function readAllRetiredRecords(
   vault: string,
   swept?: SweptPath,
+  configPath?: string,
 ): ReadonlyArray<RetiredRecord> {
+  if (memoryFromStore(vault, configPath)) {
+    return storeRetiredRecords(vault, contextOf(configPath)).records.map(({ path, retired }) => ({
+      path,
+      retired,
+    }));
+  }
   const dirs = brainDirs(vault);
   const entries = listRecordDir(dirs.retired, swept);
   if (entries === null) return [];
@@ -152,7 +180,19 @@ export interface LogSnapshot {
  * lints don't each re-parse the directory, and name every day that could
  * not be read so no caller mistakes a partial snapshot for a whole one.
  */
-export function readLogSnapshot(vault: string, swept?: SweptPath): LogSnapshot {
+export function readLogSnapshot(
+  vault: string,
+  swept?: SweptPath,
+  configPath?: string,
+): LogSnapshot {
+  // Store-only (task 2.10): the log is the store's `log-event` records.
+  const stored = storeLogDays(vault, contextOf(configPath));
+  if (stored !== null) {
+    return {
+      records: stored.map((day) => ({ date: day.date, entries: day.entries })),
+      unreadableDays: [],
+    };
+  }
   // Shard-aware (Memory Integrity Suite): dates come from the single
   // discovery helper and entries arrive merged across device shards.
   const records: LogRecord[] = [];
@@ -212,19 +252,31 @@ function listLogDatesSwept(vault: string, swept: SweptPath | undefined): Readonl
  *
  * Set is keyed by basename (without `.md`) so Obsidian's basename
  * match works.
+ *
+ * On a store-only machine the preferences, retired preferences and
+ * signals of every state come from the folds (their page names, so a
+ * link to one still resolves); the `Brain/` root and the log folder are
+ * still listed, as they are not memory records.
  */
 export function collectAllBasenames(vault: string, swept?: SweptPath): ReadonlySet<string> {
   const out = new Set<string>();
   const dirs = brainDirs(vault);
-  for (const d of [
-    dirs.brain,
-    dirs.inbox,
-    dirs.processed,
-    dirs.archived,
-    dirs.preferences,
-    dirs.retired,
-    dirs.log,
-  ]) {
+  const fromStore = memoryFromStore(vault);
+  if (fromStore) {
+    for (const page of storeRecordPages(vault, { signalStates: UNSTAGED_STATES })) out.add(page.id);
+  }
+  const listed = fromStore
+    ? [dirs.brain, dirs.log]
+    : [
+        dirs.brain,
+        dirs.inbox,
+        dirs.processed,
+        dirs.archived,
+        dirs.preferences,
+        dirs.retired,
+        dirs.log,
+      ];
+  for (const d of listed) {
     const entries = listRecordDir(d, swept);
     if (entries === null) continue;
     for (const entry of entries) {

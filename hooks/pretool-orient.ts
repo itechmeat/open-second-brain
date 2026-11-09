@@ -25,7 +25,7 @@
  *     record per tool call.
  */
 
-import { resolveHookStrictEnabled, resolveVault } from "../src/core/config.ts";
+import { resolveHookStrictEnabled } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { decideOrient, type OrientDecision } from "../src/core/brain/pretool-orient.ts";
@@ -33,6 +33,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { detectHookRuntime } from "./lib/detect.ts";
 import { readHookStamp, writeHookStamp } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { resolveHookVault } from "./lib/hook-vault.ts";
 
 /** Namespaced stamps (binding D2 convention). */
 const ORIENTED_RECENT_KEY = "osb.oriented.recent";
@@ -79,7 +80,7 @@ async function main(): Promise<void> {
     const payload = asHookPayload(raw);
     const runtime = detectHookRuntime(raw);
 
-    const vault = resolveVault();
+    const vault = resolveHookVault();
     if (vault === null) return; // no vault root to compare against -> fail open
 
     const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;

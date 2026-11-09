@@ -48,10 +48,9 @@
  *     and never turns an identical repost into an edge deletion.
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { entityNameEqualsAnchorForm } from "./atomic-facts.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
@@ -70,12 +69,16 @@ import {
   type PledgePage,
 } from "./pledges.ts";
 import { validateIsoDate } from "./paths.ts";
-import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { strictestVisibilityOf } from "../graph/visibility.ts";
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
+import {
+  acquireLaneLock,
+  assertLaneWrite,
+  removeLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 /** A pledge-intake payload or anchor failed validation; nothing was written. */
 export class PledgeIntakeError extends Error {
@@ -251,8 +254,10 @@ export function intakePledges(
   input: PledgeIntakeInput,
   opts: PledgeIntakeOptions,
 ): PledgeIntakeResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Lane write guard, the one every pledge writer passes: the vault
+  // identity guard on an unswitched machine, the store identity check on a
+  // store-only one (design D14 item 13).
+  assertLaneWrite(vault);
 
   // The batch ceiling comes before any read: an oversized extraction is
   // refused whole, so a caller cannot buy unbounded registry scans.
@@ -503,7 +508,7 @@ export function intakePledges(
         duplicates.push(prep.slug);
         continue;
       }
-      rewritePledgeCounterparties(prep.existing, mergedIds);
+      rewritePledgeCounterparties(vault, prep.existing, mergedIds);
       reanchored.push(prep.slug);
     }
   } catch (err) {
@@ -519,7 +524,7 @@ export function intakePledges(
     const stuck: string[] = [];
     for (const page of createdPages) {
       try {
-        rmSync(page.path, { force: true });
+        removeLanePage(vault, page.path);
         removed.push(page.slug);
       } catch {
         stuck.push(page.slug);
@@ -553,17 +558,19 @@ export function intakePledges(
  * mutates rather than regenerates.
  */
 function rewritePledgeCounterparties(
+  vault: string,
   page: PledgePage,
   counterparties: ReadonlyArray<string>,
 ): void {
   // Same lock discipline as the family's other writers: the rewrite is a
   // read-modify-write of the whole frontmatter, so a re-anchor racing a
   // fulfill (or a second re-anchor) must never overwrite either edit.
-  const handle = acquireLockSyncWithRetry(page.path);
+  const handle = acquireLaneLock(vault, page.path);
   try {
-    atomicWriteFileSync(
+    writeLaneText(
+      vault,
       page.path,
-      rewritePledgeFrontmatter(page, (meta) => {
+      rewritePledgeFrontmatter(vault, page, (meta) => {
         meta[PROMISED_TO_RELATION] = [...counterparties];
       }),
     );

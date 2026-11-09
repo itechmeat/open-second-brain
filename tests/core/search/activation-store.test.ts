@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +34,8 @@ function ev(ts: number, paths: string[]): ActivationAccessEvent {
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-activation-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -169,5 +171,24 @@ describe("sweepActivationEvents", () => {
     const state = readActivationState(vault);
     expect(state?.events).toBe(0);
     expect(Object.keys(state?.paths ?? { x: 1 })).toHaveLength(0);
+  });
+});
+
+describe("bare vaults (store-only, design D14 item 1)", () => {
+  test("two bare vaults on one machine never share activation", () => {
+    const parent = mkdtempSync(join(tmpdir(), "o2b-activation-bare-"));
+    try {
+      const a = join(parent, "a");
+      const b = join(parent, "b");
+      mkdirSync(a, { recursive: true });
+      mkdirSync(b, { recursive: true });
+      recordAccessEvent(a, ev(T0, ["notes/shared-name.md"]));
+      expect(readActivationState(a)?.paths["notes/shared-name.md"]).toBeDefined();
+      expect(activationStatePath(a).startsWith(a)).toBe(false);
+      expect(activationStatePath(b)).not.toBe(activationStatePath(a));
+      expect(readActivationState(b)?.paths["notes/shared-name.md"]).toBeUndefined();
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });

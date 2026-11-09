@@ -20,6 +20,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
+import { vaultForNoteAction } from "./lane-vault.ts";
 
 const TOOL = "brain_intake_entities";
 
@@ -39,7 +40,7 @@ async function toolBrainIntakeEntities(
   // A malformed extraction is a client-resolvable input problem, not a
   // server fault - surface it as INVALID_PARAMS, never a fabricated result.
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
-    const result = intakeExtraction(ctx.vault, parsed.intake, {
+    const result = intakeExtraction(vaultForNoteAction(ctx, TOOL), parsed.intake, {
       agent,
       now: new Date(),
       provenance: parsed.provenance,

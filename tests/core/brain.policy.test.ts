@@ -663,7 +663,11 @@ describe("loadBrainConfig — filesystem integration", () => {
     expect(result.warnings[0]!.message).toContain("future_field");
   });
 
+  // A legacy `Brain/` tree without the file. A vault with no `Brain/` at
+  // all is store-only and reads its settings from the store (design D14
+  // item 3), so it has no file to miss.
   test("missing file → BrainConfigError pointing at init", () => {
+    mkdirSync(join(tmp, "Brain"), { recursive: true });
     expect(() => loadBrainConfig(tmp)).toThrow(/o2b brain init/);
   });
 

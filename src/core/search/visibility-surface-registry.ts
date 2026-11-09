@@ -1544,16 +1544,6 @@ const D = DIRECT_VAULT_READ_CATEGORY;
  */
 export const DIRECT_VAULT_READ_REGISTRY: ReadonlyArray<DirectVaultReadEntry> = Object.freeze([
   {
-    file: "src/mcp/brain/knowledge-tools.ts",
-    category: D.guarded,
-    reason:
-      "brain_clusters lists Brain/clusters/*.md with readdirSync and brain_bridges reads " +
-      "Brain/proposals/bridges.md with readFileSync, both by path and neither through a read " +
-      "root. Both now ask reachView(ctx.vault, contextReach(ctx)) about each path before its " +
-      "title or body crosses the boundary, which is the same decision isPathReadableAtReach " +
-      "makes for a ranked result.",
-  },
-  {
     file: "src/cli/onboarding.ts",
     category: D.discloses_nothing,
     reason:
@@ -1570,24 +1560,5 @@ export const DIRECT_VAULT_READ_REGISTRY: ReadonlyArray<DirectVaultReadEntry> = O
       "atomically. It is a maintenance lane in the operator's own shell, and one that must see " +
       "every page: a repair that stopped reading reserved pages would rewrite the links around " +
       "them and leave the graph pointing at nothing.",
-  },
-  {
-    file: "src/cli/brain/verbs/clusters.ts",
-    category: D.discloses_nothing,
-    reason:
-      "the CLI mirror of brain_clusters, readdirSyncing Brain/clusters for the staleness " +
-      "fast-path and the listing. It runs in the operator's own shell, which the CLI answers at " +
-      "local reach through CLI_TRANSPORT_REACH, so the reserved-token rule admits every page " +
-      "here by construction rather than by omission.",
-  },
-  {
-    file: "src/cli/bootstrap/receipt.ts",
-    category: D.discloses_nothing,
-    reason:
-      "reads and writes the bootstrap receipt at .open-second-brain/bootstrap.lock.json: " +
-      "schema version, target names, owned keys, a token NAME and non-secret PREFIX, and a " +
-      "timestamp - never page content, and never token material. It runs in the operator's " +
-      "own shell, so the reach question does not arise, and no page's reservation could " +
-      "cover what it hands back.",
   },
 ]);

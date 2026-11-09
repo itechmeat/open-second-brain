@@ -1702,7 +1702,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_pre_compress_pack",
     kind: "read",
     description:
-      "Return a compact system-prompt addendum (top-K confirmed preferences plus the head of active.md) for a host to inject right before context compression. Char-budgeted: absent caps derive from the resolved model context window, so the addendum is bounded whenever a window resolves. Read-only.",
+      "Return a compact system-prompt addendum (top-K confirmed preferences plus the head of the active digest) for a host to inject right before context compression. Char-budgeted: absent caps derive from the resolved model context window, so the addendum is bounded whenever a window resolves. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

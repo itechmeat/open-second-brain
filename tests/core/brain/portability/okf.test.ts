@@ -39,8 +39,17 @@ import {
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-okf-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
+
+/** A fresh unswitched vault (its legacy `Brain/` tree in place) under the temp dir. */
+function legacyVaultDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, "Brain"), { recursive: true });
+  return dir;
+}
 
 function note(rel: string, content: string): void {
   const p = join(vault, rel);
@@ -384,7 +393,7 @@ describe("v0.2 type emission", () => {
     expect(beta).not.toContain("type: glossary-entry");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-type-rt-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-type-rt-dest-"));
+    const dest = legacyVaultDir("o2b-okf-type-rt-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const parsed = readOkfBundle(dir);
@@ -419,7 +428,7 @@ describe("v0.2 type emission", () => {
     expect(plain).toContain("okf_raw: [status, sources, generated, type]");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-dest-"));
+    const dest = legacyVaultDir("o2b-okf-type-plain-dest-");
     const dir2 = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-rt-"));
     const dest2 = mkdtempSync(join(tmpdir(), "o2b-okf-type-plain-rt-dest-"));
     try {
@@ -546,7 +555,7 @@ describe("the raw-carry marker declares what it covers", () => {
     // never declared, so its derived value lands instead of being
     // dropped by a guess.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-mark-list-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-mark-list-dest-"));
+    const dest = legacyVaultDir("o2b-okf-mark-list-dest-");
     try {
       ownBundle(
         dir,
@@ -643,7 +652,7 @@ describe("manifest-less spec-shaped v0.2 bundles", () => {
 
   test("imported spec pages stage for review through the foreign-producer path", () => {
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-imp-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-spec-imp-dest-"));
+    const dest = legacyVaultDir("o2b-okf-spec-imp-dest-");
     try {
       specBundle(dir);
       const result = importOkfBundle(dest, readOkfBundle(dir), { now: new Date(0) });
@@ -681,7 +690,7 @@ describe("manifest-less spec-shaped v0.2 bundles", () => {
     // the version declaration and log.md the change log; the same names
     // below the root are nobody's machinery.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-spec-nested-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-spec-nested-dest-"));
+    const dest = legacyVaultDir("o2b-okf-spec-nested-dest-");
     try {
       mkdirSync(join(dir, "concepts"), { recursive: true });
       writeFileSync(join(dir, "index.md"), '---\nokf_version: "0.2"\n---\n# Root\n', "utf8");
@@ -941,7 +950,7 @@ describe("v0.2 import acceptance", () => {
     expect(qPage).toContain("okf_raw: [status, sources, generated, type]");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rt-bundle-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rt-dest-"));
+    const dest = legacyVaultDir("o2b-okf-rt-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const parsed = readOkfBundle(dir);
@@ -1032,7 +1041,7 @@ describe("v0.2 import acceptance", () => {
     // those natives - a legacy bundle's trusted round-trip once lost
     // every page's status, quarantine included.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-legacy-dest-"));
+    const dest = legacyVaultDir("o2b-okf-legacy-dest-");
     try {
       mkdirSync(join(dir, "concepts"), { recursive: true });
       const manifest = {
@@ -1090,7 +1099,7 @@ describe("v0.2 import acceptance", () => {
     // along beside it, and the next export carried the materialized
     // status as a raw native, permanent.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rawnomark-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rawnomark-dest-"));
+    const dest = legacyVaultDir("o2b-okf-rawnomark-dest-");
     try {
       mkdirSync(join(dir, "concepts"), { recursive: true });
       const manifest = {
@@ -1160,7 +1169,7 @@ describe("v0.2 import acceptance", () => {
     expect(plainPage).toContain("status: stable");
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-plain-rt-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-plain-rt-dest-"));
+    const dest = legacyVaultDir("o2b-okf-plain-rt-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const parsed = readOkfBundle(dir);
@@ -1212,7 +1221,7 @@ describe("v0.2 import acceptance", () => {
     expect(fileOf(bundle.files, "concepts/Ws.md")).toContain('okf_status_raw: "  "');
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-rawshape-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-rawshape-dest-"));
+    const dest = legacyVaultDir("o2b-okf-rawshape-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const result = importOkfBundle(dest, readOkfBundle(dir), { trusted: true });
@@ -1235,7 +1244,7 @@ describe("v0.2 import acceptance", () => {
     // own data, never restored away and never re-stamped, and no raw
     // keys are read on a foreign producer's word.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-v02-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-v02-dest-"));
+    const dest = legacyVaultDir("o2b-okf-foreign-v02-dest-");
     try {
       mkdirSync(join(dir, "concepts"), { recursive: true });
       const manifest = {
@@ -1292,7 +1301,7 @@ describe("v0.2 import acceptance", () => {
     note("Notes/Q.md", "---\ntitle: Q\nstatus: quarantine\n---\nbody.\n");
     const bundle = buildOkfBundle(vault);
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-review-rt-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-review-rt-dest-"));
+    const dest = legacyVaultDir("o2b-okf-review-rt-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const result = importOkfBundle(dest, readOkfBundle(dir));
@@ -1315,7 +1324,7 @@ describe("v0.2 import acceptance", () => {
     // triggers the restore nor leaves the keys behind as stray machinery
     // in the vault - the page imports verbatim minus the namespace.
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-raw-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-foreign-raw-dest-"));
+    const dest = legacyVaultDir("o2b-okf-foreign-raw-dest-");
     try {
       mkdirSync(join(dir, "concepts"), { recursive: true });
       const manifest = {
@@ -1367,7 +1376,7 @@ describe("v0.2 import acceptance", () => {
 
   test("a sealed knowledge-pack half carrying a v0.2 okf.json installs", () => {
     const packDir = mkdtempSync(join(tmpdir(), "o2b-okf-pack-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-pack-dest-"));
+    const dest = legacyVaultDir("o2b-okf-pack-dest-");
     try {
       const okfManifest = {
         schema: "",
@@ -1439,7 +1448,7 @@ describe("round-trip", () => {
     const bundle = buildOkfBundle(vault);
 
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-bundle-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-dest-"));
+    const dest = legacyVaultDir("o2b-okf-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const parsed = readOkfBundle(dir);
@@ -1461,7 +1470,7 @@ describe("round-trip", () => {
     note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nx\n");
     const bundle = buildOkfBundle(vault);
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-bundle-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-dest-"));
+    const dest = legacyVaultDir("o2b-okf-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const result = importOkfBundle(dest, readOkfBundle(dir));
@@ -1481,7 +1490,7 @@ describe("round-trip", () => {
     note("Notes/Alpha.md", "---\ntitle: Alpha\n---\nx\n");
     const bundle = buildOkfBundle(vault);
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-bundle-"));
-    const dest = mkdtempSync(join(tmpdir(), "o2b-okf-dest-"));
+    const dest = legacyVaultDir("o2b-okf-dest-");
     try {
       writeOkfBundle(dir, bundle);
       const staged = join(dest, OKF_REVIEW_REL, "Notes/Alpha.md");

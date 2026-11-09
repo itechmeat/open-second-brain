@@ -6,9 +6,6 @@
  * BRAIN_TOOLS surface.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-
 import { buildBacklinkIndex } from "../../core/brain/backlinks.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { readPrefAudit } from "../../core/brain/pref-audit.ts";
@@ -79,7 +76,12 @@ import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-re
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../../core/brain/path-constants.ts";
 import type { AgentSourceContribution } from "../../core/brain/agent-source/types.ts";
-import { deliveryView, signalDeliveryRel, UNPROBED_DELIVERY_REL } from "./reach-events.ts";
+import {
+  deliveryView,
+  memoryPageRelIn,
+  signalDeliveryRel,
+  UNPROBED_DELIVERY_REL,
+} from "./reach-events.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg, CURSOR_SCHEMA } from "./pagination.ts";
 
@@ -1012,11 +1014,9 @@ async function toolBrainUnlinkedMentions(
  * neither probes the guaranteed-absent page.
  */
 function mentionSourceRel(vault: string, id: string): string {
-  for (const dir of [BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]) {
-    const rel = `${dir}/${id}.md`;
-    if (existsSync(join(vault, rel))) return rel;
-  }
-  return UNPROBED_DELIVERY_REL;
+  return (
+    memoryPageRelIn(vault, id, [BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]) ?? UNPROBED_DELIVERY_REL
+  );
 }
 
 // ----- brain_foresight (t_08a79c81) -----------------------------------------
@@ -1431,7 +1431,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Raw-text mentions of a target's title / aliases not already inside `[[...]]`; walks Brain/preferences and Brain/retired. Boundaries are Unicode-aware and language-agnostic. `total` is exact once the walk exhausts; mid-walk it reports the page's scan bound, never a silent cap. Read-only.",
+      "Raw-text mentions of a target's title / aliases not already inside `[[...]]`; walks the active and retired preferences. Boundaries are Unicode-aware and language-agnostic. `total` is exact once the walk exhausts; mid-walk it reports the page's scan bound, never a silent cap. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

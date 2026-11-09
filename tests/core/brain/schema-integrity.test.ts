@@ -24,6 +24,10 @@ import {
 } from "../../../src/core/brain/schema-integrity.ts";
 import { applySchemaMutations } from "../../../src/core/brain/schema-mutate.ts";
 import { parseSchemaPack, readSchemaPackSource } from "../../../src/core/brain/schema-pack.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 /** Schema tokens used by the cases below. */
 const SUPPORTS = "supports";

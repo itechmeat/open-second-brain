@@ -49,7 +49,24 @@ import { join, sep } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { canonicalNotePath, ensureInsideVault, vaultRelative } from "../path-safety.ts";
-import { parseFrontmatter } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatter } from "../vault.ts";
+import { AUTHORITY_FIELD, PREFERENCE_REMOVE_KIND } from "../store/constants.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneTree,
+  parseLanePage,
+  readLaneText,
+  removeLanePage,
+} from "../store/lane-pages.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { assertNoteVaultForWrite } from "../vault-adapter/index.ts";
+import { stripBrainIdPrefix } from "./wikilink.ts";
+import { authorityFromOrigin } from "../store/dual-write.ts";
+import { storeWrite } from "../store/store-write.ts";
+import { removeStoreSignal } from "./signal-state.ts";
+import { storeMemoryPageAt, storeRecordPages } from "./memory-pages.ts";
 import {
   BRAIN_ENTITIES_REL,
   BRAIN_INBOX_REL,
@@ -72,7 +89,6 @@ import {
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { stringArrayField, wikilinkTarget } from "./source-links.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 
@@ -376,13 +392,15 @@ interface RawMatch {
  * transitive `evidenced_by` fold is resolved in a second pass once the set
  * of directly-derived signals is known.
  */
-function directMatch(vault: string, absPath: string, identity: SourceIdentity): RawMatch | null {
-  let text: string;
-  try {
-    text = readFileSync(absPath, "utf8");
-  } catch {
-    return null;
-  }
+function directMatch(
+  vault: string,
+  absPath: string,
+  identity: SourceIdentity,
+  storeOnly: boolean,
+): RawMatch | null {
+  const page = brainPageAt(vault, absPath, storeOnly);
+  if (page === null) return null;
+  const text = page.text;
   // Unit F: `parseFrontmatter` cannot throw (it reads inside its own try;
   // everything after is string work), so the `catch { meta = {} }` that
   // stood here was unreachable - and its intent is what the parser
@@ -390,7 +408,7 @@ function directMatch(vault: string, absPath: string, identity: SourceIdentity): 
   // whose frontmatter is unavailable is still scanned as raw text.
   // Dropped lines are reported centrally; see the "Why most readers keep
   // the two-tuple form" section in src/core/vault.ts.
-  const [meta] = parseFrontmatter(absPath);
+  const meta = page.meta;
 
   const kind = classifyKind(vault, absPath);
   const sourceLinks = stringArrayField(meta, "source");
@@ -481,10 +499,12 @@ interface Traced {
  */
 function traceReferences(vault: string, identity: SourceIdentity): Traced {
   const root = brainDirs(vault).brain;
+  // Decided once per trace: every page of both passes is read the same way.
+  const storeOnly = isStoreOnly({ vault });
   const rawMatches: RawMatch[] = [];
-  if (existsSync(root)) {
-    for (const absPath of walkBrainMarkdown(root)) {
-      const m = directMatch(vault, absPath, identity);
+  if (storeOnly || existsSync(root)) {
+    for (const absPath of walkBrainMarkdown(vault, root, storeOnly)) {
+      const m = directMatch(vault, absPath, identity, storeOnly);
       if (m !== null) rawMatches.push(m);
     }
   }
@@ -494,8 +514,8 @@ function traceReferences(vault: string, identity: SourceIdentity): Traced {
   // shared fold — reported, never auto-deleted.
   const derivedSignalIds = new Set(rawMatches.filter((m) => m.kind === "signal").map((m) => m.id));
   const alreadyMatched = new Set(rawMatches.map((m) => m.absPath));
-  if (existsSync(root)) {
-    for (const absPath of walkBrainMarkdown(root)) {
+  if (storeOnly || existsSync(root)) {
+    for (const absPath of walkBrainMarkdown(vault, root, storeOnly)) {
       if (alreadyMatched.has(absPath)) continue;
       const kind = classifyKind(vault, absPath);
       if (kind !== "preference") continue;
@@ -503,7 +523,7 @@ function traceReferences(vault: string, identity: SourceIdentity): Traced {
       // above. An unreadable page yields an empty map, so it has no
       // `_evidenced_by` links and falls out on the next line exactly as
       // the dead branch intended.
-      const [meta] = parseFrontmatter(absPath);
+      const meta = brainPageAt(vault, absPath, storeOnly)?.meta ?? {};
       const evidencedBy = evidencedByLinks(meta);
       const targets = evidencedBy.map((link) => wikilinkTarget(link));
       if (targets.length === 0) continue;
@@ -572,7 +592,55 @@ function computeDeletable(
   return true;
 }
 
-function walkBrainMarkdown(root: string): string[] {
+/**
+ * A `Brain/` page as this scan reads it, its raw text and frontmatter: the
+ * file on an unswitched machine; on a store-only one the page a lane entry
+ * or a memory record (preference, retired, signal) renders. `null` for a
+ * page that is not there.
+ */
+function brainPageAt(
+  vault: string,
+  absPath: string,
+  storeOnly: boolean,
+): { readonly text: string; readonly meta: FrontmatterMap } | null {
+  if (!storeOnly) {
+    let text: string;
+    try {
+      text = readFileSync(absPath, "utf8");
+    } catch {
+      return null;
+    }
+    return { text, meta: parseFrontmatter(absPath)[0] };
+  }
+  const memory = storeMemoryPageAt(vault, vaultRelative(absPath, vault));
+  if (memory !== null) {
+    return { text: formatFrontmatter(memory.meta, memory.body), meta: memory.meta };
+  }
+  const text = readLaneText(vault, absPath);
+  return text === null ? null : { text, meta: parseLanePage(vault, absPath)[0] };
+}
+
+/**
+ * Every `.md` page under `root`: a walk of the tree on an unswitched
+ * machine; on a store-only one the lane entries and the memory records'
+ * pages, by the paths they had in the legacy tree. Dot folders are skipped
+ * in both, as the walk skips them.
+ */
+function walkBrainMarkdown(vault: string, root: string, storeOnly: boolean): string[] {
+  if (storeOnly) {
+    const memory = storeRecordPages(vault, { signalStates: "all" }).map((page) =>
+      join(vault, ...page.rel.split("/")),
+    );
+    const lanes = listLaneTree(vault, root);
+    return [...new Set([...memory, ...lanes])]
+      .filter(
+        (path) =>
+          !vaultRelative(path, vault)
+            .split("/")
+            .some((seg) => seg.startsWith(".")),
+      )
+      .toSorted();
+  }
   const out: string[] = [];
   const visit = (dir: string): void => {
     let names: string[];
@@ -702,6 +770,9 @@ export function removeFile(vault: string, relPath: string): boolean {
   } catch {
     return false;
   }
+  if (isStoreOnly({ vault }) && insideDir(abs, brainDirs(vault).brain)) {
+    return removeStorePage(vault, relPath, abs);
+  }
   try {
     rmSync(abs);
     return true;
@@ -709,6 +780,43 @@ export function removeFile(vault: string, relPath: string): boolean {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return false;
     throw err;
   }
+}
+
+/**
+ * Remove one `Brain/` page on a store-only machine, by what holds it: a
+ * preference or a retired page writes the preference's tombstone
+ * (`preference-remove`), a signal its tombstone (`signal-removed`), any other
+ * page removes its lane entry. `false` when there was nothing to remove.
+ */
+function removeStorePage(vault: string, relPath: string, abs: string): boolean {
+  const memory = storeMemoryPageAt(vault, relPath);
+  if (memory === null) {
+    if (!lanePageExists(vault, abs)) return false;
+    removeLanePage(vault, abs);
+    return true;
+  }
+  if (memory.kind === "signal") {
+    // A request to forget: the signal's tombstone, after which the fold
+    // drops it and its content from every read (FORMAT.md, Removal).
+    return removeStoreSignal(vault, memory.id);
+  }
+  // The fold keys a preference by `pref-<slug>` in both lives: a retired
+  // page's id (`ret-<slug>`) names no record of its own.
+  const preference = `pref-${stripBrainIdPrefix(memory.id)}`;
+  const isPrivate = memory.private;
+  withOperationPrivacy(isPrivate, () =>
+    storeWrite(
+      () => ({
+        stream: "events",
+        kind: PREFERENCE_REMOVE_KIND,
+        private: isPrivate,
+        body: { [AUTHORITY_FIELD]: authorityFromOrigin(), preference },
+      }),
+      { vault },
+    ),
+  );
+  // Removed only when the fold no longer shows the page.
+  return storeMemoryPageAt(vault, relPath) === null;
 }
 
 /**
@@ -724,9 +832,10 @@ export function deleteBySource(
   const canonical = identity.canonical;
   const confirm = opts.confirm === true;
   const includeOriginals = opts.includeOriginals === true;
-  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // Lane write guard: the vault identity guard on an unswitched machine,
+  // the store identity check on a store-only one (design D14 item 13).
   // Dry-run (the default) plans and writes nothing, so it stays ungated.
-  if (confirm) assertVaultIdentityForWrite(vault);
+  if (confirm) assertLaneWrite(vault);
   // Deny-consulted evidence (write-side trust, Task 12): a confirmed
   // cleanup is a mutation lane like update or append - it removes the
   // derived entries and the ingest manifest entry - so the document is
@@ -751,6 +860,12 @@ export function deleteBySource(
   const derived = traced.derived.filter((entry) => included(entry.path));
   const mentions = traced.mentions.filter((entry) => included(entry.path));
   const originals = findOriginals(vault, canonical, opts.include);
+  // The originals are user-vault files in both modes. On a store-only
+  // machine the lane guard above checks the store only, so their removal
+  // runs the vault adapter's guard (the bound vault, not frozen) up front.
+  if (confirm && includeOriginals && originals.length > 0 && isStoreOnly({ vault })) {
+    assertNoteVaultForWrite(vault, "delete_by_source removing originals");
+  }
   const manifestKey =
     readManifest(vault).entries[canonical] !== undefined &&
     !isSourceHidden(vault, canonical, opts.include)

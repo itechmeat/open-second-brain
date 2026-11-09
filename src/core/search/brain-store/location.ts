@@ -9,7 +9,10 @@
  *
  * When a store is in use the index lives in the store's device-local state
  * directory, one file per vault:
- * `<device state>/index/<vault key>/brain.sqlite`. When no store is in use
+ * `<device state>/index/<vault key>/brain.sqlite`. With no vault at all
+ * (design D14 item 14) the index is keyed by the store id instead:
+ * `<device state>/index/<store id>/brain.sqlite`; a vault key is 16 hex
+ * characters and a store id a 26-character ULID, so the two never meet. When no store is in use
  * (every install before migration) the legacy vault location stays, and an
  * explicit `search_db_path` / `OPEN_SECOND_BRAIN_SEARCH_DB` override wins
  * in both cases (see `../paths.ts`).
@@ -24,6 +27,7 @@ import { sha256Hex } from "../../integrity/digest.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { processDirsEnv, type PlatformDirsEnv } from "../../platform-dirs.ts";
 import { STORE_PARTITIONS, type StorePartition } from "../../store/constants.ts";
+import { lostHeldPartitions } from "../../store/held-ledger.ts";
 import { readStoreId } from "../../store/store-open.ts";
 import { isUlid } from "../../store/ulid.ts";
 import {
@@ -52,8 +56,9 @@ export interface IndexedStore {
 /**
  * What a read-only look at a store root found: the store, no store (no
  * partition holds an identity file), or `unknown` when it could not tell
- * (an identity file is unreadable, or the partitions disagree about the
- * store id: a broken store is not indexed; the store's own open refuses it
+ * (an identity file is unreadable, the partitions disagree about the
+ * store id, or a partition this machine has held lost its identity file:
+ * a broken store is not indexed; the store's own open refuses it
  * by name).
  */
 export type StoreProbe =
@@ -77,6 +82,9 @@ export function probeStoreRoot(root: string, dirs: PlatformDirsEnv = processDirs
     held.push(partition);
     ids.add(id);
   }
+  // A partition this machine has held that lost its identity file: the
+  // store's own open refuses it by name (`held-ledger.ts`).
+  if (lostHeldPartitions(root, new Set(held)).length > 0) return { kind: "unknown", root };
   if (held.length === 0) return { kind: "absent" };
   if (ids.size !== 1) return { kind: "unknown", root };
   const storeId = [...ids][0]!;
@@ -96,7 +104,8 @@ export function probeIndexedStore(
 }
 
 export interface ResolveIndexedStoreOptions {
-  readonly vault: string;
+  /** The vault indexed, or `null` for a machine with no vault. */
+  readonly vault: string | null;
   /** Parsed machine config (`key: value`); empty when no file was read. */
   readonly config: Readonly<Record<string, string>>;
   /** Path of the machine config file; relative `store_root` values anchor to its directory. */
@@ -151,9 +160,22 @@ export function vaultIndexKey(vault: string): string {
   return sha256Hex(real).slice(0, STORE_INDEX_VAULT_KEY_LENGTH);
 }
 
-/** The index file of `vault` inside `store`'s device-local state. */
-export function storeIndexPath(store: IndexedStore, vault: string): string {
-  return join(store.deviceStateDir, STORE_INDEX_DIR, vaultIndexKey(vault), DERIVED_STORE_FILE);
+/**
+ * The directory name of an index under a store: the vault's key, or the
+ * store id when there is no vault.
+ */
+export function indexKeyFor(storeId: string, vault: string | null): string {
+  return vault === null ? storeId : vaultIndexKey(vault);
+}
+
+/** The index file of `vault` (`null`: no vault) inside `store`'s device-local state. */
+export function storeIndexPath(store: IndexedStore, vault: string | null): string {
+  return join(
+    store.deviceStateDir,
+    STORE_INDEX_DIR,
+    indexKeyFor(store.storeId, vault),
+    DERIVED_STORE_FILE,
+  );
 }
 
 /** The store root `deviceStateDir`'s store was last read at, or `null`. */
@@ -194,7 +216,7 @@ export function rememberStoreRoot(store: IndexedStore): void {
  * index wins. A store retired or moved away from `root` is never picked.
  */
 export function lastStoreIndexPath(
-  vault: string,
+  vault: string | null,
   root: string | null,
   dirs: PlatformDirsEnv = processDirsEnv(),
 ): string | null {
@@ -205,12 +227,11 @@ export function lastStoreIndexPath(
   } catch {
     return null;
   }
-  const key = vaultIndexKey(vault);
   let best: { readonly path: string; readonly mtimeMs: number } | null = null;
   for (const id of ids) {
     const stateDir = deviceStateDirFor(id, dirs);
     if (rememberedRoot(stateDir) !== root) continue;
-    const path = join(stateDir, STORE_INDEX_DIR, key, DERIVED_STORE_FILE);
+    const path = join(stateDir, STORE_INDEX_DIR, indexKeyFor(id, vault), DERIVED_STORE_FILE);
     let mtimeMs: number;
     try {
       const stat = statSync(path);

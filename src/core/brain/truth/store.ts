@@ -61,8 +61,10 @@ import type {
 } from "./types.ts";
 import { TRUTH_SCHEMA_VERSION } from "./types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { dualWrite } from "../../store/dual-write.ts";
-import { truthClaimRowRecord } from "../../store/dual-write-records.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { routeWrite } from "../../store/store-write.ts";
+import { DUAL_WRITE_LEDGERS, truthClaimRowRecord } from "../../store/dual-write-records.ts";
 import { claimSourceIsPrivate } from "../../store/reference-privacy.ts";
 
 /** Default cap on retained claim events (explicit sweep only). */
@@ -114,7 +116,7 @@ export class ClaimWindowRefusal extends Error {
 // slugs, and Syncthing conflict copies are never shards (the shared
 // ledger-shard grammar rejects them).
 const CLAIMS_STEM = "claims";
-const CLAIMS_GRAMMAR = jsonlLedgerGrammar(CLAIMS_STEM);
+export const CLAIMS_GRAMMAR = jsonlLedgerGrammar(CLAIMS_STEM);
 
 /** Extension appended when a source target names no file as given. */
 const NOTE_EXTENSION = ".md";
@@ -285,8 +287,6 @@ export function appendClaimEvent(
   input: AppendClaimInput,
   opts: AppendClaimOptions = {},
 ): AppendClaimResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
   const entity = normalizeEntityName(input.entity);
   const aspect = normalizeEntityName(input.aspect);
   if (entity === "") throw new Error("claim entity must not be empty");
@@ -372,24 +372,60 @@ export function appendClaimEvent(
     ...(sampleId !== undefined ? { sample_id: sampleId } : {}),
   });
 
-  mkdirSync(truthDir(vault), { recursive: true });
-  const path = claimShardPath(vault, opts.configPath);
-  appendFileSync(path, JSON.stringify(event) + "\n");
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // A claim taken from a private page goes to `private` only.
-  dualWrite(() => truthClaimRowRecord(event, claimSourceIsPrivate(vault, event.source)), {
-    vault,
-    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  // One `truth-claims` ledger row on a store-only machine (design D14
+  // item 1), this device's claim shard plus the dual write otherwise. A
+  // claim taken from a private page goes to `private` only.
+  const routed = routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J).
+      assertVaultIdentityForWrite(vault);
+      mkdirSync(truthDir(vault), { recursive: true });
+      const shard = claimShardPath(vault, opts.configPath);
+      appendFileSync(shard, JSON.stringify(event) + "\n");
+      return shard;
+    },
+    store: () => truthClaimRowRecord(event, claimSourceIsPrivate(vault, event.source)),
+    context: { vault, ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}) },
   });
-  writeTruthState(vault, computeTruthState(readClaimEvents(vault).events));
+  if (routed.mode === "legacy") {
+    writeTruthState(vault, computeTruthState(readClaimEvents(vault).events));
+  }
+  // Once switched the claim is a ledger row: its location is the ledger's
+  // name, never the device path of a store shard (which would reach a
+  // remote caller of `brain_truth ingest` as an absolute host path).
+  let path = "";
+  if (routed.mode === "legacy") path = routed.value;
+  else if (routed.records.length > 0) path = TRUTH_STORE_NAME;
   return Object.freeze({ path, event });
 }
+
+/**
+ * The name a store-only claim append reports, and the `path` a warning
+ * about a store row names: the truth ledger, not a shard path.
+ */
+export const TRUTH_STORE_NAME = `store:ledgers/${DUAL_WRITE_LEDGERS.truthClaims}`;
 
 /**
  * Read every retained claim event merged across shards, sorted by
  * (ts, shardId, line). Fail-closed per line.
  */
 export function readClaimEvents(vault: string): ReadClaimEventsResult {
+  // A store-only machine (design D14 item 1) reads the `truth-claims`
+  // ledger rows, sorted by `ts` with fold order breaking ties.
+  if (isStoreOnly({ vault })) {
+    const warnings: ClaimParseWarning[] = [];
+    const events: ClaimEvent[] = [];
+    readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.truthClaims, () => [], { vault }).forEach(
+      (row, index) => {
+        const event = coerceClaim(row, TRUTH_STORE_NAME, index + 1, warnings);
+        if (event !== null) events.push(event);
+      },
+    );
+    return {
+      events: events.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)),
+      warnings,
+    };
+  }
   const dir = truthDir(vault);
   let names: string[];
   try {
@@ -603,6 +639,10 @@ function coerceClaim(
 }
 
 export function writeTruthState(vault: string, state: TruthState): void {
+  // The state is a cache derived from the claims (design D14 item 11): a
+  // store-only machine keeps none under the vault and refolds on read
+  // ({@link readTruthState}).
+  if (isStoreOnly({ vault })) return;
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   mkdirSync(truthDir(vault), { recursive: true });
@@ -684,6 +724,9 @@ function isClaimSuccession(v: unknown): v is ClaimSuccession {
  * corrupt nested rows) reads as null and the caller refolds from events.
  */
 export function readTruthState(vault: string): TruthState | null {
+  // A store-only machine keeps no state cache: the state is folded from
+  // the claim rows on every read.
+  if (isStoreOnly({ vault })) return computeTruthState(readClaimEvents(vault).events);
   try {
     const parsed = JSON.parse(readFileSync(truthStatePath(vault), "utf8")) as TruthState;
     if (parsed.version !== TRUTH_SCHEMA_VERSION) return null;
@@ -724,6 +767,15 @@ export interface ClaimSweepOptions {
  * history.
  */
 export function sweepClaimEvents(vault: string, opts: ClaimSweepOptions): ClaimSweepOutcome {
+  // A store-only machine (design D14 item 1) rewrites nothing under the
+  // vault: its claims are append-only store rows, and the legacy shards it
+  // may still hold are read-only until the tree leaves the vault.
+  if (isStoreOnly({ vault })) {
+    throw new Error(
+      "claim sweep refused: this machine writes the brain store only, whose claim rows are " +
+        "append-only; the legacy claim shards under the vault are read-only here",
+    );
+  }
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const maxEvents = opts.maxEvents ?? CLAIM_EVENT_MAX_COUNT;

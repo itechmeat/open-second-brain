@@ -79,8 +79,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
-import { resolveSkillsDir } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { machineStatePath, machineStateRoot } from "../state/machine-state.ts";
+
+import { resolveSkillsDir } from "../config.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { SKILL_FILE_NAME } from "../surface/skills.ts";
 import { requireNextStep } from "./next-step.ts";
@@ -89,7 +91,8 @@ import {
   skillAcceptJournalPath,
   skillAcceptPriorContentPath,
 } from "./paths.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { assertLaneWrite } from "../store/lane-pages.ts";
+import { defaultSkillsDir } from "../surface/skills-dir.ts";
 
 /** Step the accept sequence was about to perform when the journal was stamped. */
 export type SkillAcceptPhase = "archive" | "materialize" | "commit";
@@ -137,9 +140,8 @@ const PHASES: ReadonlySet<string> = new Set<SkillAcceptPhase>(["archive", "mater
 /** Stamp (or re-stamp) the journal for `entry.slug`. Overwrites by design. */
 export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournalEntry): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const path = skillAcceptJournalPath(vault, entry.slug);
-  mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const payload = {
     schema_version: JOURNAL_SCHEMA_VERSION,
     slug: entry.slug,
@@ -154,6 +156,9 @@ export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournal
     ...(entry.skillsRoot !== undefined ? { skills_root: entry.skillsRoot } : {}),
     ...(entry.priorContentPath !== undefined ? { prior_content_path: entry.priorContentPath } : {}),
   };
+  // A device-local repair marker (machine state), a plain file in both
+  // modes: never a lane record, which would sync and outlive its removal.
+  mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
@@ -164,8 +169,10 @@ export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournal
  */
 export function removeSkillAcceptJournalFile(vault: string, path: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  rmSync(ensureInsideVault(path, vault), { force: true });
+  assertLaneWrite(vault);
+  // Confined to where the journals live: the vault on an unswitched
+  // machine, the device-local state once switched.
+  rmSync(ensureInsideVault(path, machineStateRoot(vault)), { force: true });
 }
 
 /**
@@ -175,7 +182,7 @@ export function removeSkillAcceptJournalFile(vault: string, path: string): void 
  */
 export function clearSkillAcceptJournal(vault: string, slug: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   rmSync(skillAcceptJournalPath(vault, slug), { force: true });
   rmSync(skillAcceptPriorContentPath(vault, slug), { force: true });
 }
@@ -235,7 +242,9 @@ export class SkillAcceptJournalUnreadableError extends Error {
  * writer must never mistake an unreadable marker for "no outstanding work".
  */
 export function readSkillAcceptJournals(vault: string): SkillAcceptJournalState {
-  const dir = ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL), vault);
+  // Where the writers put them: machine state (the vault unswitched, the
+  // device-local state once switched).
+  const dir = machineStatePath(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL);
   if (!existsSync(dir)) {
     return Object.freeze({ entries: Object.freeze([]), unreadable: Object.freeze([]) });
   }
@@ -341,7 +350,7 @@ function parseJournal(
  * the guard admits exactly the paths such an accept can write.
  */
 function resolveJournalSkillsRoot(vault: string): string {
-  return resolveSkillsDir() ?? join(vault, "Brain", "skills");
+  return resolveSkillsDir() ?? defaultSkillsDir(vault);
 }
 
 /**

@@ -26,15 +26,19 @@ export async function cmdBrainAuthoredAtBackfill(argv: string[]): Promise<number
 
   if (apply && result.updated > 0) {
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.authoredAtBackfill,
-        body: {
-          agent: resolveAgentName(config),
-          updated: String(result.updated),
-          scanned: String(result.scanned),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(new Date()),
+          eventType: BRAIN_LOG_EVENT_KIND.authoredAtBackfill,
+          body: {
+            agent: resolveAgentName(config),
+            updated: String(result.updated),
+            scanned: String(result.scanned),
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append authored-at-backfill log failed: ${(err as Error).message}\n`,

@@ -79,7 +79,9 @@ beforeEach(() => {
   vault = join(tempRoot, "brain vault");
   codexHome = join(tempRoot, "codex-home");
   opencodeHome = join(tempRoot, "opencode-home");
-  mkdirSync(vault, { recursive: true });
+  // A legacy vault: it keeps its machine state (the bootstrap receipt). A
+  // vault with no `Brain/` is store-only and keeps it device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   // Both subprocess seams are injected for the whole suite: the codex
   // adapter must take its file-fallback path (no binary), and the host
   // probe must report the binary missing (no `codex mcp list` spawn).

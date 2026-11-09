@@ -28,7 +28,7 @@
  * ceiling and exits 0 on every path.
  */
 
-import { resolveBacklogNudgeEnabled, resolveVault } from "../src/core/config.ts";
+import { resolveBacklogNudgeEnabled } from "../src/core/config.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
   armProcessCeiling,
@@ -37,6 +37,7 @@ import {
 } from "./lib/process-ceiling.ts";
 import { backlogNudgeCountMatches, writeBacklogNudgeCount } from "./lib/backlog-nudge-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 async function main(): Promise<void> {
   // Fast opt-out FIRST: default OFF means an immediate no-op, no output.
@@ -59,8 +60,10 @@ async function main(): Promise<void> {
     // Default-closed: only an additionalContext-eligible event may emit.
     if (!isContextEventName(hookEventName)) return;
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
 
     // Loaded only here, after every gate: the census and its ledger chain
     // are the one heavy import, and a flag-off session start pays nothing

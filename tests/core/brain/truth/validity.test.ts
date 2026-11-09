@@ -230,6 +230,8 @@ describe("ingest window defaults (appendClaimEvent)", () => {
 
   beforeEach(() => {
     vault = mkdtempSync(join(tmpdir(), "osb-truth-window-"));
+    // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+    mkdirSync(join(vault, "Brain"), { recursive: true });
   });
 
   afterEach(() => {

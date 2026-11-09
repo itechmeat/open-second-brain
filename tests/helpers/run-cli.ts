@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 
 import { main } from "../../src/cli/main.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
+import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
+import { DEFAULT_STORE_ROOT_ENV } from "./test-store.ts";
 
 export interface RunResult {
   readonly stdout: string;
@@ -153,6 +155,19 @@ function resolveEnv(callerEnv: Record<string, string>): {
   if (!("OPEN_SECOND_BRAIN_CONFIG" in env)) {
     cleanupDir = mkdtempSync(join(tmpdir(), "o2b-test-"));
     env["OPEN_SECOND_BRAIN_CONFIG"] = join(cleanupDir, "isolated-config.yaml");
+  }
+  // `o2b init` creates the brain store (design D14 item 1). A run that
+  // still names the preload's shared default root gets a root of its own,
+  // removed with the run, so one test's store never leaks into another.
+  // A caller (or a test that set the variable itself) keeps its root.
+  const sharedRoot = env[DEFAULT_STORE_ROOT_ENV];
+  if (
+    !(STORE_ROOT_ENV in callerEnv) &&
+    sharedRoot !== undefined &&
+    env[STORE_ROOT_ENV] === sharedRoot
+  ) {
+    cleanupDir ??= mkdtempSync(join(tmpdir(), "o2b-test-"));
+    env[STORE_ROOT_ENV] = join(cleanupDir, "store");
   }
   return { env, cleanupDir };
 }

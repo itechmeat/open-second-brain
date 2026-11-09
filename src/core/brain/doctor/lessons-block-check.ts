@@ -35,6 +35,7 @@ import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts
 import {
   LESSONS_APPROVALS_FILE,
   lessonIdsInBlockBody,
+  lessonsApprovalsPath,
   planLessonsBlock,
   readLessonApprovals,
   type LessonApprovalRow,
@@ -274,7 +275,8 @@ export const lessonsBlockCheck: DoctorCheck = {
       out.issues.push({
         severity: "warning",
         code: LESSONS_LEDGER_UNREADABLE_CODE,
-        path: join(ctx.vault, ".open-second-brain", LESSONS_APPROVALS_FILE),
+        // Where the ledger lives: the vault, or the device-local state once switched.
+        path: lessonsApprovalsPath(ctx.vault),
         message:
           `the lessons approvals ledger ${LESSONS_APPROVALS_FILE} could not be read: ` +
           `${(err as Error).message} - no lesson can be approved, denied or refreshed while the ` +

@@ -18,8 +18,9 @@ import { resolveAgentName } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
+import { wrapToolErrors } from "./shared.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
+import { lanePath, laneVault } from "./lane-vault.ts";
 
 const TOOL = "brain_design_note";
 
@@ -38,10 +39,12 @@ async function toolBrainDesignNote(
       : resolveAgentName(ctx.configPath ?? undefined);
 
   return wrapToolErrors(TOOL, NAMED_REFUSALS, async () => {
+    // A record-lane tool works with no vault: its pages are store records then.
+    const vault = laneVault(ctx);
     if (args["note"] === undefined) {
-      const report = planDesignNote(ctx.vault, topic, {
+      const report = planDesignNote(vault, topic, {
         now: new Date(),
-        ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+        ownerScope: gatedOwnerScopeView(vault, ctx.agentName).scope,
         readable: readableAtContextReach(ctx),
       });
       const g = report.grounding;
@@ -64,7 +67,7 @@ async function toolBrainDesignNote(
         llm_step: report.llmStep,
       };
     }
-    const res = commitDesignNote(ctx.vault, topic, args["note"], { agent, now: new Date() });
+    const res = commitDesignNote(vault, topic, args["note"], { agent, now: new Date() });
     return {
       phase: "commit",
       topic: res.topic,
@@ -72,7 +75,7 @@ async function toolBrainDesignNote(
       // Vault-relative, like every other path this server emits: an MCP
       // response lands in model context, and the absolute host path is
       // not this surface's to hand out.
-      path: vaultRelativeSafe(ctx.vault, res.path),
+      path: lanePath(ctx, res.path),
       recommended: res.recommended,
       alternative_count: res.alternativeCount,
     };
@@ -84,7 +87,7 @@ export const DESIGN_NOTE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: TOOL,
     kind: "write",
     description:
-      "One-shot design note; runs no model. Without `note` it grounds the topic in the vault's tensions, decisions and truth projections and returns one needs-llm-step envelope, naming any store the vault holds nothing in. With `note` it commits under Brain/decisions/; not one recommendation refuses.",
+      "One-shot design note; runs no model. Without `note` it grounds the topic in the vault's tensions, decisions and truth projections and returns one needs-llm-step envelope, naming any store the vault holds nothing in. With `note` it commits a decision record; not one recommendation refuses.",
     inputSchema: {
       type: "object",
       properties: {

@@ -20,13 +20,11 @@
  * nothing.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 
 import type { Store } from "../../search/store.ts";
 import { linkConstraintAllows } from "../../search/link-constraints.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { toPosix } from "../../path-safety.ts";
 import { isoSecond } from "../time.ts";
 import { matchScope, resolveVaultScope } from "../../vault-scope/index.ts";
@@ -39,9 +37,9 @@ import {
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
+import { assertLaneWrite, readLaneText, writeLaneText } from "../../store/lane-pages.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -227,7 +225,7 @@ export function writeBridgeProposals(
   opts: { readonly now: Date },
 ): string {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const path = proposalsPath(vault);
   const lines: string[] = [
     "# Bridge proposals",
@@ -261,17 +259,16 @@ export function writeBridgeProposals(
     },
     lines.join("\n"),
   );
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, content);
+  writeLaneText(vault, path, content);
   return path;
 }
 
 /** Persisted dismissals, unordered pair keys. Fail-soft read. */
 export function readDismissedBridges(vault: string): Set<string> {
-  const path = dismissedPath(vault);
-  if (!existsSync(path)) return new Set();
+  const text = readLaneText(vault, dismissedPath(vault));
+  if (text === null) return new Set();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     const pairs = (parsed as { pairs?: unknown }).pairs;
     if (!Array.isArray(pairs)) return new Set();
     return new Set(pairs.filter((p): p is string => typeof p === "string"));
@@ -283,14 +280,16 @@ export function readDismissedBridges(vault: string): Set<string> {
 /** Persist one dismissal; returns true when it was new. */
 export function dismissBridge(vault: string, source: string, target: string): boolean {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const key = bridgePairKey(source, target);
   const dismissed = readDismissedBridges(vault);
   if (dismissed.has(key)) return false;
   dismissed.add(key);
-  const path = dismissedPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ pairs: [...dismissed].toSorted() }, null, 2) + "\n");
+  writeLaneText(
+    vault,
+    dismissedPath(vault),
+    JSON.stringify({ pairs: [...dismissed].toSorted() }, null, 2) + "\n",
+  );
   return true;
 }
 

@@ -42,6 +42,7 @@ import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { STORE_DUAL_WRITE_ENV, STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
@@ -468,7 +469,7 @@ describe("one privacy verdict per write operation", () => {
         writePage("Notes/open.md", "title: open");
         c.seed?.(trigger);
         if (trigger === "open" && c.heldPrivateRecord === true) {
-          rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+          neverHeld(storeRoot);
         }
         const added = recordsOf(() => c.run(trigger));
         expect(added.length).toBeGreaterThanOrEqual(c.minRecords);
@@ -485,7 +486,7 @@ describe("a private operation on a machine without the private partition", () =>
       test(`${name}, ${trigger}: no record of the operation reaches shared`, () => {
         writePage("Notes/open.md", "title: open");
         c.seed?.(trigger);
-        rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+        neverHeld(storeRoot);
         const added = recordsOf(() => c.run(trigger));
         expect(added).toEqual([]);
       });

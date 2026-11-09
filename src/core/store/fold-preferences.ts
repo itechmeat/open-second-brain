@@ -142,8 +142,12 @@ export function foldPreferences(input: Iterable<StoreRecord>): PreferencesFold {
   const history = new Map<string, StoreRecord[]>();
   const counters = new Map<string, Record<keyof PreferenceCounters, number>>();
   const rejected: RejectedRecord[] = [];
+  // Fold-order position of every record, and of each preference's tombstones.
+  const position = new Map<string, number>();
+  const removes = new Map<string, number[]>();
 
-  for (const record of records) {
+  for (const [index, record] of records.entries()) {
+    position.set(record.id, index);
     if (!KINDS.has(record.kind)) continue;
     const reason = rejection(record);
     if (reason !== null) {
@@ -163,6 +167,7 @@ export function foldPreferences(input: Iterable<StoreRecord>): PreferencesFold {
     const authority = recordAuthority(record)!;
     if (record.kind === PREFERENCE_REMOVE_KIND) {
       existence.offer(id, { record, authority, value: TOMBSTONE });
+      removes.set(id, [...(removes.get(id) ?? []), index]);
       continue;
     }
     existence.offer(id, { record, authority, value: true });
@@ -180,7 +185,41 @@ export function foldPreferences(input: Iterable<StoreRecord>): PreferencesFold {
     const exist = existence.get(id);
     const values: Record<string, unknown> = {};
     const winners: Record<string, string> = {};
-    for (const name of [...(fieldNames.get(id) ?? [])].toSorted()) {
+    // A removed preference keeps no content in the fold: its fields (the
+    // principle, the prose `text`, ...) are dropped from every read, so a
+    // forgotten preference shows nowhere. The shards still hold the lines
+    // until store compaction exists (FORMAT.md, "Removal").
+    const removed = exist?.removed ?? false;
+    // Re-created after a tombstone (the existence winner is a set later in
+    // fold order): the forgotten preference's fields stay forgotten, so
+    // only the sets after the tombstone offer field values. The cut is the
+    // last tombstone BEFORE the winner: a later tombstone that lost the
+    // existence register must not hide an earlier one the winner re-created
+    // over.
+    const winnerAt = exist === undefined ? -1 : position.get(exist.winner.record.id)!;
+    const cut = (removes.get(id) ?? []).findLast((at) => at < winnerAt);
+    const recreated = !removed && exist !== undefined && cut !== undefined;
+    if (recreated) {
+      const after = new RegisterSet<unknown>();
+      const names = new Set<string>();
+      for (const record of history.get(id)!) {
+        if (record.kind !== PREFERENCE_SET_KIND || position.get(record.id)! < cut) continue;
+        const authority = recordAuthority(record)!;
+        for (const [name, value] of Object.entries(
+          record.body["fields"] as Record<string, unknown>,
+        )) {
+          if (COUNTERS.has(name)) continue;
+          names.add(name);
+          after.offer(name, { record, authority, value });
+        }
+      }
+      for (const name of [...names].toSorted()) {
+        const state = after.get(name)!;
+        values[name] = state.value;
+        winners[name] = state.winner.record.id;
+      }
+    }
+    for (const name of removed || recreated ? [] : [...(fieldNames.get(id) ?? [])].toSorted()) {
       const state = fields.get(fieldKey(id, name))!;
       values[name] = state.value;
       winners[name] = state.winner.record.id;

@@ -23,6 +23,7 @@
  * knows where that point is.
  */
 
+import { legacyVaultOf } from "./no-vault.ts";
 import type { Authority } from "../store/constants.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename } from "node:path";
@@ -37,8 +38,9 @@ import { collectEvidenceForSlug } from "./evidence.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { CHAIN_DECAY_STALE_DAYS } from "./inject-governor.ts";
 import { appendLogEvent } from "./log.ts";
-import { archivedSignalPath, brainDirs, preferencePath, processedSignalPath } from "./paths.ts";
-import { moveToRetired, parsePreference } from "./preference.ts";
+import { archivedSignalPath, brainDirs, preferencePathOf, processedSignalPath } from "./paths.ts";
+import { loadPreference, moveToRetired } from "./preference.ts";
+import { isRetiredEntry, preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -51,6 +53,10 @@ import {
   type BrainRetiredReason,
 } from "./types.ts";
 import { renameWithRetry } from "../fs-atomic.ts";
+import { parseFrontmatter } from "../vault.ts";
+import { routeSignalState, signalsStoreOnly } from "./signal-state.ts";
+import { readStoreEntities } from "../store/read/store-entities.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
 
 /**
  * The authority of every dream write under brain store dual writes: dream
@@ -65,7 +71,7 @@ const DAY_MS = 24 * 3600 * 1000;
 const DEFAULT_DREAM_AGENT = "dream";
 
 export interface DreamApplyInput {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly cfg: BrainConfig;
   readonly now: Date;
   readonly plan: PlanState;
@@ -119,7 +125,8 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   // assertion on its own entry rather than trusting whoever called it. The
   // check is an idempotent in-memory pin and the caller's `openWorkrun` has
   // already satisfied it for this root, so it never fires twice in anger.
-  assertVaultIdentityForWrite(vault);
+  // With no vault the store writes check the store identity (D14 item 13).
+  if (vault !== null) assertVaultIdentityForWrite(vault);
 
   writePreferences(input, agent);
   writeConfidenceReceipts(vault, refresh, agent, now);
@@ -314,11 +321,14 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
  * (subject + before + after) makes a re-run a no-op. Fail-soft.
  */
 function writeConfidenceReceipts(
-  vault: string,
+  vault: string | null,
   refresh: RefreshResult,
   agent: string,
   now: Date,
 ): void {
+  // Decision-change receipts are a vault lane until the decisions lane has
+  // a record kind (design D14 item 2); with no vault they are not written.
+  if (vault === null) return;
   for (const d of refresh.bandDrops) {
     const before = `confidence:${d.previous}${d.previous_value !== null ? `(${d.previous_value.toFixed(2)})` : ""}`;
     const after = `confidence:${d.next}(${d.next_value.toFixed(2)})`;
@@ -342,7 +352,7 @@ function writeConfidenceReceipts(
 
 /** Step 3: move each planned retire into `retired/`, honouring the evidence gate. */
 function executeRetires(
-  vault: string,
+  vault: string | null,
   cfg: BrainConfig,
   now: Date,
   plan: PlanState,
@@ -355,8 +365,9 @@ function executeRetires(
   const gateThreshold = cfg.retire.confirmed_evidence_min_threshold;
 
   for (const r of plan.retires) {
-    const fromPath = preferencePath(vault, r.slug);
-    if (!existsSync(fromPath)) continue;
+    const fromPath = preferencePathOf(vault, r.slug);
+    // The page on an unswitched machine, the store's fold once switched.
+    if (!preferenceHeld(vault, r.slug, fromPath)) continue;
     // v0.12.0 Brain Integrity Suite: destructive-from-confirmed gate.
     // When the operator has set retire.confirmed_evidence_min_threshold,
     // refuse to retire a confirmed (unpinned) pref whose accumulated
@@ -364,8 +375,8 @@ function executeRetires(
     // retires bypass.
     if (gateThreshold !== undefined && gateThreshold > 0) {
       try {
-        const existing = parsePreference(fromPath);
-        if (shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
+        const existing = loadPreference(vault, r.slug);
+        if (existing !== null && shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
           gatedRetires.push({
             pref_id: existing.id,
             topic: existing.topic,
@@ -415,13 +426,41 @@ function executeRetires(
   return gatedRetires;
 }
 
-/** Step 4: move every consumed signal out of `inbox/`. */
-function moveConsumedSignals(vault: string, plan: PlanState): string[] {
+/** Whether the active preference `slug` exists: its page, or the store's fold once switched. */
+function preferenceHeld(vault: string | null, slug: string, pagePath: string): boolean {
+  if (!preferencesStoreOnly(vault)) return existsSync(pagePath);
+  const found = storePreferenceEntry(slug);
+  return found !== undefined && !isRetiredEntry(found);
+}
+
+/**
+ * Step 4: move every consumed signal out of `inbox/`. On a store-only
+ * machine (task 2.10) a move is a `signal-state` record (`consumed`) and no
+ * file moves; an unswitched machine renames the file and dual-writes the
+ * record.
+ */
+function moveConsumedSignals(vault: string | null, plan: PlanState): string[] {
   const moved: string[] = [];
+  const storeOnly = signalsStoreOnly(vault);
+  // Read once: recording one signal's move does not change whether another
+  // is live, and each append would otherwise invalidate the fold cache.
+  const live = storeOnly ? liveStoreSignals() : null;
   for (const sig of plan.signalsToMove.values()) {
-    const dest = processedSignalPath(vault, sig.date, sig.slug);
+    // The legacy destination, resolved only by the legacy move.
+    const dest = (): string =>
+      processedSignalPath(legacyVaultOf(vault, "moveConsumedSignals"), sig.date, sig.slug);
     try {
-      renameWithRetry(sig.path, dest);
+      if (live !== null && !live.has(sig.id)) continue;
+      // Judged before the move, from the page the scan read.
+      const meta = storeOnly ? undefined : readFrontmatterOf(sig.path);
+      routeSignalState({
+        vault,
+        id: sig.id,
+        state: "consumed",
+        authority: DREAM_AUTHORITY,
+        legacyFrontmatter: meta,
+        legacy: () => renameWithRetry(sig.path, dest()),
+      });
       moved.push(sig.id);
     } catch (err) {
       // Best-effort: a missing source signal (already moved) is
@@ -443,25 +482,48 @@ function moveConsumedSignals(vault: string, plan: PlanState): string[] {
  * archive; this covers a file that appeared since the scan). A failed move
  * is reported and the signal stays where it was, so a rerun picks it up.
  *
+ * On a store-only machine (task 2.10) the archive is a `signal-state`
+ * record (`archived`); no folder is created and no file moves.
+ *
  * No deadline checkpoint inside the loop, like the processed/ move above: a
  * pass stopped half way would leave archived files the run's log never
  * names. The pass's own post-mutation checkpoint follows immediately.
  */
-function archiveStaleSignals(vault: string, plan: PlanState): string[] {
+function archiveStaleSignals(vault: string | null, plan: PlanState): string[] {
   const archived: string[] = [];
   if (plan.signalsToArchive.size === 0) return archived;
-  mkdirSync(brainDirs(vault).archived, { recursive: true });
+  const storeOnly = signalsStoreOnly(vault);
+  const live = storeOnly ? liveStoreSignals() : null;
+  // The legacy destination, resolved only off the store-only path.
+  const archivedPath = (path: string): string =>
+    archivedSignalPath(legacyVaultOf(vault, "archiveStaleSignals"), basename(path));
+  if (!storeOnly) {
+    mkdirSync(brainDirs(legacyVaultOf(vault, "archiveStaleSignals")).archived, {
+      recursive: true,
+    });
+  }
   for (const sig of plan.signalsToArchive.values()) {
     try {
-      const dest = archivedSignalPath(vault, basename(sig.path));
-      if (existsSync(dest)) {
-        process.stderr.write(
-          `warning: archive signal ${sig.id}: ${basename(dest)} already exists in ` +
-            `inbox/archived/; left in the inbox\n`,
-        );
-        continue;
+      if (live !== null) {
+        if (!live.has(sig.id)) continue;
+      } else {
+        const dest = archivedPath(sig.path);
+        if (existsSync(dest)) {
+          process.stderr.write(
+            `warning: archive signal ${sig.id}: ${basename(dest)} already exists in ` +
+              `inbox/archived/; left in the inbox\n`,
+          );
+          continue;
+        }
       }
-      renameWithRetry(sig.path, dest);
+      routeSignalState({
+        vault,
+        id: sig.id,
+        state: "archived",
+        authority: DREAM_AUTHORITY,
+        legacyFrontmatter: storeOnly ? undefined : readFrontmatterOf(sig.path),
+        legacy: () => renameWithRetry(sig.path, archivedPath(sig.path)),
+      });
       archived.push(sig.id);
     } catch (err) {
       process.stderr.write(
@@ -470,6 +532,27 @@ function archiveStaleSignals(vault: string, plan: PlanState): string[] {
     }
   }
   return archived;
+}
+
+/** The ids the store's signal fold holds in the inbox (store-only moves). */
+function liveStoreSignals(): ReadonlySet<string> {
+  const live = new Set<string>();
+  for (const [id, signal] of readStoreEntities()?.signals ?? []) {
+    if (signal.state === "active") live.add(id);
+  }
+  return live;
+}
+
+/**
+ * The frontmatter of a signal page, judged for the dual write before it
+ * moves. A page that cannot be read is judged private (fail closed).
+ */
+function readFrontmatterOf(path: string): Record<string, unknown> {
+  try {
+    return parseFrontmatter(path)[0];
+  } catch {
+    return { visibility: [REMOTE_DENY_VISIBILITY_TOKEN] };
+  }
 }
 
 /**
@@ -488,7 +571,9 @@ function archiveStaleSignals(vault: string, plan: PlanState): string[] {
  * absorbing it here only ever bought a wrong `heal_enriched: 0` on the
  * way to the same error.
  */
-function runHealEnrichmentSafely(vault: string, safeguard: Safeguard | undefined): number {
+function runHealEnrichmentSafely(vault: string | null, safeguard: Safeguard | undefined): number {
+  // Heal enrichment rewrites user notes; with no vault there are none.
+  if (vault === null) return 0;
   try {
     return runHealEnrichment(vault, safeguard ? { safeguard } : {}).enriched;
   } catch (err) {

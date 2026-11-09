@@ -96,6 +96,8 @@ export interface HostPathPolicySource {
 /** The policy source plus the vault {@link vaultPathField} renders. */
 export interface VaultPathSource extends HostPathPolicySource {
   readonly vault: string;
+  /** `null` on a server with no vault (design D14); `vault` is then never read. */
+  readonly vaultOrNull?: string | null;
 }
 
 /**
@@ -197,8 +199,12 @@ export function hostPathReference(
   }
 }
 
-/** The contract above, as the one value every emitting site returns. */
-export function vaultPathField(ctx: VaultPathSource): string | UnresolvedField {
+/**
+ * The contract above, as the one value every emitting site returns:
+ * `null` on a server with no vault, which has no vault path to render.
+ */
+export function vaultPathField(ctx: VaultPathSource): string | UnresolvedField | null {
+  if (ctx.vaultOrNull === null) return null;
   return hostPathReference(ctx.vault, ctx);
 }
 

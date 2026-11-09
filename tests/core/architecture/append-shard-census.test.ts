@@ -71,6 +71,15 @@ const MIN_REASON_LENGTH = 80;
  * single shared file is still correct.
  */
 const APPEND_ALLOW_LIST: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/store-migration/exporters.ts":
+    "a rollback appends each log event to this device's own day shard only, never to a shard " +
+    "another device writes",
+  "src/core/store-migration/rollback.ts":
+    "the rollback's replay journal lives in the device-local state of the store, which is never " +
+    "synced, so only this device appends to it",
+  "src/core/store-migration/journal.ts":
+    "the migration journal lives in the device-local state of the store, which is never synced, " +
+    "so only this device ever appends to it",
   "src/core/brain/dream-workrun.ts":
     "each dream run appends to its own dream-runs/<run-id>.jsonl, a name unique to one run on one " +
     "device, so no second device ever appends to the same file",

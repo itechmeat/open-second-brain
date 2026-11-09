@@ -31,6 +31,8 @@ const env = () => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-freshen-child-"));
   vault = join(tmp, "vault");
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   derived = join(vault, ".open-second-brain");
   mkdirSync(join(vault, "notes"), { recursive: true });
   mkdirSync(derived, { recursive: true });

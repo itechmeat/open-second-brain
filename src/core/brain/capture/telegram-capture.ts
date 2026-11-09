@@ -26,7 +26,11 @@ import { dirname } from "node:path";
 
 import { escapeMarkdownV2 } from "../../discipline/telegram.ts";
 import { isoSecond } from "../time.ts";
-import { captureDecisionLogPath } from "../paths.ts";
+import { CAPTURE_DECISION_LEDGER_STEM, captureDecisionLogPath } from "../paths.ts";
+import { ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { storeWrite } from "../../store/store-write.ts";
 import {
   CaptureContractError,
   capturesSince,
@@ -176,7 +180,28 @@ export function requireTelegramToken(token: string | null): string {
   return token;
 }
 
+/** The store ledger of capture decisions (FORMAT.md, the migration's ledgers). */
+export const CAPTURE_DECISIONS_LEDGER = CAPTURE_DECISION_LEDGER_STEM;
+
 function appendDecision(vault: string, decision: CaptureDecision): void {
+  // One `capture-decisions` ledger row on a store-only machine (design D14
+  // item 1); an unswitched machine keeps its decision shard, with no dual
+  // write (format version 1 has none for this ledger; the migration
+  // imports the shard). A decision names a chat and the capture page it
+  // wrote: `private` when that page is private or cannot be judged, else
+  // `private-when-held` (private when this machine holds it).
+  if (isStoreOnly({ vault })) {
+    storeWrite(
+      () =>
+        ledgerRowRecord(
+          CAPTURE_DECISIONS_LEDGER,
+          decision,
+          rowNamesPrivatePage(vault, decision) ? "private" : "private-when-held",
+        ),
+      { vault },
+    );
+    return;
+  }
   const path = captureDecisionLogPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(decision)}\n`, { encoding: "utf8" });

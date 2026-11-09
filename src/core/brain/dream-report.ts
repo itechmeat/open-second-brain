@@ -12,12 +12,12 @@
  * byte-identical.
  */
 
+import { vaultRelativeOf } from "./no-vault.ts";
 import { preferenceSlug, type PlanState, type ScanResult } from "./dream-plan.ts";
 import { writeCrossTopicLedger, type CrossTopicLedger } from "./dream-plan-cross-topic.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
 import { WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { appendLogEvent } from "./log.ts";
-import { vaultRelative } from "./paths.ts";
 import type { ReconcileOutcomes } from "./reconcile-outcomes.ts";
 import { writeRollupLedger, type RollupLadderPlan } from "./rollup-ladder.ts";
 import { isoSecond } from "./time.ts";
@@ -31,7 +31,7 @@ const EVENT_STAMP_STEP_MS = 1000;
 const RETIRE_BLOCKED_PINNED = "pinned";
 
 export interface DreamReportInput {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly now: Date;
   readonly runId: string;
   readonly scan: ScanResult;
@@ -72,7 +72,7 @@ export function writeDreamLog(input: DreamReportInput): void {
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter,
       body: {
-        path: vaultRelative(corrupt.path, vault),
+        path: vaultRelativeOf(corrupt.path, vault),
       },
     });
   }

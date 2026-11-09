@@ -260,7 +260,10 @@ export interface MigrationPlanInput extends StateInventoryInput {
 export function planStateMigration(input: MigrationPlanInput): MigrationPlan {
   const source = resolve(input.vault);
   const destination = resolve(input.destination);
-  const inventory = inventoryStateSurfaces({ ...input, vault: source });
+  // The vault-side paths: `o2b state migrate` moves the tree the vault
+  // holds, the legacy copies a switched machine keeps until removal
+  // included; a device-local surface is not this move's to make.
+  const inventory = inventoryStateSurfaces({ ...input, vault: source, stateRoot: null });
 
   const refusals: MigrationRefusal[] = [];
   const external: ExternalSurface[] = [];

@@ -15,6 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,7 +78,8 @@ async function initialize(server: MCPServer): Promise<void> {
 }
 
 async function callContext(): Promise<Record<string, unknown>> {
-  const server = new MCPServer({ vault, configPath });
+  // A local caller: a read failure names the host path it holds.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await initialize(server);
   const r = (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,

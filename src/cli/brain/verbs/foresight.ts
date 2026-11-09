@@ -9,8 +9,7 @@
  * errors.
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import {
   buildForesight,
@@ -18,8 +17,12 @@ import {
   type ForesightEnvelope,
 } from "../../../core/brain/temporal/foresight.ts";
 import { isoDate } from "../../../core/brain/time.ts";
-import { writeFrontmatterAtomic } from "../../../core/vault.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { lanePagesInStore, writeLanePage } from "../../../core/store/lane-pages.ts";
+import { toPosix } from "../../../core/path-safety.ts";
+
+/** How a page held as a store record is named: `store:<record path>`, as `feedback` names its records. */
+const STORE_RECORD_PREFIX = "store:";
 
 const USAGE = "usage: o2b brain foresight [--horizon-days N] [--write] [--vault <path>] [--json]";
 
@@ -59,10 +62,11 @@ export async function cmdBrainForesight(argv: string[]): Promise<number> {
 
     let writtenPath: string | undefined;
     if (flags["write"] === true) {
+      // A record-lane page: a store record on a store-only machine.
       const dir = join(vault, "Brain", "foresight");
-      mkdirSync(dir, { recursive: true });
       writtenPath = join(dir, `${isoDate(now)}.md`);
-      writeFrontmatterAtomic(
+      writeLanePage(
+        vault,
         writtenPath,
         {
           kind: "brain-foresight",
@@ -74,6 +78,11 @@ export async function cmdBrainForesight(argv: string[]): Promise<number> {
         renderBody(envelope),
         { overwrite: true, existsErrorKind: "foresight", vaultForRelativePath: vault },
       );
+      // On a store-only machine the page is a store record and no file
+      // exists at that path: it is named by its record path instead.
+      if (lanePagesInStore(vault)) {
+        writtenPath = `${STORE_RECORD_PREFIX}${toPosix(relative(vault, writtenPath))}`;
+      }
     }
 
     if (asJson) {

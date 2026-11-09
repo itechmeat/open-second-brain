@@ -27,9 +27,13 @@ import { REPAIR_VERDICT, requireRepairCapability } from "../applier-capability.t
 import { computeContentHash, verifyContentHash } from "../content-hash.ts";
 import { brainDirs, preferencePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { parsePreference } from "../preference.ts";
+import { memoryFromStore } from "../memory-pages.ts";
+import { storePreferenceRecords } from "../memory-page-records.ts";
+import { loadPreference, parsePreference } from "../preference.ts";
+import { routePreferencePage } from "../preference-page-write.ts";
+import { preferenceLockTarget, preferencesStoreOnly } from "../preference-store.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
-import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
+import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "../types.ts";
 
 export type RemediationClass = "auto-safe" | "needs-review";
 
@@ -137,12 +141,18 @@ function classify(code: string): RemediationClass {
  */
 export function collectDriftedSlugs(vault: string): string[] {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
+  // Store-only (task 2.10): the preference fold, by the page's rules.
+  const fromStore = memoryFromStore(vault);
+  if (!fromStore && !existsSync(dir)) return [];
+  const reads: ReadonlyArray<() => BrainPreference> = fromStore
+    ? storePreferenceRecords(vault).records.map((r) => () => r.pref)
+    : readdirSync(dir)
+        .filter((name) => name.endsWith(".md") && name.startsWith("pref-"))
+        .map((name) => () => parsePreference(join(dir, name)));
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
+  for (const read of reads) {
     try {
-      const pref = parsePreference(join(dir, name));
+      const pref = read();
       // Only confirmed preferences carry a txn-stamped hash; a legacy
       // or unconfirmed pref without one is not a drift target (and
       // verifyContentHash is neutral on absent hashes anyway).
@@ -304,15 +314,19 @@ export function planRemediation(
  */
 function restampContentHash(vault: string, slug: string): boolean {
   const path = preferencePath(vault, slug);
-  if (!existsSync(path)) return false;
+  // Store-only (task 2.10): the preference is the store's fold, the lock is
+  // device-local, and the re-stamp is one record of the field.
+  const storeOnly = preferencesStoreOnly(vault);
+  if (!storeOnly && !existsSync(path)) return false;
   let handle: ReturnType<typeof acquireLockSync>;
   try {
-    handle = acquireLockSync(path);
+    handle = acquireLockSync(preferenceLockTarget(path, slug, storeOnly));
   } catch {
     return false; // contended - leave for a later run
   }
   try {
-    const pref = parsePreference(path);
+    const pref = storeOnly ? loadPreference(vault, slug) : parsePreference(path);
+    if (pref === null) return false;
     // Defence in depth: only re-stamp confirmed preferences that
     // already carry a hash, so a direct call cannot stamp a hash onto a
     // legacy/unconfirmed record outside the drift path.
@@ -320,9 +334,16 @@ function restampContentHash(vault: string, slug: string): boolean {
     if (!pref.content_hash) return false;
     const correct = computeContentHash(pref.principle, pref.scope);
     if (pref.content_hash === correct) return false;
-    const [meta, body] = parseFrontmatter(path);
-    meta["_content_hash"] = correct;
-    writeFrontmatterAtomic(path, meta, body, { overwrite: true });
+    routePreferencePage({
+      vault,
+      slug,
+      frontmatter: { _content_hash: correct },
+      legacy: () => {
+        const [meta, body] = parseFrontmatter(path);
+        meta["_content_hash"] = correct;
+        writeFrontmatterAtomic(path, meta, body, { overwrite: true });
+      },
+    });
     return true;
   } finally {
     handle.release();

@@ -166,7 +166,7 @@ export interface ObservedReuseFilter {
  * whether the material injected THIS session was used.
  */
 export function observedReuseRates(
-  vault: string,
+  vault: string | null,
   filter: ObservedReuseFilter = {},
 ): Map<string, ObservedReuse> {
   const acc = new Map<string, { used: number; ignored: number; contradicted: number }>();

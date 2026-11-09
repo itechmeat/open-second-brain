@@ -46,6 +46,9 @@ let vault: string;
 
 function freshVault(): string {
   const dir = mkdtempSync(join(tmpdir(), "o2b-gitignore-guard-"));
+  // A legacy vault: it keeps machine state, so it wants the ignore block.
+  // A vault with no `Brain/` is store-only and keeps none.
+  mkdirSync(join(dir, "Brain"));
   return dir;
 }
 
@@ -408,6 +411,10 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
     "names the legacy derived-store file to place the store-aware index outside the vault",
   ],
   ["cli/bootstrap/receipt.ts", "bootstraps the bootstrap lockfile under the store"],
+  [
+    "core/state/machine-state.ts",
+    "names the derived-store tree the machine-state resolver maps into device-local state",
+  ],
   ["cli/bootstrap/run.ts", "CLI bootstrap reporting that names the store"],
   ["cli/brain/help-text.ts", "help prose naming the store directory"],
   ["cli/brain/verbs/bench.ts", "bench runs default dir, composed from BENCH_RUNS_REL"],
@@ -430,10 +437,6 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   [
     "core/brain/doctor/git-tracked-state-check.ts",
     "composes the ls-files pathspec and the guard ignore line from the constant",
-  ],
-  [
-    "core/brain/doctor/lessons-block-check.ts",
-    "lessons-block readiness probe naming the store-side approval ledger (t_1e952e43)",
   ],
   ["core/brain/ingest/checkpoint.ts", "ingest checkpoints under the store"],
   [

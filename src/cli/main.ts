@@ -8,11 +8,14 @@
  * statement, not a registry — keeps the control flow obvious.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+import { recordFreshInstallSwitch } from "../core/store/fresh-switch.ts";
 
 import {
   ConfigReadError,
+  configuredVaultKey,
   defaultConfigPath,
   discoverConfig,
   resolveMcpToolProfile,
@@ -55,6 +58,7 @@ import { handleSearchSubcommand } from "./search.ts";
 import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
 import { handleStoreSubcommand } from "./store.ts";
+import { handleViewSubcommand } from "./view.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { installMcpFaultGuard } from "./mcp-fault-guard.ts";
 import { handleVaultSubcommand } from "./vault.ts";
@@ -62,6 +66,7 @@ import {
   NoVaultConfiguredError,
   normalizeFlagString,
   requireVault,
+  resolveOptionalVault,
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
@@ -83,6 +88,9 @@ import { cmdBootstrap, handleMcpTokenCommand } from "./bootstrap/index.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
+import { ensureBrainStore, type EnsureBrainStoreResult } from "../core/brain/init-store.ts";
+import { bindVaultToStore } from "../core/vault-adapter/vault-binding.ts";
+import { holdsLegacyBrain } from "../core/store/legacy-tree.ts";
 import {
   buildOnboardingChecklist,
   renderOnboardingChecklist,
@@ -93,7 +101,7 @@ import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./compl
 import { MCPServer } from "../mcp/server.ts";
 import { CLI_TRANSPORT_REACH } from "./transport-reach.ts";
 import { isLoopbackHost, resolveMcpTokensRequired, startHttp } from "../mcp/http.ts";
-import { hasAnyAgentToken } from "../core/brain/secrets/token-store.ts";
+import { hasAnyMcpToken } from "../mcp/token-source.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -106,8 +114,23 @@ import {
   type InstallTargetId,
 } from "../core/runtime/host-facts.ts";
 import { HARNESS_IDS, isHarnessId, type HarnessId } from "../core/brain/scoped-rules.ts";
+import { buildStoreStatusBlock } from "../core/store/store-status.ts";
+import { storeStatusLine } from "./store-path.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
+
+/** The vault `o2b status` looks at for the store block: the flag, else the configured one, when it is a directory. */
+function statusVault(flag: string | undefined, configPath: string | undefined): string | null {
+  let vault: string | null;
+  try {
+    vault = flag ?? resolveVault(configPath);
+  } catch {
+    return null;
+  }
+  return vault !== null && statSync(vault, { throwIfNoEntry: false })?.isDirectory() === true
+    ? vault
+    : null;
+}
 
 async function cmdStatus(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -120,6 +143,21 @@ async function cmdStatus(argv: string[]): Promise<number> {
   // `writeSearchInitBlock`; lifted into `resolveSemanticConfigState`
   // so both call sites share a single source of truth.
   const semantic = resolveSemanticConfigState(result.data, process.env);
+  // The brain store block `second_brain_status` carries too (design D12).
+  // It is extra information: a fault reading it (a locked index or store
+  // file) degrades to its error, never a crash of the config report.
+  let store: Record<string, unknown>;
+  try {
+    store = buildStoreStatusBlock({
+      vault: statusVault(
+        flags["vault"] as string | undefined,
+        flags["config"] as string | undefined,
+      ),
+      configPath: (flags["config"] as string | undefined) ?? null,
+    });
+  } catch (exc) {
+    store = { error: exc instanceof Error ? exc.message : String(exc) };
+  }
   if (flags["json"]) {
     const output: Record<string, unknown> = {
       config_path: String(result.path),
@@ -135,6 +173,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     // no-dead-ends, phase 3: the human stream prints this exit as a rail
     // line; the machine stream carried nothing at all until now.
     if (!result.exists) Object.assign(output, nextCommandField("cli-config-absent"));
+    output["store"] = store;
     process.stdout.write(JSON.stringify(output, sortedReplacer, 2) + "\n");
   } else {
     process.stdout.write(`config_path: ${result.path}\n`);
@@ -148,6 +187,7 @@ async function cmdStatus(argv: string[]): Promise<number> {
     if (semantic.off && semantic.hint) {
       process.stdout.write(`semantic: off (${semantic.hint})\n`);
     }
+    process.stdout.write(`${storeStatusLine(store)}\n`);
   }
   // no-dead-ends, task 7: the terminal-state census found this one. With
   // no configuration file there is nothing else this verb can report and
@@ -163,6 +203,92 @@ async function cmdStatus(argv: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * Create the brain store unless it exists, and print the outcome (and the
+ * view writer line); `null` after printing the failure.
+ */
+function ensureStoreAndReport(configPath: string): EnsureBrainStoreResult | null {
+  let store: EnsureBrainStoreResult;
+  try {
+    store = ensureBrainStore({ configPath });
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to create the brain store: ${(exc as Error).message ?? exc}\n`,
+    );
+    return null;
+  }
+  process.stdout.write(
+    store.status === "created"
+      ? `initialized the brain store: ${store.root}\n`
+      : `the brain store already exists: ${store.root}\n`,
+  );
+  if (store.viewWriter !== null) process.stdout.write(`${store.viewWriter.message}\n`);
+  return store;
+}
+
+/**
+ * The store step of `o2b init --vault`: create the store unless it exists
+ * and bind the vault to it. Prints the outcome; false on a failure.
+ */
+function initBrainStoreForVault(vault: string, configPath: string): boolean {
+  const store = ensureStoreAndReport(configPath);
+  if (store === null) return false;
+  try {
+    const bound = bindVaultToStore(vault, {
+      configPath,
+      store: { root: store.root, storeId: store.storeId },
+    });
+    if (bound !== null) process.stdout.write("vault bound to the brain store\n");
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to bind the vault to the brain store: ${(exc as Error).message ?? exc}\n`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/** `o2b init` with no `--vault` and none configured: machine values, then the store (see `cmdInit`). */
+function initWithoutVault(agentName: string | null, timezone: string | null): number {
+  let configPath = defaultConfigPath();
+  try {
+    if (agentName) configPath = setConfigValue("agent_name", agentName);
+    if (timezone) configPath = setConfigValue("timezone", timezone);
+  } catch (exc) {
+    process.stderr.write(
+      `error: failed to persist plugin config: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  if (ensureStoreAndReport(configPath) === null) return 1;
+  recordFreshSwitchQuietly(null, configPath);
+  // The onboarding checklist below names the optional vault step and its
+  // command, so this line does not repeat it.
+  process.stdout.write("no vault configured: the brain works without one\n");
+  if (agentName) process.stdout.write(`agent name registered: ${agentName}\n`);
+  if (timezone) process.stdout.write(`timezone registered: ${timezone}\n`);
+  try {
+    process.stdout.write(renderOnboardingChecklist(buildOnboardingChecklist(null, { configPath })));
+  } catch {
+    // onboarding is advisory; never break init
+  }
+  return 0;
+}
+
+/**
+ * A fresh install (no legacy `Brain/` tree in the vault) whose store exists
+ * records this device's switch, so a later writer of an older release that
+ * creates `Brain/` cannot flip the machine back (design D14 item 1). Never
+ * fails the init: with no store yet, `o2b store init` records it.
+ */
+function recordFreshSwitchQuietly(vault: string | null, configPath: string): void {
+  try {
+    recordFreshInstallSwitch({ vault, configPath });
+  } catch {
+    // An unreadable store is reported by doctor; the config write stands.
+  }
+}
+
 async function cmdInit(argv: string[]): Promise<number> {
   // `--interactive` is its own mode — composed of `init` + `brain init` +
   // per-target `install`. The non-interactive path below requires --vault.
@@ -170,13 +296,12 @@ async function cmdInit(argv: string[]): Promise<number> {
     return await cmdInitInteractive(argv.filter((a) => a !== "--interactive"));
   }
   const { flags } = parseFlags(argv, {
-    vault: { type: "string", required: true },
+    vault: { type: "string" },
     name: { type: "string", default: "Second Brain" },
     "agent-name": { type: "string" },
     timezone: { type: "string" },
     force: { type: "boolean" },
   });
-  const vault = String(flags["vault"]);
   const agentName = (flags["agent-name"] as string | undefined) ?? null;
   const timezone = (flags["timezone"] as string | undefined) ?? null;
 
@@ -191,6 +316,33 @@ async function cmdInit(argv: string[]): Promise<number> {
       return 1;
     }
   }
+
+  // An explicit `--vault` must name a path: `resolve("")` is the working
+  // directory, which must never become the vault by accident.
+  const flagVault =
+    flags["vault"] === undefined ? undefined : normalizeFlagString(String(flags["vault"]));
+  if (flagVault === null) {
+    process.stderr.write("error: --vault must be a non-empty path\n");
+    return 1;
+  }
+  // With no `--vault` the vault already configured is the one this run
+  // initializes (a re-run to change the agent name or the timezone); with
+  // none configured either, the brain lives in the store alone (design D14
+  // item 1): init persists the other values and creates the store. Only
+  // the machine config's own `vault` key counts: `VAULT_DIR`, a linked
+  // project folder or an active profile name a vault for one session, and
+  // must never be written back as the machine's vault.
+  let configured: string | null;
+  try {
+    configured = flagVault === undefined ? configuredVaultKey(defaultConfigPath()) : null;
+  } catch (exc) {
+    process.stderr.write(
+      `error: cannot read the machine config: ${(exc as Error).message ?? exc}\n`,
+    );
+    return 1;
+  }
+  const vault = flagVault ?? configured;
+  if (vault === null) return initWithoutVault(agentName, timezone);
 
   // v0.11.0: `o2b init` no longer writes content into the vault.
   // Content scaffolding belongs to `o2b brain init` (the Brain layer).
@@ -213,6 +365,18 @@ async function cmdInit(argv: string[]): Promise<number> {
   }
   process.stdout.write(`initialized vault: ${resolvedVault}\n`);
   process.stdout.write(`vault path persisted to: ${configPath}\n`);
+  // On a fresh vault (no legacy `Brain/` tree) `o2b init` runs `o2b store
+  // init` (design D14 item 1) and binds the vault to the store in the
+  // device-local state, so the vault is store-only from its first write
+  // and the note tools can tell it from a swapped one without a marker
+  // file in the vault. A legacy vault gets no store here: a store moves
+  // its search index (design D5), and the migration is its way in.
+  if (!holdsLegacyBrain(resolvedVault) && !initBrainStoreForVault(resolvedVault, configPath)) {
+    return 1;
+  }
+  // After the store exists: a fresh vault records this device's switch
+  // here, so its machine state moves to the device-local state at once.
+  recordFreshSwitchQuietly(resolvedVault, configPath);
   if (agentName) {
     process.stdout.write(`agent name registered: ${agentName}\n`);
     process.stdout.write(`agent name persisted to: ${configPath}\n`);
@@ -246,7 +410,8 @@ async function cmdOnboarding(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const vault = requireVault(flags["vault"] as string | undefined, config);
+  // With no vault the checklist walks the store (design D14).
+  const vault = resolveOptionalVault(flags["vault"] as string | undefined, config);
   const checklist = buildOnboardingChecklist(vault, { configPath: config });
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(checklist, sortedReplacer, 2) + "\n");
@@ -913,8 +1078,11 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // token map (write-side-trust, Task 7). The vault resolves without
   // throwing here so the pre-check keeps its answer (and its exit code) on
   // a machine with no vault at all.
-  const mapVault = (flags["vault"] as string | undefined) ?? resolveVault(config) ?? "";
-  const mintedTokens = mapVault !== "" && hasAnyAgentToken(mapVault);
+  // An explicit blank `--vault` names no vault (it is refused below); it
+  // must not resolve the token file against the working directory.
+  const mapVault =
+    normalizeFlagString(flags["vault"] as string | undefined) ?? resolveVault(config) ?? null;
+  const mintedTokens = hasAnyMcpToken({ vault: mapVault, configPath: config });
   if (
     transport === "http" &&
     !isLoopbackHost(host) &&
@@ -965,7 +1133,11 @@ async function cmdMcp(argv: string[]): Promise<number> {
     });
   }
 
-  const vault = requireVault(flags["vault"] as string | undefined, config);
+  // The vault is optional (design D14): a server with none starts, answers
+  // `second_brain_status` and the store tools, and refuses each
+  // vault-adapter tool by name.
+  const vault = resolveOptionalVault(flags["vault"] as string | undefined, config);
+  const vaultLabel = vault ?? "none";
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
 
   // A served transport outlives every other verb, so it is the one place
@@ -983,7 +1155,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     // bring it current with no user action. Fire-and-forget, full scope only
     // (the writer server skips it), never blocks or fails server start; a needed
     // reindex runs detached in the background.
-    if (scope === "full") {
+    if (scope === "full" && vault !== null) {
       void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
         // best-effort; the server must come up regardless
       });
@@ -994,9 +1166,9 @@ async function cmdMcp(argv: string[]): Promise<number> {
       // enforce against. With the key on but nothing minted yet the server
       // starts and only says so - an outage would be the wrong answer for
       // an operator one mint away from the posture they asked for.
-      if (resolveMcpTokensRequired(config) && !hasAnyAgentToken(vault)) {
+      if (resolveMcpTokensRequired(config) && !hasAnyMcpToken({ vault, configPath: config })) {
         process.stderr.write(
-          "o2b mcp: mcp_tokens_required is on, but no agent token is minted for this vault yet; " +
+          "o2b mcp: mcp_tokens_required is on, but no agent token is minted for this server yet; " +
             "credential-less requests are not refused until one exists " +
             "(mint one with `o2b mcp token mint --agent <name>`)\n",
         );
@@ -1010,7 +1182,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
       // assigns an ephemeral port, so the requested `port` value ("0") would
       // advertise the wrong URL. handle.url carries the real bound port.
       process.stderr.write(
-        `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
+        `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vaultLabel})\n`,
       );
       // A served transport outlives every other verb in this CLI, so it is
       // the one place a shutdown signal has work to do: stop accepting,
@@ -1029,7 +1201,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     }
 
     process.stderr.write(
-      `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
+      `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vaultLabel})\n`,
     );
     // A holder rather than a `let`, because the assignment happens inside a
     // callback: the compiler cannot see that it ran and would narrow a bare
@@ -1088,9 +1260,9 @@ async function runMcpProbe(args: {
   // The probe is an in-process MCP handshake: it counts the tools the
   // server would advertise and exits. Used by `o2b install --check`
   // to verify the server starts cleanly.
-  let vault: string;
+  let vault: string | null;
   try {
-    vault = requireVault(args.vault, args.config);
+    vault = resolveOptionalVault(args.vault, args.config);
   } catch (e) {
     process.stdout.write(`mcp probe FAIL: vault not configured (${(e as Error).message})\n`);
     return 1;
@@ -1119,7 +1291,7 @@ async function runMcpProbe(args: {
     }
     const tools = evaluated.tools;
     process.stdout.write(
-      `mcp probe ok: ${args.serverName} (${tools.length} tools, vault=${vault})\n`,
+      `mcp probe ok: ${args.serverName} (${tools.length} tools, vault=${vault ?? "none"})\n`,
     );
     return 0;
   } catch (e) {
@@ -1176,7 +1348,7 @@ async function cmdToolCall(argv: string[]): Promise<number> {
   }
   const toolName = positional[0]!;
   const config = defaultConfigPath();
-  const vault = requireVault(flags["vault"] as string | undefined, config);
+  const vault = resolveOptionalVault(flags["vault"] as string | undefined, config);
 
   const args: Record<string, unknown> = {};
   for (const pair of (flags["tool-arg"] as string[] | undefined) ?? []) {
@@ -1387,6 +1559,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleStateSubcommand(rest);
       case "store":
         return await handleStoreSubcommand(rest);
+      case "view":
+        return await handleViewSubcommand(rest);
       case "vault":
         return await handleVaultSubcommand(rest);
       case "partner":

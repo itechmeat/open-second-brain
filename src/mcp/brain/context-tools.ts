@@ -9,8 +9,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolveAgentName } from "../../core/config.ts";
 import {
-  brainActivePath,
-  brainDirs,
+  brainDirsOf,
   brainStandingRulesPath,
   BRAIN_ACTIVE_FILE,
   BRAIN_ROOT_REL,
@@ -40,6 +39,10 @@ import {
   renderActiveForReader,
   type RegenerateActiveResult,
 } from "../../core/brain/active.ts";
+import {
+  compiledDigestPath,
+  digestsRenderedOnDemand,
+} from "../../core/brain/compiled-digest-path.ts";
 import { computeMaintenanceOverdueFlag } from "../../core/brain/status.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
@@ -71,12 +74,17 @@ import {
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
-import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
+import {
+  contextReach,
+  contextVault,
+  type ServerContext,
+  type ToolDefinition,
+} from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt, unknownOperationError } from "../coerce.ts";
 import { deliveryView } from "./reach-events.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 
 /**
  * One agent-facing surface for the write-session kernel: `op`
@@ -266,7 +274,7 @@ function shapedPinnedContent(
   delivery: ReturnType<typeof deliveryView> = deliveryView(ctx),
 ): string {
   if (!pinned.present || pinned.content.length === 0) return pinned.content;
-  return delivery.shape(pinned.content, vaultRelativeSafe(ctx.vault, pinned.path));
+  return delivery.shape(pinned.content, toolPath(ctx, pinned.path));
 }
 
 function serializePinnedContext(
@@ -279,7 +287,7 @@ function serializePinnedContext(
   return {
     ...(operation ? { operation } : {}),
     present: pinned.present,
-    path: vaultRelativeSafe(ctx.vault, pinned.path),
+    path: toolPath(ctx, pinned.path),
     absolute_path: pinned.path,
     // Only a READ shapes the body (delivery-trust, lane A). A write or
     // batch confirmation echoes bytes the caller just authored - the
@@ -304,18 +312,18 @@ async function toolBrainPinnedContext(
   }
   const operation = coercePinnedContextOperation(args);
   if (operation === "read") {
-    return serializePinnedContext(ctx, readPinnedContext(ctx.vault), operation, undefined, {
+    return serializePinnedContext(ctx, readPinnedContext(contextVault(ctx)), operation, undefined, {
       shapeBody: true,
     });
   }
   let pinned: PinnedContext;
   try {
     if (operation === "write") {
-      pinned = writePinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+      pinned = writePinnedContext(contextVault(ctx), coerceStr(args, "content", true)!);
     } else if (operation === "append") {
-      pinned = appendPinnedContext(ctx.vault, coerceStr(args, "content", true)!);
+      pinned = appendPinnedContext(contextVault(ctx), coerceStr(args, "content", true)!);
     } else {
-      pinned = clearPinnedContext(ctx.vault);
+      pinned = clearPinnedContext(contextVault(ctx));
     }
   } catch (err) {
     throw pinnedBatchErrorToMcp(err);
@@ -354,7 +362,10 @@ function runPinnedContextBatch(
 ): Record<string, unknown> {
   let result: PinnedBatchResult;
   try {
-    result = applyPinnedOperations(ctx.vault, operationsRaw as ReadonlyArray<PinnedOperation>);
+    result = applyPinnedOperations(
+      contextVault(ctx),
+      operationsRaw as ReadonlyArray<PinnedOperation>,
+    );
   } catch (err) {
     throw pinnedBatchErrorToMcp(err);
   }
@@ -406,9 +417,16 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
  *                                        body is returned verbatim.
  */
 async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unknown>> {
-  const dirs = brainDirs(ctx.vault);
-  const activePath = brainActivePath(ctx.vault);
-  const pinned = readPinnedContext(ctx.vault);
+  // `null` on a server with no vault (design D14): the digest renders from
+  // the store's folds into the device-local cache, and there is no vault
+  // file to read (standing rules, scoped rules, the instruction file).
+  const vault = contextVault(ctx);
+  const dirs = brainDirsOf(vault);
+  // `Brain/active.md` on an unswitched machine; on a store-only one the
+  // device-local cache the digest is rendered into on demand (D14 item 7).
+  const activePath = compiledDigestPath(vault, "active");
+  const onDemand = digestsRenderedOnDemand(vault);
+  const pinned = readPinnedContext(vault);
   // The request's delivery binding, resolved ONCE and used for the active
   // body AND the pinned scratchpad beside it (delivery-trust, lane A): one
   // frontmatter cache serves the whole assembly, instead of the pinned
@@ -418,7 +436,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // `computeMaintenanceOverdueFlag`'s docblock for the cost bound. This
   // is the always-loaded path, so the full `maintenance_debt` derivation
   // on `computeBrainStatus` never runs here.
-  const maintenanceOverdue = computeMaintenanceOverdueFlag(ctx.vault);
+  const maintenanceOverdue = computeMaintenanceOverdueFlag(vault);
 
   // The operator's standing rules, resolved before anything else this
   // surface assembles - INCLUDING the no-Brain return below. `brain_context`
@@ -432,14 +450,15 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // path that said nothing at all about the rules - the last silent answer
   // on a surface where every other path either carries the block or states
   // why it could not be read.
-  const standing = readStandingBlock(ctx.vault);
+  const standing = vault === null ? NO_STANDING_BLOCK : readStandingBlock(vault);
   // The scoped operator rules for the project, harness and host this
   // server was launched for - local reach only, see `readScopedBlock`.
   // Read beside the constitution, before the no-Brain return, for the
   // same reason: the rules govern a session whatever the memory layer did.
   const scoped = readScopedBlock(ctx);
 
-  if (!existsSync(dirs.brain)) {
+  // A store-only machine keeps its memory in the store, `Brain/` or not.
+  if (!onDemand && !existsSync(dirs.brain)) {
     return {
       vault_path: vaultPathField(ctx),
       present: false,
@@ -466,7 +485,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     // `osb://preferences/active` resource - so narrowing the WRITE to this
     // caller would make it thrash and could drop an agent's own memories
     // from its session start (context-integrity-gates, A3).
-    counts = regenerateActive(ctx.vault).counts;
+    counts = regenerateActive(vault).counts;
   } catch (err) {
     error = (err as Error)?.message ?? String(err);
   }
@@ -508,8 +527,8 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
       restricted: contextReach(ctx) !== TRANSPORT_REACH.local,
       ...(ctx.agentName !== undefined ? { agentScope: ctx.agentName } : {}),
     };
-    if (readerNarrowsActive(ctx.vault, reader)) {
-      const narrowed = renderActiveForReader(ctx.vault, reader);
+    if (readerNarrowsActive(vault, reader)) {
+      const narrowed = renderActiveForReader(vault, reader);
       content = narrowed.document;
       counts = narrowed.counts;
     }
@@ -543,7 +562,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   let vaultInstruction: ReturnType<typeof readVaultInstructionFile> = null;
   let vaultInstructionError: string | undefined;
   try {
-    vaultInstruction = readVaultInstructionFile(ctx.vault);
+    vaultInstruction = vault === null ? null : readVaultInstructionFile(vault);
   } catch (err) {
     vaultInstructionError = (err as Error)?.message ?? String(err);
   }
@@ -627,7 +646,7 @@ function standingRulesField(ctx: ServerContext, standing: StandingBlock): Record
   if (standing.rules === null) return {};
   return {
     standing_rules: {
-      path: vaultRelativeSafe(ctx.vault, standing.rules.path),
+      path: toolPath(ctx, standing.rules.path),
       content: standing.rules.text,
       truncated: standing.rules.truncated,
     },
@@ -656,6 +675,8 @@ function prependBlock(block: string, content: string): string {
  */
 function readScopedBlock(ctx: ServerContext): ScopedRules | null {
   if (contextReach(ctx) !== TRANSPORT_REACH.local) return null;
+  // Scoped rules are vault files; a server with no vault has none.
+  if (contextVault(ctx) === null) return null;
   let host: { readonly host: string | null; readonly unreadable: boolean };
   try {
     host = resolveHostScope(ctx.configPath ?? undefined);
@@ -902,7 +923,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_pinned_context",
     kind: "write",
     description:
-      "Read, write, append, or clear the transient current-task scratchpad at `Brain/pinned.md`. Use for facts that should survive context rotation but should not become permanent preferences. Pass `operations` to apply an ordered batch atomically (all-or-nothing).",
+      "Read, write, append, or clear the transient current-task scratchpad (pinned context). Use for facts that should survive context rotation but should not become permanent preferences. Pass `operations` to apply an ordered batch atomically (all-or-nothing).",
     inputSchema: {
       type: "object",
       properties: {
@@ -951,7 +972,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // one shared file beside each other on the stdio read path.
     kind: "write",
     description:
-      "Pull the current Brain/active.md body, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Regenerates Brain/active.md when absent or stale.",
+      "Pull the active-preferences digest, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Regenerates the digest when absent or stale.",
     inputSchema: {
       type: "object",
       properties: {},

@@ -31,7 +31,7 @@ import {
   setKey,
   writeConfig,
 } from "../../helpers/advisory-decision-harness.ts";
-import { digestVaultFiles } from "../../helpers/vault-digest.ts";
+import { treeEntries } from "../../helpers/vault-digest.ts";
 
 let server: FakeSystemOne;
 let root: string;
@@ -269,13 +269,14 @@ describe("tension verify privacy and writes", () => {
   });
 
   test("the vault tree is unchanged apart from the accounting log", async () => {
-    const before = digestVaultFiles(vault);
+    const before = treeEntries(vault);
     const provider = new FakeChoiceProvider(() => ({ choice: "unrelated", p: 0.99 }));
     const out = await verifyTensions(vault, listTensions(vault), { config: enforce(), provider });
     expect(out.rows.every((r) => r.lowPriority)).toBe(true);
-    const after = digestVaultFiles(vault);
+    const after = treeEntries(vault);
     for (const key of Array.from(after.keys()))
-      if (key.startsWith("Brain/log/continuity/")) after.delete(key);
+      if (key === "Brain/log/continuity" || key.startsWith("Brain/log/continuity/"))
+        after.delete(key);
     expect(after).toEqual(before);
   });
 });

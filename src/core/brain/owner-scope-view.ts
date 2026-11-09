@@ -60,6 +60,11 @@
 
 import { isPathOwnerVisible } from "../search/result-filters.ts";
 import {
+  isStoreRecordOwnerVisible,
+  storeRecordLookup,
+  storeRecordRefView,
+} from "./store-record-visibility.ts";
+import {
   UNFILTERED_ARTIFACT_REFS,
   artifactRefView,
   type ArtifactRef,
@@ -87,11 +92,24 @@ export interface OwnerScopeView extends ArtifactRefView {
  * threads this through unconditionally costs nothing on a vault that
  * never opted in.
  */
-export function ownerScopeView(vault: string, scope: string | null): OwnerScopeView {
+export function ownerScopeView(vault: string | null, scope: string | null): OwnerScopeView {
   if (scope === null) return Object.freeze({ scope: null, ...UNFILTERED_ARTIFACT_REFS });
+  // No vault (design D14): every page a reference can name is a record.
+  if (vault === null) {
+    return Object.freeze({
+      scope,
+      ...storeRecordRefView((page) => isStoreRecordOwnerVisible(page, scope)),
+    });
+  }
+  // Store-only (task 2.10): a preference or signal is judged by its record.
+  const record = storeRecordLookup(vault);
   return Object.freeze({
     scope,
-    ...artifactRefView(vault, (rel, cache) => isPathOwnerVisible(vault, rel, scope, cache)),
+    ...artifactRefView(vault, (rel, cache) => {
+      const page = record?.(rel);
+      if (page !== undefined) return isStoreRecordOwnerVisible(page, scope);
+      return isPathOwnerVisible(vault, rel, scope, cache);
+    }),
   });
 }
 
@@ -105,6 +123,9 @@ export function ownerScopeView(vault: string, scope: string | null): OwnerScopeV
  * and `warn` `enforcedScope` is `null` and the view hides nothing, which
  * is what keeps a vault that never opted in byte-identical.
  */
-export function gatedOwnerScopeView(vault: string, agentName: string | undefined): OwnerScopeView {
+export function gatedOwnerScopeView(
+  vault: string | null,
+  agentName: string | undefined,
+): OwnerScopeView {
   return ownerScopeView(vault, resolveOwnerScopeDelivery(vault, agentName).enforcedScope);
 }

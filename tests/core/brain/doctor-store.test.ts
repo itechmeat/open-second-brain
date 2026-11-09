@@ -26,11 +26,13 @@ import {
   STORE_DUAL_WRITE_NO_STORE_CODE,
   STORE_MISSING_CODE,
   STORE_DIGEST_SILENT_CODE,
+  STORE_PARTITION_LOST_CODE,
   STORE_PARTITION_UNREADABLE_CODE,
   STORE_RECORD_ID_CONFLICT_CODE,
   STORE_ROOT_INVALID_CODE,
   STORE_SHARD_TAIL_HELD_CODE,
   STORE_SHARD_UNREADABLE_CODE,
+  STORE_REMOVED_AWAITING_COMPACTION_CODE,
 } from "../../../src/core/brain/doctor/store-check.ts";
 import {
   reservedDeviceDirIssues,
@@ -38,12 +40,15 @@ import {
   STORE_MODE_LOOSE_CODE,
   STORE_RECORD_ID_CROSS_PARTITION_CODE,
 } from "../../../src/core/brain/doctor/store-trust-check.ts";
+import { STORE_DEVICE_RETIRED_RETURNED_CODE } from "../../../src/core/brain/doctor/device-retire-check.ts";
 import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { STORE_DUAL_WRITE_ENV, STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { bodyChecksum } from "../../../src/core/store/envelope.ts";
+import { readStreamRecords } from "../../../src/core/store/read/stream-read.ts";
 import { publishStateDigest } from "../../../src/core/store/state-digest.ts";
 import { inspectStore, openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
+import { initStore } from "../../../src/core/store/store-init.ts";
 import { ensureStore } from "../store/fixtures/temp-store.ts";
 import { dualWriteStatusPath, shardPath } from "../../../src/core/store/store-paths.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
@@ -173,6 +178,25 @@ describe("store in use", () => {
     expect(finding?.message).toContain("4 brain store dual write(s) were skipped");
     expect(finding?.message).toContain("o2b store init");
     expect(storeCodes()).not.toContain(STORE_MISSING_CODE);
+  });
+
+  test("a partition this machine has held that lost its identity file is named as an error", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    ensureStore(storeRoot);
+    openStore({ root: storeRoot, device: "dev-a" });
+    rmSync(join(storeRoot, "private", "store.json"));
+    const report = runDoctor(vault, { now: new Date(NOW) });
+    const finding = report.errors.find((i) => i.code === STORE_PARTITION_LOST_CODE);
+    expect(finding?.message).toContain("private partition");
+    expect(finding?.message).toContain("private/store.json");
+    expect(storeCodes()).toEqual([STORE_PARTITION_LOST_CODE]);
+  });
+
+  test("a store that never held private on this machine is no finding", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    initStore({ root: storeRoot, partitions: ["shared"] });
+    openStore({ root: storeRoot, device: "dev-a" });
+    expect(storeCodes()).not.toContain(STORE_PARTITION_LOST_CODE);
   });
 
   test("a configured root inside the vault is reported, not thrown", () => {
@@ -416,6 +440,45 @@ describe("what a synced peer can deliver", () => {
     },
   );
 
+  test("a shard this machine read and that is gone now is reported by its path", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    machine("dev-a");
+    const shard = appendRecord(
+      machine("dev-b"),
+      { partition: "shared", stream: "events", kind: "note", agent: "t", body: { n: 1 } },
+      { now: at(NOW) },
+    ).path;
+    expect(storeCodes()).not.toContain(STORE_SHARD_UNREADABLE_CODE);
+    // A store read of this machine saw it (the doctor itself records nothing).
+    expect(readStreamRecords(storeRoot, "shared", { stream: "events" }).unreadable).toEqual([]);
+    rmSync(shard);
+    const report = runDoctor(vault, { now: new Date(NOW + 10) });
+    const found = report.warnings.filter((i) => i.code === STORE_SHARD_UNREADABLE_CODE);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.path).toBe(shard);
+    expect(found[0]!.message).toContain("gone now");
+  });
+
+  test("a record whose blob has not arrived is not reported as an unreadable shard", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    machine("dev-a");
+    appendRecord(
+      machine("dev-b"),
+      {
+        partition: "shared",
+        stream: "events",
+        kind: "note",
+        agent: "t",
+        body: { n: 1, text: "x".repeat(20_000) },
+      },
+      { now: at(NOW) },
+    );
+    rmSync(join(storeRoot, "shared", "blobs"), { recursive: true, force: true });
+    // A protection read names the shard; the doctor's shard check does not.
+    expect(readStreamRecords(storeRoot, "shared", { stream: "events" }).unreadable).toHaveLength(1);
+    expect(storeCodes()).not.toContain(STORE_SHARD_UNREADABLE_CODE);
+  });
+
   test("on Windows a device folder named like a Windows device is reported, elsewhere not", () => {
     machine("dev-a");
     for (const dir of [
@@ -484,5 +547,79 @@ describe("clocks ahead of now", () => {
     write(machine("dev-a"), NOW + DAY - 60_000);
     const report = runDoctor(vault, { now: new Date(NOW) });
     expect(report.warnings.map((i) => i.code)).not.toContain(STORE_CLOCK_AHEAD_CODE);
+  });
+});
+
+describe("retired devices", () => {
+  function retire(device: string, ms: number): void {
+    appendRecord(
+      machine("dev-a"),
+      {
+        partition: "shared",
+        stream: "settings",
+        kind: "device-retire",
+        agent: "t",
+        body: { authority: "human", device },
+      },
+      { now: at(ms) },
+    );
+  }
+  const note = (device: string, ms: number) =>
+    appendRecord(
+      machine(device),
+      { partition: "shared", stream: "log", kind: "note", agent: "t", body: { n: ms } },
+      { now: at(ms) },
+    );
+
+  test("a retired device that writes again is named, with its retirement", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    note("dev-b", NOW - 60_000);
+    retire("dev-b", NOW - 30_000);
+    expect(storeCodes()).not.toContain(STORE_DEVICE_RETIRED_RETURNED_CODE);
+    note("dev-b", NOW - 1000);
+    const report = runDoctor(vault, { now: new Date(NOW + 10) });
+    const finding = report.warnings.find((i) => i.code === STORE_DEVICE_RETIRED_RETURNED_CODE);
+    expect(finding?.message).toContain("dev-b");
+    expect(finding?.message).toContain("o2b store device retire dev-b");
+  });
+});
+
+describe("removed content awaiting compaction", () => {
+  test("a store with no removed content says nothing; a forgotten signal's lines are counted as awaiting compaction", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const a = machine("dev-a");
+    appendRecord(
+      a,
+      {
+        partition: "shared",
+        stream: "events",
+        kind: "signal",
+        agent: "t",
+        body: {
+          id: "sig-x",
+          path: "Brain/inbox/sig-x.md",
+          staged: false,
+          frontmatter: {},
+          raw: "x",
+        },
+      },
+      { now: at(NOW - 3000) },
+    );
+    expect(storeCodes()).not.toContain(STORE_REMOVED_AWAITING_COMPACTION_CODE);
+    appendRecord(
+      a,
+      {
+        partition: "shared",
+        stream: "events",
+        kind: "signal-removed",
+        agent: "t",
+        body: { authority: "human", signal: "sig-x" },
+      },
+      { now: at(NOW - 2000) },
+    );
+    const report = runDoctor(vault, { now: new Date(NOW + 10) });
+    const issue = report.warnings.find((i) => i.code === STORE_REMOVED_AWAITING_COMPACTION_CODE);
+    expect(issue?.message).toContain("1 record(s) of removed content");
+    expect(issue?.message).toContain("1 of forgotten signals");
   });
 });

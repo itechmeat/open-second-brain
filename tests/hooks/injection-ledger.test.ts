@@ -40,6 +40,9 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-ledger-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -366,7 +369,7 @@ describe("session isolation", () => {
       expect(basename(path)).toMatch(/^[a-z0-9-]{1,64}\.json$/);
       expect(readRecallInjected(vault, id, NOW).has(`k-${id.length}`)).toBe(true);
     }
-    expect(readdirSync(vault).toSorted()).toEqual([".open-second-brain"]);
+    expect(readdirSync(vault).toSorted()).toEqual([".open-second-brain", "Brain"]);
     expect(readdirSync(stateDir).filter((name) => name.endsWith(".json"))).toHaveLength(5);
   });
 

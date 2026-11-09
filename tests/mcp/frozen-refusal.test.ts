@@ -19,7 +19,11 @@ import { freezeVault, unfreezeVault } from "../../src/core/brain/freeze.ts";
 import { resetFreezeMarkerCache } from "../../src/core/brain/freeze-marker.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
-import { VAULT_FROZEN_REFUSAL } from "../../src/mcp/frozen-refusal.ts";
+import { holdMigrationGate, releaseMigrationGate } from "../../src/core/migration-gate.ts";
+import {
+  MIGRATION_IN_PROGRESS_REFUSAL,
+  VAULT_FROZEN_REFUSAL,
+} from "../../src/mcp/frozen-refusal.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
 let tmp: string;
@@ -111,6 +115,43 @@ describe("a write tool called on a frozen vault", () => {
     const response = await createNote("notes/thawed.md");
     expect((response as { error?: unknown }).error).toBeUndefined();
     expect(existsSync(join(vault, "notes", "thawed.md"))).toBe(true);
+  });
+});
+
+describe("a write tool called while a store migration of the vault runs here", () => {
+  test("comes back as the same structured refusal, naming the migration and the way out", async () => {
+    // Restored in `finally`, not deleted: the preload points the state root
+    // at a temp dir, and deleting it sends every later test in this process
+    // to the developer's real `~/.local/state`.
+    const saved = {
+      XDG_STATE_HOME: process.env["XDG_STATE_HOME"],
+      LOCALAPPDATA: process.env["LOCALAPPDATA"],
+    };
+    process.env["XDG_STATE_HOME"] = join(tmp, "state");
+    process.env["LOCALAPPDATA"] = join(tmp, "state");
+    try {
+      holdMigrationGate(vault, "migrate-test");
+      const response = await createNote("notes/gated.md");
+      const error = (response as { error?: { message: string; data?: unknown } }).error;
+      const data = error!.data as Record<string, unknown>;
+      expect(data["code"]).toBe(MIGRATION_IN_PROGRESS_REFUSAL);
+      expect(data["run_id"]).toBe("migrate-test");
+      expect(data["tool"]).toBe("brain_create_note");
+      expect(data["next_command"]).toBe("o2b brain migrate-store --resume");
+      // The way out is named once in the prose, not twice.
+      expect(error!.message.split("--resume")).toHaveLength(2);
+      expect(existsSync(join(vault, "notes", "gated.md"))).toBe(false);
+      releaseMigrationGate(vault, "migrate-test");
+      expect((await createNote("notes/open.md")) as { error?: unknown }).not.toHaveProperty(
+        "error",
+      );
+    } finally {
+      releaseMigrationGate(vault, "migrate-test");
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

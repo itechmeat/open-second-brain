@@ -7,7 +7,15 @@
 
 import { defaultConfigPath } from "../../../core/config.ts";
 import { appendBrainNote } from "../../../core/brain/note.ts";
-import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import {
+  CliError,
+  NO_VAULT_ERROR,
+  normalizeFlagString,
+  ok,
+  okJson,
+  parse,
+  resolveOptionalVault,
+} from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
 
@@ -41,7 +49,13 @@ export async function cmdBrainNote(argv: string[]): Promise<number> {
   }
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  // No vault is fine on a store-only machine: the note is a store record.
+  // An explicit `--vault ""` stays the usage error it always was.
+  const vaultFlag = flags["vault"] as string | undefined;
+  if (vaultFlag !== undefined && normalizeFlagString(vaultFlag) === null) {
+    throw new CliError(NO_VAULT_ERROR);
+  }
+  const vault = resolveOptionalVault(vaultFlag, config);
   const explicitAgent = normalizeFlagString(flags["agent"]);
 
   let res;
@@ -62,6 +76,7 @@ export async function cmdBrainNote(argv: string[]): Promise<number> {
       logged_at: res.logged_at,
       log_path: res.log_path,
       absolute_log_path: res.absolute_log_path,
+      ...(res.record_id !== undefined ? { record_id: res.record_id } : {}),
       agent: res.agent,
     });
     return 0;

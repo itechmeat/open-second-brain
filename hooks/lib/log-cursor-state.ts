@@ -64,7 +64,7 @@
 
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
 import {
@@ -72,6 +72,12 @@ import {
   readRegularFileNoFollow,
 } from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
+import {
+  machineStatePath,
+  machineStatePathIn,
+  machineStateRoot,
+} from "../../src/core/state/machine-state.ts";
+import { compareHlc, parseHlc } from "../../src/core/store/hlc.ts";
 
 /** Stem of the per-identity state file, under {@link DERIVED_STORE_DIR}. */
 export const LOG_CATCHUP_CURSOR_STEM = "log-catchup";
@@ -232,7 +238,9 @@ function parseDatedMarks(raw: unknown): Record<string, Record<string, number>> |
 
 /** Absolute path of the cursor file for one identity on one vault. */
 export function logCatchupCursorPath(vault: string, identity: string): string {
-  return join(vault, DERIVED_STORE_DIR, logCatchupCursorFilename(identity));
+  // Machine state: the vault on an unswitched machine, device-local once
+  // switched or with no vault (`machineStatePath`, design D14 item 6).
+  return machineStatePath(vault, DERIVED_STORE_DIR, logCatchupCursorFilename(identity));
 }
 
 /**
@@ -311,12 +319,53 @@ export function writeLogCatchupCursor(
         }
       }
     }
-    if (derivedDirIsSymlinked(vault, DERIVED_STORE_DIR)) return false;
-    const path = logCatchupCursorPath(vault, identity);
+    // One root for the check and the write (resolved once).
+    const root = machineStateRoot(vault);
+    if (derivedDirIsSymlinked(root, DERIVED_STORE_DIR)) return false;
+    const path = machineStatePathIn(root, DERIVED_STORE_DIR, logCatchupCursorFilename(identity));
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteText(path, `${JSON.stringify(cursor)}\n`);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Each entry's index among its device's events of the day, in append
+ * order (the record clock), not merge order: an event recorded later with
+ * an earlier timestamp takes the next index, so the marks already stored
+ * keep naming the same events.
+ */
+export function appendOrderLines(
+  devices: ReadonlyArray<string>,
+  hlcs: ReadonlyArray<string>,
+): number[] {
+  const byDevice = new Map<string, number[]>();
+  devices.forEach((device, i) => {
+    const list = byDevice.get(device) ?? [];
+    list.push(i);
+    byDevice.set(device, list);
+  });
+  const lines = new Array<number>(devices.length).fill(0);
+  for (const indexes of byDevice.values()) {
+    const clock = (i: number) => parseHlc(hlcs[i] ?? "");
+    // A total order (missing clock last, then clock, then index): an
+    // entry without a readable clock compared by index against clocked
+    // ones could contradict their clock order, and the sort would be
+    // unspecified.
+    const ordered = indexes.toSorted((a, b) => {
+      const ca = clock(a);
+      const cb = clock(b);
+      if (ca === null || cb === null) {
+        if (ca !== cb) return ca === null ? 1 : -1;
+        return a - b;
+      }
+      return compareHlc(ca, cb) || a - b;
+    });
+    ordered.forEach((entryIndex, rank) => {
+      lines[entryIndex] = rank;
+    });
+  }
+  return lines;
 }

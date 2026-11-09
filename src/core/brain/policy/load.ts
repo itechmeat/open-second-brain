@@ -17,15 +17,29 @@
  *     healthy. The `*Safe` entry points do not absorb this.
  *
  * The strict entry point ({@link loadBrainConfig}) throws on both.
+ *
+ * On a store-only machine (design D14 item 3, task 2.10), and with no
+ * vault at all, there is no `_brain.yaml` to read: every entry point here
+ * answers from the single store-backed settings reader
+ * (`./settings-source.ts`), the folded shared settings records plus the
+ * device keys of the machine config over the defaults. There the settings
+ * are never ABSENT; they are the defaults until a record says otherwise,
+ * and folded values that do not validate are UNREADABLE settings.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import type { BrainConfig, BrainInstallConfig, ResolvedBrainIntegrityConfig } from "../types.ts";
 import { parseBrainYaml, type ParsedBlock } from "../yaml-parse.ts";
 import { brainConfigPath } from "../paths.ts";
-import { BrainConfigError, type BrainConfigLoadWarning } from "./errors.ts";
+import {
+  BrainConfigError,
+  BrainSettingsUnreadableError,
+  type BrainConfigLoadWarning,
+} from "./errors.ts";
 import { validateBrainConfigDetailed } from "./validate.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./defaults.ts";
+import { readBrainSettingsFromStore } from "./settings-source.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
 import { BRAIN_STORAGE_DEFAULTS, resolveStorage } from "./blocks/storage.ts";
 import { BRAIN_MOST_APPLIED_DEFAULTS, resolveMostApplied } from "./blocks/active.ts";
 import { BRAIN_NOTES_DEFAULTS, resolveNotes } from "./blocks/notes.ts";
@@ -56,15 +70,28 @@ export interface LoadBrainConfigResult {
  *
  * Unknown top-level keys are reported as warnings, not errors.
  */
-export function loadBrainConfig(vault: string): BrainConfig {
+export function loadBrainConfig(vault: string | null): BrainConfig {
   return loadBrainConfigDetailed(vault).config;
+}
+
+/**
+ * Whether the settings of `vault` come from the store rather than its
+ * `_brain.yaml`: with no vault, or on a store-only machine.
+ */
+export function brainSettingsFromStore(vault: string | null, configPath?: string): boolean {
+  if (vault === null || vault.trim() === "") return true;
+  return isStoreOnly({ vault, ...(configPath !== undefined ? { configPath } : {}) });
 }
 
 /**
  * Same as {@link loadBrainConfig} but also returns parser warnings (for
  * the future `o2b brain doctor` integration).
  */
-export function loadBrainConfigDetailed(vault: string): LoadBrainConfigResult {
+export function loadBrainConfigDetailed(vault: string | null): LoadBrainConfigResult {
+  if (vault === null || brainSettingsFromStore(vault)) {
+    const read = readBrainSettingsFromStore();
+    return { config: read.config, warnings: read.warnings, path: read.source };
+  }
   const path = brainConfigPath(vault);
   if (!existsSync(path)) {
     throw new BrainConfigError(
@@ -77,9 +104,8 @@ export function loadBrainConfigDetailed(vault: string): LoadBrainConfigResult {
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
-    throw new BrainConfigError(
+    throw new BrainSettingsUnreadableError(
       `failed to read: ${(err as Error).message ?? String(err)}`,
-      null,
       path,
     );
   }
@@ -101,9 +127,11 @@ export function loadBrainConfigDetailed(vault: string): LoadBrainConfigResult {
  * The ONE predicate every reader in this module splits on, so "absent"
  * cannot come to mean two different things on two surfaces. It is
  * deliberately existence and nothing more: a file that exists but cannot
- * be opened is present, and its contents are not the defaults.
+ * be opened is present, and its contents are not the defaults. Settings
+ * read from the store are always present (see the module docblock).
  */
-function brainConfigExists(vault: string): boolean {
+function brainConfigExists(vault: string | null): boolean {
+  if (vault === null || brainSettingsFromStore(vault)) return true;
   return existsSync(brainConfigPath(vault));
 }
 
@@ -129,8 +157,8 @@ function brainConfigExists(vault: string): boolean {
 function makeAbsentTolerantLoader<T>(
   resolveFn: (config: BrainConfig) => T,
   fallback: T,
-): (vault: string) => T {
-  return (vault: string): T => {
+): (vault: string | null) => T {
+  return (vault: string | null): T => {
     if (!brainConfigExists(vault)) return fallback;
     return resolveFn(loadBrainConfig(vault));
   };
@@ -332,7 +360,7 @@ export const loadActiveMostAppliedSafe = makeAbsentTolerantLoader(
  * runtime-notice channel reports it; `loadIntegrityConfigSafe` uses the
  * same distinction to choose its fallback.
  */
-export function brainConfigReadFailure(vault: string): string | null {
+export function brainConfigReadFailure(vault: string | null): string | null {
   if (!brainConfigExists(vault)) return null;
   try {
     loadBrainConfig(vault);
@@ -359,13 +387,20 @@ export function brainConfigReadFailure(vault: string): string | null {
  * `DIAGNOSTIC_SIGNALS` - see the notice that raises it. The cause the
  * parser gave IS the actionable part, so it is quoted verbatim.
  */
-export function brainConfigUnreadableReport(vault: string): string | null {
+export function brainConfigUnreadableReport(vault: string | null): string | null {
   const failure = brainConfigReadFailure(vault);
   if (failure === null) return null;
+  const fromStore = vault === null || brainSettingsFromStore(vault);
+  const what = fromStore ? "The brain settings" : "Brain/_brain.yaml";
+  // Store-backed settings have no file to fix: the value is corrected
+  // through the settings verb, or in the machine config for a device key.
+  const remedy = fromStore
+    ? "Correct the value with `o2b brain settings set <name> <value>` (or `unset <name>`), " +
+      "or fix its `brain_*` line in the machine config, then re-run."
+    : "Fix the file, then re-run.";
   return (
-    `Brain/_brain.yaml could not be read, so configured settings are not in force ` +
-    `and the integrity gates fall back to their strictest mode (${failure}). ` +
-    `Fix the file, then re-run.`
+    `${what} could not be read, so configured settings are not in force ` +
+    `and the integrity gates fall back to their strictest mode (${failure}). ${remedy}`
   );
 }
 
@@ -392,7 +427,7 @@ export function brainConfigUnreadableReport(vault: string): string | null {
  * what makes that safe - the unreadable config cannot loosen a gate, it
  * can only close one.
  */
-export function loadIntegrityConfigSafe(vault: string): ResolvedBrainIntegrityConfig {
+export function loadIntegrityConfigSafe(vault: string | null): ResolvedBrainIntegrityConfig {
   try {
     return resolveIntegrity(loadBrainConfig(vault));
   } catch {

@@ -335,6 +335,9 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_feedback: "write; returns a small fixed-shape ack",
   brain_apply_evidence: "write; returns a small fixed-shape ack",
   brain_note: "write; returns a small fixed-shape ack",
+  brain_settings:
+    "small fixed-shape answers: one setting, or the list of shared settings that are set, " +
+    "bounded by the closed key classification",
   brain_observed_use: "write; returns a small fixed-shape ack (records/aggregates count)",
   // The four note writers. Their receipts are no longer fixed-shape:
   // each carries an additive `lint` key over the pages it committed
@@ -350,7 +353,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
     "write; returns the appended note path, the kernel's appended flag, and a page-lint finding list capped and self-declaring its truncation",
   brain_write_batch:
     "write; returns a bounded per-operation result list, an applied count, and one page-lint finding list capped and self-declaring its truncation",
-  brain_pinned_context: "pinned.md is operator-curated and small by practice",
+  brain_pinned_context: "pinned context is operator-curated and small by practice",
   brain_recall_feedback: "write; returns one event receipt plus bounded weights",
   brain_switch_vault: "write; returns a small profile ack",
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
@@ -369,7 +372,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   // `dry_run: true` this tool is not a write at all and returns no receipt:
   // it returns the entire resulting pack plus a leaf-level diff.
   schema_apply_mutations:
-    "returns the whole resulting schema pack - plus a leaf diff under dry_run, which writes nothing; bounded by the size of the schema block in Brain/_brain.yaml, which the operator curates",
+    "returns the whole resulting schema pack - plus a leaf diff under dry_run, which writes nothing; bounded by the size of the schema pack, which the operator curates",
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",

@@ -8,15 +8,15 @@ preserved for backward compatibility with existing client configs):
   - brain_note            — record one narrative milestone (release shipped,
                             PR merged, fact discovered) that fits neither
                             category.
-  - brain_pinned_context  — read/write/append/clear Brain/pinned.md for
+  - brain_pinned_context  — read/write/append/clear the pinned context for
                             current-task facts that should survive context
                             rotation without becoming permanent preferences.
-  - brain_context         — pull the current Brain/active.md body plus
+  - brain_context         — pull the active-preferences digest plus
                             pinned context and active-preference counts.
                             Read-only. Use at session
                             start when the host runtime lacks a SessionStart
                             hook (Cursor, Aider, raw Claude API). Runtimes that
-                            already inject active.md via a hook can skip this.
+                            already inject the digest via a hook can skip this.
 
 The remaining Brain surface lives on the sibling "open-second-brain"
 MCP server (deferred), including additional read-only, analytics,

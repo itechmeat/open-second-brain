@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,11 +25,17 @@ import {
   REMOTE_DENY_VISIBILITY_TOKEN as RESERVED,
   strictestVisibility,
 } from "../../../src/core/graph/visibility.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
 
 let vault: string;
 
+// The tension log events are read from the un-sharded day log.
+useUnshardedLegacyLog();
+
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-tensions-"));
+  // The legacy layout: tension pages under `Brain/` (a bare vault is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });

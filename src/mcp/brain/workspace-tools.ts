@@ -43,6 +43,7 @@ import { contextReach, type ServerContext, type ToolDefinition } from "../tool-c
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, unknownOperationError } from "../coerce.ts";
+import { lanePath, laneVault } from "./lane-vault.ts";
 
 function toolBrainIntention(
   ctx: ServerContext,
@@ -57,7 +58,7 @@ function toolBrainIntention(
   const withheld = (scope: string): boolean =>
     readable !== undefined && !readable(intentionRel(scope));
   if (operation === "list") {
-    const chains = listIntentions(ctx.vault);
+    const chains = listIntentions(laneVault(ctx));
     const kept =
       readable === undefined ? chains : chains.filter((c) => readable(intentionStemRel(c.scope)));
     return {
@@ -75,21 +76,26 @@ function toolBrainIntention(
     // Setting folds the prior text into the new version's history, so an
     // existing withheld chain is refused rather than read and rewritten.
     // The refusal is the one answer that cannot match an absent chain's.
-    if (withheld(scope) && showIntention(ctx.vault, scope) !== null) {
+    if (withheld(scope) && showIntention(laneVault(ctx), scope) !== null) {
       throw new MCPError(
         INVALID_PARAMS,
         `brain_intention: cannot set scope: ${resolveSessionScope(scope)}`,
       );
     }
-    const chain = setIntention(ctx.vault, {
+    const chain = setIntention(laneVault(ctx), {
       scope,
       text,
       agent: resolveAgentName(ctx.configPath ?? undefined),
     });
-    return { operation, scope: chain.scope, version: chain.version, path: chain.path };
+    return {
+      operation,
+      scope: chain.scope,
+      version: chain.version,
+      path: lanePath(ctx, chain.path),
+    };
   }
   if (operation === "show") {
-    const chain = withheld(scope) ? null : showIntention(ctx.vault, scope);
+    const chain = withheld(scope) ? null : showIntention(laneVault(ctx), scope);
     if (chain === null) return { operation, scope, present: false };
     return {
       operation,
@@ -99,16 +105,16 @@ function toolBrainIntention(
       updated_at: chain.updatedAt,
       text: chain.text,
       history: chain.history,
-      path: chain.path,
+      path: lanePath(ctx, chain.path),
     };
   }
   if (operation === "move") {
     if (withheld(scope)) throw noActiveIntentionError(resolveSessionScope(scope));
-    const moved = moveIntentionToHistory(ctx.vault, { scope });
+    const moved = moveIntentionToHistory(laneVault(ctx), { scope });
     // The archive name steps past every name already taken in history/,
     // readable or not, so below local reach it is left out of the answer.
     if (readable !== undefined) return { operation, scope: moved.scope };
-    return { operation, scope: moved.scope, archive_path: moved.archivePath };
+    return { operation, scope: moved.scope, archive_path: lanePath(ctx, moved.archivePath) };
   }
   throw unknownOperationError("brain_intention operation must be one of: set, show, list, move");
 }
@@ -190,6 +196,8 @@ function toolBrainTrigger(
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
   const now = new Date();
+  // A record-lane tool works with no vault: its pages are store records then.
+  const vault = laneVault(ctx);
   // A trigger row is dropped WHOLE when any artifact it names is
   // withheld: `reason` and `cooldown_key` repeat the same ids the
   // `source_artifacts` list holds, so trimming the list alone would
@@ -197,8 +205,8 @@ function toolBrainTrigger(
   // joins the owner view: below local reach a trigger naming a record
   // the caller cannot read answers as an absent one.
   const view = everyArtifactRefView(
-    gatedOwnerScopeView(ctx.vault, ctx.agentName),
-    reachView(ctx.vault, contextReach(ctx)),
+    gatedOwnerScopeView(vault, ctx.agentName),
+    reachView(vault, contextReach(ctx)),
   );
   if (operation === "scan") {
     const cooldownDays = resolveTriggerCooldownDays(ctx.configPath ?? undefined);
@@ -206,7 +214,7 @@ function toolBrainTrigger(
     // `candidates` total counts none it may not, and a scan from a remote
     // caller writes no trigger about a withheld record.
     const readable = readableAtContextReachOrUndefined(ctx);
-    const result = scanTriggers(ctx.vault, {
+    const result = scanTriggers(vault, {
       now,
       cooldownDays,
       ...(readable !== undefined ? { readable } : {}),
@@ -237,7 +245,7 @@ function toolBrainTrigger(
         code: TOOL_ERROR_CODE.invalidStatus,
       });
     }
-    const scan = readTriggers(ctx.vault, {
+    const scan = readTriggers(vault, {
       now,
       ...(statusRaw ? { status: statusRaw } : {}),
     });
@@ -264,13 +272,13 @@ function toolBrainTrigger(
       // say so. A trigger this caller may not see answers exactly as an
       // absent id does - same message, byte for byte, from the store's
       // own error - because a distinguishable refusal confirms it exists.
-      const target = readTriggers(ctx.vault, { now }).records.find((r) => r.id === id);
+      const target = readTriggers(vault, { now }).records.find((r) => r.id === id);
       if (target !== undefined && !view.row(...triggerRefs(target))) {
         throw new Error(`unknown trigger: ${id}`);
       }
       return {
         operation,
-        trigger: triggerToJson(transitionTrigger(ctx.vault, id, operation, { now })),
+        trigger: triggerToJson(transitionTrigger(vault, id, operation, { now })),
       };
     } catch (err) {
       // One code for the whole transition refusal: a separate code for
@@ -292,7 +300,7 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_intention",
     kind: "write",
     description:
-      "Scoped current-intention chains under Brain/intentions/: set updates a workstream's now-document (prior text lands in its history trail), show/list read, move retires the chain into history/.",
+      "Scoped current-intention chains: set updates a workstream's now-document (prior text lands in its history trail), show/list read, move retires the chain into history/.",
     inputSchema: {
       type: "object",
       properties: {
@@ -329,7 +337,7 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       // unreadable partition has to be in here, because a caller that
       // does not know to look at it will read an empty `triggers` list
       // as an empty queue.
-      "Proactive trigger queue in Brain/triggers/: scan makes deduped triggers, list/history read by status, transitions apply one. suppress silences indefinitely; snooze defers to window end or refire; unsuppress/unsnooze restore the interrupted status. Unreadable records are named, not omitted.",
+      "Proactive trigger queue: scan makes deduped triggers, list/history read by status, transitions apply one. suppress silences indefinitely; snooze defers to window end or refire; unsuppress/unsnooze restore the interrupted status. Unreadable records are named, not omitted.",
     inputSchema: {
       type: "object",
       properties: {

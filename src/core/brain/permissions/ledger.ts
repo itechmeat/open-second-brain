@@ -37,9 +37,11 @@ import {
   type ShardedRow,
 } from "../ledger-shards.ts";
 import { BRAIN_ROOT_REL } from "../path-constants.ts";
+import { legacyVaultOf } from "../no-vault.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { PermissionAction } from "./document.ts";
-import { dualWrite } from "../../store/dual-write.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { routeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 /** Month-sharded JSONL root under `Brain/logs/`, beside the idempotency ledger. */
@@ -50,7 +52,7 @@ const MONTH_BASE = "\\d{4}-\\d{2}";
 const MONTH_RE = new RegExp(`^${MONTH_BASE}$`);
 
 /** The ledger's file-name layout, handed to the shared shard grammar. */
-const DECISIONS_GRAMMAR: LedgerShardGrammar = Object.freeze({
+export const DECISIONS_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: MONTH_BASE,
   extensions: Object.freeze([JSONL_LEDGER_EXT]),
 });
@@ -123,27 +125,34 @@ export function decisionLedgerShardPath(month: string, shardId: string): string 
  * still gets its verdict through and carries the reason.
  */
 export function appendDecisionLedger(
-  vault: string,
+  vault: string | null,
   row: DecisionLedgerRow,
 ): DecisionLedgerAppendResult {
   try {
-    assertVaultIdentityForWrite(vault);
     const ts = requireTimestamp(row.ts);
     const month = monthOf(ts);
-    const shardId = resolveAppendShardId();
-    const dir = decisionLedgerDir(vault);
-    mkdirSync(dir, { recursive: true });
-    const shardPath = join(dir, decisionLedgerShardPath(month, shardId));
     const stored = stripEmptyOptionals(row);
-    withShardLock(shardPath, () => {
-      writeFileSync(shardPath, `${JSON.stringify(stored)}\n`, {
-        encoding: "utf8",
-        flag: "a",
-      });
-    });
-    // Brain store dual write (task 1.11): off by default, never fails this append.
-    dualWrite(() => ledgerRowRecord(DUAL_WRITE_LEDGERS.permissions, stored, "private-when-held"), {
-      vault,
+    // One `permissions` ledger row on a store-only machine (design D14
+    // item 1), this device's month shard plus the dual write otherwise. A
+    // store failure is caught below like any other and carried as the
+    // audit reason.
+    routeWrite({
+      legacy: () => {
+        const root = legacyVaultOf(vault, "appendDecisionLedger");
+        assertVaultIdentityForWrite(root);
+        const shardId = resolveAppendShardId();
+        const dir = decisionLedgerDir(root);
+        mkdirSync(dir, { recursive: true });
+        const shardPath = join(dir, decisionLedgerShardPath(month, shardId));
+        withShardLock(shardPath, () => {
+          writeFileSync(shardPath, `${JSON.stringify(stored)}\n`, {
+            encoding: "utf8",
+            flag: "a",
+          });
+        });
+      },
+      store: () => ledgerRowRecord(DUAL_WRITE_LEDGERS.permissions, stored, "private-when-held"),
+      context: { vault },
     });
     return { logged: true };
   } catch (err) {
@@ -164,9 +173,36 @@ export function appendDecisionLedger(
  * around a torn line instead of disappearing behind it.
  */
 export function queryDecisionLedger(
-  vault: string,
+  vault: string | null,
   filter: DecisionLedgerFilter = {},
 ): DecisionLedgerRow[] {
+  // One source decision (the read facade): the `permissions` ledger rows
+  // on a store-only machine (design D14 item 1), the merged shards on an
+  // unswitched one, which are already in the agreed order and are kept as
+  // they were read. The store rows, in fold order, are ordered by `ts`
+  // (ties keep fold order); a store row with no string `ts` cannot be
+  // placed and is not a decision row.
+  let legacy = false;
+  const rows = readLedgerRows<DecisionLedgerRow>(
+    DUAL_WRITE_LEDGERS.permissions,
+    () => {
+      legacy = true;
+      return readLegacyDecisionRows(legacyVaultOf(vault, "queryDecisionLedger"));
+    },
+    { vault },
+    // As an unreadable legacy shard throws: never "this write was never gated".
+    { strict: true },
+  );
+  const ordered = legacy
+    ? rows
+    : rows
+        .filter((row) => row !== null && typeof row === "object" && typeof row.ts === "string")
+        .toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return ordered.filter((row) => matches(row, filter)).slice(0, positiveLimit(filter));
+}
+
+/** The decision rows of an unswitched vault, merged across its shards. */
+function readLegacyDecisionRows(vault: string): DecisionLedgerRow[] {
   const dir = decisionLedgerDir(vault);
   const shards = listShardedFiles(dir, DECISIONS_GRAMMAR);
   if (shards.length === 0) return [];
@@ -192,8 +228,7 @@ export function queryDecisionLedger(
       }
     }
   }
-  const merged = mergeShardedRows(sharded, (row) => row.ts);
-  return merged.filter((row) => matches(row, filter)).slice(0, positiveLimit(filter));
+  return mergeShardedRows(sharded, (row) => row.ts);
 }
 
 // ----- internals -------------------------------------------------------------

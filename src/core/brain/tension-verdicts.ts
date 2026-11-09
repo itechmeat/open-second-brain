@@ -42,6 +42,8 @@ import {
 } from "../decision-model/pair-verdict.ts";
 import { TENSION_QUESTIONS } from "../decision-model/questions.ts";
 import { mayLeaveMachine } from "../decision-model/state.ts";
+import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
+import { readLanePage } from "../store/lane-pages.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import type { TensionRecord } from "./tensions.ts";
@@ -112,6 +114,20 @@ function resolveSubjects(vault: string, ids: ReadonlySet<string>): Map<string, s
   return out;
 }
 
+/**
+ * The visibility tokens of a tension page, read through the lane API: on
+ * a store-only machine the page is a store record with no file behind it.
+ * `null` (never sent) when it cannot be read.
+ */
+function tensionPageVisibility(vault: string, path: string): ReadonlyArray<string> | null {
+  try {
+    const page = readLanePage(vault, path);
+    return page === null ? null : remoteDenyVisibilityTokens(page.frontmatter);
+  } catch {
+    return null;
+  }
+}
+
 function side(
   quote: string,
   facts: PageEgressFacts,
@@ -149,7 +165,7 @@ export async function verifyTensions(
     return f;
   };
   const pairs: VerdictPairInput[] = records.map((t) => {
-    const pageAllowed = mayLeaveMachine(factsOf(t.path).visibility);
+    const pageAllowed = mayLeaveMachine(tensionPageVisibility(vault, t.path));
     return {
       id: t.slug,
       a: t.subjectA,

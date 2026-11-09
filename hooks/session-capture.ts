@@ -39,7 +39,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveAgentName, resolveVault } from "../src/core/config.ts";
+import { resolveAgentName } from "../src/core/config.ts";
 import {
   captureSessionLifecycleEvent,
   lifecycleEventNeedsDedup,
@@ -54,6 +54,7 @@ import {
 } from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { normalizeHookPayload, readHookInput } from "./lib/stdin.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 const DEFERRED_FLAG = "--deferred";
 /** A deferred worker has no host deadline, but it must still end. */
@@ -203,8 +204,10 @@ async function runWorker(spool: string): Promise<void> {
       // already consumed
     }
   }
-  const vault = resolveVault();
-  if (vault === null || payload === null) return;
+  // With no vault the capture lands in the brain store (design D14, task 2.10).
+  const target = resolveHookTarget();
+  if (target === null || payload === null) return;
+  const { vault } = target;
   const disarm = armProcessCeiling({
     ceilingMs: WORKER_CEILING_MS,
     onExpire: () => audit(vault, "hook_ceiling_exceeded", { mode: "deferred" }),
@@ -231,8 +234,10 @@ async function runHook(): Promise<void> {
   });
   const safeguard = ceilingSafeguard(ceilingMs);
   try {
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the capture lands in the brain store (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const { vault } = target;
     auditVault = vault;
     let payload: unknown;
     try {

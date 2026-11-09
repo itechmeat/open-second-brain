@@ -1,11 +1,15 @@
-import { existsSync } from "node:fs";
 import {
   resolveAgentName,
   resolveNearDuplicateRetireSiblingsEnabled,
 } from "../../../core/config.ts";
 import { scanBrain } from "../../../core/brain/dream-scan.ts";
 import { READ_ALL_REFS } from "../../../core/brain/near-duplicate.ts";
-import { moveToRetired, parsePreference } from "../../../core/brain/preference.ts";
+import {
+  loadPreference,
+  moveToRetired,
+  parsePreference,
+  preferencePresence,
+} from "../../../core/brain/preference.ts";
 import {
   planRetireSiblings,
   retireSiblingPool,
@@ -16,6 +20,7 @@ import { isoDate, isoSecond } from "../../../core/brain/time.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import { appendLogEvent, logShardWikilink } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "../../../core/brain/types.ts";
+import { isStoreOnly } from "../../../core/store/store-only.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainReject(argv: string[]): Promise<number> {
@@ -40,13 +45,22 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
   const rawId = String(flags["id"]).trim();
   const slug = rawId.startsWith("pref-") ? rawId.slice("pref-".length) : rawId;
   const path = preferencePath(vault, slug);
-  if (!existsSync(path)) {
-    process.stderr.write(`preference not found: pref-${slug}; expected ${path}\n`);
+  // The page on an unswitched machine, the store's fold once switched; a
+  // store-only machine has no page to point the operator at.
+  const storeOnly = isStoreOnly({ vault, configPath: config });
+  const notFound = (): number => {
+    const where = storeOnly ? "in the brain store" : `at ${path}`;
+    process.stderr.write(`preference not found: pref-${slug}; expected ${where}\n`);
     return 2;
-  }
+  };
+  if (preferencePresence(vault, slug) !== "active") return notFound();
   let pref;
   try {
-    pref = parsePreference(path);
+    const loaded = loadPreference(vault, slug);
+    // Retired between the two reads: not found, never a parse of a page a
+    // store-only machine does not have.
+    if (loaded === null && storeOnly) return notFound();
+    pref = loaded ?? parsePreference(path);
   } catch (exc) {
     return fail(`failed to parse preference: ${(exc as Error).message ?? exc}`);
   }

@@ -162,7 +162,7 @@ function tokenMint(argv: string[]): number {
   let tokenMaterial: string;
   let record: ReturnType<typeof mintAgentToken>["record"];
   try {
-    ({ tokenMaterial, record } = mintAgentToken(vault, name, agent));
+    ({ tokenMaterial, record } = mintAgentToken(vault, name, agent, configFlag(flags)));
   } catch (e) {
     return storeFailure(e);
   }
@@ -195,7 +195,7 @@ function tokenRotate(argv: string[]): number {
   let tokenMaterial: string;
   let record: ReturnType<typeof rotateAgentToken>["record"];
   try {
-    ({ tokenMaterial, record } = rotateAgentToken(vault, name));
+    ({ tokenMaterial, record } = rotateAgentToken(vault, name, configFlag(flags)));
   } catch (e) {
     return storeFailure(e);
   }
@@ -229,7 +229,7 @@ function tokenRevoke(argv: string[]): number {
   if (name === "") return usage("o2b mcp token revoke requires --name <mcp_token_...>");
   let revoked: boolean;
   try {
-    revoked = revokeAgentToken(vault, name);
+    revoked = revokeAgentToken(vault, name, configFlag(flags));
   } catch (e) {
     return storeFailure(e);
   }
@@ -256,7 +256,7 @@ function tokenList(argv: string[]): number {
   }
   const vault = vaultFromFlags(flags);
   if (vault === "") return usage(`o2b mcp token list: ${VAULT_NOT_CONFIGURED_REASON}`);
-  const records = listAgentTokens(vault);
+  const records = listAgentTokens(vault, configFlag(flags));
   if (records.length === 0) {
     process.stdout.write("tokens: no tokens minted\n");
     return TOKEN_EXIT.ok;
@@ -276,4 +276,10 @@ function tokenList(argv: string[]): number {
 /** `mcp_token_<slug>`: the agent name lowercased, non-grammar runs dashed to underscores. */
 function deriveTokenName(agent: string): string {
   return `mcp_token_${agent.toLowerCase().replaceAll(/[^a-z0-9_]+/g, "_")}`;
+}
+
+/** The `--config` the operator named: the machine whose token map is written. */
+function configFlag(flags: TokenFlags): string | undefined {
+  const config = flags.get("config");
+  return typeof config === "string" && config.trim() !== "" ? config : undefined;
 }

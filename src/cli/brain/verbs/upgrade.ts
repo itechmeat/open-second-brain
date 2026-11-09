@@ -2,6 +2,8 @@ import {
   planUpgrade,
   applyUpgrade,
   BrainUpgradeError,
+  BrainUpgradeStoreOnlyError,
+  upgradeBlockedByStore,
   type UpgradePlan,
 } from "../../../core/brain/upgrade.ts";
 import { basename } from "node:path";
@@ -82,6 +84,29 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
     return fail("brain upgrade: --dry-run and --apply are mutually exclusive");
   if (flags["check"] && flags["apply"])
     return fail("brain upgrade: --check and --apply are mutually exclusive");
+
+  // A store-only machine has no managed files to upgrade: say so before
+  // planning or prompting, and record no failure for it. Asked to apply,
+  // that is a refusal (exit 1, `ok: false`); asked to look, it is the
+  // answer (exit 0, `ok: true`), so the exit code and `ok` always agree.
+  let blocked: boolean;
+  try {
+    blocked = upgradeBlockedByStore(vault);
+  } catch (exc) {
+    return fail(`upgrade check failed: ${(exc as Error).message ?? exc}`);
+  }
+  if (blocked) {
+    const message = new BrainUpgradeStoreOnlyError().message;
+    const refused = Boolean(flags["apply"]);
+    if (flags["json"]) {
+      okJson(
+        refused
+          ? { ok: false, store_only: true, error: message }
+          : { ok: true, store_only: true, note: message },
+      );
+    } else process.stderr.write(`${message}\n`);
+    return refused ? 1 : 0;
+  }
 
   let plan: UpgradePlan;
   try {

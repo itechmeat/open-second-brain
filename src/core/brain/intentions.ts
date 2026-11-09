@@ -10,14 +10,21 @@
  * stays untouched as the scope-free scratchpad.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
-import { parseFrontmatter } from "../vault.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  moveLanePage,
+  parseLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 export interface IntentionChain {
   readonly scope: string;
@@ -104,8 +111,8 @@ function renderChain(chain: Omit<IntentionChain, "path">): string {
 
 function parseChain(vault: string, scope: string): IntentionChain | null {
   const path = intentionPath(vault, scope);
-  if (!existsSync(path)) return null;
-  const [meta, body] = parseFrontmatter(path);
+  if (!lanePageExists(vault, path)) return null;
+  const [meta, body] = parseLanePage(vault, path);
   const versionRaw = meta["version"];
   const version =
     typeof versionRaw === "string" && /^[0-9]+$/.test(versionRaw)
@@ -137,7 +144,7 @@ function parseChain(vault: string, scope: string): IntentionChain | null {
 /** Create or update the scoped intention; prior text lands in history. */
 export function setIntention(vault: string, input: SetIntentionInput): IntentionChain {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const scope = resolveSessionScope(input.scope);
   const now = input.now ?? new Date();
   const text = input.text.trim();
@@ -158,9 +165,8 @@ export function setIntention(vault: string, input: SetIntentionInput): Intention
     text,
     history: Object.freeze(history),
   };
-  mkdirSync(intentionsDir(vault), { recursive: true });
   const path = intentionPath(vault, scope);
-  atomicWriteFileSync(path, renderChain(chain));
+  writeLaneText(vault, path, renderChain(chain));
   return Object.freeze({ ...chain, path });
 }
 
@@ -172,10 +178,9 @@ export function showIntention(vault: string, scope: string): IntentionChain | nu
 /** Active chains sorted by scope. History entries are excluded. */
 export function listIntentions(vault: string): IntentionChain[] {
   const dir = intentionsDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const out: IntentionChain[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const chain = parseChain(vault, name.replace(/\.md$/u, ""));
     if (chain !== null) out.push(chain);
   }
@@ -188,26 +193,31 @@ export function moveIntentionToHistory(
   input: MoveIntentionInput,
 ): MoveIntentionResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const scope = resolveSessionScope(input.scope);
   const now = input.now ?? new Date();
   const activePath = intentionPath(vault, scope);
-  if (!existsSync(activePath)) {
+  if (!lanePageExists(vault, activePath)) {
     throw noActiveIntentionError(scope);
   }
   const historyDir = join(intentionsDir(vault), "history");
-  mkdirSync(historyDir, { recursive: true });
   const base = `${scope}-${isoDate(now)}`;
   let archivePath = join(historyDir, `${base}.md`);
-  for (let suffix = 2; existsSync(archivePath); suffix++) {
+  for (let suffix = 2; lanePageExists(vault, archivePath); suffix++) {
     archivePath = join(historyDir, `${base}-${suffix}.md`);
   }
-  try {
-    renameWithRetry(activePath, archivePath);
-  } catch {
-    // Cross-device fallback: copy then remove.
-    atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
-    rmSync(activePath, { force: true });
+  if (lanePagesInStore(vault)) {
+    // A store-only machine: one move record pair, no file in the vault.
+    moveLanePage(vault, activePath, archivePath);
+  } else {
+    mkdirSync(historyDir, { recursive: true });
+    try {
+      renameWithRetry(activePath, archivePath);
+    } catch {
+      // Cross-device fallback: copy then remove.
+      atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
+      rmSync(activePath, { force: true });
+    }
   }
   return Object.freeze({ scope, archivePath });
 }

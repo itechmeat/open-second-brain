@@ -33,6 +33,11 @@
  *    whatever its builder judged (`private-region.ts`). A record written
  *    while a private writer operation runs is private too, whoever wrote
  *    it (`operation-scope.ts`).
+ *  - **Located records.** A record that concerns one existing entry (a
+ *    tombstone, a moved entry) can be placed in the partition that entry
+ *    lives in instead of the operation's one partition ({@link Located}),
+ *    so a device that holds only `shared` sees a shared entry removed even
+ *    when the rest of the operation is private.
  *
  * Call it after the legacy write has succeeded and after any legacy lock is
  * released (the store takes its own device-local lock), passing the vault
@@ -47,7 +52,7 @@ import { resolveAgentName, resolveStoreDualWrite } from "../config.ts";
 import { ORIGIN_CHANNEL, resolveOriginChannel } from "../origin-channel.ts";
 import { resolveAppendShardId } from "../brain/ledger-shards.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
-import { appendRecord } from "./appender.ts";
+import { appendRecord, PartitionUnavailableError, type AppendResult } from "./appender.ts";
 import {
   STORE_PARTITIONS,
   VAULT_ID_FIELD,
@@ -79,11 +84,35 @@ export interface DualWriteRecord extends StreamRef {
    * `true`.
    */
   readonly privateWhenHeld?: boolean;
+  /** Placed by the entry it concerns, not by the operation's one partition. */
+  readonly located?: Located;
   readonly kind: string;
   /** The writing agent; defaults to the configured agent name. */
   readonly agent?: string;
   readonly scope?: string | null;
   readonly body: RecordBody;
+}
+
+/**
+ * Where a record that concerns one existing entry goes (design D14 item
+ * 18): the partition the entry lives in, apart from the partition the
+ * operation's other records share.
+ *
+ *  - A content-free record (`content: false`, a tombstone) goes exactly
+ *    there. No verdict raises it: it carries no text to protect, and a
+ *    shared entry's removal must reach a device that holds only `shared`.
+ *  - A content-bearing record (`content: true`, a moved entry) goes there,
+ *    or to `private` when the active operation is private or its body
+ *    carries a `<private>` region: raise-only, as every other record.
+ *  - `onlyIfApart`: the record is written only when the operation's other
+ *    records land in another partition: the tombstone of a shared entry a
+ *    private value replaces, which a device holding both partitions sees
+ *    before the replacement and a device holding only `shared` sees last.
+ */
+export interface Located {
+  readonly partition: StorePartition;
+  readonly content: boolean;
+  readonly onlyIfApart?: boolean;
 }
 
 /**
@@ -93,8 +122,8 @@ export interface DualWriteRecord extends StreamRef {
  * another vault or under another config.
  */
 export interface DualWriteContext {
-  /** The vault the legacy write went to; a store root inside it is refused. */
-  readonly vault?: string;
+  /** The vault the legacy write went to (`null`: none); a store root inside it is refused. */
+  readonly vault?: string | null;
   /** The machine config the flag and the store root are read from. */
   readonly configPath?: string;
 }
@@ -229,7 +258,13 @@ function recordNoStore(root: string): void {
   bumpStatus((s) => ({ ...s, skipped_no_store: s.skipped_no_store + 1, last_skip_at: at }));
 }
 
-function storeFor(device: string, context: DualWriteContext): StoreHandle {
+/**
+ * The store this device writes for `context`, opened once per process and
+ * re-opened when its partitions change. Throws {@link NoStoreError} when
+ * the root holds no store, {@link StoreRootInsideVaultError} when the root
+ * sits inside the vault written, and the open's error otherwise.
+ */
+export function storeFor(device: string, context: DualWriteContext): StoreHandle {
   const { root, origin } = resolveConfiguredStoreRoot(context.configPath);
   // The resolver checks the configured vault; the vault actually written
   // may be another one, and a root inside it is just as wrong.
@@ -273,6 +308,70 @@ function defaultAgent(): string {
   }
 }
 
+/** The records `build` produced, as a list (empty when it built none). */
+export function builtRecords(build: DualWriteBuild): ReadonlyArray<DualWriteRecord> {
+  const built = build();
+  if (built === null) return [];
+  return Array.isArray(built) ? built : [built as DualWriteRecord];
+}
+
+/**
+ * Append `records` to `store` as one operation, in order: one partition
+ * for all of them, `private` when any record's flags, the active operation
+ * scope or the `<private>` region backstop make it so (see the module
+ * docblock), except a {@link Located} record, which goes where its entry
+ * lives. Each is stamped with the written vault's id. The partitions are
+ * checked before the first append, so a machine without one writes none of
+ * the records rather than half the operation. Throws the appender's error.
+ */
+export function appendStoreRecords(
+  store: StoreHandle,
+  records: ReadonlyArray<DualWriteRecord>,
+  context: DualWriteContext,
+): AppendResult[] {
+  const vaultId = vaultIdOf(context);
+  const scoped = activeOperationPrivate();
+  const joined = records.filter((record) => record.located === undefined);
+  const isPrivate =
+    scoped ||
+    joined.some(
+      (record) =>
+        record.private === true ||
+        valueCarriesPrivateRegion(record.body) ||
+        (record.privateWhenHeld === true && store.partitions.has("private")),
+    );
+  const partition: StorePartition = isPrivate ? "private" : "shared";
+  const placed: Array<[DualWriteRecord, StorePartition]> = [];
+  for (const record of records) {
+    const at = record.located;
+    if (at === undefined) {
+      placed.push([record, partition]);
+      continue;
+    }
+    const raised =
+      at.content && (scoped || valueCarriesPrivateRegion(record.body)) ? "private" : at.partition;
+    if (at.onlyIfApart === true && (joined.length === 0 || raised === partition)) continue;
+    placed.push([record, raised]);
+  }
+  // Every partition is checked before the first append, so a machine
+  // without one writes none of the records rather than half the operation.
+  for (const [, at] of placed) {
+    if (!store.partitions.has(at)) throw new PartitionUnavailableError(at, store.root);
+  }
+  return placed.map(([record, at]) =>
+    appendRecord(store, {
+      partition: at,
+      stream: record.stream,
+      ...(record.ledger !== undefined ? { ledger: record.ledger } : {}),
+      kind: record.kind,
+      agent:
+        record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
+      scope: record.scope ?? null,
+      body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
+    }),
+  );
+}
+
 /**
  * Append the store records `build` describes, when the flag is on. Never
  * throws; see the module docblock for what happens on failure.
@@ -285,11 +384,7 @@ export function dualWrite(build: DualWriteBuild, context: DualWriteContext = {})
       recordNoDevice();
       return;
     }
-    const built = build();
-    if (built === null) return;
-    const records: ReadonlyArray<DualWriteRecord> = Array.isArray(built)
-      ? built
-      : [built as DualWriteRecord];
+    const records = builtRecords(build);
     if (records.length === 0) return;
     let store: StoreHandle;
     try {
@@ -299,26 +394,7 @@ export function dualWrite(build: DualWriteBuild, context: DualWriteContext = {})
       recordNoStore(err.root);
       return;
     }
-    const vaultId = vaultIdOf(context);
-    for (const record of records) {
-      const partition: StorePartition =
-        record.private === true ||
-        activeOperationPrivate() ||
-        valueCarriesPrivateRegion(record.body) ||
-        (record.privateWhenHeld === true && store.partitions.has("private"))
-          ? "private"
-          : "shared";
-      appendRecord(store, {
-        partition,
-        stream: record.stream,
-        ...(record.ledger !== undefined ? { ledger: record.ledger } : {}),
-        kind: record.kind,
-        agent:
-          record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
-        scope: record.scope ?? null,
-        body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
-      });
-    }
+    appendStoreRecords(store, records, context);
   } catch (err) {
     recordFailure(err);
   }

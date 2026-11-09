@@ -25,7 +25,11 @@ import {
   BRAIN_SIGNAL_SIGN,
 } from "../../../core/brain/types.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
+import { isStoreOnly } from "../../../core/store/store-only.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
+
+/** How a store-only machine names a record in this verb's output. */
+const STORE_RECORD_PREFIX = "store:";
 
 export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -56,7 +60,11 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     return fail(`--signal must be 'positive' or 'negative'; got ${JSON.stringify(signalSign)}`);
   }
 
-  const { config, vault } = brainVerbContext(flags);
+  const context = brainVerbContext(flags, { vault: "optional" });
+  const { config } = context;
+  // `null` with no vault configured: the signal (and a force-confirmed
+  // preference) are store records then (design D14).
+  const { vault } = context;
   const agent = resolveBrainAgent(flags, config);
 
   // Vault-configured fallback scope (`feedback.default_scope`). Applied
@@ -128,22 +136,27 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
   // primary write; surfaced only when the key is configured.
   const sharedNamespace = resolveSharedNamespace(config);
+  // The mirror copies from a vault, so there is none without one.
   const mirror =
-    sharedNamespace === null
+    sharedNamespace === null || vault === null
       ? undefined
       : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts);
 
   try {
-    appendLogEvent(vault, {
-      timestamp: isoSecond(now),
-      eventType: BRAIN_LOG_EVENT_KIND.feedback,
-      body: {
-        signal: `[[${sigResult.id}]]`,
-        topic: String(flags["topic"]),
-        sign: signalSign,
-        agent,
+    appendLogEvent(
+      vault,
+      {
+        timestamp: isoSecond(now),
+        eventType: BRAIN_LOG_EVENT_KIND.feedback,
+        body: {
+          signal: `[[${sigResult.id}]]`,
+          topic: String(flags["topic"]),
+          sign: signalSign,
+          agent,
+        },
       },
-    });
+      { failOpen: true },
+    );
   } catch (err) {
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
@@ -209,14 +222,21 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       return fail(message);
     }
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(new Date(now.getTime() + 1000)),
-        eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
-        body: {
-          preference: renderPrefLink({ id: prefResult.id, principle: String(flags["principle"]) }),
-          agent,
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(new Date(now.getTime() + 1000)),
+          eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
+          body: {
+            preference: renderPrefLink({
+              id: prefResult.id,
+              principle: String(flags["principle"]),
+            }),
+            agent,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
@@ -224,9 +244,21 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     }
   }
 
+  // A store-only machine wrote records, not files: name them by id
+  // (`store:<id>`), never by the legacy path the writer still composes.
+  const storeOnly = vault === null || isStoreOnly({ vault, configPath: config });
+  const named = (path: string, id: string): string =>
+    storeOnly ? `${STORE_RECORD_PREFIX}${id}` : path;
+  // The text form: vault-relative, matching the distill house style (the
+  // absolute host path is the operator-supplied vault prefix composed with
+  // a machine-derived subtree); a record by id.
+  const shown = (path: string, id: string): string =>
+    vault === null || storeOnly
+      ? `${STORE_RECORD_PREFIX}${id}`
+      : canonicalNotePath(relative(vault, path));
   if (flags["json"]) {
     okJson({
-      signal_path: sigResult.path,
+      signal_path: named(sigResult.path, sigResult.id),
       signal_id: sigResult.id,
       ...mirrorReportFields(mirror),
       ...(advisory !== null ? { advisory } : {}),
@@ -234,14 +266,13 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       // forward pointer belongs on a payload the caller parses. The key
       // and the resolution come from the one composer both surfaces use.
       ...captureRoutingHintField(routingHint),
-      ...(prefResult ? { preference_path: prefResult.path, preference_id: prefResult.id } : {}),
+      ...(prefResult
+        ? { preference_path: named(prefResult.path, prefResult.id), preference_id: prefResult.id }
+        : {}),
     });
     return 0;
   }
-  // Vault-relative, matching the distill house style: the absolute host
-  // path is the operator-supplied vault prefix composed with a
-  // machine-derived subtree.
-  ok(`signal: ${canonicalNotePath(relative(vault, sigResult.path))}`);
+  ok(`signal: ${shown(sigResult.path, sigResult.id)}`);
   ok(`id: ${sigResult.id}`);
   if (mirror !== undefined) {
     ok(`mirror: ${mirror.outcome}`);
@@ -274,7 +305,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     emitNextStep(routingHint.code, stream);
   }
   if (prefResult) {
-    ok(`preference: ${canonicalNotePath(relative(vault, prefResult.path))}`);
+    ok(`preference: ${shown(prefResult.path, prefResult.id)}`);
     ok(`status: confirmed`);
   }
   return 0;

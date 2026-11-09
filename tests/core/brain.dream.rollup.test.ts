@@ -18,6 +18,10 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { rollupLedgerPath } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

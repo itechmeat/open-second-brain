@@ -81,7 +81,6 @@
  * not record itself as done while its output awaits review.
  */
 
-import { readFileSync, unlinkSync } from "node:fs";
 import { relative } from "node:path";
 
 import { canonicalNotePath } from "../../path-safety.ts";
@@ -111,6 +110,7 @@ import {
   isSourceHidden,
   type SourceOrigin,
 } from "./source-trust.ts";
+import { readLaneFile, removeLanePage } from "../../store/lane-pages.ts";
 
 /** One entity the agent extracted from a source. */
 export interface IntakeEntity {
@@ -544,6 +544,13 @@ export function intakeExtraction(
       if (entry.publishTarget !== undefined) openStagedTargets.set(entry.publishTarget, entry.id);
     }
   }
+  // The entity writer created each page before the disposition is known,
+  // and the staged copy is taken from it before the page is removed. On a
+  // store-only machine the removal is a tombstone in an append-only store:
+  // the page's record stays in the store's history (in the partition its
+  // own privacy verdict chose) until compaction exists, though no reader
+  // folds it in. Staging the bytes without the canonical record first is
+  // an entity-writer change, left for that owner.
   const stagedEntityPages =
     opts.disposition === "stage" && createdPages.length > 0
       ? createdPages.map((page) => {
@@ -552,17 +559,17 @@ export function intakeExtraction(
           );
           const existingId = openStagedTargets.get(publishTarget);
           if (existingId !== undefined) {
-            unlinkSync(entityPath(vault, page.category, page.id));
+            removeLanePage(vault, entityPath(vault, page.category, page.id));
             return { entityId: page.id, pendingId: existingId, publishTarget };
           }
-          const bytes = readFileSync(entityPath(vault, page.category, page.id), "utf8");
+          const bytes = readLaneFile(vault, entityPath(vault, page.category, page.id));
           const { pendingId } = stageForReview(
             vault,
             REVIEW_LANE.notes,
             publishTarget,
             () => bytes,
           );
-          unlinkSync(entityPath(vault, page.category, page.id));
+          removeLanePage(vault, entityPath(vault, page.category, page.id));
           return { entityId: page.id, pendingId, publishTarget };
         })
       : undefined;

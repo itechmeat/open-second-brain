@@ -47,6 +47,8 @@ import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
+import { makeStoreEnv } from "../store/fixtures/store-env.ts";
+import { switchDevice } from "./store-only/fixtures.ts";
 
 let vault: string;
 let configHome: string;
@@ -231,5 +233,31 @@ describe("computeBrainStatus — dry-run dream moves nothing in the ledger", () 
     const after = computeBrainStatus(vault);
     expect(after.last_dream_at).not.toBeNull();
     expect(after.maintenance_debt.status).toBe(MAINTENANCE_DEBT_STATUS.counted);
+  });
+});
+
+describe("computeMaintenanceOverdueFlag on a switched machine", () => {
+  test("a dream stamped by a clock already in tomorrow's UTC date is the newest day", () => {
+    const env = makeStoreEnv("osb-overdue-offset-", { dualWrite: false });
+    try {
+      switchDevice(env.storeRoot);
+      const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
+      const tomorrow = new Date(now + 86_400_000).toISOString().slice(0, 10);
+      appendLogEvent(env.vault, {
+        timestamp: `${today}T00:00:01Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.note,
+        body: { text: "earlier today" },
+      });
+      // A device whose clock runs a little ahead has already reached tomorrow.
+      appendLogEvent(env.vault, {
+        timestamp: `${tomorrow}T00:00:30Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.dream,
+        body: { summary: "nothing to promote" },
+      });
+      expect(computeMaintenanceOverdueFlag(env.vault)).toBe(false);
+    } finally {
+      env.cleanup();
+    }
   });
 });
